@@ -707,6 +707,64 @@ public final class ToolLoop: @unchecked Sendable {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 
+    /// Turns `[label](url)` into a bare, tappable URL.
+    ///
+    /// Signal renders plain text and linkifies bare URLs itself — it does not
+    /// parse markdown. So a model that helpfully writes
+    /// `[Google Maps](https://…)` produces a link the owner cannot tap, on a
+    /// phone, which is the one place a maps link is worth anything. The system
+    /// prompt already says "no markdown"; this is the belt to that braces,
+    /// because the model does it anyway when it is being helpful.
+    ///
+    /// Also percent-encodes the URL. The same reply carried
+    /// `?query=日枝あかさか+山王茶寮` with the Japanese raw, and a URL with
+    /// non-ASCII bytes in it is not a URL — Signal's linkifier stops at the
+    /// first one, so even the flattened link would have been truncated
+    /// mid-address. Encoding happens per-character so an already-encoded URL is
+    /// left alone rather than double-encoded into nonsense.
+    static func flattenedLinks(_ text: String) -> String {
+        let pattern = "\\[([^\\]\\n]*)\\]\\((https?://[^)\\s]+)\\)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+
+        var result = text
+        // Back to front, so each replacement cannot shift the ranges of the ones
+        // still to be made.
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        for match in matches.reversed() {
+            guard let whole = Range(match.range, in: result),
+                  let urlRange = Range(match.range(at: 2), in: result) else { continue }
+            result.replaceSubrange(whole, with: encodedURL(String(result[urlRange])))
+        }
+        return encodedBareURLs(result)
+    }
+
+    /// Percent-encodes anything in a URL that cannot travel as itself.
+    private static func encodedURL(_ url: String) -> String {
+        // Everything legal in a URL, plus `%` so an already-encoded triplet
+        // survives untouched.
+        let safe = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+            + "-._~:/?#[]@!$&'()*+,;=%"
+        )
+        return url.unicodeScalars.map { scalar in
+            if safe.contains(scalar) { return String(scalar) }
+            return String(scalar).utf8.map { String(format: "%%%02X", $0) }.joined()
+        }.joined()
+    }
+
+    /// The same treatment for a URL the model wrote without markdown around it.
+    private static func encodedBareURLs(_ text: String) -> String {
+        let pattern = "https?://[^\\s<>\"']+"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        var result = text
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: encodedURL(String(result[range])))
+        }
+        return result
+    }
+
     public static func speakable(_ content: String) -> String {
         var text = stripThinkTags(content)
         text = text.replacingOccurrences(
@@ -724,6 +782,7 @@ public final class ToolLoop: @unchecked Sendable {
             with: "\n",
             options: [.regularExpression]
         )
+        text = Self.flattenedLinks(text)
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "`", with: "")

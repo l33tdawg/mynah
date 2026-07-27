@@ -493,3 +493,47 @@ final class DaemonPresentationTests: XCTestCase {
         XCTAssertTrue(configuration.sendsThinkingAcknowledgement)
     }
 }
+
+// MARK: - Links the owner can actually tap
+
+/// Signal renders plain text and linkifies bare URLs; it does not parse
+/// markdown. These are the exact replies that failed on the appliance.
+final class SpeakableLinkTests: XCTestCase {
+
+    /// The real one. A maps link, on a phone, that could not be tapped.
+    func testMarkdownMapsLinkBecomesATappableEncodedURL() {
+        let raw = "Here's a direct Google Maps link: "
+            + "[Google Maps](https://www.google.com/maps/search/?query=日枝あかさか+山王茶寮)"
+        let spoken = ToolLoop.speakable(raw)
+
+        XCTAssertFalse(spoken.contains("[Google Maps]"), "markdown wrapper must go — Signal cannot parse it")
+        XCTAssertFalse(spoken.contains("]("), "no markdown link syntax may survive")
+        XCTAssertTrue(spoken.contains("https://www.google.com/maps/search/?query="))
+        XCTAssertFalse(
+            spoken.contains("日"),
+            "raw non-ASCII in a URL truncates Signal's linkifier mid-address"
+        )
+        XCTAssertTrue(spoken.contains("%E6%97%A5"), "Japanese must survive as percent-encoded UTF-8")
+        // The `+` is a legal query separator and must NOT be encoded away.
+        XCTAssertTrue(spoken.contains("+"))
+    }
+
+    /// A URL the model wrote without markdown still needs encoding.
+    func testBareURLWithNonASCIIIsEncoded() {
+        let spoken = ToolLoop.speakable("Try https://example.com/search?q=山王茶寮 for more.")
+        XCTAssertTrue(spoken.contains("%E5%B1%B1"))
+        XCTAssertTrue(spoken.hasSuffix("for more."))
+    }
+
+    /// An already-encoded URL must not be encoded twice into nonsense.
+    func testAlreadyEncodedURLIsLeftAlone() {
+        let url = "https://www.google.com/maps/search/?query=%E5%B1%B1%E7%8E%8B"
+        XCTAssertTrue(ToolLoop.speakable("See \(url)").contains(url))
+    }
+
+    /// Ordinary ASCII links must pass through untouched.
+    func testPlainURLIsUnchanged() {
+        let url = "https://github.com/l33tdawg/sage"
+        XCTAssertTrue(ToolLoop.speakable("Repo: \(url)").contains(url))
+    }
+}
