@@ -63,13 +63,19 @@ public struct WhisperKitServerTranscriber: AudioFileTranscribing {
             includeWordTimestamps: includeWordTimestamps
         )
 
+        // Redirect-blocking session: a naive host check on `endpoint` alone does
+        // not stop URLSession following a 307 off-box and re-sending the audio.
+        let session = LoopbackSecurity.makeSession(timeout: timeoutSeconds)
+        defer { session.finishTasksAndInvalidate() }
+
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             throw AudioTranscriberError.requestFailed(Self.describeRequestFailure(error, timeoutSeconds: timeoutSeconds))
         }
+        try LoopbackSecurity.verifyResponseOrigin(response, expected: endpoint)
         guard let http = response as? HTTPURLResponse else {
             throw AudioTranscriberError.badResponse(-1)
         }
