@@ -366,6 +366,81 @@ func runSearch(_ arguments: [String]) -> Never {
     }
 }
 
+/// Signs in to Google and, on request, provisions a Gemini key from it.
+///
+/// A command rather than a buried step because this is the one part of setup
+/// that involves a browser, another company's consent screen and four chained
+/// Google APIs — when it fails it must be runnable in isolation, with the
+/// failure visible, rather than only reachable through a wizard.
+func runGoogle(_ arguments: [String]) -> Never {
+    let flags = parseFlags(arguments)
+    guard let client = GoogleOAuthClient.fromEnvironment() else {
+        exit(fail("""
+        set GOOGLE_OAUTH_CLIENT_ID first (and GOOGLE_OAUTH_CLIENT_SECRET if your
+        client is a "Desktop app" — Google issues one and its token endpoint
+        usually wants it back, PKCE notwithstanding).
+        """))
+    }
+
+    let store = GoogleTokenStore(url: GoogleTokenStore.defaultURL())
+    let logger: @Sendable (String) -> Void = { print($0) }
+
+    runAndExit {
+        let credential = GoogleOAuthCredential(client: client, store: store)
+
+        if arguments.contains("--sign-out") {
+            await credential.signOut()
+            print("signed out")
+            return 0
+        }
+
+        if await !credential.isSignedIn {
+            let session = GoogleSignInSession(client: client, store: store, log: logger)
+            do {
+                _ = try await session.signIn { url in
+                    // The appliance is headless and the owner is elsewhere, so
+                    // print the URL as well as trying to open it.
+                    print("\nopen this to sign in:\n\(url.absoluteString)\n")
+                    let open = Process()
+                    open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                    open.arguments = [url.absoluteString]
+                    try? open.run()
+                }
+            } catch {
+                return fail("\(error)")
+            }
+        } else {
+            print("already signed in")
+        }
+
+        guard arguments.contains("--provision") else {
+            // Proves the token works without changing anything.
+            do {
+                _ = try await credential.authorizationHeaders()
+                print("token ok — rerun with --provision to mint a Gemini key")
+                return 0
+            } catch {
+                return fail("\(error)")
+            }
+        }
+
+        let provisioner = GeminiKeyProvisioner(
+            transport: GoogleAuthorizedTransport(credential: credential),
+            log: logger
+        )
+        do {
+            let key = try await provisioner.provision(preferredProjectID: flags["project"])
+            // Deliberately not printed in full: it is a live credential and this
+            // output lands in scrollback and log files.
+            print("provisioned Gemini key \(key.prefix(6))…\(key.suffix(4)) (\(key.count) chars)")
+            print("export GEMINI_API_KEY=… to use it, or let setup store it for you")
+            return 0
+        } catch {
+            return fail("\(error)")
+        }
+    }
+}
+
 func runDaemon(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
 
@@ -466,6 +541,7 @@ case "brain":       runBrain(Array(arguments.dropFirst()))
 case "setup":       runSetup(Array(arguments.dropFirst()))
 case "verify-sage": runVerifySage(Array(arguments.dropFirst()))
 case "search":      runSearch(Array(arguments.dropFirst()))
+case "google":      runGoogle(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 default:            usage()
 }
