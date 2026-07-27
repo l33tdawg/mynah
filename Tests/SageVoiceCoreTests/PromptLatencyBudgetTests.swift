@@ -27,18 +27,31 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// The system prompt is the front of every prompt, so it is prefilled on
     /// every cold turn and occupies context on every warm one.
     ///
-    /// Measured at the time of writing: 5,100 characters, about 1,275 tokens.
-    /// Cold prefill on the appliance runs at roughly 130 tok/s, so this is ~10 s
-    /// of the owner's morning every time the model has been evicted, and it grew
-    /// three times in one day — a vision section, a notes section and a
-    /// pronoun-resolution section — with nobody watching the total.
+    /// Measured at the time of writing: 5,724 characters, about 1,430 tokens.
     ///
-    /// The budget is deliberately close, not generous: 900 characters of room,
-    /// about one more section. It is a conversation starter, not a wall — if a
-    /// change needs more than this, the right move is usually to cut something
-    /// that stopped earning its place, and the failure is where that
-    /// conversation happens.
-    static let systemPromptCharacterBudget = 6_000
+    /// Raised from 6,000 to 8,000, and the reason it exists changed with it.
+    ///
+    /// It was set as a *latency* budget: cold prefill runs at roughly 130 tok/s,
+    /// so every 500 characters is about a second of the owner's morning. That
+    /// framing turned out to overstate the cost badly. The system prompt is the
+    /// most cacheable thing in the request — byte-identical on every turn, at the
+    /// very front of the prefix — so on a warm appliance it is prefilled once and
+    /// then costs nothing. `num_ctx` is 65536 precisely so those prefixes stay
+    /// resident. Growing it is close to free in seconds.
+    ///
+    /// What it is *not* free in is attention. Every rule added to a 4B model is
+    /// another instruction competing for the same limited capacity to follow any
+    /// of them, and that cost does not show up in a character count, a token
+    /// count, or a stopwatch. It shows up as a tool call that should have
+    /// happened and did not.
+    ///
+    /// So this is now a sprawl budget. 8,000 leaves room for the rules still
+    /// owed — `sage_forget` on correction, documents written in full — while
+    /// keeping the failure that starts the argument. When it fires, the question
+    /// to ask is not "can we afford the prefill" (yes) but "is this rule earning
+    /// its place against the ones already here", which is the question that
+    /// actually matters and the one a latency framing was hiding.
+    static let systemPromptCharacterBudget = 8_000
 
     func testTheSystemPromptStaysWithinItsPrefillBudget() {
         let count = BrainPrompts.voiceAgentManager.count

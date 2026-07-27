@@ -254,6 +254,73 @@ final class ToolLoopDeadlineTests: XCTestCase {
         XCTAssertFalse(clean.summary.contains("["))
     }
 
+    /// The failure that a fixed budget could not see.
+    ///
+    /// Measured on the appliance: a 90 s deadline delivered at 175 s, because
+    /// passing the line at 78 s still admitted one 43 s iteration plus a 42 s
+    /// wrap-up. A slow backend has to stop *earlier* than a fast one, not at the
+    /// same wall-clock mark, and the only way to know which it is is to have
+    /// timed it.
+    func testASlowBackendStopsSoonerThanAFastOneOnTheSameBudget() async throws {
+        // Sized so the slow backend runs out of predicted room well before the
+        // cap; a budget that only bites at iteration 10 is being enforced by the
+        // cap, and would pass this test without the prediction existing at all.
+        let (slowLoop, slowBackend) = makeLoop(
+            delay: .milliseconds(400),
+            callingForever: "sage_recall",
+            deadline: 1.5,
+            reserve: 0.05
+        )
+        let (fastLoop, fastBackend) = makeLoop(
+            delay: .milliseconds(20),
+            callingForever: "sage_recall",
+            deadline: 1.5,
+            reserve: 0.05
+        )
+
+        let slow = try await slowLoop.run(transcript: "what shops did we talk about")
+        let fast = try await fastLoop.run(transcript: "what shops did we talk about")
+
+        XCTAssertTrue(slow.trace.hitDeadline)
+        XCTAssertLessThan(
+            slow.trace.iterations,
+            fast.trace.iterations,
+            """
+            Both backends stopped after the same number of iterations, so the budget is \
+            still being spent as wall clock rather than as predicted remaining work — \
+            the fault that turned 90s into 175s.
+            """
+        )
+        XCTAssertGreaterThan(slowBackend.callCount, 1)
+        XCTAssertGreaterThan(fastBackend.callCount, slowBackend.callCount)
+    }
+
+    /// The promise, end to end. A budget that is routinely blown by the work it
+    /// forgot to count is not a budget.
+    func testTheTurnLandsInsideItsBudgetOnASlowBackend() async throws {
+        let deadline: TimeInterval = 1.5
+        let (loop, _) = makeLoop(
+            delay: .milliseconds(200),
+            callingForever: "sage_recall",
+            deadline: deadline,
+            reserve: 0.05
+        )
+
+        let started = Date()
+        let result = try await loop.run(transcript: "what shops did we talk about")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertTrue(result.trace.hitDeadline)
+        XCTAssertFalse(result.reply.isEmpty)
+        // Generous, because scheduling noise is real — but far tighter than the
+        // 1.94x overshoot this replaced.
+        XCTAssertLessThan(
+            elapsed,
+            deadline * 1.3,
+            "a \(deadline)s budget delivered at \(elapsed)s"
+        )
+    }
+
     // MARK: The numbers themselves
 
     func testTheShippedBudgetIsTheOneTheApplianceWasTunedFor() {

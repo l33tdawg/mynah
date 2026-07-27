@@ -79,24 +79,20 @@ final class RecallDisciplineTests: XCTestCase {
         )
     }
 
-    /// The prompt is a prefill cost paid on every single turn, so it is measured
-    /// rather than trusted. This records what the section above cost — 5,100 to
-    /// ~5,724 characters — and, more usefully, how little is left.
+    /// This section cost ~624 characters, taking the prompt from 5,100 to ~5,724.
     ///
-    /// `PromptLatencyBudgetTests` owns the ceiling. This is the reminder that the
-    /// next addition is not free: at ~276 characters of headroom, whoever writes
-    /// the `sage_forget`-on-correction rule has to either cut something or move
-    /// the budget deliberately, with a measurement attached.
-    func testTheHeadroomLeftIsSmallEnoughToBeWorthKnowing() {
-        let remaining = PromptLatencyBudgetTests.systemPromptCharacterBudget - prompt.count
-        XCTAssertGreaterThan(remaining, 0, "the prompt is over budget")
-        XCTAssertLessThan(
-            remaining,
-            1_200,
-            """
-            The prompt shrank or the budget moved. Neither is wrong, but the note in \
-            this test about having ~276 characters left is now misleading — update it.
-            """
+    /// `PromptLatencyBudgetTests` owns the ceiling and explains why it is now
+    /// 8,000 rather than 6,000 — briefly, the system prompt is the most cacheable
+    /// part of the request, so its real cost is a 4B model's attention rather
+    /// than the owner's seconds. This assertion just keeps the arithmetic above
+    /// honest: if the section is edited down to nothing, the sentence claiming it
+    /// cost 624 characters should stop being true out loud.
+    func testTheseRulesCostWhatTheDocSaysTheyCost() {
+        XCTAssertGreaterThan(
+            prompt.count,
+            5_400,
+            "the recall section appears to have been cut — the 624-character note above is now wrong"
         )
+        XCTAssertLessThanOrEqual(prompt.count, PromptLatencyBudgetTests.systemPromptCharacterBudget)
     }
 }

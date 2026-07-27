@@ -254,13 +254,16 @@ public final class ToolLoop: @unchecked Sendable {
     /// what it was still doing — see `BrainPrompts.forcedSummary`.
     public static let defaultDeadlineSeconds: TimeInterval = 90
 
-    /// Held back from `deadlineSeconds` so the forced summary fits inside it.
+    /// Floor for what the wrap-up is assumed to cost, and the estimate used
+    /// before this turn has measured anything.
     ///
-    /// The wrap-up is a real model call: measured at 3.7 s with reasoning
-    /// disabled, but that was against a thin context. A deadline turn is the
-    /// opposite — every tool result of the turn is in the prompt, so it pays a
-    /// prefill the measurement never saw. 12 s covers that; without any reserve
-    /// a 90 s budget reliably delivers at ~100 s, which is a budget that lies.
+    /// It is a floor rather than a subtraction. Subtracting a constant was the
+    /// first attempt and it failed on the appliance by a factor of two: 12 s
+    /// came from a 3.7 s measurement against a thin context, while a real
+    /// deadline turn wraps up over every tool result the turn produced, on a
+    /// model whose calls cost 40–60 s. The loop now estimates from the turn's
+    /// own timings and only falls back here on the first iteration, where there
+    /// is nothing measured yet.
     public static let summaryReserveSeconds: TimeInterval = 12
 
     public struct Configuration: Sendable {
@@ -602,22 +605,41 @@ public final class ToolLoop: @unchecked Sendable {
         var reply = ""
         let cap = max(1, configuration.maxIterations)
 
-        // What the tool-calling phase may spend, leaving the wrap-up its
-        // reserve. `nil` means no deadline was configured at all.
-        let toolPhaseBudget = configuration.deadlineSeconds.map {
-            max(0, $0 - configuration.summaryReserveSeconds)
-        }
-
         for iteration in 1...cap {
             // Checked before the call, not after, and never on the first pass:
             // a turn that spends its whole budget in tools still owes the owner
             // one model call, and a turn with no model call at all has nothing
             // for the wrap-up to summarise.
-            if iteration > 1,
-               let budget = toolPhaseBudget,
-               Date().timeIntervalSince(started) >= budget {
-                trace.hitDeadline = true
-                break
+            // Stop when the work still owed would not fit, not when the budget
+            // is already gone.
+            //
+            // The first version compared elapsed against a fixed budget, and on
+            // the appliance a 90 s promise delivered at 175 s. Nothing was wrong
+            // with the check; the estimate behind it was. A model call here
+            // costs 40–60 s, so passing the line at 78 s still admitted one full
+            // iteration *and* the wrap-up — two calls, ~85 s of work, none of it
+            // visible to a comparison that only knows how long it has been.
+            //
+            // So the loop predicts instead, from this turn's own measurements:
+            // one more tool-calling iteration, plus the wrap-up it already owes.
+            // A fast backend measures itself fast and keeps its iterations; a
+            // slow one stops early, which is the honest outcome rather than a
+            // budget that quietly means nothing.
+            if iteration > 1, let deadline = configuration.deadlineSeconds {
+                let elapsed = Date().timeIntervalSince(started)
+                // Worst observed, not mean: a promise is kept against the bad
+                // case, and one 60 s call among three 40 s ones is exactly the
+                // case that broke the fixed budget.
+                let expectedCall = trace.modelCalls.map(\.durationSeconds).max()
+                    ?? configuration.summaryReserveSeconds
+                // The wrap-up runs with reasoning withheld — measured at roughly
+                // half a reasoning turn (3.7 s vs 9.7 s) — but never assumed
+                // cheaper than the configured floor.
+                let wrapUp = max(configuration.summaryReserveSeconds, expectedCall * 0.5)
+                if elapsed + expectedCall + wrapUp > deadline {
+                    trace.hitDeadline = true
+                    break
+                }
             }
 
             trace.iterations = iteration
