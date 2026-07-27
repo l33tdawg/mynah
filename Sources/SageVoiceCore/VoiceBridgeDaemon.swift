@@ -187,6 +187,15 @@ public actor VoiceBridgeDaemon {
     /// wrong place to save power. The interval is deliberately well inside the
     /// eviction window rather than close to it.
     private func startKeepWarm(tools: [MCPTool]) {
+        // Local models only. Re-warming preserves an on-device KV cache; a
+        // hosted API has none to preserve, so the timer would spend quota to
+        // buy nothing — 72 requests a day against Gemini's free tier before the
+        // owner has said a word, and the same again in tokens on a paid one.
+        guard loop.backendIsLocal else {
+            log("[daemon] keep-warm off: a hosted backend has no local cache to keep warm")
+            return
+        }
+
         keepWarmTask?.cancel()
         keepWarmTask = Task { [weak self] in
             while !Task.isCancelled {

@@ -277,6 +277,13 @@ public final class ToolLoop: @unchecked Sendable {
         return systemPromptOverride ?? configuration.systemPrompt
     }
 
+    /// Whether the model runs on this machine.
+    ///
+    /// Exposed because keeping a prompt cache warm is a purely local idea: it
+    /// preserves an on-device KV cache. Against a hosted API the same timer
+    /// buys nothing and spends real quota.
+    public var backendIsLocal: Bool { backend.isLocal }
+
     public func setSystemPrompt(_ prompt: String) {
         promptLock.lock()
         defer { promptLock.unlock() }
