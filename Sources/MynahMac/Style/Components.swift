@@ -57,6 +57,53 @@ enum MynahCopy {
     /// Shown under the indicator on the owner's very first turn, once, never
     /// animated. Sets the expectation before the wait rather than during it.
     static let firstTurnExpectation = "Answers usually take about twenty seconds."
+
+    /// "21s", "1m 14s". How long a turn took, in the smallest honest unit.
+    ///
+    /// Lives here rather than beside the transcript block that first needed it,
+    /// because the floating panel reports the same number and two formatters
+    /// would drift the moment one of them learned about hours.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        guard whole >= 60 else { return "\(whole)s" }
+        return "\(whole / 60)m \(whole % 60)s"
+    }
+
+    // MARK: The floating panel
+    //
+    // The panel appears the moment the owner closes the window, which for most
+    // people is the first time they meet it. So its resting line has to answer
+    // "why is this here?" as well as "what is it doing?" — a panel that only
+    // says "Listening" is a thing that appeared for no stated reason.
+
+    /// The panel's second line when MYNAH is ready and nothing is in flight.
+    ///
+    /// Two facts, and no third. "It's on and waiting" is why the panel appeared;
+    /// the destination is the one thing this product is about, and the panel is
+    /// the only surface still on screen once the window is shut.
+    ///
+    /// Deliberately *not* "send it a voice note and watch here". The panel
+    /// reports the conversation this app is holding; a note sent to the phone is
+    /// answered by a separate process that nothing in this target can observe,
+    /// so inviting that here would promise a narration that never arrives.
+    static func floatingPanelResting(destination: String, staysOnDevice: Bool) -> String {
+        staysOnDevice
+            ? "It's on and waiting. Your words stay on this Mac."
+            : "It's on and waiting. Your words go to \(destination)."
+    }
+
+    /// The panel's second line during start-up. `ConversationModel.Health` has
+    /// no detail for this state because the window's health line sits directly
+    /// above a composer that explains itself; the panel has no such neighbour.
+    static let floatingPanelWaking = "It's getting ready. This only takes a moment."
+
+    /// The panel's second line while the owner has answering paused. Deliberately
+    /// not the window's wording — "or this window" names a window that, by the
+    /// time anyone reads this, is closed.
+    static let floatingPanelSleeping = "It won't answer your phone until you start it again."
+
+    /// The panel's second line while speech is being captured.
+    static let floatingPanelListening = "Go ahead — it's listening."
 }
 
 // MARK: - Divider

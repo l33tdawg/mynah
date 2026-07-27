@@ -10,7 +10,7 @@
        the bundle executable is what made double-clicking this app open
        nothing at all. -->
   <key>CFBundleExecutable</key>
-  <string>MynahMac</string>
+  <string>Mynah</string>
 
   <!-- DO NOT CHANGE. macOS files every TCC grant — microphone, automation,
        files-and-folders — under this string. A new identifier silently revokes

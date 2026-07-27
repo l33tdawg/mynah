@@ -10,7 +10,7 @@ let package = Package(
     products: [
         .library(name: "SageVoiceCore", targets: ["SageVoiceCore"]),
         .executable(name: "sage-voiced", targets: ["sage-voiced"]),
-        .executable(name: "MynahMac", targets: ["MynahMac"]),
+        .executable(name: "Mynah", targets: ["Mynah"]),
     ],
     targets: [
         // Speech-to-text core, lifted from QuietType (github.com/l33tdawg/quiettype).
@@ -28,13 +28,25 @@ let package = Package(
         // The app a non-technical owner actually sees. The CLI above stays as
         // the debugging surface — every screen here drives the same
         // SageVoiceCore types, so neither is a reimplementation of the other.
-        .executableTarget(
+        //
+        // A library, not an executable, and the distinction is load-bearing:
+        // nothing can import an executable target, so while this was one it had
+        // zero tests. That is how the app shipped recommending a brain it could
+        // not build — `BrainSetupPlanner` emitted seven backend identifiers,
+        // `BrainFactory` handled four, and no test could see both lists at once.
+        .target(
             name: "MynahMac",
             dependencies: ["SageVoiceCore"]
         ),
+        // Nothing but `@main`. Everything real lives in the library above so it
+        // can be tested.
+        .executableTarget(
+            name: "Mynah",
+            dependencies: ["MynahMac"]
+        ),
         .testTarget(
             name: "SageVoiceCoreTests",
-            dependencies: ["SageVoiceCore"]
+            dependencies: ["SageVoiceCore", "MynahMac"]
         ),
     ]
 )

@@ -762,9 +762,14 @@ struct SettingsView: View {
         @Bindable var app = app
         return VStack(alignment: .leading, spacing: 0) {
             SectionHeader("Answering")
+            // Names the panel, because the panel is the visible half of this
+            // setting. The row used to promise something with no evidence on
+            // screen: the window closed, one menu-bar glyph appeared, and the
+            // owner had no way to tell whether anything was still listening.
             SettingsRow(
                 "Keep answering when this window is closed",
-                detail: "Your phone can still reach Mynah with the window shut."
+                detail: "Your phone can still reach Mynah with the window shut, and a small panel "
+                    + "stays on screen showing what it's doing."
             ) {
                 Toggle("", isOn: $app.keepsAnsweringWhenClosed).labelsHidden().mynahToggle()
             }

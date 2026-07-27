@@ -81,6 +81,11 @@ struct RootView: View {
             // `openWindow` only exists inside a scene, and the delegate outlives
             // every scene, so the reopen path is wired from here.
             appDelegate.openMainWindow = { openWindow(id: MynahWindowID.main) }
+            // Same seam, same reason: the floating panel outlives this window
+            // and has to read the live `AppModel`, which the scene owns. It is
+            // this call that makes "keeps answering when this window is closed"
+            // something the owner can watch rather than only read about.
+            FloatingHUDController.shared.attach(app: app)
         }
     }
 }

@@ -29,7 +29,7 @@ APP="${SAGE_VOICE_APP_PATH:-$ROOT/dist/Mynah.app}"
 BUILD_DIR="$ROOT/.build/arm64-apple-macosx"
 
 # What the owner double-clicks, and what CFBundleExecutable must name.
-APP_PRODUCT="MynahMac"
+APP_PRODUCT="Mynah"
 # Ships alongside it as the debugging surface: same SageVoiceCore, no window.
 # Not a second copy of the app — it is how a problem gets diagnosed over a call
 # without asking a non-technical owner to read a log.

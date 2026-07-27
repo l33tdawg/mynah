@@ -224,6 +224,15 @@ final class MynahAppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
+
+    /// Quitting closes every window, and the floating panel appears when windows
+    /// close. Without this the last thing the owner sees on the way out is a
+    /// panel arriving over their desktop for the length of one runloop hop.
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            FloatingHUDController.shared.applicationWillTerminate()
+        }
+    }
 }
 
 // MARK: - Window identity
@@ -258,16 +267,32 @@ enum MainWindowPresenter {
         if presentExisting() { return }
         openWindow(id: MynahWindowID.main)
     }
+
+    /// The same errand from a surface that has no SwiftUI environment to read
+    /// `openWindow` out of — today, the floating panel.
+    ///
+    /// Goes through the delegate's stored action rather than duplicating the
+    /// scene lookup, so there is still exactly one place that knows a
+    /// `WindowGroup` cannot be focused and must be *opened*.
+    static func presentFromAppKit() {
+        NSApp.activate(ignoringOtherApps: true)
+        if presentExisting() { return }
+        (NSApp.delegate as? MynahAppDelegate)?.openMainWindow?()
+    }
 }
 
 // MARK: - App
 
-@main
-struct MynahApp: App {
+/// The app itself. `@main` lives in the thin `Mynah` executable target, because
+/// nothing can import an executable and this target needs to be testable — see
+/// `Sources/Mynah/main.swift` for what that omission cost.
+public struct MynahApp: App {
     @NSApplicationDelegateAdaptor(MynahAppDelegate.self) private var appDelegate
     @State private var app = AppModel()
 
-    var body: some Scene {
+    public init() {}
+
+    public var body: some Scene {
         WindowGroup(id: MynahWindowID.main) {
             // No root `.tint`, and that is a decision rather than an omission.
             //
@@ -306,7 +331,7 @@ struct MynahApp: App {
     }
 }
 
-/// Four verbs and one state line. A menu-bar menu is not a control panel; if a
+/// Five verbs and one state line. A menu-bar menu is not a control panel; if a
 /// setting needs explaining it belongs in Settings, where there is room for the
 /// sentence that explains it.
 private struct MenuBarContent: View {
@@ -314,12 +339,31 @@ private struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        // Read inside `body` rather than held as a stored property: `body` is
+        // already main-actor isolated, and reading `isVisible` here is what
+        // makes the item below rename itself when the panel comes and goes.
+        let hud = FloatingHUDController.shared
+
         Text("Mynah — \(app.effectivePresence.verb)")
 
         Divider()
 
         Button("Open Mynah") {
             MainWindowPresenter.present(using: openWindow)
+        }
+
+        // The only way back once the panel has been sent away, which is why it
+        // sits beside "Open Mynah" rather than under a submenu. "Panel" is a
+        // word an owner uses; it is not a class name leaking into the menu.
+        //
+        // Absent during onboarding rather than present and disabled: the panel
+        // reports on a conversation that does not exist until setup finishes, so
+        // the item would be a verb that leads nowhere — which is the one thing
+        // every escape hatch in this app is written not to be.
+        if app.hasCompletedSetup {
+            Button(hud.isVisible ? "Hide the panel" : "Show the panel") {
+                hud.toggleFromMenuBar()
+            }
         }
 
         Button(app.isPaused ? "Resume answering" : "Pause answering") {

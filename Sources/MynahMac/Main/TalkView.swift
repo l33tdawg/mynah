@@ -405,7 +405,7 @@ private struct AnswerBlock: View {
         // phrases are `.label` at 11, so centring them would leave the row
         // visibly askew.
         HStack(alignment: .firstTextBaseline, spacing: s3) {
-            Text(Self.duration(answer.seconds))
+            Text(MynahCopy.duration(answer.seconds))
                 .mynahFont(.mono)
                 .monospacedDigit()
                 .foregroundStyle(Palette.ink.secondary)
@@ -418,12 +418,6 @@ private struct AnswerBlock: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
         }
-    }
-
-    static func duration(_ seconds: TimeInterval) -> String {
-        let whole = max(0, Int(seconds.rounded()))
-        guard whole >= 60 else { return "\(whole)s" }
-        return "\(whole / 60)m \(whole % 60)s"
     }
 }
 

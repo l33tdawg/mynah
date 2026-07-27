@@ -645,32 +645,38 @@ extension View {
 
 // MARK: - Materials
 //
-// MARK: Dormant on purpose — read before wiring these in
+// MARK: Live — and the two rules the glass imposes on whatever sits on it
 //
-// `MynahVisualEffect` and `MynahGlassBackground` below are not reachable from
-// any shipping screen, and `MynahShadow.float` is unused for the same reason.
-// Silent dead code in a style layer is how a design system rots, so this says
-// why out loud rather than leaving it to be discovered.
+// `MynahVisualEffect` and `MynahGlassBackground` are the chrome of the floating
+// HUD in `Main/FloatingHUD.swift` — the panel that shows what MYNAH is doing
+// once the owner closes the window, which is the capability promised in the
+// welcome copy, on the Ready stage, in Settings and in `AppModel`'s own doc
+// comment. `MynahVisualEffect` is also what the sidebar would use if
+// `.listStyle(.sidebar)` ever stopped supplying vibrancy for free.
 //
-// They exist for the floating HUD — the panel that shows what MYNAH is doing
-// once the owner closes the window. That capability is *promised*, in the
-// welcome copy, on the Ready stage, in Settings, and in `AppModel`'s own doc
-// comment, and today the whole feedback surface for it is one template-rendered
-// menu-bar glyph. There is no `NSPanel` anywhere in the app.
+// **Text on this glass is bound by two measured rules.** Behind-window vibrancy
+// composites the owner's *desktop*, so there is no single background colour to
+// quote a ratio against; what can be quoted is the floor — the glass composited
+// over the worst wallpaper for the scheme (pure white behind dark mode, pure
+// black behind light mode), which is where legibility bottoms out.
 //
-// TO LIGHT IT UP: build a `FloatingHUD` as an `NSPanel` with
-// `[.borderless, .nonactivatingPanel]`, `level = .statusBar`,
-// `isFloatingPanel = true`, a clear non-opaque background, `hasShadow = false`
-// and `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary,
-// .ignoresCycle]`; host `MynahGlassBackground` plus a 40×40 `GlyphWell`, a
-// `.title3` state line read off `AppModel.effectivePresence`, and the existing
-// `Waveform`; persist its dragged position in `UserDefaults` and
-// screen-intersection-check it on restore; and show it from `MynahAppDelegate`
-// when the last window closes while `keepsAnsweringWhenClosed` is on.
+//   1. Sentences take `ink.primary` and nothing softer. At the floor,
+//      `ink.primary` measures 5.1:1 dark / 10.3:1 light, and `ink.secondary`
+//      measures 3.7:1 dark / 4.2:1 light — under 4.5:1 in both, which is why the
+//      transcript's habit of dropping to `secondary` for a supporting line does
+//      not survive the move onto glass.
+//   2. Nothing readable goes in the top 32pt. The sheen below is a 42pt band
+//      running 0.48 → 0.14 → clear white, and at its hottest a dark-mode
+//      backdrop composites to ~2.2:1 even for `ink.primary`. By y = 32 the sheen
+//      is down to ~0.07 alpha and the floor is back to 5.1:1, so the HUD simply
+//      insets its content by `s8` and leaves the band as the lip of the glass.
 //
-// `MynahVisualEffect` is also what the sidebar would use if `.listStyle(.sidebar)`
-// ever stopped supplying vibrancy for free. Both are compiled and exercised by
-// `MynahThemeGallery` on every build, so neither can rot while it waits.
+// `MynahShadow.float` stays a *sheet and popover* token and is deliberately not
+// used by the HUD: a real `NSWindow` gets AppKit's own shadow, derived from the
+// content's alpha channel and moved by the window server as the panel is
+// dragged. Drawing `.float` there instead would mean padding the panel frame by
+// 30pt of transparent window on every side, and that halo swallows clicks meant
+// for the app behind it. `MynahThemeGallery` exercises `.float` on every build.
 
 /// Real desktop vibrancy. Used in exactly three places: the sidebar, the
 /// floating HUD, and popovers (which get it free). A `.regularMaterial` card
@@ -679,6 +685,17 @@ struct MynahVisualEffect: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
     var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
     var isEmphasized: Bool = true
+
+    /// When the vibrancy is allowed to dim.
+    ///
+    /// `.followsWindowActiveState` is what makes the sidebar grey out when the
+    /// window loses key — a detail people never name but always notice. The
+    /// floating HUD is the exact opposite case: it is a non-activating panel
+    /// whose whole job is to be watched *while the owner works in another app*,
+    /// so it is almost never key. Left on the default it would render in the
+    /// inactive variant permanently — the flat, washed-out look that vibrancy
+    /// exists to avoid — so that one surface passes `.active`.
+    var state: NSVisualEffectView.State = .followsWindowActiveState
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
@@ -693,9 +710,7 @@ struct MynahVisualEffect: NSViewRepresentable {
     private func apply(to view: NSVisualEffectView) {
         view.material = material
         view.blendingMode = blendingMode
-        // `.followsWindowActiveState` is what makes the sidebar dim when the
-        // window loses key — a detail people never name but always notice.
-        view.state = .followsWindowActiveState
+        view.state = state
         view.isEmphasized = isEmphasized
     }
 }
@@ -704,15 +719,30 @@ struct MynahVisualEffect: NSViewRepresentable {
 /// QuietType. Five stacked fills plus a top sheen and a gradient border; this is
 /// the only place in MYNAH where bare `Color.white`/`Color.black` are correct,
 /// because they are specular highlights over a material rather than surfaces.
+///
+/// Read the two contrast rules above before putting text on it.
 struct MynahGlassBackground: View {
     @Environment(\.colorScheme) private var colorScheme
     var radius: CGFloat = r.sheet
+
+    /// Passed through to the vibrancy layer. See `MynahVisualEffect.state` —
+    /// a floating panel has to force `.active` or its glass never lights up.
+    var vibrancyState: NSVisualEffectView.State = .followsWindowActiveState
+
+    /// Whether the glass draws the drop shadow that finishes the recipe.
+    ///
+    /// True inside a window, where nothing else will draw one. False when the
+    /// glass *is* a window: AppKit derives a shadow from a borderless window's
+    /// alpha channel for free, and stacking a second one under it would need
+    /// 30pt of transparent frame all round to avoid being clipped — a halo that
+    /// then eats clicks aimed at whatever is behind the panel.
+    var castsShadow: Bool = true
 
     var body: some View {
         let shape = RoundedRectangle.mynah(radius)
         let isDark = colorScheme == .dark
         return ZStack {
-            MynahVisualEffect(material: .hudWindow, blendingMode: .behindWindow)
+            MynahVisualEffect(material: .hudWindow, blendingMode: .behindWindow, state: vibrancyState)
             shape.fill(Color.white.opacity(isDark ? 0.02 : 0.04))
             shape.fill(Color.white.opacity(isDark ? 0.08 : 0.16))
             shape.fill(
@@ -777,7 +807,14 @@ struct MynahGlassBackground: View {
             )
         )
         .compositingGroup()
-        .shadow(color: Color.black.opacity(isDark ? 0.26 : 0.12), radius: 22, y: 10)
+        // `.clear` rather than an `if`: branching the modifier chain would give
+        // the glass two identities and rebuild the whole stack — including the
+        // `NSVisualEffectView` — the moment the flag changed.
+        .shadow(
+            color: castsShadow ? Color.black.opacity(isDark ? 0.26 : 0.12) : .clear,
+            radius: 22,
+            y: 10
+        )
     }
 }
 
@@ -883,18 +920,20 @@ struct MynahThemeGallery: View {
                     swatch("caution", Palette.state.caution)
                     swatch("critical", Palette.state.critical)
                 }
-                // The dormant HUD chrome, kept on screen so it cannot rot while
-                // it waits for the panel that will host it. See the note above
-                // `MynahVisualEffect`.
+                // The HUD chrome as it looks *inside a window* — glass drawing
+                // its own `.float` shadow, which is the sheet-and-popover case.
+                // The floating panel itself takes neither default: it forces
+                // `.active` vibrancy and lets AppKit shadow the window. See the
+                // note above `MynahVisualEffect`.
                 VStack(alignment: .leading, spacing: s4) {
-                    Text("Dormant — HUD glass").mynahFont(.eyebrow).foregroundStyle(Palette.ink.tertiary)
+                    Text("HUD glass").mynahFont(.eyebrow).foregroundStyle(Palette.ink.tertiary)
                     Text("Answering")
                         .mynahFont(.title3)
                         .foregroundStyle(Palette.ink.primary)
                         .padding(.horizontal, s6)
                         .padding(.vertical, s5)
                         .frame(width: 320, alignment: .leading)
-                        .background(MynahGlassBackground())
+                        .background(MynahGlassBackground(castsShadow: false))
                         .mynahShadow(.float)
                 }
                 VStack(alignment: .leading, spacing: s4) {

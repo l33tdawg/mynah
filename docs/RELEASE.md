@@ -111,7 +111,7 @@ diff. So regenerate when the drawing changed, not as a habit.
 
 ### `scripts/package-app.sh`
 
-Stages both binaries into `Contents/MacOS` — `MynahMac`, which is what the
+Stages both binaries into `Contents/MacOS` — `Mynah`, which is what the
 owner double-clicks, and `sage-voiced` beside it, which stays as the debugging
 surface. Copies the icon and the vendored `SAGE.app` into `Contents/Resources`.
 
@@ -120,7 +120,7 @@ exists:
 
 1. helpers inside `SAGE.app`, then `SAGE.app` itself
 2. `Contents/MacOS/sage-voiced`
-3. `Contents/MacOS/MynahMac`
+3. `Contents/MacOS/Mynah`
 4. the outer bundle
 5. `codesign --verify --deep --strict`
 
@@ -187,7 +187,7 @@ codesign --display --entitlements :- dist/Mynah.app
 `resources/SageVoiceBridge.entitlements` explains why at length. The short
 version: library validation governs code loaded *into* a process, and SAGE,
 Ollama and the WhisperKit server are all separate processes with their own
-signatures. Nothing foreign is loaded into `MynahMac`.
+signatures. Nothing foreign is loaded into `Mynah`.
 
 The trap worth knowing: a development build is ad-hoc signed, ad-hoc code has no
 Team ID, and library validation is not enforced without one. So a missing
