@@ -384,6 +384,12 @@ struct SettingsView: View {
     @State private var isLinkingPhone = false
     @State private var isPastingKey = false
 
+    /// Seeded from disk rather than defaulted, so the switch shows what the
+    /// daemon will actually do rather than what this app assumes.
+    @State private var voiceNotes = ReplyPreferences().style().usesVoiceNotes
+
+    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "settings")
+
     /// The conversation's own view of whether Mynah can think.
     ///
     /// Settings used to report the *stored* choice and nothing else, so it could
@@ -636,6 +642,33 @@ struct SettingsView: View {
                 detail: "The voice Mynah answers in is generated on this Mac."
             ) {
                 Text("This Mac").mynahFont(.bodyEmphasis).foregroundStyle(Palette.ink.secondary)
+            }
+            MynahDivider()
+
+            // The detail line explains the consequence, not the mechanism. The
+            // owner is choosing how they want to be answered; that this rewrites
+            // a section of the system prompt is not their problem.
+            SettingsRow(
+                "Answer with voice notes",
+                detail: voiceNotes
+                    ? "Mynah speaks its answers, so it keeps them short — a couple of sentences, "
+                        + "no lists. Long answers are unlistenable."
+                    : "Mynah writes its answers, so it gives you the whole thing — a line per "
+                        + "item, and links you can tap."
+            ) {
+                Toggle("", isOn: $voiceNotes)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: voiceNotes) { _, isOn in
+                        do {
+                            try ReplyPreferences().save(voiceNotes: isOn)
+                        } catch {
+                            // Revert rather than show a switch that lies about
+                            // what the daemon will do on its next start.
+                            Self.log.error("could not save reply preference: \(error)")
+                            voiceNotes = !isOn
+                        }
+                    }
             }
         }
     }
