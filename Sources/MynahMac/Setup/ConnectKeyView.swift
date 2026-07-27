@@ -256,7 +256,7 @@ struct ConnectKeyScreen: View {
                 // The button performs step one, so it sits where step one ends
                 // rather than in the stage's action row, where it would compete
                 // with the single commitment on the screen.
-                MynahButton("Get a \(provider) key", kind: .secondary) {
+                MynahButton("Get \(BrainSetupPlanner.indefiniteArticle(for: provider)) \(provider) key", kind: .secondary) {
                     NSWorkspace.shared.open(instructions.keyPageURL)
                 }
             }
@@ -290,7 +290,7 @@ struct ConnectKeyScreen: View {
     /// and sending that owner back to the key page would waste their afternoon.
     private var fixTitle: String? {
         switch phase {
-        case .refused: return "Get a \(provider) key"
+        case .refused: return "Get \(BrainSetupPlanner.indefiniteArticle(for: provider)) \(provider) key"
         case .unusable: return "Choose a different brain"
         case .untested, .shapeProblem, .checking, .unreachable, .accepted: return nil
         }

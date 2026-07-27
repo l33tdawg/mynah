@@ -981,7 +981,7 @@ private struct BrainKeySheet: View {
                     MynahCard {
                         VStack(alignment: .leading, spacing: s6) {
                             NumberedStepList(steps: instructions.steps)
-                            MynahButton("Get a \(instructions.providerName) key", kind: .secondary) {
+                            MynahButton("Get \(BrainSetupPlanner.indefiniteArticle(for: instructions.providerName)) \(instructions.providerName) key", kind: .secondary) {
                                 NSWorkspace.shared.open(instructions.keyPageURL)
                             }
                         }

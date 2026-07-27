@@ -358,13 +358,25 @@ struct ActionRow<Trailing: View>: View {
                 // `secondary`, not `tertiary`: this is the only explanation for
                 // a disabled Continue, so it is a sentence the owner has to act
                 // on rather than a decorative mark.
+                //
+                // Lowest layout priority in the row. It is prose, so it can wrap
+                // to a second line; the buttons cannot, and when this text won
+                // the negotiation the result was a Connect screen where "Check
+                // this key" wrapped mid-phrase and "Back" was compressed to a
+                // blank white rectangle — a control the owner could still click
+                // and could no longer read.
                 Text(helper)
                     .mynahFont(.callout)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.trailing)
+                    .layoutPriority(-1)
             }
+            // Buttons keep their intrinsic width. A squeezed label is not a
+            // smaller button, it is an unreadable one.
             trailing
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
         }
     }
 }

@@ -675,7 +675,13 @@ public struct BrainSetupPlanner: Sendable {
     /// "an Anthropic API key", not "a Anthropic API key". Crude, but every
     /// provider name in the catalog is a plain word starting with a letter, and
     /// this text is read by the owner on the first screen they ever see.
-    static func indefiniteArticle(for noun: String) -> String {
+    ///
+    /// Public because the app module needs it too and did not have it: the
+    /// Connect screen built its own "Get a \(provider) key" by interpolation and
+    /// shipped "Get a Anthropic key" on the button that is the entire point of
+    /// that screen. One copy, or this happens again the next time someone writes
+    /// the phrase.
+    public static func indefiniteArticle(for noun: String) -> String {
         guard let first = noun.lowercased().first else { return "a" }
         return "aeiou".contains(first) ? "an" : "a"
     }

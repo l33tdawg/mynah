@@ -78,6 +78,59 @@ public struct ModelCallRecord: Sendable, Equatable {
     }
 }
 
+/// A turn checking in while it is still running.
+///
+/// Passed to `ToolLoop.run(onProgress:)` on a cadence rather than once, because
+/// a 300-second budget cannot be covered by a single "still working" — see
+/// `WorkingReply.progressAfterSeconds`.
+public struct ToolLoopProgress: Sendable {
+    /// Tools that have finished, in order.
+    public var completed: [String]
+    /// The tool about to run, if the model has chosen one.
+    public var pending: String?
+    /// How many progress messages have already gone out this turn.
+    public var index: Int
+    /// Raw output of the last finished tool.
+    ///
+    /// Carried so the message can say what was *found* rather than which tool
+    /// ran. `WorkingReply` reduces it to a count and, at most, a proper noun the
+    /// owner themselves used — it is never quoted, because a tool result is
+    /// text written by strangers on the internet.
+    public var lastResult: String?
+    /// What the owner said, so a place named in the reply can be checked against
+    /// their own words rather than taken from a search result alone.
+    public var request: String
+
+    public init(
+        completed: [String],
+        pending: String? = nil,
+        index: Int = 0,
+        lastResult: String? = nil,
+        request: String = ""
+    ) {
+        self.completed = completed
+        self.pending = pending
+        self.index = index
+        self.lastResult = lastResult
+        self.request = request
+    }
+
+    /// The line to send, or `nil` to stay quiet.
+    public var line: String? {
+        var findings = WorkingReply.Findings.none
+        if let lastResult {
+            findings.count = WorkingReply.resultCount(in: lastResult)
+            findings.subject = WorkingReply.sharedSubject(request: request, result: lastResult)
+        }
+        return WorkingReply.progressLine(
+            completed: completed,
+            pending: pending,
+            index: index,
+            findings: findings
+        )
+    }
+}
+
 /// Everything the loop did, for logging and for latency reporting.
 public struct ToolLoopTrace: Sendable, Equatable {
     public var model: String
@@ -247,12 +300,26 @@ public final class ToolLoop: @unchecked Sendable {
     /// ceiling was "10 iterations times however long each happens to take",
     /// which on a capped turn was already 101 s at five.
     ///
-    /// 90 s is the owner's number and the reasoning behind it is right: two
-    /// exchanges of 45 beat one wait of 200, because a partial answer they can
-    /// push on ("keep digging") is worth more than a complete one that arrives
-    /// after they have put the phone down. That only holds if the wrap-up says
-    /// what it was still doing — see `BrainPrompts.forcedSummary`.
-    public static let defaultDeadlineSeconds: TimeInterval = 90
+    /// It was 90, on the reasoning that two exchanges of 45 beat one wait of
+    /// 200 — a partial answer the owner can push on is worth more than a
+    /// complete one that arrives after they have put the phone down.
+    ///
+    /// That reasoning was about *silence*, not about time, and it stopped
+    /// applying the moment the turn could speak while it worked. Measured at 90:
+    /// two `sage_recall`s and then the clock, so the note the owner asked for
+    /// became "would you like me to proceed?" — a question they now have to
+    /// answer and wait for again. The budget was cheaper than waiting only while
+    /// waiting meant staring at nothing.
+    ///
+    /// 300 is the owner's number, for complex work, given `WorkingReply` now
+    /// reports progress on a cadence. It also happens to line up with the cap:
+    /// at 40–60 s a call, 300 s buys five or six iterations before the clock
+    /// binds, which is recall, recall again, search, write, and the wrap-up —
+    /// the shape of the turn this whole thread has been about.
+    ///
+    /// A fast backend will never reach it. This is a ceiling for the worst case,
+    /// not a target.
+    public static let defaultDeadlineSeconds: TimeInterval = 300
 
     /// Floor for what the wrap-up is assumed to cost, and the estimate used
     /// before this turn has measured anything.
@@ -577,12 +644,19 @@ public final class ToolLoop: @unchecked Sendable {
     ///   - onToolDecision: called once, the moment the model has chosen its
     ///     first tools and before any of them run. The appliance uses this to
     ///     say something true while the owner waits — see `WorkingReply`.
+    ///   - onProgress: called on a cadence while the turn runs — see
+    ///     `WorkingReply.progressAfterSeconds` and `maximumProgressMessages` —
+    ///     with the tools already finished, the one about to run, how many
+    ///     updates have gone out, and the last tool's raw output. Carries facts
+    ///     rather than a timer so the message can say what was found instead of
+    ///     "still working".
     public func run(
         transcript: String,
         tools: [MCPTool]? = nil,
         history: [BrainMessage] = [],
         images: [Data] = [],
-        onToolDecision: (@Sendable ([String]) async -> Void)? = nil
+        onToolDecision: (@Sendable ([String]) async -> Void)? = nil,
+        onProgress: (@Sendable (ToolLoopProgress) async -> Void)? = nil
     ) async throws -> ToolLoopResult {
         let started = Date()
         let catalogue: [MCPTool]
@@ -604,6 +678,13 @@ public final class ToolLoop: @unchecked Sendable {
         var trace = ToolLoopTrace(model: backend.modelName, toolsOffered: catalogue.count)
         var reply = ""
         let cap = max(1, configuration.maxIterations)
+
+        // Progress cadence. Measured from the last thing the owner heard — which
+        // is the first `onToolDecision` line, not the start of the turn — so the
+        // two never arrive together.
+        var progressCount = 0
+        var lastSpokeAt = started
+        var lastToolResult: String?
 
         for iteration in 1...cap {
             // Checked before the call, not after, and never on the first pass:
@@ -680,9 +761,32 @@ public final class ToolLoop: @unchecked Sendable {
                 await onToolDecision(response.toolCalls.map(\.name))
             }
 
+            // Check in before running the next batch, not after: "checking
+            // online now" is worth saying while it is still true, and a message
+            // that lands after the work it describes has finished is noise.
+            if let onProgress,
+               progressCount < WorkingReply.maximumProgressMessages,
+               Date().timeIntervalSince(lastSpokeAt) >= WorkingReply.progressAfterSeconds {
+                let update = ToolLoopProgress(
+                    completed: trace.toolCalls.map(\.name),
+                    pending: response.toolCalls.first?.name,
+                    index: progressCount,
+                    lastResult: lastToolResult,
+                    request: transcript
+                )
+                // A turn with nothing new to report stays quiet and does not
+                // burn one of its three updates doing so.
+                if update.line != nil {
+                    await onProgress(update)
+                    progressCount += 1
+                    lastSpokeAt = Date()
+                }
+            }
+
             for call in response.toolCalls {
                 let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
                 trace.toolCalls.append(record)
+                lastToolResult = record.result
                 messages.append(
                     .toolResult(
                         name: call.name,

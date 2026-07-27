@@ -122,6 +122,21 @@ public actor VoiceBridgeDaemon {
     /// message cannot bleed into each other's context.
     private var histories: [String: [BrainMessage]] = [:]
 
+    /// The last "hang on" line sent to each thread.
+    ///
+    /// Kept so the next one can avoid repeating it. Random choice from four
+    /// options still repeats about a quarter of the time, and the same sentence
+    /// twice running is *more* obviously mechanical than the same sentence
+    /// always — it reads as something that tried to sound human and slipped.
+    ///
+    /// Per-thread, and deliberately not persisted: it is a conversational tic,
+    /// not state worth surviving a restart.
+    private var lastWorkingLines: [String: String] = [:]
+
+    func lastWorkingLine(for key: String) -> String? { lastWorkingLines[key] }
+
+    func rememberWorkingLine(_ line: String, for key: String) { lastWorkingLines[key] = line }
+
     /// Fetched once and reused. `tools/list` costs a round trip and the
     /// catalogue does not change while the server is up.
     private var cachedTools: [MCPTool]?
@@ -312,7 +327,17 @@ public actor VoiceBridgeDaemon {
                 history: histories[key] ?? [],
                 images: resolveImages(message),
                 onToolDecision: { [weak self] chosen in
-                    guard let self, let line = WorkingReply.line(forTools: chosen) else { return }
+                    guard let self else { return }
+                    let previous = await self.lastWorkingLine(for: key)
+                    guard let line = WorkingReply.line(forTools: chosen, previous: previous) else {
+                        return
+                    }
+                    await self.rememberWorkingLine(line, for: key)
+                    await self.reply(line, to: recipient)
+                },
+                onProgress: { [weak self] update in
+                    guard let self, let line = update.line else { return }
+                    await self.rememberWorkingLine(line, for: key)
                     await self.reply(line, to: recipient)
                 }
             )

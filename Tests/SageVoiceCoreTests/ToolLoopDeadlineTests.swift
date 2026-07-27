@@ -323,10 +323,29 @@ final class ToolLoopDeadlineTests: XCTestCase {
 
     // MARK: The numbers themselves
 
+    /// 90 → 300. The first number was chosen against *silence*: waiting was
+    /// cheap only while waiting meant staring at nothing. Measured at 90, the
+    /// appliance got two `sage_recall`s and then the clock, so a request for a
+    /// note came back as "would you like me to proceed?" — a question the owner
+    /// then has to answer and wait through again, which is strictly worse than
+    /// the wait it was avoiding.
+    ///
+    /// `WorkingReply` now reports progress on a cadence, so the turn is audible
+    /// while it works and the tradeoff moved. The budget is only defensible
+    /// while that remains true, which is what the second half of this asserts.
     func testTheShippedBudgetIsTheOneTheApplianceWasTunedFor() {
-        XCTAssertEqual(ToolLoop.defaultDeadlineSeconds, 90)
+        XCTAssertEqual(ToolLoop.defaultDeadlineSeconds, 300)
         XCTAssertEqual(ToolLoop.summaryReserveSeconds, 12)
         XCTAssertEqual(ToolLoop.defaultMaxIterations, 10)
+
+        // A long budget without progress messages is just a long silence, which
+        // is the configuration the owner has already reported twice as a hang.
+        XCTAssertGreaterThan(WorkingReply.maximumProgressMessages, 0)
+        XCTAssertLessThan(
+            WorkingReply.progressAfterSeconds,
+            ToolLoop.defaultDeadlineSeconds / 2,
+            "the turn can outlast its first check-in by more than half the budget"
+        )
 
         // The cap has to be loose enough that it is not what ends a normal
         // research turn. Recall, recall again, search, write is four before
