@@ -44,7 +44,13 @@ public enum OllamaClientError: Error, CustomStringConvertible, Equatable {
 
 // MARK: - Wire encoding
 
-private extension BrainMessage {
+// Internal rather than private, so `PromptLatencyBudgetTests` can assert on the
+// exact bytes that go out. These bytes *are* the prompt cache key — llama.cpp
+// matches a byte prefix, not parsed JSON — and keeping them unreachable from a
+// test is how a key-ordering change silently cost every turn 17 seconds without
+// turning anything red.
+
+extension BrainMessage {
     /// Ollama's `/api/chat` message shape.
     var ollamaWireObject: [String: Any] {
         var object: [String: Any] = [
@@ -69,7 +75,7 @@ private extension BrainMessage {
     }
 }
 
-private extension BrainToolCall {
+extension BrainToolCall {
     var ollamaWireObject: [String: Any] {
         var function: [String: Any] = [
             "name": name,
@@ -86,7 +92,7 @@ private extension BrainToolCall {
     }
 }
 
-private extension BrainTool {
+extension BrainTool {
     var ollamaWireObject: [String: Any] {
         [
             "type": "function",
