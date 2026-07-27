@@ -212,4 +212,94 @@ final class WorkingReplyTests: XCTestCase {
         XCTAssertEqual(lines.count, WorkingReply.maximumProgressMessages)
         XCTAssertEqual(Set(lines).count, lines.count, "an update repeated an earlier one verbatim")
     }
+
+    // MARK: Instant
+
+    /// The reported failure: "Having a look." arrived most of a minute after the
+    /// question, because `line(forTools:)` waits on a tool decision and deciding
+    /// costs a whole model call. Late enough to be worse than nothing — by then
+    /// the owner has already concluded it is broken.
+    func testTheBacklogQuestionFromTheThreadGetsAnInstantLine() {
+        let line = WorkingReply.instantLine(
+            forRequest: "any other items on our task list / backlog ?",
+            chooser: { _ in 0 }
+        )
+        XCTAssertEqual(line, "Let me check your backlog.")
+    }
+
+    /// What separates this from the acknowledgement the owner already rejected
+    /// ("they sound very fake and don't make sense"): it is derived from their
+    /// own sentence, not predicted from the model. If they said backlog, saying
+    /// backlog back is true before anything has run.
+    func testTheLineComesFromTheOwnersOwnWords() {
+        XCTAssertEqual(
+            WorkingReply.instantOptions(forRequest: "what did we talk about in Tokyo last week")?.first,
+            "Let me go back through that."
+        )
+        XCTAssertEqual(
+            WorkingReply.instantOptions(forRequest: "whats the latest news on eurorack")?.first,
+            "Looking into that now."
+        )
+    }
+
+    /// The first turn in the reported thread — "add a note to your sage task
+    /// list that we need to check on the a100 benchmarks before Friday" — got no
+    /// acknowledgement and read correctly. A write answers before an
+    /// acknowledgement would land, and this thread is Note to Self, where two
+    /// bubbles where one would do is noise.
+    func testFastWritesStillSayNothing() {
+        XCTAssertNil(
+            WorkingReply.instantLine(
+                forRequest: "add a note to your sage task list that we need to check on the a100 benchmarks before Friday"
+            )
+        )
+        XCTAssertNil(WorkingReply.instantLine(forRequest: "remind me to pay the signal number"))
+    }
+
+    func testSmallTalkStillSaysNothing() {
+        for chatter in ["thanks bro thats all", "never mind", "good night", "hey"] {
+            XCTAssertNil(
+                WorkingReply.instantLine(forRequest: chatter),
+                "\"\(chatter)\" got an acknowledgement it did not need"
+            )
+        }
+    }
+
+    /// Nothing said instantly may name a tool or a source, because at this point
+    /// nothing has chosen one. "Let me check your backlog" is safe — they said
+    /// backlog. "Searching online" would not be.
+    func testNoInstantLinePromisesSomethingUnknowable() {
+        let requests = [
+            "any other items on our task list / backlog ?",
+            "what did we talk about in Tokyo",
+            "make me a list of the shops",
+            "whats the latest news",
+            "what time is the festival?"
+        ]
+        for request in requests {
+            for line in WorkingReply.instantOptions(forRequest: request) ?? [] {
+                for promise in ["online", "searching", "web", "memory", "sage"] {
+                    XCTAssertFalse(
+                        line.localizedCaseInsensitiveContains(promise),
+                        "\"\(line)\" promises \(promise) before anything has decided to do it"
+                    )
+                }
+            }
+        }
+    }
+
+    func testTheInstantLineVariesToo() {
+        let options = WorkingReply.instantOptions(forRequest: "any other items on our backlog?") ?? []
+        XCTAssertGreaterThan(options.count, 1)
+        for index in 0..<options.count {
+            XCTAssertNotEqual(
+                WorkingReply.instantLine(
+                    forRequest: "any other items on our backlog?",
+                    previous: options[0],
+                    chooser: { _ in index }
+                ),
+                options[0]
+            )
+        }
+    }
 }

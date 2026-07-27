@@ -30,6 +30,108 @@ import Foundation
 /// from one pool of friendly noises.
 public enum WorkingReply {
 
+    // MARK: - Instant
+
+    /// Said the moment the message lands, before any model call.
+    ///
+    /// `line(forTools:)` cannot be instant: it waits for the model to choose a
+    /// tool, and choosing costs a whole model call — 15–40 s on this appliance.
+    /// Observed in the thread as "Having a look." arriving most of a minute after
+    /// the question, which is late enough to be worse than nothing, because by
+    /// then the owner has already decided it is broken.
+    ///
+    /// The obvious fix is the one this product already rejected: a fixed
+    /// acknowledgement sent on arrival. The owner's verdict was "they sound very
+    /// fake and don't make sense", and the reason is worth restating — it fired
+    /// before anything was known, so it was guessing, and a turn that says "let
+    /// me look that up" and then answers from memory has told the owner
+    /// something untrue about itself.
+    ///
+    /// What is different here is the source. This is derived from *the owner's
+    /// own sentence*, which is available instantly and is not a guess about the
+    /// model's behaviour. If they asked about their backlog, "let me check the
+    /// backlog" is true because they said backlog — not because anything
+    /// predicted a tool call.
+    ///
+    /// Silence remains the default. Anything that cannot be classified with
+    /// confidence says nothing, because a wrong instant line is exactly the
+    /// failure this is trying not to repeat.
+    public static func instantLine(
+        forRequest request: String,
+        previous: String? = nil,
+        chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
+    ) -> String? {
+        guard let options = instantOptions(forRequest: request), !options.isEmpty else { return nil }
+        let fresh = options.filter { $0 != previous }
+        let pool = fresh.isEmpty ? options : fresh
+        return pool[min(max(chooser(pool.count), 0), pool.count - 1)]
+    }
+
+    /// Classifies the request from its wording alone. Deliberately conservative:
+    /// every branch here has to be true of *any* turn that reaches it.
+    static func instantOptions(forRequest request: String) -> [String]? {
+        let text = request.lowercased()
+
+        func mentions(_ words: [String]) -> Bool {
+            words.contains { text.contains($0) }
+        }
+
+        // Fast writes answer before an acknowledgement would land, and the
+        // thread is the owner's own Note to Self — two bubbles where one would
+        // do is noise. "add a note ... before Friday" already behaves this way
+        // and reads correctly.
+        guard !mentions(["add a note", "add a task", "remind me", "save that", "remember that", "note that"]) else {
+            return nil
+        }
+        // Nothing to acknowledge.
+        guard !mentions(["thanks", "thank you", "never mind", "nevermind", "forget it", "cancel", "good night", "goodnight"]) else {
+            return nil
+        }
+        guard text.count > 12 else { return nil }
+
+        if mentions(["backlog", "task list", "todo", "to-do", "inbox"]) {
+            return [
+                "Let me check your backlog.",
+                "Checking the list now.",
+                "One sec, pulling up your tasks."
+            ]
+        }
+        // Stems, not whole phrases. "what did we talk about" and "the shops we
+        // talked about" are the same question, and matching only the past tense
+        // sent the first one to the generic branch.
+        if mentions(["we talk", "we discuss", "we said", "you told me", "from before", "earlier", "last time", "remember when"]) {
+            return [
+                "Let me go back through that.",
+                "Digging that up now.",
+                "One sec, looking back."
+            ]
+        }
+        if mentions(["note", "document", "write up", "markdown", "list of", "compile", "export"]) {
+            return [
+                "On it — let me pull that together.",
+                "Right, working on that now.",
+                "Give me a minute on that."
+            ]
+        }
+        if mentions(["news", "latest", "price", "who is", "what's on", "look up", "search", "find me"]) {
+            return [
+                "Looking into that now.",
+                "On it — give me a moment.",
+                "Right, let me find out."
+            ]
+        }
+        // A question about the owner's own world. Broad, so it gets the most
+        // neutral wording — nothing here promises a search, a memory, or a file.
+        if mentions(["?", "what", "which", "where", "how many", "any other"]) {
+            return [
+                "Let me have a look.",
+                "One moment.",
+                "On it."
+            ]
+        }
+        return nil
+    }
+
     // MARK: - First word
 
     /// Alternatives for a set of chosen tools, or `nil` to stay quiet.

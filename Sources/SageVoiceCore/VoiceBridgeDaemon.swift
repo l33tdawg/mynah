@@ -142,6 +142,14 @@ public actor VoiceBridgeDaemon {
     /// not state worth surviving a restart.
     private var lastWorkingLines: [String: String] = [:]
 
+    /// Whether this turn already said something when the message arrived.
+    ///
+    /// Turn-scoped rather than per-thread: it exists only to stop the
+    /// tool-decision line repeating news the arrival line already gave, and that
+    /// question is answered and finished within one turn. Safe as a single value
+    /// because turns are answered sequentially — see the intake loop.
+    private var spokeOnArrival = false
+
     func lastWorkingLine(for key: String) -> String? { lastWorkingLines[key] }
 
     func rememberWorkingLine(_ line: String, for key: String) { lastWorkingLines[key] = line }
@@ -349,6 +357,22 @@ public actor VoiceBridgeDaemon {
             return .failed("transcript of \(transcript.count) characters exceeds the limit")
         }
 
+        // Before the model, not after it. Everything else the appliance says
+        // while working is gated on a tool decision, and deciding costs a whole
+        // model call — which is why "Having a look." landed most of a minute
+        // after the question. This is derived from the owner's own sentence, so
+        // it needs nothing from the model and is not a prediction about it.
+        spokeOnArrival = false
+        let threadKey = recipient.description
+        if let opener = WorkingReply.instantLine(
+            forRequest: transcript,
+            previous: lastWorkingLines[threadKey]
+        ) {
+            spokeOnArrival = true
+            lastWorkingLines[threadKey] = opener
+            await reply(opener, to: recipient)
+        }
+
         // Anything left over from a turn that failed after writing a note. The
         // file stays on disk — it is the owner's, and the turn that made it may
         // simply have run out of iterations — but it must not ride out on the
@@ -374,6 +398,11 @@ public actor VoiceBridgeDaemon {
                 images: batch.flatMap { resolveImages($0) },
                 onToolDecision: { [weak self] chosen in
                     guard let self else { return }
+                    // Already spoke on arrival. Saying "having a look" a second
+                    // time, seconds after "let me check your backlog", is the
+                    // same news twice — the next thing the owner hears should be
+                    // a progress update or the answer.
+                    guard await !self.spokeOnArrival else { return }
                     let previous = await self.lastWorkingLine(for: key)
                     guard let line = WorkingReply.line(forTools: chosen, previous: previous) else {
                         return
