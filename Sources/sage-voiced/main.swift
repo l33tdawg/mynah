@@ -175,7 +175,11 @@ func makeBackend(
     case "openai":
         return try openAICompat(.openAI, defaultModel: "gpt-5", keyVariable: "OPENAI_API_KEY")
     case "deepseek":
-        return try openAICompat(.deepSeek, defaultModel: "deepseek-chat", keyVariable: "DEEPSEEK_API_KEY")
+        // v4-flash, not "deepseek-chat": the alias no longer resolves on this
+        // account — /v1/models serves only deepseek-v4-flash and deepseek-v4-pro.
+        // Flash is the owner's choice and the right one here, since the whole
+        // reason to leave the local model is turn latency.
+        return try openAICompat(.deepSeek, defaultModel: "deepseek-v4-flash", keyVariable: "DEEPSEEK_API_KEY")
     case "moonshot", "kimi":
         return try openAICompat(.moonshot, defaultModel: "kimi-k2-0905-preview", keyVariable: "MOONSHOT_API_KEY")
     case "groq":
@@ -612,7 +616,8 @@ func runDaemon(_ arguments: [String]) -> Never {
         ritual: arguments.contains("--no-sage-ritual")
             ? nil
             : SageRitual(tools: mcp, log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }),
-        notes: notes
+        notes: notes,
+        conversations: ConversationStore(),
     )
 
     runAndExit {

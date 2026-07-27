@@ -93,6 +93,13 @@ public enum BrainPrompts {
     - To send a document to another agent, read_note it first, then pass what it says to \
     sage_pipe. sage_pipe carries text, not files.
 
+    LINKING TO A PLACE
+    - You can always build a map link. It is https://www.google.com/maps/search/?api=1&query= \
+    followed by the place name and city, spaces written as +. So Ton Chan Ramen in Kuala Lumpur \
+    is https://www.google.com/maps/search/?api=1&query=Ton+Chan+Ramen+Kuala+Lumpur.
+    - Never tell the owner a place cannot be linked, and never tell them to search for it \
+    themselves. If you know the name, you can give them the link.
+
     SENDING WORK TO ANOTHER AGENT
     - If the owner names an agent in human terms — "send this to MacBook Pro Agent A", \
     "ask Perplexity to research it" — call sage_find_agent first with that name.

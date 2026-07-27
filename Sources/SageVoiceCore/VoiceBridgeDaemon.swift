@@ -150,6 +150,24 @@ public actor VoiceBridgeDaemon {
     /// because turns are answered sequentially — see the intake loop.
     private var spokeOnArrival = false
 
+    /// Writes history after every turn.
+    ///
+    /// After, not on shutdown: the daemon is stopped with `pkill` on every
+    /// deploy and dies outright on a crash, so a save that only runs on a clean
+    /// exit is a save that never runs when it matters.
+    ///
+    /// Failures are logged and swallowed. Losing the ability to resume is a
+    /// disappointment; failing the turn the owner is waiting on, because a cache
+    /// file would not write, is a fault.
+    private func persistConversations() {
+        guard let conversations else { return }
+        do {
+            try conversations.save(histories)
+        } catch {
+            log("[daemon] could not save conversation history: \(error)")
+        }
+    }
+
     func lastWorkingLine(for key: String) -> String? { lastWorkingLines[key] }
 
     func rememberWorkingLine(_ line: String, for key: String) { lastWorkingLines[key] = line }
@@ -177,6 +195,10 @@ public actor VoiceBridgeDaemon {
     /// `CompositeToolSource` makes for web search not being an MCP server.
     private let notes: NotesToolSource?
 
+    /// Where history goes so a deploy does not erase the conversation.
+    /// `nil` disables persistence entirely, which is what the tests use.
+    private let conversations: ConversationStore?
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
@@ -184,6 +206,7 @@ public actor VoiceBridgeDaemon {
         configuration: Configuration = Configuration(),
         ritual: SageRitual? = nil,
         notes: NotesToolSource? = nil,
+        conversations: ConversationStore? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -192,12 +215,25 @@ public actor VoiceBridgeDaemon {
         self.configuration = configuration
         self.ritual = ritual
         self.notes = notes
+        self.conversations = conversations
         self.log = log
     }
 
     /// Runs until the message stream finishes (i.e. until `signal.stop()`).
     public func run() async {
         await signal.start()
+
+        // Before anything else the owner might reply into. A restart is
+        // invisible from their side — they just carry on talking — so the
+        // conversation has to be back before the first message can arrive.
+        if let conversations {
+            let restored = conversations.load()
+            if !restored.isEmpty {
+                histories = restored
+                let turns = restored.values.reduce(0) { $0 + $1.count }
+                log("[daemon] resumed \(restored.count) conversation(s), \(turns) turns")
+            }
+        }
 
         // SAGE's boot sequence, before the warm-up and not after. Inception's
         // reply becomes part of the system prompt, and the warm-up's only value
@@ -412,6 +448,13 @@ public actor VoiceBridgeDaemon {
                 },
                 onProgress: { [weak self] update in
                     guard let self, let line = update.line else { return }
+                    // "Looking that up online — give me a few seconds." followed
+                    // by "Looking online for the rest of it." is two true
+                    // sentences and one piece of news. Varying the wording was
+                    // supposed to stop the appliance sounding mechanical; a
+                    // stutter puts that back.
+                    let previous = await self.lastWorkingLine(for: key)
+                    guard !WorkingReply.saysTheSameThing(line, as: previous) else { return }
                     await self.rememberWorkingLine(line, for: key)
                     await self.reply(line, to: recipient)
                 }
@@ -420,6 +463,7 @@ public actor VoiceBridgeDaemon {
                 Self.conversationOnly(result.messages),
                 keepingLastTurns: configuration.historyTurnLimit
             )
+            persistConversations()
             // Documents this turn produced go out with the sentence that
             // announces them, not as a second message. On Note-to-Self every
             // message is the owner's own outgoing bubble, so a follow-up bubble
@@ -559,7 +603,13 @@ public actor VoiceBridgeDaemon {
         to recipient: SignalRecipient,
         attaching attachments: [URL] = []
     ) async {
-        let body = configuration.replyPrefix.isEmpty ? text : configuration.replyPrefix + text
+        // On the way out only. The model writes bare domains — "check their
+        // website mamaison.com.my" — and Signal linkifies nothing without a
+        // scheme, so the owner gets a phone screen of addresses to retype.
+        // Applied here rather than to history: the model keeps seeing what it
+        // actually said, and nothing about this can reach routing.
+        let linked = Linkify.promotingBareDomains(in: text)
+        let body = configuration.replyPrefix.isEmpty ? linked : configuration.replyPrefix + linked
         do {
             _ = try await signal.send(
                 text: body,

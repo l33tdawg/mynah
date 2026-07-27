@@ -120,17 +120,68 @@ public enum WorkingReply {
                 "Right, let me find out."
             ]
         }
-        // A question about the owner's own world. Broad, so it gets the most
-        // neutral wording — nothing here promises a search, a memory, or a file.
-        if mentions(["?", "what", "which", "where", "how many", "any other"]) {
-            return [
-                "Let me have a look.",
-                "One moment.",
-                "On it."
-            ]
-        }
-        return nil
+        // Everything else. Speaking is the default, and that is a correction:
+        // this started as a keyword allowlist, and "the ramen shops near klcc"
+        // matched none of it — so the owner waited about 30 seconds for the
+        // tool-decision line, which is the exact failure the instant line
+        // exists to remove. An allowlist is the wrong shape for "say something
+        // unless it would be wrong", because the cases where it is wrong are
+        // few and nameable while the cases where it is right are unbounded.
+        //
+        // Safe as a default because these three name nothing: no tool, no
+        // source, no claim beyond having received the message. They are true of
+        // any turn that reaches here, which small talk and fast writes do not.
+        return [
+            "Let me have a look.",
+            "One moment.",
+            "On it."
+        ]
     }
+
+    // MARK: - Not saying it twice
+
+    /// Whether two lines carry the same news.
+    ///
+    /// Observed twice in the thread: "Looking that up online — give me a few
+    /// seconds." followed by "Looking online for the rest of it.", and "On it —
+    /// having a look online." followed by the same. Both pairs are individually
+    /// true and together read as a stutter, which undoes the point of varying
+    /// the wording in the first place.
+    ///
+    /// Compares meaningful words rather than whole strings, because the whole
+    /// problem is two different strings meaning one thing.
+    public static func saysTheSameThing(_ line: String, as previous: String?) -> Bool {
+        guard let previous else { return false }
+        let a = significantWords(line)
+        let b = significantWords(previous)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        // Half is deliberately lenient. A false positive costs one update the
+        // owner would not have missed; a false negative is the stutter.
+        return Double(a.intersection(b).count) / Double(min(a.count, b.count)) >= 0.5
+    }
+
+    private static func significantWords(_ line: String) -> Set<String> {
+        Set(
+            line.lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .map(String.init)
+                .filter { $0.count > 2 && !filler.contains($0) }
+                // Crudest possible stem, and it has to be here: the observed
+                // stutter was "having a look online" then "Looking online",
+                // which share their whole meaning and not one exact token.
+                // Four characters collapses look/looking, check/checking,
+                // search/searching without pulling unrelated words together.
+                .map { String($0.prefix(4)) }
+        )
+    }
+
+    /// Words that carry no news, so two lines sharing only these are not saying
+    /// the same thing.
+    private static let filler: Set<String> = [
+        "the", "and", "for", "you", "let", "give", "few", "one", "now", "just",
+        "some", "get", "sec", "that", "this", "them", "there", "here", "with",
+        "moment", "second", "seconds", "minute", "hang", "still"
+    ]
 
     // MARK: - First word
 

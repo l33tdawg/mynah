@@ -302,4 +302,66 @@ final class WorkingReplyTests: XCTestCase {
             )
         }
     }
+
+    /// The reported gap: "the ramen shops near klcc" matched no keyword, so the
+    /// owner waited about 30 seconds for the tool-decision line — exactly the
+    /// failure the instant line exists to remove. An allowlist is the wrong
+    /// shape for "say something unless it would be wrong": the wrong cases are
+    /// few and nameable, the right ones are unbounded.
+    func testAnOrdinaryRequestWithNoKeywordsStillGetsAnInstantLine() {
+        for request in [
+            "the ramen shops near klcc",
+            "hugo boss stores in bukit bintang",
+            "a good place for coffee tomorrow morning"
+        ] {
+            XCTAssertNotNil(
+                WorkingReply.instantLine(forRequest: request),
+                "\"\(request)\" waits on a model call before anything is said"
+            )
+        }
+    }
+
+    /// The generic fallback is only safe while it claims nothing. The moment it
+    /// names a tool or a source it becomes a guess about behaviour that has not
+    /// been decided.
+    func testTheFallbackClaimsNothing() {
+        for line in WorkingReply.instantOptions(forRequest: "the ramen shops near klcc") ?? [] {
+            for promise in ["online", "search", "web", "memory", "sage", "note", "backlog"] {
+                XCTAssertFalse(
+                    line.localizedCaseInsensitiveContains(promise),
+                    "the catch-all line \"\(line)\" promises \(promise)"
+                )
+            }
+        }
+    }
+
+    // MARK: Not saying it twice
+
+    /// Both pairs observed in the thread. Individually true, together a stutter.
+    func testTheStutterFromTheThreadIsCaught() {
+        XCTAssertTrue(WorkingReply.saysTheSameThing(
+            "Looking online for the rest of it.",
+            as: "Looking that up online — give me a few seconds."
+        ))
+        XCTAssertTrue(WorkingReply.saysTheSameThing(
+            "Looking online for the rest of it.",
+            as: "On it — having a look online."
+        ))
+    }
+
+    /// Real news must still get through. Suppressing "found a few options in
+    /// Tokyo" because the opener also said "look" would delete the only update
+    /// worth sending.
+    func testActualNewsIsNotSuppressed() {
+        XCTAssertFalse(WorkingReply.saysTheSameThing(
+            "Found a few options in Tokyo — let me compile that.",
+            as: "Looking that up online — give me a few seconds."
+        ))
+        XCTAssertFalse(WorkingReply.saysTheSameThing(
+            "Memory didn't have all of it — checking online now.",
+            as: "Let me go back through that."
+        ))
+        XCTAssertFalse(WorkingReply.saysTheSameThing("Almost there.", as: "One moment."))
+        XCTAssertFalse(WorkingReply.saysTheSameThing("anything", as: nil))
+    }
 }
