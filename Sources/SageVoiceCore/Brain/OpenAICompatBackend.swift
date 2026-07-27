@@ -271,7 +271,12 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
                     // `arguments` is spec'd as a JSON *string*, so it always
                     // needs a second parse. `normalizeArguments` already handles
                     // that plus the double-encoded variant seen in the wild.
-                    arguments: OllamaClient.normalizeArguments(function["arguments"])
+                    arguments: OllamaClient.normalizeArguments(function["arguments"]),
+                    // Gemini hides its thought_signature in here. Captured
+                    // whole rather than reaching for the Google key, so a
+                    // provider that puts something else in extra_content keeps
+                    // working without another special case.
+                    providerPayload: entry["extra_content"]
                 )
             }
 
@@ -350,8 +355,8 @@ extension BrainMessage {
             // spec asks for; sending "" makes some providers reject the turn.
             object["content"] = content.isEmpty ? NSNull() : content
             if !toolCalls.isEmpty {
-                object["tool_calls"] = toolCalls.enumerated().map { index, call in
-                    [
+                object["tool_calls"] = toolCalls.enumerated().map { index, call -> [String: Any] in
+                    var entry: [String: Any] = [
                         "id": call.id ?? "call_\(index)",
                         "type": "function",
                         "function": [
@@ -360,6 +365,12 @@ extension BrainMessage {
                             "arguments": call.argumentsJSON
                         ]
                     ]
+                    // Replayed byte for byte. Gemini 3.x rejects the request
+                    // that carries the tool result if this is missing.
+                    if let payload = call.providerPayload {
+                        entry["extra_content"] = payload.foundationObject
+                    }
+                    return entry
                 }
             }
 

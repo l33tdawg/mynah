@@ -96,10 +96,30 @@ public struct BrainToolCall: Sendable, Equatable {
     public var name: String
     public var arguments: [String: JSONValue]
 
-    public init(id: String? = nil, name: String, arguments: [String: JSONValue]) {
+    /// Opaque provider data attached to this call, replayed verbatim.
+    ///
+    /// Gemini 3.x puts an encrypted `thought_signature` here and rejects the
+    /// *following* request without it — the turn that carries the tool result:
+    ///
+    ///     400 INVALID_ARGUMENT
+    ///     Function call is missing a thought_signature in functionCall parts.
+    ///
+    /// Which makes it invisible to any check that sends one request. A key can
+    /// pass validation, answer a single question, and fail every turn that
+    /// actually uses a tool result. Nothing here interprets the contents; the
+    /// bytes go back exactly as they arrived.
+    public var providerPayload: JSONValue?
+
+    public init(
+        id: String? = nil,
+        name: String,
+        arguments: [String: JSONValue],
+        providerPayload: JSONValue? = nil
+    ) {
         self.id = id
         self.name = name
         self.arguments = arguments
+        self.providerPayload = providerPayload
     }
 
     /// Compact JSON rendering of `arguments`, for traces and logging.
