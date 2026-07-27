@@ -81,6 +81,9 @@ public actor VoiceBridgeDaemon {
     /// Periodic re-prime. Cancelled on stop.
     private var keepWarmTask: Task<Void, Never>?
 
+    /// Measured turn times, so the acknowledgement can quote a real number.
+    private var estimator = TurnDurationEstimator()
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
@@ -197,7 +200,10 @@ public actor VoiceBridgeDaemon {
         }
 
         if configuration.sendsThinkingAcknowledgement {
-            await reply("…on it.", to: recipient)
+            await reply(
+                WaitingPhrases.acknowledgement(estimatedSeconds: estimator.typicalSeconds),
+                to: recipient
+            )
         }
 
         do {
@@ -208,13 +214,23 @@ public actor VoiceBridgeDaemon {
                 tools: tools,
                 history: histories[key] ?? []
             )
-            // Drop the system prompt; `ToolLoop` prepends its own every turn.
             histories[key] = Self.trimmed(
-                Array(result.messages.dropFirst()),
+                Self.conversationOnly(result.messages),
                 keepingLastTurns: configuration.historyTurnLimit
             )
             await reply(result.reply, to: recipient)
             log("[daemon] \(result.trace.summary)")
+            // Cleanup should tidy a reply, not amputate it. A large gap between
+            // what the model produced and what the owner receives means
+            // `speakable` ate something — most likely an unclosed <think> tag,
+            // which strips to end-of-string.
+            if let raw = result.messages.last?.content {
+                let cleaned = result.reply.count
+                if raw.count > 40, cleaned < raw.count / 2 {
+                    log("[daemon] WARNING reply shrank \(raw.count) -> \(cleaned) chars during cleanup")
+                }
+            }
+            estimator.record(Date().timeIntervalSince(started))
             return .replied(
                 transcript: transcript,
                 reply: result.reply,
@@ -261,6 +277,38 @@ public actor VoiceBridgeDaemon {
         } catch {
             // Nowhere left to report to — the reply channel is what failed.
             log("[daemon] could not send reply to \(recipient): \(error)")
+        }
+    }
+
+    /// Reduces a finished turn to what the *next* turn should remember: the
+    /// owner's words and the answer they were given. Nothing else.
+    ///
+    /// Persisting the tool calls and their results was a real bug, not just
+    /// waste. Observed on the appliance: turn 2 called `sage_federation` and
+    /// answered; turns 3, 4 and 5 then called **no tools at all** and recycled
+    /// that answer, including for "Can you save a memory?" which should have
+    /// written one. With last turn's tool output sitting in context, a 4B model
+    /// concludes it already has the facts and answers from them — so the
+    /// appliance goes stale the moment anything changes on the SAGE node, which
+    /// for an agent manager is the whole job.
+    ///
+    /// It also drops the system turn (`ToolLoop` prepends its own) and every
+    /// assistant turn that carried only tool calls and no speakable text, since
+    /// replaying those without their results is incoherent.
+    static func conversationOnly(_ messages: [BrainMessage]) -> [BrainMessage] {
+        messages.compactMap { message in
+            switch message.role {
+            case .system, .tool:
+                return nil
+            case .user:
+                return message
+            case .assistant:
+                guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return nil
+                }
+                // Strip the tool-call metadata; keep the sentence.
+                return BrainMessage(role: .assistant, content: ToolLoop.speakable(message.content))
+            }
         }
     }
 

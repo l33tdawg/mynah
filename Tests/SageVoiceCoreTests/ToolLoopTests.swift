@@ -357,3 +357,72 @@ final class ToolLoopTests: XCTestCase {
         }
     }
 }
+
+/// Regression tests for the conversation-history bug found on the live
+/// appliance: after one tool call, later turns stopped calling tools at all and
+/// recycled the previous answer.
+final class DaemonHistoryTests: XCTestCase {
+
+    /// Observed on the Mini: turn 2 called `sage_federation` and answered;
+    /// turns 3-5 called NO tools and reused that answer — including for
+    /// "Can you save a memory?", which should have written one. With last
+    /// turn's tool output in context a 4B model answers from it instead of
+    /// asking again, so the appliance goes stale exactly when the SAGE node
+    /// changes — which is the entire job of an agent manager.
+    func testToolCallsAndResultsAreNotCarriedIntoTheNextTurn() {
+        let finished: [BrainMessage] = [
+            .system("prompt"),
+            .user("Are you connected to sage?"),
+            BrainMessage(role: .assistant, content: "", toolCalls: [
+                BrainToolCall(id: "c1", name: "sage_federation", arguments: [:])
+            ]),
+            .toolResult(name: "sage_federation", content: "{\"peers\":0}", id: "c1"),
+            .assistant("You're connected; federation shows zero peers.")
+        ]
+
+        let carried = VoiceBridgeDaemon.conversationOnly(finished)
+
+        XCTAssertEqual(carried.map(\.role), [.user, .assistant])
+        XCTAssertFalse(
+            carried.contains { !$0.toolCalls.isEmpty },
+            "a stale tool call must not reach the next turn"
+        )
+        XCTAssertFalse(
+            carried.contains { $0.role == .tool },
+            "a stale tool RESULT must not reach the next turn"
+        )
+        XCTAssertFalse(
+            carried.contains { $0.content.contains("{\"peers\"") },
+            "the raw tool payload must not reach the next turn"
+        )
+        XCTAssertEqual(carried.last?.content, "You're connected; federation shows zero peers.")
+    }
+
+    /// The system prompt is prepended fresh by ToolLoop every turn; carrying it
+    /// would duplicate it.
+    func testSystemPromptIsNotCarried() {
+        let carried = VoiceBridgeDaemon.conversationOnly([.system("prompt"), .user("hi")])
+        XCTAssertEqual(carried.count, 1)
+        XCTAssertEqual(carried.first?.role, .user)
+    }
+
+    /// The estimate quoted to the owner must ignore a single slow outlier.
+    func testDurationEstimateUsesMedianNotMean() {
+        var estimator = TurnDurationEstimator()
+        [20.0, 22.0, 21.0, 300.0].forEach { estimator.record($0) }
+        let typical = estimator.typicalSeconds ?? 0
+        XCTAssertLessThan(typical, 60, "one 300s recall must not make every reply promise minutes")
+    }
+
+    /// Under ten seconds, an estimate is noise — the answer arrives before the
+    /// owner finishes reading it.
+    func testNoDurationHintForFastTurns() {
+        XCTAssertNil(WaitingPhrases.durationHint(4))
+        XCTAssertNotNil(WaitingPhrases.durationHint(25))
+    }
+
+    func testPhrasePoolIsLargeAndUnique() {
+        XCTAssertGreaterThanOrEqual(WaitingPhrases.all.count, 100)
+        XCTAssertEqual(Set(WaitingPhrases.all).count, WaitingPhrases.all.count, "duplicates")
+    }
+}
