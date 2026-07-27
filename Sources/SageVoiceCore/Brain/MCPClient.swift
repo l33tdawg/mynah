@@ -122,6 +122,17 @@ public final class MCPClient: @unchecked Sendable {
 
     private var process: Process?
     private var stdinHandle: FileHandle?
+    /// Retained so teardown can clear their readabilityHandlers before the
+    /// Process (and therefore the Pipes that own them) is released. Without
+    /// this, a dispatch source can be inside `handle.availableData` when the
+    /// handle is deallocated, which raises an ObjC exception Swift cannot catch.
+    private var stdoutHandle: FileHandle?
+    private var stderrHandle: FileHandle?
+    /// De-duplicates concurrent `start()` calls. Without it, two callers racing
+    /// at daemon boot — e.g. the catalogue hoist and the auto-connect primer —
+    /// both see `handshakeInfo == nil`, both spawn (the second is a no-op), and
+    /// both send `initialize` down the same stdin.
+    private var startTask: Task<MCPServerInfo, Error>?
     private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
     private var nextRequestID = 1
     private var stdoutBuffer = Data()
@@ -187,6 +198,30 @@ public final class MCPClient: @unchecked Sendable {
         if let existing = serverInfo, isRunning {
             return existing
         }
+
+        // Single-flight: concurrent callers await the same handshake rather than
+        // each sending their own `initialize` on the shared stdin.
+        stateLock.lock()
+        if let inFlight = startTask {
+            stateLock.unlock()
+            return try await inFlight.value
+        }
+        let task = Task<MCPServerInfo, Error> { [weak self] in
+            guard let self else { throw MCPClientError.serverExited(-1, "client deallocated") }
+            return try await self.performHandshake()
+        }
+        startTask = task
+        stateLock.unlock()
+
+        defer {
+            stateLock.lock()
+            if startTask == task { startTask = nil }
+            stateLock.unlock()
+        }
+        return try await task.value
+    }
+
+    private func performHandshake() async throws -> MCPServerInfo {
         try spawn()
 
         let result = try await send(
@@ -222,22 +257,52 @@ public final class MCPClient: @unchecked Sendable {
         stateLock.lock()
         let runningProcess = process
         let stdin = stdinHandle
+        let stdout = stdoutHandle
+        let stderr = stderrHandle
         let inFlight = pending
         process = nil
         stdinHandle = nil
+        stdoutHandle = nil
+        stderrHandle = nil
+        startTask = nil
         pending = [:]
         handshakeInfo = nil
         cachedTools = nil
         stateLock.unlock()
 
+        // Detach the readability handlers BEFORE releasing the Process. The
+        // Pipes (and their read FileHandles) are owned solely by the Process,
+        // so dropping the last reference while a dispatch source is inside
+        // `availableData` deallocates the handle mid-read — an ObjC exception
+        // Swift cannot catch, which crashes the daemon on shutdown.
+        stdout?.readabilityHandler = nil
+        stderr?.readabilityHandler = nil
+
         try? stdin?.close()
+
         if runningProcess?.isRunning == true {
-            runningProcess?.terminate()
+            runningProcess?.terminate()  // SIGTERM
+
+            // sage-gui is a Go binary and may trap SIGTERM for graceful
+            // shutdown. Without a bounded wait plus SIGKILL it can outlive the
+            // daemon and hold the SAGE home directory open across a launchd
+            // restart. Poll rather than waitUntilExit() so we cannot hang here.
+            let deadline = Date().addingTimeInterval(Self.terminationGraceSeconds)
+            while runningProcess?.isRunning == true, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if runningProcess?.isRunning == true, let pid = runningProcess?.processIdentifier {
+                kill(pid, SIGKILL)
+            }
         }
+
         for continuation in inFlight.values {
             continuation.resume(throwing: MCPClientError.serverExited(-1, "client stopped"))
         }
     }
+
+    /// How long to let the child exit on SIGTERM before escalating to SIGKILL.
+    private static let terminationGraceSeconds: TimeInterval = 2.0
 
     // MARK: Public API
 
@@ -390,6 +455,8 @@ public final class MCPClient: @unchecked Sendable {
         try? stdinHandle?.close()
         self.process = process
         stdinHandle = stdinPipe.fileHandleForWriting
+        stdoutHandle = stdoutPipe.fileHandleForReading
+        stderrHandle = stderrPipe.fileHandleForReading
         stdoutBuffer = Data()
     }
 

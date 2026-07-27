@@ -145,6 +145,10 @@ public struct ToolLoopResult: Sendable, Equatable {
 public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
     case noTools
     case emptyReply
+    /// The curated tool allowlist matched none of the tools the server publishes.
+    /// Deliberately fatal rather than silently falling back to the full
+    /// catalogue — see `ToolLoop.availableTools()`.
+    case toolAllowlistMatchedNothing(expected: [String], published: [String])
 
     public var description: String {
         switch self {
@@ -152,6 +156,14 @@ public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
             return "The MCP server advertised no tools, so the brain has nothing to drive."
         case .emptyReply:
             return "The model produced no speakable reply."
+        case .toolAllowlistMatchedNothing(let expected, let published):
+            return """
+            None of the \(expected.count) allowlisted tools are published by this MCP server. \
+            Refusing to fall back to the full catalogue, because routing accuracy roughly halves \
+            on the full set and it contains irreversible operations. \
+            Expected any of: \(expected.joined(separator: ", ")). \
+            Server publishes: \(published.joined(separator: ", ")).
+            """
         }
     }
 }
@@ -243,7 +255,24 @@ public final class ToolLoop: @unchecked Sendable {
             return tools
         }
         let filtered = tools.filter { configuration.allowedToolNames.contains($0.name) }
-        return filtered.isEmpty ? tools : filtered
+        guard filtered.isEmpty else {
+            return filtered
+        }
+
+        // The allowlist matched nothing — SAGE has renamed or re-prefixed its
+        // tools, or we are pointed at a differently-branded build.
+        //
+        // Fail CLOSED. Silently widening to the whole catalogue is the worst
+        // possible response: routing accuracy roughly halves at 27 tools
+        // (measured 5-6/12 vs 12/12 on the curated set), so the model would be
+        // at its least reliable exactly when its blast radius is widest — and
+        // the widened set includes irreversible verbs like sage_forget,
+        // sage_register and the governance tools, driven by an ASR transcript
+        // that may contain mishearings.
+        throw ToolLoopError.toolAllowlistMatchedNothing(
+            expected: configuration.allowedToolNames.sorted(),
+            published: tools.map(\.name).sorted()
+        )
     }
 
     /// Runs one voice turn.
@@ -331,10 +360,15 @@ public final class ToolLoop: @unchecked Sendable {
         // it has to produce something speakable.
         if reply.isEmpty {
             trace.hitIterationCap = trace.hitIterationCap || trace.iterations >= cap
-            messages.append(.user(BrainPrompts.forcedSummary))
+            // Build the wrap-up request in a LOCAL copy. This control message is
+            // an instruction to stop calling tools; persisting it into the
+            // history we hand back would leave a standing "stop calling tools"
+            // user turn in the conversation, so the next thing the owner asks
+            // gets answered from nothing instead of hitting SAGE.
+            let summaryMessages = messages + [.user(BrainPrompts.forcedSummary)]
             let response = try await ollama.chat(
                 model: configuration.model,
-                messages: messages,
+                messages: summaryMessages,
                 tools: [],
                 temperature: configuration.temperature,
                 think: configuration.thinkOnSummary,

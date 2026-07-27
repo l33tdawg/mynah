@@ -230,16 +230,37 @@ final class SignalLineSocket: @unchecked Sendable {
     }
 
     private func writeSynchronously(_ frame: Data) throws {
-        guard !isClosedByUs else {
-            throw SignalTransportError.notConnected
-        }
+        // The read pump closes the descriptor on peer EOF WITHOUT setting
+        // isShutDown, so checking isClosedByUs alone is not enough: after
+        // signal-cli restarts, the fd number can already have been recycled by
+        // something else in the process (a URLSession connection to WhisperKit,
+        // an attachment file). Writing then silently succeeds against the wrong
+        // fd — proven in review to inject JSON-RPC bytes into an unrelated file.
+        //
+        // Take a private dup under the lock: dup(2) pins a fd number that stays
+        // valid for the whole write even if the pump closes the original
+        // underneath us, and it avoids holding the lock across a blocking write.
+        let fd: Int32 = try {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !isShutDown, !descriptorClosed else {
+                throw SignalTransportError.notConnected
+            }
+            let duplicate = Darwin.dup(descriptor)
+            guard duplicate >= 0 else {
+                throw SignalTransportError.socketWriteFailed(Self.errnoDescription())
+            }
+            return duplicate
+        }()
+        defer { Darwin.close(fd) }
+
         var offset = 0
         try frame.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress else {
                 return
             }
             while offset < buffer.count {
-                let written = Darwin.write(descriptor, base.advanced(by: offset), buffer.count - offset)
+                let written = Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
                 if written > 0 {
                     offset += written
                     continue
@@ -274,14 +295,22 @@ final class SignalLineSocket: @unchecked Sendable {
     }
 
     private func shutdownSocket() {
+        // Must not shutdown() a descriptor the read pump has already closed:
+        // supervise() calls close() immediately after the lines() loop ends, so
+        // on EVERY clean disconnect the fd number may already belong to
+        // something else. Proven in review to half-close an unrelated socket,
+        // which surfaces as a "flaky network" with no error anywhere.
         lock.lock()
         let alreadyDown = isShutDown
+        let alreadyClosed = descriptorClosed
         isShutDown = true
-        lock.unlock()
-        guard !alreadyDown else {
-            return
+        // Issue the syscall while still holding the lock so the pump cannot
+        // close the descriptor between the check and the shutdown(). shutdown()
+        // on a socket does not block.
+        if !alreadyDown && !alreadyClosed {
+            Darwin.shutdown(descriptor, SHUT_RDWR)
         }
-        Darwin.shutdown(descriptor, SHUT_RDWR)
+        lock.unlock()
     }
 
     private func closeDescriptorOnce() {
