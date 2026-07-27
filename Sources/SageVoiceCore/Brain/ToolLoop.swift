@@ -86,6 +86,14 @@ public struct ToolLoopTrace: Sendable, Equatable {
     public var toolCalls: [ToolCallRecord]
     public var toolsOffered: Int
     public var hitIterationCap: Bool
+    /// The turn ran out of wall clock and was sent to the wrap-up early.
+    ///
+    /// Separate from `hitIterationCap` because they mean opposite things about
+    /// what to change. A capped turn is a model that would not stop calling
+    /// tools; a timed-out turn is a model that was working fine and too slowly.
+    /// Collapsing both into `[CAPPED]` is how the log stops being able to tell
+    /// you which knob to turn.
+    public var hitDeadline: Bool
     public var totalDurationSeconds: TimeInterval
 
     public init(
@@ -95,6 +103,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         toolCalls: [ToolCallRecord] = [],
         toolsOffered: Int = 0,
         hitIterationCap: Bool = false,
+        hitDeadline: Bool = false,
         totalDurationSeconds: TimeInterval = 0
     ) {
         self.model = model
@@ -103,6 +112,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         self.toolCalls = toolCalls
         self.toolsOffered = toolsOffered
         self.hitIterationCap = hitIterationCap
+        self.hitDeadline = hitDeadline
         self.totalDurationSeconds = totalDurationSeconds
     }
 
@@ -127,8 +137,17 @@ public struct ToolLoopTrace: Sendable, Equatable {
             modelSeconds,
             toolSeconds,
             generatedTokens,
-            hitIterationCap ? " [CAPPED]" : ""
+            stopNote
         )
+    }
+
+    /// At most one note, deadline first: when a turn runs out of time on its
+    /// last allowed iteration both flags are true, and the useful fact is that
+    /// the clock is what ended it.
+    private var stopNote: String {
+        if hitDeadline { return " [TIMEOUT]" }
+        if hitIterationCap { return " [CAPPED]" }
+        return ""
     }
 }
 
@@ -206,14 +225,58 @@ extension MCPClient: ToolProviding {
 /// model untouched. Nothing about SAGE's tool set is baked in here, so the loop
 /// keeps working when the server grows a 28th tool.
 public final class ToolLoop: @unchecked Sendable {
-    /// Five is enough for the deepest chain this product actually needs
-    /// (`sage_find_agent` then `sage_pipe`, plus slack) and short enough that a
-    /// confused model cannot spin the Mac mini's fans for a minute.
-    public static let defaultMaxIterations = 5
+    /// The backstop, not the brake. `defaultDeadlineSeconds` is the brake.
+    ///
+    /// This was 5, sized for the deepest chain the product had when it was a
+    /// dispatcher: `sage_find_agent` then `sage_pipe`, plus slack. That is the
+    /// wrong workload now. Answering "the shops we talked about" is recall,
+    /// recall again in different words, search what memory missed, then write —
+    /// five before anything goes wrong, and three real turns were observed
+    /// hitting the cap, including the one that produced a thin document from a
+    /// single `sage_recall` followed by three consolation web searches.
+    ///
+    /// Ten is high enough that the cap stops being the thing that ends a normal
+    /// turn. Time ends it instead, which is the honest unit: the owner is
+    /// waiting on seconds, not on iterations.
+    public static let defaultMaxIterations = 10
+
+    /// Wall clock for the whole turn, tools included.
+    ///
+    /// Until now the iteration count was the only brake in the loop —
+    /// `totalDurationSeconds` was measured and never enforced — so the real
+    /// ceiling was "10 iterations times however long each happens to take",
+    /// which on a capped turn was already 101 s at five.
+    ///
+    /// 90 s is the owner's number and the reasoning behind it is right: two
+    /// exchanges of 45 beat one wait of 200, because a partial answer they can
+    /// push on ("keep digging") is worth more than a complete one that arrives
+    /// after they have put the phone down. That only holds if the wrap-up says
+    /// what it was still doing — see `BrainPrompts.forcedSummary`.
+    public static let defaultDeadlineSeconds: TimeInterval = 90
+
+    /// Held back from `deadlineSeconds` so the forced summary fits inside it.
+    ///
+    /// The wrap-up is a real model call: measured at 3.7 s with reasoning
+    /// disabled, but that was against a thin context. A deadline turn is the
+    /// opposite — every tool result of the turn is in the prompt, so it pays a
+    /// prefill the measurement never saw. 12 s covers that; without any reserve
+    /// a 90 s budget reliably delivers at ~100 s, which is a budget that lies.
+    public static let summaryReserveSeconds: TimeInterval = 12
 
     public struct Configuration: Sendable {
         public var systemPrompt: String
         public var maxIterations: Int
+        /// Wall clock for the turn, or `nil` to let iterations be the only
+        /// brake. Enforced between iterations, never mid-call: cancelling a
+        /// model call in flight throws away work already paid for and, on
+        /// Ollama, leaves the prompt cache holding a prefix nothing will reuse.
+        public var deadlineSeconds: TimeInterval?
+        /// Withheld from `deadlineSeconds` for the wrap-up turn. Configurable
+        /// because it is a property of the backend, not of the loop: a local 4B
+        /// paying a full prefill over a turn's worth of tool results is not the
+        /// same cost as an API call, and a reserve tuned for the slower one
+        /// silently shortens every turn on the faster one.
+        public var summaryReserveSeconds: TimeInterval
         public var temperature: Double?
         /// Reasoning on tool-selection turns. Leave `.automatic` — reasoning is
         /// what makes a small model route correctly. Measured on qwen3.5:4b
@@ -239,6 +302,8 @@ public final class ToolLoop: @unchecked Sendable {
         public init(
             systemPrompt: String = BrainPrompts.voiceAgentManager,
             maxIterations: Int = ToolLoop.defaultMaxIterations,
+            deadlineSeconds: TimeInterval? = ToolLoop.defaultDeadlineSeconds,
+            summaryReserveSeconds: TimeInterval = ToolLoop.summaryReserveSeconds,
             temperature: Double? = 0,
             reasoning: ReasoningPreference = .automatic,
             reasoningOnSummary: ReasoningPreference = .disabled,
@@ -248,6 +313,8 @@ public final class ToolLoop: @unchecked Sendable {
         ) {
             self.systemPrompt = systemPrompt
             self.maxIterations = maxIterations
+            self.deadlineSeconds = deadlineSeconds
+            self.summaryReserveSeconds = summaryReserveSeconds
             self.temperature = temperature
             self.reasoning = reasoning
             self.reasoningOnSummary = reasoningOnSummary
@@ -535,7 +602,24 @@ public final class ToolLoop: @unchecked Sendable {
         var reply = ""
         let cap = max(1, configuration.maxIterations)
 
+        // What the tool-calling phase may spend, leaving the wrap-up its
+        // reserve. `nil` means no deadline was configured at all.
+        let toolPhaseBudget = configuration.deadlineSeconds.map {
+            max(0, $0 - configuration.summaryReserveSeconds)
+        }
+
         for iteration in 1...cap {
+            // Checked before the call, not after, and never on the first pass:
+            // a turn that spends its whole budget in tools still owes the owner
+            // one model call, and a turn with no model call at all has nothing
+            // for the wrap-up to summarise.
+            if iteration > 1,
+               let budget = toolPhaseBudget,
+               Date().timeIntervalSince(started) >= budget {
+                trace.hitDeadline = true
+                break
+            }
+
             trace.iterations = iteration
 
             let response = try await completeWithRateLimitRetry(

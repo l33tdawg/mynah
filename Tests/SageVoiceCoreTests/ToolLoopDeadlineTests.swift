@@ -1,0 +1,290 @@
+import XCTest
+@testable import SageVoiceCore
+
+/// The turn budget.
+///
+/// Until this existed the iteration count was the only brake in the loop —
+/// `ToolLoopTrace.totalDurationSeconds` was measured and never enforced — so the
+/// real ceiling was "N iterations times however long each happens to take". On
+/// the appliance that meant a 5-iteration turn costing 101 seconds, and raising
+/// the cap to 10 without a clock would have doubled it.
+///
+/// The owner's reasoning for 90 s is the thing these tests are protecting: two
+/// exchanges of 45 beat one wait of 200, because a partial answer they can push
+/// on is worth more than a complete one that arrives after they have stopped
+/// waiting. That only works if a timed-out turn still *speaks*, which is why
+/// most of what follows is about the wrap-up rather than the break itself.
+final class ToolLoopDeadlineTests: XCTestCase {
+
+    // MARK: Doubles
+
+    /// A backend that burns wall clock. Every call sleeps, then either asks for
+    /// a tool again (so the loop keeps going) or answers.
+    private final class SlowBackend: BrainBackend, @unchecked Sendable {
+        let identifier = "slow"
+        let modelName = "slow-model"
+        let isLocal = true
+
+        private let lock = NSLock()
+        private let delay: Duration
+        private let toolName: String?
+        private(set) var callCount = 0
+        /// Requests that arrived with no tools attached — the wrap-up turn.
+        private(set) var toolFreeCallCount = 0
+
+        /// - Parameter toolName: a tool to request forever, or `nil` to answer
+        ///   immediately. "Forever" is what makes the brake observable; a
+        ///   backend that stops on its own would pass whether or not one exists.
+        init(delay: Duration, callingForever toolName: String?) {
+            self.delay = delay
+            self.toolName = toolName
+        }
+
+        func isAvailable() async -> Bool { true }
+
+        func complete(_ request: BrainRequest) async throws -> BrainReply {
+            try? await Task.sleep(for: delay)
+            lock.lock()
+            callCount += 1
+            if request.tools.isEmpty { toolFreeCallCount += 1 }
+            let wrapUp = request.tools.isEmpty
+            lock.unlock()
+
+            // The loop withholds tools on the wrap-up, so a backend that kept
+            // requesting one there would loop forever. Answering on an empty
+            // catalogue is what a real model does under `forcedSummary`.
+            guard let toolName, !wrapUp else {
+                return BrainReply(
+                    model: "slow-model",
+                    message: .assistant("here is what I found"),
+                    stopReason: .endTurn,
+                    usage: BrainUsage(inputTokens: 10, outputTokens: 5)
+                )
+            }
+            return BrainReply(
+                model: "slow-model",
+                message: BrainMessage(
+                    role: .assistant,
+                    content: "",
+                    toolCalls: [BrainToolCall(id: "call_\(callCount)", name: toolName, arguments: [:])]
+                ),
+                stopReason: .toolUse,
+                usage: BrainUsage(inputTokens: 10, outputTokens: 5)
+            )
+        }
+    }
+
+    private final class EchoToolSource: ToolProviding, @unchecked Sendable {
+        private let name: String
+        init(name: String) { self.name = name }
+
+        func listTools() async throws -> [MCPTool] {
+            [MCPTool(name: name, description: "stub", inputSchema: .object(["type": .string("object")]))]
+        }
+
+        func call(name: String, arguments: [String: JSONValue]) async throws -> String { "ok" }
+    }
+
+    /// Deliberately generous margins. These assert *that* a brake exists and
+    /// which one fired, never a precise duration — a test that pins wall clock
+    /// on a shared CI box is a test that fails for reasons nobody caused.
+    private func makeLoop(
+        delay: Duration,
+        callingForever tool: String?,
+        deadline: TimeInterval?,
+        reserve: TimeInterval,
+        maxIterations: Int = 10
+    ) -> (ToolLoop, SlowBackend) {
+        let backend = SlowBackend(delay: delay, callingForever: tool)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: EchoToolSource(name: "sage_recall"),
+            configuration: ToolLoop.Configuration(
+                maxIterations: maxIterations,
+                deadlineSeconds: deadline,
+                summaryReserveSeconds: reserve,
+                allowedToolNames: []
+            )
+        )
+        return (loop, backend)
+    }
+
+    // MARK: The brake
+
+    func testAModelThatNeverStopsCallingToolsIsStoppedByTheClockNotTheCap() async throws {
+        let (loop, _) = makeLoop(
+            delay: .milliseconds(120),
+            callingForever: "sage_recall",
+            deadline: 0.6,
+            reserve: 0.2
+        )
+
+        let result = try await loop.run(transcript: "what shops did we talk about")
+
+        XCTAssertTrue(result.trace.hitDeadline, "the clock did not stop a turn that would run forever")
+        XCTAssertLessThan(
+            result.trace.iterations,
+            10,
+            "the turn used every iteration, so the deadline did nothing"
+        )
+    }
+
+    /// The whole point of stopping early. A turn that goes quiet is worse than
+    /// a slow one — the owner has no idea whether to ask again.
+    func testATimedOutTurnStillSpeaks() async throws {
+        let (loop, backend) = makeLoop(
+            delay: .milliseconds(120),
+            callingForever: "sage_recall",
+            deadline: 0.6,
+            reserve: 0.2
+        )
+
+        let result = try await loop.run(transcript: "what shops did we talk about")
+
+        XCTAssertFalse(result.reply.isEmpty, "a timed-out turn returned nothing to say")
+        XCTAssertEqual(backend.toolFreeCallCount, 1, "the wrap-up turn did not run")
+    }
+
+    /// The reserve is the difference between a budget and a suggestion: the loop
+    /// has to stop early enough that the wrap-up it still owes fits inside the
+    /// number the owner was promised.
+    func testTheLoopStopsCallingToolsBeforeTheDeadlineNotAtIt() async throws {
+        let deadline: TimeInterval = 1.0
+        let reserve: TimeInterval = 0.5
+        let (loop, _) = makeLoop(
+            delay: .milliseconds(100),
+            callingForever: "sage_recall",
+            deadline: deadline,
+            reserve: reserve
+        )
+
+        let started = Date()
+        let result = try await loop.run(transcript: "what shops did we talk about")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertTrue(result.trace.hitDeadline)
+        // The last model call may start just under the budget and still run its
+        // full delay, so the ceiling is budget + one call + the wrap-up call.
+        XCTAssertLessThan(
+            elapsed,
+            deadline + 1.0,
+            "the reserve did not hold: a \(deadline)s budget delivered at \(elapsed)s"
+        )
+    }
+
+    /// A turn with a whole budget left must not be cut short. This is the test
+    /// that fails if the elapsed check is ever moved before the first call, or
+    /// compared against the deadline rather than the deadline minus reserve.
+    func testAFastTurnIsUntouchedByTheDeadline() async throws {
+        let (loop, backend) = makeLoop(
+            delay: .milliseconds(1),
+            callingForever: nil,
+            deadline: 90,
+            reserve: 12
+        )
+
+        let result = try await loop.run(transcript: "morning mate")
+
+        XCTAssertFalse(result.trace.hitDeadline)
+        XCTAssertFalse(result.trace.hitIterationCap)
+        XCTAssertEqual(result.reply, "here is what I found")
+        XCTAssertEqual(backend.callCount, 1)
+        XCTAssertEqual(backend.toolFreeCallCount, 0, "a turn that answered on its own paid for a wrap-up")
+    }
+
+    /// Even with nothing left to spend, one model call has to happen — the
+    /// wrap-up summarises the turn's own results, and a turn with zero calls has
+    /// no results to summarise. An exhausted budget should degrade to "one
+    /// honest attempt", not to silence.
+    func testAnAlreadyExhaustedBudgetStillMakesOneAttempt() async throws {
+        let (loop, backend) = makeLoop(
+            delay: .milliseconds(10),
+            callingForever: "sage_recall",
+            deadline: 0,
+            reserve: 0
+        )
+
+        let result = try await loop.run(transcript: "what shops did we talk about")
+
+        XCTAssertEqual(result.trace.iterations, 1, "the first iteration was skipped")
+        XCTAssertGreaterThanOrEqual(backend.callCount, 2, "no wrap-up followed the single attempt")
+        XCTAssertFalse(result.reply.isEmpty)
+    }
+
+    func testWithNoDeadlineTheIterationCapIsStillTheBackstop() async throws {
+        let (loop, _) = makeLoop(
+            delay: .milliseconds(1),
+            callingForever: "sage_recall",
+            deadline: nil,
+            reserve: 12,
+            maxIterations: 3
+        )
+
+        let result = try await loop.run(transcript: "what shops did we talk about")
+
+        XCTAssertFalse(result.trace.hitDeadline)
+        XCTAssertTrue(result.trace.hitIterationCap)
+        XCTAssertEqual(result.trace.iterations, 3)
+    }
+
+    // MARK: What the log says
+
+    /// The two brakes mean opposite things about what to change — a cap means a
+    /// model that would not stop, a timeout means one that was working fine and
+    /// too slowly. A log that calls both `[CAPPED]` cannot tell you which.
+    func testTheLogDistinguishesATimeoutFromACap() {
+        var timedOut = ToolLoopTrace(model: "m", iterations: 4)
+        timedOut.hitDeadline = true
+        XCTAssertTrue(timedOut.summary.contains("[TIMEOUT]"))
+        XCTAssertFalse(timedOut.summary.contains("[CAPPED]"))
+
+        var capped = ToolLoopTrace(model: "m", iterations: 10)
+        capped.hitIterationCap = true
+        XCTAssertTrue(capped.summary.contains("[CAPPED]"))
+
+        // Both fire when the clock runs out on the last allowed iteration. The
+        // clock is the useful fact, so it wins.
+        var both = ToolLoopTrace(model: "m", iterations: 10)
+        both.hitIterationCap = true
+        both.hitDeadline = true
+        XCTAssertTrue(both.summary.contains("[TIMEOUT]"))
+        XCTAssertFalse(both.summary.contains("[CAPPED]"))
+
+        let clean = ToolLoopTrace(model: "m", iterations: 2)
+        XCTAssertFalse(clean.summary.contains("["))
+    }
+
+    // MARK: The numbers themselves
+
+    func testTheShippedBudgetIsTheOneTheApplianceWasTunedFor() {
+        XCTAssertEqual(ToolLoop.defaultDeadlineSeconds, 90)
+        XCTAssertEqual(ToolLoop.summaryReserveSeconds, 12)
+        XCTAssertEqual(ToolLoop.defaultMaxIterations, 10)
+
+        // The cap has to be loose enough that it is not what ends a normal
+        // research turn. Recall, recall again, search, write is four before
+        // anything goes wrong; five was measured ending three real turns.
+        XCTAssertGreaterThan(
+            ToolLoop.defaultMaxIterations,
+            5,
+            "back at the dispatcher-era cap that truncated the shop list"
+        )
+        XCTAssertLessThan(
+            ToolLoop.summaryReserveSeconds,
+            ToolLoop.defaultDeadlineSeconds,
+            "the reserve ate the whole budget, so no tool would ever be called"
+        )
+    }
+
+    /// The wrap-up is reached both by running out of iterations and by running
+    /// out of time, and the difference only reaches the owner through this text.
+    func testTheWrapUpAsksToContinueRatherThanJustReportingFailure() {
+        let prompt = BrainPrompts.forcedSummary
+        XCTAssertTrue(prompt.contains("ran out of time"))
+        XCTAssertTrue(prompt.contains("keep going"), "a timed-out turn cannot be resumed by the owner")
+        XCTAssertTrue(
+            prompt.contains("what you already found"),
+            "stopping early is only cheaper than waiting if the partial result comes back"
+        )
+    }
+}

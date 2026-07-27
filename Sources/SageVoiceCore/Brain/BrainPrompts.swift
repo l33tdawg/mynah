@@ -108,9 +108,20 @@ public enum BrainPrompts {
     /// before they have said anything.
     public static let warmUpProbe = "ok"
 
+    /// Reached two ways: the model burned every iteration, or the turn ran out
+    /// of wall clock (`ToolLoop.defaultDeadlineSeconds`).
+    ///
+    /// The last sentence is what makes a 90-second budget better than a
+    /// 200-second one rather than just shorter. A turn that stops early and says
+    /// *"I have the Japan ones, still looking for Thailand — want me to keep
+    /// going?"* costs the owner one cheap round trip to finish the job. The same
+    /// turn stopping early and saying only "I could not find it" costs them the
+    /// whole question again, and they have no way to know anything was found.
     public static let forcedSummary = """
     Stop calling tools now and answer the owner out loud in two or three short spoken sentences, \
-    using only what the tool results above already told you. If they were not enough, say so plainly.
+    using only what the tool results above already told you. If they were not enough, say so plainly. \
+    If you had more to check and ran out of time, say what you already found, name what is still \
+    missing, and ask if they want you to keep going.
     """
 
     /// The slice of SAGE's tool surface that a voice conversation actually needs.
