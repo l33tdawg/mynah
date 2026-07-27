@@ -187,14 +187,18 @@ private struct BrainPicker: View {
             options: choices.options.filter { !$0.keepsWordsOnDevice }
         )
 
-        let present = [onDevice, away].filter { !$0.options.isEmpty }
-        guard present.count == 2 else { return present }
-        // A half with nothing available in it must not lead the screen. Opening on
-        // a dead end reads as "this Mac can't do it" before the owner has seen a
-        // single thing they could actually pick.
-        return onDevice.hasAvailableOption || !away.hasAvailableOption
-            ? [onDevice, away]
-            : [away, onDevice]
+        // On-device always leads, even when this Mac cannot run it yet.
+        //
+        // This used to demote the local half whenever nothing in it was
+        // available, on the reasoning that opening on a dead end reads as "this
+        // Mac can't do it". That was a sound instinct about layout and the wrong
+        // answer for this product: the owner then opens on a list of companies
+        // to send their speech to, and the private option — the reason this
+        // thing exists — is below the fold on the one screen that decides it.
+        //
+        // The ordering was never the real problem. A local option the app cannot
+        // set up is the problem, and burying it hid that rather than fixing it.
+        return [onDevice, away].filter { !$0.options.isEmpty }
     }
 
     private struct PrivacyGroup: Identifiable {
