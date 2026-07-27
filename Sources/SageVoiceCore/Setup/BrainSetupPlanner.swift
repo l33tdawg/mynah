@@ -22,6 +22,75 @@ public enum BrainSetupOptionID: String, Sendable, Codable, CaseIterable {
     case fullyLocal = "local.ollama"
 }
 
+// MARK: - What actually serves an option
+
+/// The concrete backend an option would be built as.
+///
+/// This exists so "the planner offered it" and "the app can build it" are one
+/// fact rather than two switches in two modules that drifted apart. They had:
+/// the planner emitted `signin.google`, `cli.claude-code`, `cli.codex` and
+/// `openai-compatible`, and the app's factory matched on `"ollama"`, `"gemini"`,
+/// `"openai"` and `"anthropic"` — so four of the seven cards on the most
+/// important screen in the product threw on first use, including the one the
+/// app itself recommended.
+///
+/// `nil` from `BrainSetupOptionID.backendPlan` means *nothing in this product
+/// can serve that option yet*, which is the planner's cue to mark it
+/// unavailable rather than the owner's cue to discover it thirty seconds later.
+public enum BrainSetupBackendPlan: Sendable, Equatable {
+    case localOllama
+    case anthropic
+    case openAICompatible(OpenAICompatProvider)
+}
+
+public extension BrainSetupOptionID {
+
+    /// How this option would be served, or `nil` when it cannot be yet.
+    ///
+    /// Exhaustive on purpose: adding a case to `BrainSetupOptionID` without
+    /// deciding what serves it is a compile error here, not a runtime throw in
+    /// front of the owner.
+    var backendPlan: BrainSetupBackendPlan? {
+        switch self {
+        case .fullyLocal:      return .localOllama
+        case .anthropicAPIKey: return .anthropic
+        case .openAIAPIKey:    return .openAICompatible(.openAI)
+        case .googleAPIKey:    return .openAICompatible(.gemini)
+        case .deepSeekAPIKey:  return .openAICompatible(.deepSeek)
+        case .moonshotAPIKey:  return .openAICompatible(.moonshot)
+        case .groqAPIKey:      return .openAICompatible(.groq)
+        // Both agent CLIs would have to be driven as subprocesses speaking their
+        // own protocols, and consumer Google sign-in routes to Code Assist,
+        // which is a different wire format from the Gemini API entirely. None of
+        // those three backends exists in this product.
+        case .claudeCodeCLI, .codexCLI, .googleSignIn:
+            return nil
+        }
+    }
+
+    /// The `APIKeyOnboarding` vocabulary for this option, or `nil` when it needs
+    /// no pasted key.
+    ///
+    /// The single seam between an option's identity and the onboarding
+    /// vocabulary. Passing `backendIdentifier` through raw is what produced the
+    /// unrecoverable "Google Gemini API key" loop: the option said it needed a
+    /// key, the instructions lookup said there was nothing to explain, and setup
+    /// resolved the contradiction by skipping the screen.
+    var keyProviderIdentifier: String? {
+        switch backendPlan {
+        case .anthropic: return "anthropic"
+        case .openAICompatible(let provider): return provider.identifier
+        case .localOllama, .none: return nil
+        }
+    }
+}
+
+public extension BrainSetupOption {
+    /// Where this option's key is filed on disk, and which instructions explain
+    /// how to get one. `nil` for anything that needs no key.
+    var keyProviderIdentifier: String? { id.keyProviderIdentifier }
+}
+
 /// What the owner still has to do. Ordering of the cases is not the ranking —
 /// see `BrainSetupTier` for that.
 ///
@@ -272,6 +341,20 @@ public struct BrainSetupPlanner: Sendable {
 
     // MARK: Agent CLIs
 
+    /// Why an agent CLI is never offerable today, in words a card can print.
+    ///
+    /// Driving `claude` or `codex` means owning a subprocess that speaks its own
+    /// protocol, and no such backend exists here — `BrainSetupOptionID.backendPlan`
+    /// says so in one place and this sentence is what the owner reads. Shipping
+    /// it as available is what produced the dead end a reviewer walked into:
+    /// pick the app's own sparkle-marked recommendation, finish setup, and the
+    /// first question answers "Mynah can't use that brain any more", with the
+    /// only offer being a wizard that recommends it again.
+    private func cliUnsupportedReason(_ kind: AgentCLIKind) -> String {
+        "Mynah can't think through \(kind.displayName) yet. Pick another way for now — "
+            + "you can switch to this later."
+    }
+
     private func cliOption(_ report: AgentCLIReport) -> BrainSetupOption {
         let kind = report.kind
         let id: BrainSetupOptionID = kind == .claudeCode ? .claudeCodeCLI : .codexCLI
@@ -302,7 +385,7 @@ public struct BrainSetupPlanner: Sendable {
                     + "\(kind.vendorName).",
                 requirement: .nothing,
                 keepsWordsOnDevice: false,
-                availability: .available,
+                availability: .unavailable(reason: cliUnsupportedReason(kind)),
                 tier: .signedInSubscription,
                 backendIdentifier: backend
             )
@@ -318,7 +401,7 @@ public struct BrainSetupPlanner: Sendable {
                     + "\(kind.vendorName).",
                 requirement: .nothing,
                 keepsWordsOnDevice: false,
-                availability: .available,
+                availability: .unavailable(reason: cliUnsupportedReason(kind)),
                 tier: .ambientAPIKey,
                 backendIdentifier: backend
             )
@@ -332,7 +415,7 @@ public struct BrainSetupPlanner: Sendable {
                 + "\(kind.vendorName).",
             requirement: .signIn,
             keepsWordsOnDevice: false,
-            availability: .available,
+            availability: .unavailable(reason: cliUnsupportedReason(kind)),
             tier: .installedCLINeedingSignIn,
             backendIdentifier: backend
         )
@@ -340,10 +423,19 @@ public struct BrainSetupPlanner: Sendable {
 
     // MARK: Google sign-in
 
-    /// Always offered, and always available: it depends on the owner having a
-    /// Google account, which no probe of this machine can settle. This is the
-    /// path for the owner with no API key and no CLI — the majority case the
-    /// product is aimed at.
+    /// Always listed, never yet offerable.
+    ///
+    /// This was the recommendation on a bare Mac, and it had no screen behind it:
+    /// `requirement` is `.signIn`, the flow has no sign-in stage, so `advance()`
+    /// skipped straight past it and Ready declared "Mynah is ready" for a brain
+    /// that had never been connected to anything. `GoogleSignInSession` and
+    /// `GeminiKeyProvisioner` exist, but only the CLI drives them, and consumer
+    /// sign-in routes to Code Assist rather than the Gemini API — a different
+    /// wire format, so there is no backend either (`backendPlan` is `nil`).
+    ///
+    /// It stays in the catalog rather than being hidden: the card says in plain
+    /// words that this is coming, which is more useful than an option that
+    /// silently is not there.
     private func googleSignInOption() -> BrainSetupOption {
         BrainSetupOption(
             id: .googleSignIn,
@@ -352,9 +444,13 @@ public struct BrainSetupPlanner: Sendable {
                 + "to Google.",
             requirement: .signIn,
             keepsWordsOnDevice: false,
-            availability: .available,
+            availability: .unavailable(
+                reason: "Signing in with Google isn't ready yet. Pick another way for now — "
+                    + "you can switch to this later. If you already have a Google key, "
+                    + "“Google Gemini API key” below works today."
+            ),
             tier: .zeroFrictionSignIn,
-            backendIdentifier: "google"
+            backendIdentifier: "gemini"
         )
     }
 
@@ -367,6 +463,14 @@ public struct BrainSetupPlanner: Sendable {
 
     private func apiKeyOptions(_ keys: AmbientAPIKeyReport) -> [BrainSetupOption] {
         APIKeyProvider.allCases.compactMap { provider in
+            // Structural guard, not a filter anyone expects to fire: an option
+            // that needs a key we cannot explain how to obtain must not be
+            // offerable at all. "Google Gemini API key" shipped for months with
+            // no instructions behind it, which meant the key screen was skipped
+            // and Ready declared success for a brain with no credential.
+            guard APIKeyOnboarding.instructions(forProvider: provider.backendIdentifier) != nil else {
+                return nil
+            }
             let hasAmbientKey = keys.hasKey(for: provider)
             // The niche providers enter the catalog only on evidence. Listing
             // Moonshot and Groq to an owner who has never heard of either is
@@ -409,6 +513,20 @@ public struct BrainSetupPlanner: Sendable {
 
     // MARK: Fully local
 
+    /// Offered only when it would answer *today*.
+    ///
+    /// The download branches are gated rather than advertised because nothing in
+    /// this product performs that download — there is no Ollama installer, no
+    /// `pull`, no progress. The card used to read "Downloads qwen3.5:4b (about
+    /// 3.4 GB) and runs it on this Mac", setup skipped the key stage because a
+    /// `.download` requirement needs no key, Ready said "Mynah is ready", and the
+    /// first question reached a daemon that was never installed and surfaced as
+    /// "check this Mac is online" — sending the owner to look at their Wi-Fi for
+    /// a file that was never fetched.
+    ///
+    /// The option stays in the catalog in every state, and the reason names the
+    /// real obstacle, because this is the only choice that keeps the owner's
+    /// words on the machine and hiding it would say nothing at all.
     private func fullyLocalOption(_ probe: EnvironmentProbeResult) -> BrainSetupOption {
         let hardware = probe.hardware
         let runtime = probe.localRuntime
@@ -469,7 +587,7 @@ public struct BrainSetupPlanner: Sendable {
             + (runtime.isRuntimeInstalled ? 0 : LocalBrainModelCatalog.approximateRuntimeDownloadBytes)
         let runtimeNote = runtime.isRuntimeInstalled
             ? ""
-            : " Installs the Ollama runtime as well."
+            : " It needs the Ollama runtime on this Mac as well."
 
         guard hardware.hasRoomForDownload(ofBytes: downloadBytes) else {
             return option(
@@ -483,15 +601,21 @@ public struct BrainSetupPlanner: Sendable {
         }
 
         return option(
-            summary: "Downloads \(LocalBrainModelCatalog.preferredModel) "
-                + "(about \(Self.gigabytes(downloadBytes))) and runs it on this Mac. Nothing you "
+            summary: "Runs \(LocalBrainModelCatalog.preferredModel) on this Mac. Nothing you "
                 + "say leaves the machine, and there's nothing to sign into or pay "
                 + "for.\(runtimeNote)\(tightNote)",
             requirement: .download,
             downloadBytes: downloadBytes,
-            availability: .available,
+            availability: .unavailable(reason: manualDownloadReason(downloadBytes)),
             model: LocalBrainModelCatalog.preferredModel
         )
+    }
+
+    /// Says what is missing and how big it is, and does not promise that pressing
+    /// anything here will fetch it.
+    private func manualDownloadReason(_ bytes: Int64) -> String {
+        "Mynah can't set this up for you yet. It needs a \(Self.gigabytes(bytes)) download "
+            + "that has to be done by hand first."
     }
 
     private func unsupportedHardwareReason(_ hardware: HardwareReport) -> String {

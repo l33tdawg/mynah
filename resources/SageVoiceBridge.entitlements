@@ -1,18 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+  Entitlements for the Mynah GUI (Contents/MacOS/MynahMac) only.
+
+  Nothing else in the bundle gets these. The CLI helper beside it and the
+  vendored SAGE.app are signed with the hardened runtime and NO entitlements,
+  because neither of them touches the microphone and an entitlement handed to a
+  process that cannot use it is just a larger thing to attack.
+
+  Mynah is not sandboxed. That is a deliberate limit on what this file can
+  claim: outside the sandbox, network access, file access and spawning helpers
+  need no entitlement at all, so the only entries here are the ones the
+  *hardened runtime* actually requires.
+-->
 <dict>
-  <!-- Live voice calls. Phase 1 gets its audio from Signal attachments and
-       does not need this, but the entitlement must be present at first
-       signing or adding it later invalidates the signature. -->
+  <!-- Required. Under the hardened runtime a process that opens an audio input
+       device is killed on the spot without this, before macOS ever gets as far
+       as showing the owner a permission box.
+
+       Present even though Mynah does not record from this Mac today: the owner
+       speaks into their phone and the voice note arrives over Signal. It is
+       here because entitlements are baked into the signature — adding one to a
+       shipped app means a new signed, notarized, stapled build, and the moment
+       hold-to-talk lands (Setup/MicrophonePermissionView) the owner would be
+       stuck on the old one. The paired sentence the owner actually reads is
+       NSMicrophoneUsageDescription in resources/Info.plist. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- The appliance spawns SAGE (sage-gui) and talks to a local Ollama and
-       WhisperKit server. Under the hardened runtime a signed process may only
-       execute other processes signed by the same team unless this is set —
-       and Ollama is signed by Ollama, not by us. -->
-  <key>com.apple.security.cs.disable-library-validation</key>
-  <true/>
+  <!--
+    com.apple.security.cs.disable-library-validation is DELIBERATELY ABSENT.
+
+    It is the obvious thing to reach for once the bundle contains SAGE.app, and
+    it is the wrong reach. Library validation governs code loaded *into this
+    process* — frameworks, plug-ins, dylibs. It has nothing to say about
+    processes we start. SAGE, Ollama and the WhisperKit server are all separate
+    processes with their own signatures and their own entitlements; the kernel
+    evaluates each on its own. And the vendored SAGE.app is re-signed with our
+    identity by scripts/package-app.sh, so it is the same team either way.
+
+    Verified for this codebase: no dlopen, no NSBundle load, no Bundle(path:),
+    no third-party framework in Contents/Frameworks. Nothing foreign is loaded
+    into MynahMac's address space.
+
+    The trap that makes this worth writing down: a development build is ad-hoc
+    signed, and ad-hoc code has no Team ID, so library validation is not
+    enforced at all. A missing entitlement of this kind therefore cannot show
+    up on the build machine — only on a Developer ID build, on someone else's
+    Mac. So if that day comes, the signature is:
+
+      "Library validation failed" or code signature 0xd (SIGKILL, CODESIGNING)
+      in the crash report, naming the library that was refused.
+
+    The fix is to add the key back HERE and re-run the full sign, and to say in
+    the commit message which library forced it. Do not add it pre-emptively:
+    turning it on weakens every future load in the process to buy nothing.
+  -->
 </dict>
 </plist>

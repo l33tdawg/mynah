@@ -14,67 +14,79 @@ final class BrainSetupPlannerTests: XCTestCase {
 
     // MARK: - Ranking
 
-    /// Tier 0. The owner already pays for this and has already signed in, so
-    /// nothing else can beat it.
-    func testSignedInAgentCLIOutranksEverythingElse() {
+    /// An agent CLI keeps its tier, and is still not offerable.
+    ///
+    /// The ranking is about what *would* be best; availability is about what can
+    /// actually be built. Nothing in this product drives `claude` or `codex` as a
+    /// subprocess, so a signed-in CLI must not become the recommendation — that
+    /// is exactly the dead end that shipped: pick the app's own sparkle-marked
+    /// suggestion, finish setup, and the first question answers "Mynah can't use
+    /// that brain any more".
+    func testSignedInAgentCLIIsRankedFirstButNotOfferable() throws {
         let probe = EnvironmentProbeResult.machine(
             claudeCode: .signedIn(.claudeCode),
             ambientKeys: AmbientAPIKeyReport(providers: [.anthropic], variableNames: ["ANTHROPIC_API_KEY"])
         )
         let choices = planner.plan(for: probe)
 
-        XCTAssertEqual(choices.recommendation?.optionID, .claudeCodeCLI)
-        XCTAssertEqual(choices.options.first?.id, .claudeCodeCLI)
-        XCTAssertEqual(choices.option(withID: .claudeCodeCLI)?.requirement, BrainSetupRequirement.nothing)
-        XCTAssertEqual(choices.option(withID: .claudeCodeCLI)?.tier, .signedInSubscription)
+        let claude = try XCTUnwrap(choices.option(withID: .claudeCodeCLI))
+        XCTAssertEqual(claude.tier, .signedInSubscription)
+        XCTAssertFalse(claude.isAvailable, "Nothing can serve an agent CLI yet")
+        XCTAssertTrue(try XCTUnwrap(claude.availability.reason).contains("Claude Code"))
+        XCTAssertNotEqual(choices.recommendation?.optionID, .claudeCodeCLI)
+        XCTAssertEqual(choices.recommendation?.optionID, .anthropicAPIKey)
     }
 
-    /// The majority case the product is aimed at: no CLI, no key, just a person
-    /// with a Google account.
-    func testGoogleSignInIsRecommendedOnAnOtherwiseBareMachine() {
+    /// The majority case the product is aimed at, and the one that had no screen
+    /// behind it. `requirement` is `.signIn`, the flow has no sign-in stage, and
+    /// consumer Google sign-in routes to a different API than the one this app
+    /// speaks — so it is listed, explained, and not offered.
+    func testGoogleSignInIsListedWithAReasonAndNeverRecommended() throws {
         let choices = planner.plan(for: .machine())
+        let google = try XCTUnwrap(choices.option(withID: .googleSignIn))
 
-        XCTAssertEqual(choices.recommendation?.optionID, .googleSignIn)
-        XCTAssertEqual(choices.option(withID: .googleSignIn)?.requirement, .signIn)
+        XCTAssertFalse(google.isAvailable)
+        XCTAssertEqual(google.requirement, .signIn)
+        XCTAssertTrue(try XCTUnwrap(google.availability.reason).contains("isn't ready yet"))
+        XCTAssertNotEqual(choices.recommendation?.optionID, .googleSignIn)
     }
 
-    /// An ambient key needs no input either, but it bills per token. Ranking it
-    /// above a flat-rate subscription or a free tier would be a quiet way to
-    /// spend the owner's money, so it sits at tier 2 on purpose.
-    func testAmbientAPIKeyIsZeroInputButStillRanksBelowGoogleSignIn() {
+    /// An ambient key needs no input, so it outranks a key the owner has to go
+    /// and fetch — but it still bills per token, which is why it is tier 2 rather
+    /// than tier 0.
+    func testAmbientAPIKeyIsZeroInputAndBecomesTheRecommendation() throws {
         let probe = EnvironmentProbeResult.machine(
-            ambientKeys: AmbientAPIKeyReport(providers: [.anthropic], variableNames: ["ANTHROPIC_API_KEY"])
+            ambientKeys: AmbientAPIKeyReport(providers: [.openAI], variableNames: ["OPENAI_API_KEY"])
         )
         let choices = planner.plan(for: probe)
 
-        let anthropic = choices.option(withID: .anthropicAPIKey)
-        XCTAssertEqual(anthropic?.requirement, BrainSetupRequirement.nothing, "An ambient key needs nothing typed")
-        XCTAssertEqual(anthropic?.tier, .ambientAPIKey)
+        let openAI = try XCTUnwrap(choices.option(withID: .openAIAPIKey))
+        XCTAssertEqual(openAI.requirement, BrainSetupRequirement.nothing, "An ambient key needs nothing typed")
+        XCTAssertEqual(openAI.tier, .ambientAPIKey)
 
-        XCTAssertEqual(choices.recommendation?.optionID, .googleSignIn)
+        XCTAssertEqual(choices.recommendation?.optionID, .openAIAPIKey)
         XCTAssertLessThan(
-            try XCTUnwrap(index(of: .googleSignIn, in: choices)),
+            try XCTUnwrap(index(of: .openAIAPIKey, in: choices)),
             try XCTUnwrap(index(of: .anthropicAPIKey, in: choices))
         )
     }
 
-    /// A binary on disk proves nothing about entitlement — the owner may have
-    /// installed it and never subscribed. So it is offered, but below the paths
-    /// we have actual evidence for.
-    func testInstalledButUnauthenticatedCLIRanksBelowATypedAPIKey() throws {
+    /// A binary on disk proves nothing about entitlement, and in any case there
+    /// is nothing to drive it with. It keeps its tier and stays unavailable.
+    func testInstalledButUnauthenticatedCLIIsExplainedRatherThanOffered() throws {
         let probe = EnvironmentProbeResult.machine(claudeCode: .installedNotSignedIn(.claudeCode))
         let choices = planner.plan(for: probe)
 
         let claude = try XCTUnwrap(choices.option(withID: .claudeCodeCLI))
-        XCTAssertTrue(claude.isAvailable)
-        XCTAssertEqual(claude.requirement, .signIn)
+        XCTAssertFalse(claude.isAvailable)
         XCTAssertEqual(claude.tier, .installedCLINeedingSignIn)
+        XCTAssertNotNil(claude.availability.reason)
 
         XCTAssertGreaterThan(
             try XCTUnwrap(index(of: .claudeCodeCLI, in: choices)),
             try XCTUnwrap(index(of: .anthropicAPIKey, in: choices))
         )
-        XCTAssertEqual(choices.recommendation?.optionID, .googleSignIn)
+        XCTAssertEqual(choices.recommendation?.optionID, .anthropicAPIKey)
     }
 
     /// Unavailable options are kept so the UI can explain them, but they must
@@ -102,6 +114,7 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// option must never remove the private one from the list.
     func testFullyLocalIsStillOfferedWhenASignedInCLIExists() throws {
         let probe = EnvironmentProbeResult.machine(
+            localRuntime: .servingPreferredModel,
             claudeCode: .signedIn(.claudeCode),
             codex: .signedIn(.codex),
             ambientKeys: AmbientAPIKeyReport(providers: APIKeyProvider.allCases, variableNames: [])
@@ -171,7 +184,11 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// 8–16 GiB works but swaps against the ASR model. The owner is allowed to
     /// choose that; they are not allowed to be surprised by it.
     func testTightMemoryStillOffersFullyLocalButWarns() throws {
-        let choices = planner.plan(for: .machine(hardware: .appleSilicon8GB))
+        // The model is already pulled, because that is the only state in which
+        // fully-local is offerable at all — see `testFullyLocalIsNotOfferedWhenItWouldNeedADownloadNothingPerforms`.
+        let choices = planner.plan(
+            for: .machine(hardware: .appleSilicon8GB, localRuntime: .servingPreferredModel)
+        )
         let local = try XCTUnwrap(choices.option(withID: .fullyLocal))
 
         XCTAssertTrue(local.isAvailable, "8 GiB is above the floor, so it must still be offered")
@@ -217,13 +234,26 @@ final class BrainSetupPlannerTests: XCTestCase {
     }
 
     /// Unknown free space means the measurement failed, not that the disk is
-    /// full. Refusing on a measurement we never took would hide a working option.
-    func testUnknownFreeSpaceDoesNotHideFullyLocal() throws {
+    /// full. Blaming a measurement we never took would send the owner to free up
+    /// space they already have.
+    func testUnknownFreeSpaceIsNeverBlamedOnTheDisk() throws {
         var hardware = HardwareReport.appleSilicon16GB
         hardware.freeDiskBytes = nil
         let local = try XCTUnwrap(planner.plan(for: .machine(hardware: hardware)).option(withID: .fullyLocal))
 
-        XCTAssertTrue(local.isAvailable)
+        let reason = try XCTUnwrap(local.availability.reason)
+        XCTAssertFalse(reason.contains("free"), "Unknown free space must not read as a full disk: \(reason)")
+        XCTAssertTrue(reason.contains("download"), "The real obstacle is the download: \(reason)")
+    }
+
+    /// With unknown free space *and* the model already pulled there is nothing
+    /// left to gate on, so it is offered.
+    func testUnknownFreeSpaceDoesNotHideAnAlreadyPulledModel() throws {
+        var hardware = HardwareReport.appleSilicon16GB
+        hardware.freeDiskBytes = nil
+        let probe = EnvironmentProbeResult.machine(hardware: hardware, localRuntime: .servingPreferredModel)
+
+        XCTAssertTrue(try XCTUnwrap(planner.plan(for: probe).option(withID: .fullyLocal)).isAvailable)
     }
 
     // MARK: - Download sizing
@@ -364,7 +394,7 @@ final class BrainSetupPlannerTests: XCTestCase {
     func testAllDetectionFailedStillProducesOfferableOptions() throws {
         let choices = planner.plan(for: .nothingDetected)
 
-        XCTAssertEqual(choices.recommendation?.optionID, .googleSignIn)
+        XCTAssertEqual(choices.recommendation?.optionID, .anthropicAPIKey)
         // `nothingDetected` has zero-byte RAM and no Apple Silicon flag, so the
         // local path is correctly withheld — with a reason.
         let local = try XCTUnwrap(choices.option(withID: .fullyLocal))
@@ -385,7 +415,8 @@ final class BrainSetupPlannerTests: XCTestCase {
         // There is no API that turns `recommendation` into a selection; the
         // caller must name the id, which is what makes the choice the owner's.
         let selection = try XCTUnwrap(choices.select(recommendation.optionID))
-        XCTAssertEqual(selection.option.id, .claudeCodeCLI)
+        XCTAssertEqual(selection.option.id, recommendation.optionID)
+        XCTAssertTrue(selection.option.isAvailable)
     }
 
     func testSelectRefusesAnUnavailableOption() throws {
@@ -407,14 +438,142 @@ final class BrainSetupPlannerTests: XCTestCase {
 
     func testSelectReturnsExactlyTheNamedOption() throws {
         let choices = planner.plan(for: .machine())
-        let selection = try XCTUnwrap(choices.select(.anthropicAPIKey))
+        let selection = try XCTUnwrap(choices.select(.googleAPIKey))
 
-        XCTAssertEqual(selection.option.id, .anthropicAPIKey)
+        XCTAssertEqual(selection.option.id, .googleAPIKey)
         XCTAssertNotEqual(
             selection.option.id,
             choices.recommendation?.optionID,
             "Selecting something other than the recommendation must be honoured"
         )
+    }
+
+    // MARK: - Offered means buildable
+
+    /// Every machine worth planning for, so the guards below are exercised
+    /// against the full range rather than the developer's own Mac.
+    private static let plausibleMachines: [EnvironmentProbeResult] = [
+        .nothingDetected,
+        .machine(),
+        .machine(hardware: .intel32GB),
+        .machine(hardware: .appleSilicon4GB),
+        .machine(hardware: .appleSilicon8GB),
+        .machine(hardware: .appleSilicon16GBLowDisk),
+        .machine(localRuntime: .servingPreferredModel),
+        .machine(localRuntime: LocalModelRuntimeReport(isRuntimeInstalled: true)),
+        .machine(claudeCode: .signedIn(.claudeCode), codex: .signedIn(.codex)),
+        .machine(claudeCode: .installedNotSignedIn(.claudeCode)),
+        .machine(ambientKeys: AmbientAPIKeyReport(
+            providers: APIKeyProvider.allCases,
+            variableNames: APIKeyProvider.allCases.flatMap(\.environmentVariableNames)
+        ))
+    ]
+
+    /// The guard that would have caught the whole class of bug this suite grew
+    /// around: the planner offering something no backend can serve.
+    ///
+    /// Four of seven cards on the brain screen threw on the owner's first
+    /// question because the planner's `backendIdentifier` strings and the app's
+    /// factory switch were two independent lists that drifted. `backendPlan` is
+    /// now the single mapping, and offering an option without one is a test
+    /// failure rather than a dead end thirty seconds into the product.
+    func testEveryOfferedOptionCanActuallyBeBuilt() {
+        for probe in Self.plausibleMachines {
+            for option in planner.plan(for: probe).availableOptions {
+                XCTAssertNotNil(
+                    option.id.backendPlan,
+                    "\(option.id) is offered but nothing in the product can serve it"
+                )
+            }
+        }
+    }
+
+    /// An option that needs a key we cannot explain how to get must not be
+    /// offerable. "Google Gemini API key" was, and setup resolved the
+    /// contradiction by skipping the key screen and declaring success.
+    func testEveryOfferedKeyOptionHasInstructionsAndAProvider() throws {
+        for probe in Self.plausibleMachines {
+            for option in planner.plan(for: probe).availableOptions
+            where option.requirement == .apiKey {
+                let provider = try XCTUnwrap(
+                    option.keyProviderIdentifier,
+                    "\(option.id) needs a key but names no provider to file it under"
+                )
+                XCTAssertNotNil(
+                    APIKeyOnboarding.instructions(forProvider: provider),
+                    "\(option.id) needs a key but there is nothing to tell the owner"
+                )
+            }
+        }
+    }
+
+    /// Setup owns two screens: "paste a key" and "nothing to do". An offered
+    /// option whose requirement is neither is a requirement with no way to
+    /// satisfy it, which the flow used to resolve by skipping ahead to Ready.
+    func testNoOfferedOptionAsksForSomethingSetupCannotDeliver() {
+        for probe in Self.plausibleMachines {
+            for option in planner.plan(for: probe).availableOptions {
+                XCTAssertTrue(
+                    option.requirement == .nothing || option.requirement == .apiKey,
+                    "\(option.id) is offered with requirement \(option.requirement), "
+                        + "which no stage in setup can satisfy"
+                )
+            }
+        }
+    }
+
+    /// Nothing performs the model download, so the card must not promise one.
+    /// The option stays listed with its size and a reason — it is the only
+    /// choice that keeps the owner's words on the machine, and hiding it would
+    /// tell them nothing.
+    func testFullyLocalIsNotOfferedWhenItWouldNeedADownloadNothingPerforms() throws {
+        let states: [LocalModelRuntimeReport] = [
+            LocalModelRuntimeReport(),
+            LocalModelRuntimeReport(isRuntimeInstalled: true),
+            LocalModelRuntimeReport(isRuntimeInstalled: true, isDaemonReachable: true)
+        ]
+        for runtime in states {
+            let local = try XCTUnwrap(
+                planner.plan(for: .machine(localRuntime: runtime)).option(withID: .fullyLocal)
+            )
+            XCTAssertFalse(local.isAvailable, "A download nothing performs must not be offered")
+            XCTAssertEqual(local.requirement, .download)
+            XCTAssertNotNil(local.approximateDownloadBytes, "The size is still worth stating")
+            XCTAssertNotNil(local.availability.reason)
+        }
+    }
+
+    /// And the moment the model really is there, it is the option the product
+    /// exists for.
+    func testFullyLocalIsOfferedTheMomentTheModelIsServing() throws {
+        let local = try XCTUnwrap(
+            planner.plan(for: .machine(localRuntime: .servingPreferredModel)).option(withID: .fullyLocal)
+        )
+        XCTAssertTrue(local.isAvailable)
+        XCTAssertEqual(local.requirement, BrainSetupRequirement.nothing)
+        XCTAssertEqual(local.id.backendPlan, .localOllama)
+    }
+
+    /// Three vendors used to share the string `"openai-compatible"`, which meant
+    /// three keys collapsing into one slot on disk and none of them resolving to
+    /// instructions. Each provider now names itself.
+    func testEveryKeyProviderMapsToItsOwnAdapterIdentifier() {
+        let expected: [BrainSetupOptionID: String] = [
+            .anthropicAPIKey: "anthropic",
+            .openAIAPIKey: "openai",
+            .googleAPIKey: "gemini",
+            .deepSeekAPIKey: "deepseek",
+            .moonshotAPIKey: "moonshot",
+            .groqAPIKey: "groq"
+        ]
+        for (id, provider) in expected {
+            XCTAssertEqual(id.keyProviderIdentifier, provider)
+            XCTAssertNotNil(APIKeyOnboarding.instructions(forProvider: provider))
+        }
+        XCTAssertEqual(Set(expected.values).count, expected.count, "Two options must never share a key slot")
+        for id in [BrainSetupOptionID.fullyLocal, .claudeCodeCLI, .codexCLI, .googleSignIn] {
+            XCTAssertNil(id.keyProviderIdentifier, "\(id) must not ask for a pasted key")
+        }
     }
 
     // MARK: - Helpers

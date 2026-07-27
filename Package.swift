@@ -5,11 +5,12 @@ import PackageDescription
 let package = Package(
     name: "sage-voice-bridge",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "SageVoiceCore", targets: ["SageVoiceCore"]),
         .executable(name: "sage-voiced", targets: ["sage-voiced"]),
+        .executable(name: "MynahMac", targets: ["MynahMac"]),
     ],
     targets: [
         // Speech-to-text core, lifted from QuietType (github.com/l33tdawg/quiettype).
@@ -22,6 +23,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "sage-voiced",
+            dependencies: ["SageVoiceCore"]
+        ),
+        // The app a non-technical owner actually sees. The CLI above stays as
+        // the debugging surface — every screen here drives the same
+        // SageVoiceCore types, so neither is a reimplementation of the other.
+        .executableTarget(
+            name: "MynahMac",
             dependencies: ["SageVoiceCore"]
         ),
         .testTarget(

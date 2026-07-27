@@ -129,10 +129,13 @@ func makeBackend(
 ) throws -> BrainBackend {
     func environmentKey(_ name: String) throws -> String {
         if let explicitKey, !explicitKey.isEmpty { return explicitKey }
-        guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
-            throw HarnessError("\(name) is not set in the environment")
+        // Environment, then the stored key. The daemon runs for weeks and must
+        // not carry a credential in its argument vector, where every local
+        // process can read it out of `ps`.
+        if let stored = ProviderKeyStore().key(forProvider: provider), !stored.isEmpty {
+            return stored
         }
-        return value
+        throw HarnessError("no key for '\(provider)' — run: sage-voiced key --provider \(provider) --key <key> --save")
     }
 
     func openAICompat(
@@ -427,7 +430,19 @@ func runKey(_ arguments: [String]) -> Never {
         print("checking the key against \(backend.displayDescription)…")
         let verdict = await BrainKeyValidator().validate(backend)
         print(verdict.spokenDescription)
-        return verdict.isUsable ? 0 : 1
+        guard verdict.isUsable else { return 1 }
+
+        if arguments.contains("--save") {
+            do {
+                try ProviderKeyStore().save(key, forProvider: providerID)
+                print("saved — the daemon will use it on its next start")
+            } catch {
+                return fail("could not save the key: \(error)")
+            }
+        } else {
+            print("rerun with --save to keep it")
+        }
+        return 0
     }
 }
 

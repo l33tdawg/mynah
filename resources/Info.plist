@@ -4,32 +4,91 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+
+  <!-- The app, not the CLI. sage-voiced still ships alongside it in
+       Contents/MacOS as the debugging surface, but it is a helper: making it
+       the bundle executable is what made double-clicking this app open
+       nothing at all. -->
   <key>CFBundleExecutable</key>
-  <string>sage-voiced</string>
+  <string>MynahMac</string>
+
+  <!-- DO NOT CHANGE. macOS files every TCC grant — microphone, automation,
+       files-and-folders — under this string. A new identifier silently revokes
+       all of them for every existing owner, who then gets permission boxes
+       with no idea why. scripts/package-app.sh hard-fails on a change for
+       exactly this reason; if you think you need a new one, you need a
+       migration plan first. -->
   <key>CFBundleIdentifier</key>
   <string>local.sage.voicebridge</string>
+
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+
+  <!-- What the owner calls it: the menu bar, the Dock, the "quit" box, the
+       first Finder column. "SAGE Voice Bridge" is the name of the machinery,
+       and the owner is never shown the machinery. -->
   <key>CFBundleName</key>
-  <string>SAGE Voice Bridge</string>
+  <string>Mynah</string>
+  <key>CFBundleDisplayName</key>
+  <string>Mynah</string>
+
+  <!-- Contents/Resources/Mynah.icns, drawn by scripts/make-icon.sh. -->
+  <key>CFBundleIconFile</key>
+  <string>Mynah</string>
+  <key>CFBundleIconName</key>
+  <string>Mynah</string>
+
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+
+  <!-- Package.swift targets macOS 14, so anything lower is a bundle that
+       launches into a dyld error instead of a window. -->
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
-  <!-- Agent, not an app with a Dock icon: this is an always-on appliance the
-       owner reaches by voice message, not something they switch to. -->
+  <string>14.0</string>
+
+  <!-- Mynah has a window, a Dock icon and a full menu bar. It was an agent
+       when it was a daemon with a CLI; as an app, LSUIElement would hide the
+       Dock icon, and the Dock icon is the only way back after the owner closes
+       the window — the app deliberately keeps running when they do
+       (MynahApp.applicationShouldTerminateAfterLastWindowClosed). The menu bar
+       extra is an extra, not the product. -->
   <key>LSUIElement</key>
-  <true/>
+  <false/>
+
   <key>NSHighResolutionCapable</key>
   <true/>
-  <!-- Not needed for Phase 1 (audio arrives as a Signal attachment), but a
-       live call is on the roadmap and adding the key later would re-prompt. -->
+
+  <!-- Shown in the macOS microphone prompt, so it is written to be read by the
+       person staring at that box — not by a lawyer, and not by us.
+       Scoped honestly: Mynah does not record from this Mac today (the owner
+       talks into their phone and the voice note arrives over Signal), and
+       Settings says so in as many words. The key is here because the
+       hold-to-talk path in Setup/MicrophonePermissionView refuses to ask
+       without it, and because a bundle that gains a usage string later has to
+       be re-signed and re-notarized to pick it up. -->
   <key>NSMicrophoneUsageDescription</key>
-  <string>SAGE Voice Bridge needs microphone access for live voice calls. Audio is transcribed on this Mac and never uploaded.</string>
+  <string>Mynah asks for the microphone only if you choose to hold the talk button and speak to it from this Mac. It never listens in the background, and what you say is turned into words on this Mac.</string>
+
+  <!-- Mynah is an appliance: it answers the phone whether or not a window is
+       open. Letting macOS terminate it quietly at logout or under memory
+       pressure would mean messages going unanswered with nothing to see. -->
+  <key>NSSupportsSuddenTermination</key>
+  <false/>
+  <key>NSSupportsAutomaticTermination</key>
+  <false/>
+
+  <key>NSHumanReadableCopyright</key>
+  <string>Apache 2.0 licensed. See the LICENSE file included with this app.</string>
+
+  <!-- Set by scripts/package-app.sh; read back by scripts/notarize.sh to name
+       the archive. Empty means a plain release. -->
   <key>SageVoiceBridgeReleaseLabel</key>
   <string></string>
 </dict>

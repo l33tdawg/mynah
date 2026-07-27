@@ -22,7 +22,10 @@ together does not yet.
 - [x] Speech synthesis (Kokoro over loopback HTTP)
 - [~] Signal transport — written, **never run against a real signal-cli daemon**
 - [ ] The daemon: Signal -> ASR -> brain -> TTS -> Signal, end to end
-- [ ] `package-app.sh` — copy SAGE into `Resources` and codesign the bundle
+- [x] `package-app.sh` — app + CLI + SAGE in one bundle, signed inside out,
+      verified with a real Developer ID and a tamper test
+- [~] `notarize.sh` — written and its preflight verified; the submission itself
+      has **never been run against Apple** (needs a Developer Program account)
 - [ ] Google OAuth client + consent-screen verification
 
 ## Layout

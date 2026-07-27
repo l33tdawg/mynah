@@ -280,14 +280,25 @@ public enum APIKeyProvider: String, Sendable, Codable, CaseIterable, Comparable 
         }
     }
 
-    /// `BrainBackend.identifier` this provider would be served by. The three
-    /// OpenAI-compatible vendors share one adapter.
+    /// `BrainBackend.identifier` this provider would be served by.
+    ///
+    /// These are the *adapter's own* identifiers — `OpenAICompatBackend.identifier`
+    /// returns `provider.identifier`, so Gemini reports `"gemini"` and Kimi
+    /// reports `"moonshot"`. An earlier version answered `"google"` here and
+    /// folded DeepSeek, Kimi and Groq into a single `"openai-compatible"`, and
+    /// both were live bugs rather than cosmetic ones: `APIKeyOnboarding` keys its
+    /// instructions on the adapter's vocabulary, so `"google"` matched nothing and
+    /// the owner was offered a "Google Gemini API key" option whose key screen
+    /// could never be reached, while three vendors sharing one string meant three
+    /// keys collapsing into one slot on disk.
     public var backendIdentifier: String {
         switch self {
         case .anthropic: return "anthropic"
         case .openAI:    return "openai"
-        case .google:    return "google"
-        case .deepSeek, .moonshot, .groq: return "openai-compatible"
+        case .google:    return "gemini"
+        case .deepSeek:  return "deepseek"
+        case .moonshot:  return "moonshot"
+        case .groq:      return "groq"
         }
     }
 

@@ -120,7 +120,13 @@ public enum APIKeyOnboarding {
     /// genuinely supports. A test now asserts the two lists agree.
     public static func instructions(forProvider identifier: String) -> Instructions? {
         switch identifier {
-        case "gemini":           return gemini
+        // `"google"` is an alias, not a second provider. `APIKeyProvider.google`
+        // now reports `"gemini"`, but the string reached here from three call
+        // sites for months and returned nil every time — which skipped the key
+        // screen, declared setup finished, and left the owner with an appliance
+        // that asked for a key it had never offered to take. Kept so that a
+        // stored choice written by an older build still resolves.
+        case "gemini", "google": return gemini
         case "openai":           return openAI
         case "anthropic":        return anthropic
         case "deepseek":         return deepSeek
@@ -169,7 +175,7 @@ public enum APIKeyOnboarding {
         if key.hasPrefix("http://") || key.hasPrefix("https://") { return .looksLikeAURL }
 
         switch provider {
-        case "gemini":
+        case "gemini", "google":
             if key.hasPrefix("sk-ant-") { return .wrongProvider(guessed: "an Anthropic") }
             if key.hasPrefix("sk-") { return .wrongProvider(guessed: "an OpenAI") }
         case "openai":
