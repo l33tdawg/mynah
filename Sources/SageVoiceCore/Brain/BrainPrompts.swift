@@ -130,10 +130,14 @@ public enum BrainPrompts {
     /// not things anyone asks for by voice, and their presence was pulling the
     /// model towards generic browse-style tools for every question.
     ///
-    /// The three note tools take this to 18, which is a debt against that
-    /// measurement rather than a free addition: nothing has been re-run at 18,
-    /// and the curve above says the cost is real even if it is small here.
-    /// Their schemas are written short for that reason. If routing regresses,
+    /// The three note tools take this to 18. Spot-checked on the appliance at
+    /// that size: 6/6 correct — `write_note`, `list_notes`, `web_search`,
+    /// `sage_recall`, `sage_backlog`, and "thanks bro that's all" correctly
+    /// calling nothing. That is a spot check, not the 12-utterance set the
+    /// numbers above come from, so it rules out a collapse rather than proving
+    /// no cost.
+    ///
+    /// Their schemas are written short regardless. If routing does regress,
     /// collapsing `read_note` and `list_notes` into one tool that lists when
     /// given no title is the cheapest thing to try before dropping the feature.
     public static let voiceToolAllowlist: Set<String> = Set<String>([

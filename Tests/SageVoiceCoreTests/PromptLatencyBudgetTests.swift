@@ -59,11 +59,12 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// Every tool also carries its schema into the prefill.
     ///
     /// 18 is where the note tools left it, and the budget is 18 — no headroom at
-    /// all, on purpose. Nothing has been re-measured since 14, so the next tool
-    /// added turns this red, and whoever adds it has to either re-run the
-    /// routing measurement or raise this line and say why. That is the whole
-    /// point: the cost of tool nineteen is unknown, and it should not be
-    /// possible to spend it without noticing.
+    /// all, on purpose. 18 has only been spot-checked (6/6 on the appliance),
+    /// not run against the 12-utterance set those numbers come from, so the next
+    /// tool added turns this red and whoever adds it has to either measure
+    /// properly or raise this line and say why. That is the whole point: the
+    /// cost of tool nineteen is unknown, and it should not be possible to spend
+    /// it without noticing.
     static let voiceCatalogueBudget = 18
 
     func testTheVoiceCatalogueDoesNotSilentlyGrow() {
