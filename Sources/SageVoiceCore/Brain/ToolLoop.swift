@@ -295,6 +295,55 @@ public final class ToolLoop: @unchecked Sendable {
         )
     }
 
+    /// Puts the model and its prompt prefix in cache before anyone is waiting.
+    ///
+    /// Every turn re-sends the same system prompt and the same 14 tool schemas
+    /// — about 2,833 tokens before the owner's words even start. Measured on
+    /// the M2 appliance:
+    ///
+    ///     cold          prompt_eval 2833 tok / 13.95s
+    ///     warm prefix   prompt_eval 2836 tok /  2.90s
+    ///     warm again    prompt_eval 2835 tok /  2.74s
+    ///
+    /// A ~5x drop, and a turn makes at least two model calls, so this is worth
+    /// roughly 22 seconds of the owner's waiting per request. The cost is paid
+    /// once at boot, when nobody is listening.
+    ///
+    /// The throwaway turn must carry the *identical* system prompt and tool
+    /// catalogue a real turn will, or the prefix does not match and nothing is
+    /// reused. That is why this lives here rather than in the daemon: this type
+    /// owns the prompt.
+    ///
+    /// Never throws. A failed warm-up costs latency, not correctness, and must
+    /// not stop an appliance from booting.
+    @discardableResult
+    public func warmUp(tools: [MCPTool]? = nil) async -> Bool {
+        do {
+            let catalogue: [MCPTool]
+            if let tools {
+                catalogue = tools
+            } else {
+                catalogue = try await availableTools()
+            }
+            _ = try await backend.complete(
+                BrainRequest(
+                    messages: [
+                        .system(configuration.systemPrompt),
+                        .user(BrainPrompts.warmUpProbe)
+                    ],
+                    tools: catalogue.map(\.brainTool),
+                    temperature: configuration.temperature,
+                    // One token. We want the prefill, not the answer.
+                    maxOutputTokens: 1,
+                    reasoning: .disabled
+                )
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Runs one voice turn.
     ///
     /// - Parameters:

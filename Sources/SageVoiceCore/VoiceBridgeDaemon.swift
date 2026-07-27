@@ -78,6 +78,9 @@ public actor VoiceBridgeDaemon {
     /// catalogue does not change while the server is up.
     private var cachedTools: [MCPTool]?
 
+    /// Periodic re-prime. Cancelled on stop.
+    private var keepWarmTask: Task<Void, Never>?
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
@@ -95,6 +98,22 @@ public actor VoiceBridgeDaemon {
     /// Runs until the message stream finishes (i.e. until `signal.stop()`).
     public func run() async {
         await signal.start()
+
+        // Pay the prefill before anyone is waiting on it. An appliance boots
+        // once and then sits idle for hours, so this cost belongs at startup.
+        if let tools = try? await toolCatalogue() {
+            let started = Date()
+            let warmed = await loop.warmUp(tools: tools)
+            log(String(
+                format: "[daemon] warm-up %@ in %.1fs",
+                warmed ? "ok" : "FAILED (turns will be slower)",
+                Date().timeIntervalSince(started)
+            ))
+            if warmed {
+                startKeepWarm(tools: tools)
+            }
+        }
+
         log("[daemon] listening for Signal messages")
 
         for await message in signal.incomingMessages {
@@ -109,8 +128,40 @@ public actor VoiceBridgeDaemon {
     }
 
     public func stop() async {
+        keepWarmTask?.cancel()
+        keepWarmTask = nil
         await signal.stop()
     }
+
+    /// Re-primes the cache on a timer so an idle appliance stays fast.
+    ///
+    /// Ollama drops the model — and its KV cache with it — after `keep_alive`
+    /// elapses, which for this product is 30 minutes. An agent manager is idle
+    /// for hours at a time and then wanted *immediately*, so paying 14 seconds
+    /// of prefill on the owner's first sentence of the morning is exactly the
+    /// wrong place to save power. The interval is deliberately well inside the
+    /// eviction window rather than close to it.
+    private func startKeepWarm(tools: [MCPTool]) {
+        keepWarmTask?.cancel()
+        keepWarmTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.keepWarmIntervalSeconds * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                await self.reWarm(tools: tools)
+            }
+        }
+    }
+
+    private func reWarm(tools: [MCPTool]) async {
+        // Silent unless it fails — a heartbeat that logs every 20 minutes buries
+        // the lines that matter.
+        if await loop.warmUp(tools: tools) == false {
+            log("[daemon] keep-warm failed; the next turn will pay full prefill")
+        }
+    }
+
+    /// Comfortably inside Ollama's 30-minute `keep_alive`.
+    static let keepWarmIntervalSeconds: TimeInterval = 20 * 60
 
     // MARK: One message
 

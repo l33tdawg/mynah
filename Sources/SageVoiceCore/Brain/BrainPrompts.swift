@@ -56,6 +56,14 @@ public enum BrainPrompts {
 
     /// Prompt used for the forced wrap-up turn after the iteration cap is hit.
     /// Tools are withheld on that turn, so the model has to produce speech.
+    /// Throwaway user turn used only to prime the prompt cache.
+    ///
+    /// Short on purpose: the point is the ~2,833 tokens of system prompt and
+    /// tool schemas that precede it, not this. It also must not look like a
+    /// request, or a warm-up could call a tool against the owner's SAGE node
+    /// before they have said anything.
+    public static let warmUpProbe = "ok"
+
     public static let forcedSummary = """
     Stop calling tools now and answer the owner out loud in two or three short spoken sentences, \
     using only what the tool results above already told you. If they were not enough, say so plainly.

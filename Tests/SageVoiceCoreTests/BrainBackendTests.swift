@@ -367,4 +367,33 @@ final class BrainBackendTests: XCTestCase {
     private func encodeOpenAI(_ messages: [BrainMessage]) -> [[String: Any]] {
         OpenAICompatBackend.encodeMessages(messages)
     }
+
+    // MARK: - Anthropic parameter gating (regression)
+
+    /// `temperature` was removed on Opus 4.7+. ToolLoop defaults to 0, so
+    /// sending it made every real voice turn a 400 — while isAvailable()
+    /// passed nil and succeeded, so setup said "you're all set" and the first
+    /// thing the owner said out loud failed.
+    func testTemperatureIsOmittedOnModelsThatRejectIt() {
+        for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"] {
+            XCTAssertFalse(
+                AnthropicBackend.acceptsTemperature(model),
+                "\(model) rejects temperature outright; sending it is a 400"
+            )
+        }
+        for model in ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"] {
+            XCTAssertTrue(AnthropicBackend.acceptsTemperature(model), model)
+        }
+    }
+
+    /// A local 4B's 1024-token budget is not a sane cap for a cloud reasoning
+    /// model: thinking can consume it entirely, yielding empty content and —
+    /// through ToolLoop's forced summary — silence for the owner.
+    func testMaxTokensFloorProtectsReasoningModelsButLeavesProbesAlone() {
+        XCTAssertGreaterThanOrEqual(AnthropicBackend.minimumMaxOutputTokens, 4096)
+        XCTAssertLessThan(
+            1024, AnthropicBackend.minimumMaxOutputTokens,
+            "ToolLoop's default must be raised by the floor, not passed through"
+        )
+    }
 }

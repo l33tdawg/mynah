@@ -26,6 +26,28 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     /// caller does not specify one.
     public static let defaultMaxOutputTokens = 4096
 
+    /// Floor applied to whatever the caller asks for.
+    ///
+    /// On Anthropic `max_tokens` caps thinking **and** visible text together,
+    /// and reasoning models spend it thinking first. `ToolLoop` defaults to
+    /// 1024 — tuned against a local 4B — which extended thinking can consume
+    /// entirely, returning `stop_reason: max_tokens` with empty content. The
+    /// loop then forces a summary that fails the same way and throws
+    /// `emptyReply`: the owner gets silence. A local model's token budget is
+    /// not a sane cap for a cloud reasoning model.
+    public static let minimumMaxOutputTokens = 4096
+
+    /// Models that still accept `temperature`.
+    ///
+    /// It was removed on Opus 4.7 and later. Matching on the family prefix
+    /// rather than an allowlist of exact ids, so a new 4.6-era model keeps
+    /// working and anything newer defaults to the safe behaviour of omitting it.
+    static func acceptsTemperature(_ model: String) -> Bool {
+        let legacy = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+                      "claude-3-", "claude-sonnet-4-2", "claude-opus-4-1"]
+        return legacy.contains { model.hasPrefix($0) }
+    }
+
     private let baseURL: URL
     private let credential: BrainCredential
     private let session: URLSession
@@ -100,11 +122,15 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     // MARK: Completion
 
     public func complete(_ request: BrainRequest) async throws -> BrainReply {
-        let wantsThinking = request.reasoning == .enabled
+        // A deliberate 1-token probe must stay a 1-token probe; the floor
+        // exists to stop a local model's budget starving a reasoning model, not
+        // to override an explicit tiny request.
+        let requested = request.maxOutputTokens ?? Self.defaultMaxOutputTokens
+        let maxTokens = requested <= 4 ? requested : max(requested, Self.minimumMaxOutputTokens)
 
         var body: [String: Any] = [
             "model": modelName,
-            "max_tokens": request.maxOutputTokens ?? Self.defaultMaxOutputTokens,
+            "max_tokens": maxTokens,
             "messages": try Self.encodeMessages(request.messages)
         ]
 
@@ -123,14 +149,27 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
             body["tools"] = request.tools.map(\.anthropicWireObject)
         }
 
-        if wantsThinking {
+        switch request.reasoning {
+        case .enabled:
             // Adaptive thinking on Claude 4.6 and newer. `budget_tokens` is
-            // deprecated on 4.6 and rejected outright by Opus 5, so it must not
-            // appear here.
+            // deprecated on 4.6 and rejected outright by Opus 5.
             body["thinking"] = ["type": "adaptive"]
-            // Extended thinking requires the default temperature; sending one
-            // alongside is a 400.
-        } else if let temperature = request.temperature {
+        case .disabled:
+            // Must be sent explicitly. Omitting the field does NOT mean "off"
+            // on Opus 5, where thinking is on by default — so the loop's
+            // "no reasoning on the wrap-up turn" setting was silently a no-op.
+            body["thinking"] = ["type": "disabled"]
+        case .automatic:
+            break
+        }
+
+        // `temperature` was REMOVED on Opus 4.7 and later (Opus 5, 4.8,
+        // Fable 5): the parameter is rejected outright, thinking or not. Since
+        // ToolLoop defaults to temperature 0, sending it made every real voice
+        // turn a 400 — while isAvailable() passed nil and therefore succeeded,
+        // so setup reported "you're all set" and the first thing the owner said
+        // out loud failed.
+        if let temperature = request.temperature, Self.acceptsTemperature(modelName) {
             body["temperature"] = temperature
         }
 
