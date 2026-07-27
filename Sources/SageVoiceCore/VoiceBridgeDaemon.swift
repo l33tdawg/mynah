@@ -40,9 +40,31 @@ public actor VoiceBridgeDaemon {
         /// Prefix on every reply, so a Signal thread makes it obvious which
         /// messages came from the appliance rather than from a person.
         public var replyPrefix: String
-        /// Conversation turns kept for context. Each turn re-sends the whole
-        /// history plus 14 tool schemas, and prefill measured ~130 tok/s on the
-        /// M2 — so history is the most expensive knob here, not the cheapest.
+        /// Conversation turns kept for context.
+        ///
+        /// This was 6, on the grounds that every turn re-sends the whole history
+        /// at ~130 tok/s of prefill, which made history the most expensive knob
+        /// on the appliance. That was true, and it is not true any more.
+        ///
+        /// Prefill only costs anything when the prompt cache *misses*, and it
+        /// was missing every turn for a reason unrelated to length: the tool
+        /// schemas were being serialised with their JSON keys in a different
+        /// order each time (Swift seeds dictionary hashing per process), so a
+        /// byte-prefix cache matched nothing. With `.sortedKeys` the prefill of
+        /// a warm turn fell from 3,572 tokens to 4, and a turn from 27.7 s to
+        /// 11.0 s.
+        ///
+        /// That changes what history costs. Turn N's history is a *prefix* of
+        /// turn N+1's prompt, so it is already in the cache — carrying it
+        /// forward is close to free, and the ceiling is `num_ctx` rather than
+        /// patience. Hence 16: the owner gets an appliance that remembers the
+        /// whole conversation instead of one that forgets what they said four
+        /// sentences ago and has to go ask SAGE.
+        ///
+        /// Not free, two ways, both worth watching: KV cache grows with context,
+        /// and a 4B model's instruction-following degrades as context fills.
+        /// Routing accuracy at 16 turns of history is *not* measured — the
+        /// 12/12 figure quoted elsewhere was on short contexts.
         public var historyTurnLimit: Int
         /// Refuse transcripts longer than this. A 20-minute voice note is
         /// almost certainly a misfire, and it would cost minutes of model time.
@@ -65,7 +87,7 @@ public actor VoiceBridgeDaemon {
         public init(
             genericFailureReply: String = "Something went wrong handling that. It's logged.",
             replyPrefix: String = VoiceBridgeDaemon.Configuration.defaultReplyPrefix,
-            historyTurnLimit: Int = 6,
+            historyTurnLimit: Int = 16,
             maximumTranscriptCharacters: Int = 4000,
             sendsThinkingAcknowledgement: Bool = false
         ) {

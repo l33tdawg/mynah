@@ -332,13 +332,29 @@ public final class ToolLoop: @unchecked Sendable {
         self.configuration = configuration
     }
 
-    /// The tools this loop will offer the model, straight from the MCP server.
+    /// The tools this loop will offer the model, straight from the MCP server —
+    /// but sorted by name, which is not cosmetic.
     ///
-    /// If the allowlist matches nothing the server publishes — a different MCP
-    /// server, or SAGE renaming its tools — the full catalogue is offered
-    /// rather than failing, so the loop degrades instead of breaking.
+    /// SAGE builds its `tools/list` reply by iterating a Go map, and Go
+    /// deliberately randomises map iteration order. Its own test suite says so
+    /// (`internal/mcp/http_transport_test.go:437`: "tools/list iterates a map
+    /// and ordering is non-deterministic"). So the same 14 tools come back in a
+    /// different order on every fetch.
+    ///
+    /// That order is load-bearing here, because the tool schemas are rendered
+    /// into the *front* of the prompt, ahead of the owner's words. Reshuffle
+    /// them and the prompt is a different byte string from position ~1 — so
+    /// llama.cpp's prefix cache matches nothing and re-prefills the whole thing.
+    /// Measured on the appliance, straight from `ollama.log`:
+    ///
+    ///     total=3021 matched=3012   →  prompt eval    0.4 s
+    ///     total=3568 matched=1      →  prompt eval   16.4 s
+    ///
+    /// Three of eight requests in that sample were full misses. Sorting costs
+    /// nothing and makes the prefix byte-identical every turn, which is also
+    /// what `warmUp()` has been quietly assuming since the day it was written.
     public func availableTools() async throws -> [MCPTool] {
-        let tools = try await mcp.listTools()
+        let tools = try await mcp.listTools().sorted { $0.name < $1.name }
         guard !configuration.allowedToolNames.isEmpty else {
             return tools
         }

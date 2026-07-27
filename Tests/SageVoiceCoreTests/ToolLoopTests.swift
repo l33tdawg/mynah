@@ -95,6 +95,46 @@ final class ToolLoopTests: XCTestCase {
         ToolLoop(backend: backend, mcp: tools, configuration: configuration)
     }
 
+    // MARK: Prompt-cache stability
+
+    /// The catalogue must come back in the same order every time, whatever
+    /// order the server sent it in.
+    ///
+    /// This is a latency test wearing a correctness test's clothes. SAGE builds
+    /// `tools/list` by iterating a Go map, which Go randomises on purpose — so
+    /// the same 14 tools arrive shuffled on every fetch. Those schemas are
+    /// rendered into the front of the prompt, so a reshuffle changes the prompt
+    /// from roughly its first token, llama.cpp's prefix cache matches nothing,
+    /// and the appliance re-prefills ~3,500 tokens at about 16 seconds a go.
+    /// Measured in `ollama.log`: `matched=3012` cost 0.4 s, `matched=1` cost
+    /// 16.4 s, on prompts of the same size.
+    func testCatalogueOrderIsStableRegardlessOfServerOrder() async throws {
+        let names = ["sage_recall", "sage_remember", "sage_task", "web_search"]
+        let forward = StubToolSource(toolNames: names)
+        let reversed = StubToolSource(toolNames: names.reversed())
+
+        let fromForward = try await makeLoop(backend: ScriptedBackend([]), tools: forward)
+            .availableTools().map(\.name)
+        let fromReversed = try await makeLoop(backend: ScriptedBackend([]), tools: reversed)
+            .availableTools().map(\.name)
+
+        XCTAssertEqual(fromForward, fromReversed, "a reshuffled server reply must not reshuffle the prompt")
+        XCTAssertEqual(fromForward, names.sorted())
+    }
+
+    /// The allowlist path must sort too — it is the one the appliance runs.
+    func testAllowlistedCatalogueIsAlsoStablyOrdered() async throws {
+        let tools = StubToolSource(toolNames: ["web_search", "sage_task", "sage_recall", "sage_forget"])
+        let loop = makeLoop(
+            backend: ScriptedBackend([]),
+            tools: tools,
+            configuration: ToolLoop.Configuration(allowedToolNames: ["sage_recall", "sage_task", "web_search"])
+        )
+
+        let names = try await loop.availableTools().map(\.name)
+        XCTAssertEqual(names, ["sage_recall", "sage_task", "web_search"])
+    }
+
     // MARK: Allowlist
 
     /// Falling back to the full catalogue when the allowlist matches nothing is

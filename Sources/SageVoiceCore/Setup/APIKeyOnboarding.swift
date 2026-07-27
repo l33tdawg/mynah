@@ -76,14 +76,63 @@ public enum APIKeyOnboarding {
         costNote: "Anthropic charges per use and needs a card on file."
     )
 
+    public static let deepSeek = Instructions(
+        providerName: "DeepSeek",
+        keyPageURL: URL(string: "https://platform.deepseek.com/api_keys")!,
+        steps: [
+            "Open the DeepSeek platform and sign in.",
+            "Go to API keys and create one.",
+            "Copy it and paste it below — DeepSeek only shows it once."
+        ],
+        looksLikeHint: "It starts with sk- and is a long string of letters and numbers.",
+        costNote: "DeepSeek charges per use and needs credit on the account. It's cheap, but it isn't free."
+    )
+
+    public static let groq = Instructions(
+        providerName: "Groq",
+        keyPageURL: URL(string: "https://console.groq.com/keys")!,
+        steps: [
+            "Open the Groq console and sign in.",
+            "Create an API key.",
+            "Copy it and paste it below."
+        ],
+        looksLikeHint: "It starts with gsk_ and is a long string.",
+        costNote: "Groq has a free allowance with tight per-minute limits."
+    )
+
+    public static let moonshot = Instructions(
+        providerName: "Kimi",
+        keyPageURL: URL(string: "https://platform.moonshot.ai/console/api-keys")!,
+        steps: [
+            "Open the Moonshot console and sign in. Kimi is made by Moonshot AI.",
+            "Create an API key.",
+            "Copy it and paste it below."
+        ],
+        looksLikeHint: "It starts with sk- and is a long string.",
+        costNote: "Kimi charges per use and needs credit on the account."
+    )
+
+    /// Every provider `makeBackend` can build must appear here.
+    ///
+    /// The gap this closes was silent and user-facing: `deepseek` was a working
+    /// backend with no instructions, so the setup command answered "no key
+    /// instructions for provider 'deepseek'" for a provider the product
+    /// genuinely supports. A test now asserts the two lists agree.
     public static func instructions(forProvider identifier: String) -> Instructions? {
         switch identifier {
-        case "gemini": return gemini
-        case "openai": return openAI
-        case "anthropic": return anthropic
-        default: return nil
+        case "gemini":           return gemini
+        case "openai":           return openAI
+        case "anthropic":        return anthropic
+        case "deepseek":         return deepSeek
+        case "groq":             return groq
+        case "moonshot", "kimi": return moonshot
+        default:                 return nil
         }
     }
+
+    /// Providers that need a pasted key, and therefore need instructions.
+    /// Local backends are absent on purpose: they need nothing pasted.
+    public static let keyedProviders = ["gemini", "openai", "anthropic", "deepseek", "groq", "moonshot"]
 
     // MARK: - Shape check
 

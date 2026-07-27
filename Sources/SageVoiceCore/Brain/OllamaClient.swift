@@ -302,7 +302,10 @@ public final class OllamaClient: @unchecked Sendable {
         request.timeoutInterval = timeoutSeconds
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            // Byte-stable, or llama.cpp's prefix cache matches nothing and the
+            // appliance re-prefills 3,572 tokens on every turn. See
+            // `PromptStableJSON` for the measurement.
+            request.httpBody = try PromptStableJSON.data(from: body)
         } catch {
             throw OllamaClientError.malformedResponse("could not encode request: \(error)")
         }
@@ -473,9 +476,30 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// this only became reproducible once search results entered the prompt —
     /// before that the appliance was living just inside the ceiling.
     ///
-    /// 8192 doubles the headroom and still leaves the KV cache small enough for
-    /// a 4B model on a 16 GB machine that is also running SAGE and WhisperKit.
-    public static let defaultContextTokens = 8192
+    /// 8192 doubled the headroom and still left the KV cache small enough for
+    /// a 4B model on a 16 GB machine also running SAGE and WhisperKit.
+    ///
+    /// It is now 24576, and the reason has nothing to do with headroom: on this
+    /// build of Ollama, `num_ctx` also sets the size of the *prompt cache*, and
+    /// that is the appliance's dominant latency term. From `ollama.log`:
+    ///
+    ///     cache state: 6 prompts, 1909 MiB (limits: 8192 MiB, 8192 tokens, ...)
+    ///
+    /// The budget is a token count, and it equals `num_ctx`. The system prompt
+    /// and 14 tool schemas are ~3,572 tokens *before the owner says anything*,
+    /// so at 8192 the cache held two prefixes and six live conversations
+    /// thrashed over them. A prefix that gets evicted is re-prefilled at about
+    /// 219 tok/s — 16.3 seconds, measured, every time it happens.
+    ///
+    /// 65536 buys room for many prefixes and, just as importantly, for a long
+    /// conversation: `historyTurnLimit` is 16 now that a cached prefix makes
+    /// carrying history nearly free, and that history has to fit somewhere.
+    ///
+    /// The cost is KV cache, which is unusually cheap here because qwen3.5 is a
+    /// hybrid-attention model with only 8 cached layers — 256 MiB at 8192, so
+    /// ~2 GiB at 65536. Against a 3.5 GB model on a 16 GB machine that also runs
+    /// SAGE and WhisperKit, that fits with room to spare.
+    public static let defaultContextTokens = 65536
 
     private let client: OllamaClient
     private let keepAlive: String?

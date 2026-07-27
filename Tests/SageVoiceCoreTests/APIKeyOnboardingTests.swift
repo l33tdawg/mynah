@@ -64,6 +64,37 @@ final class APIKeyOnboardingTests: XCTestCase {
         XCTAssertNil(APIKeyOnboarding.instructions(forProvider: "nonesuch"))
     }
 
+    /// Regression: `deepseek` was a working backend with no instructions, so
+    /// setup answered "no key instructions for provider 'deepseek'" for a
+    /// provider the product genuinely supports. Silent, and only findable by
+    /// trying it.
+    func testEveryKeyedProviderHasInstructions() {
+        for provider in APIKeyOnboarding.keyedProviders {
+            XCTAssertNotNil(
+                APIKeyOnboarding.instructions(forProvider: provider),
+                "\(provider) can be built as a backend but has no setup instructions"
+            )
+        }
+    }
+
+    func testEveryKeyedProviderHasAKnownEnvironmentVariable() {
+        for provider in APIKeyOnboarding.keyedProviders {
+            XCTAssertNotNil(
+                ProviderKeyStore.environmentVariable(forProvider: provider),
+                "\(provider) has instructions but no environment variable to read"
+            )
+        }
+    }
+
+    /// Cost is the thing a person most needs to know before choosing, and the
+    /// only free one should be the only one that says so.
+    func testOnlyGeminiIsDescribedAsFree() {
+        for provider in APIKeyOnboarding.keyedProviders where provider != "gemini" && provider != "groq" {
+            let note = APIKeyOnboarding.instructions(forProvider: provider)?.costNote ?? ""
+            XCTAssertFalse(note.isEmpty, "\(provider) must state its cost")
+        }
+    }
+
     // MARK: Shape checks
 
     func testAWholeExportLineIsCaught() {

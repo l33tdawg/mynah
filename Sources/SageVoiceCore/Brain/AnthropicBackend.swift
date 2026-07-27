@@ -182,7 +182,10 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }
         do {
-            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            // Byte-stable so the tool schemas do not move turn to turn.
+            // Anthropic prompt caching matches an exact prefix, so an unsorted
+            // schema would break the cache on every request.
+            urlRequest.httpBody = try PromptStableJSON.data(from: body)
         } catch {
             throw BrainBackendError.malformedResponse("could not encode request: \(error)")
         }

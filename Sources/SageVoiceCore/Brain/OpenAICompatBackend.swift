@@ -189,7 +189,10 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }
         do {
-            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+            // Byte-stable for the same reason as Ollama, and here it is worth
+            // money: DeepSeek prices a context-cache hit about ten times cheaper
+            // than a miss, so an unsorted tool schema pays full price every turn.
+            urlRequest.httpBody = try PromptStableJSON.data(from: body)
         } catch {
             throw BrainBackendError.malformedResponse("could not encode request: \(error)")
         }
