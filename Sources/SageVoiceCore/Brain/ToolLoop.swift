@@ -428,6 +428,72 @@ public final class ToolLoop: @unchecked Sendable {
         }
     }
 
+    /// Plants a prompt-cache checkpoint where the *next* turn will diverge.
+    ///
+    /// Worth the whole comment, because the bug it fixes is invisible and the
+    /// fix looks like wasted work.
+    ///
+    /// qwen3.5 is a hybrid attention/SSM architecture, and its recurrent state
+    /// cannot be truncated to an arbitrary position — llama.cpp says so at load:
+    /// "the context does not support partial sequence removal". So unlike a
+    /// plain transformer, it cannot cut the KV cache at the longest common
+    /// prefix. It can only rewind to a saved *checkpoint*, and checkpoints are
+    /// pruned to a minimum spacing of 8,192 tokens — larger than this appliance's
+    /// entire conversation, so in practice only two survive: one ancient, and one
+    /// at the end of the last prompt.
+    ///
+    /// That end-of-prompt checkpoint always lands a few tokens *past* where the
+    /// next turn diverges, which makes it invalid, which sends the runtime back
+    /// to the ancient one. Measured, task 13434:
+    ///
+    ///     prompt 3,925 tokens, matched the cache to 3,915 — 10 new tokens
+    ///     checkpoints at 3987, 3924, 1523; 3924 erased as invalidated
+    ///     restored from 1524 → prompt eval 2,401 tokens / 11.4 s
+    ///
+    /// Ten new tokens cost eleven and a half seconds. Across 34 consecutive
+    /// calls that was 30,620 tokens of recomputed, byte-identical cache.
+    ///
+    /// The cure is not to change the prompt — it is already a 99.7% match. It is
+    /// to make a checkpoint exist in the right place. Sending the next turn's
+    /// prompt *minus the owner's next sentence* plants one exactly at the
+    /// divergence, so the next real turn restores there and prefills only what is
+    /// genuinely new. Measured on a synthetic harness: 10.76 s → 0.33 s.
+    ///
+    /// This is `warmUp()` generalised from boot to every turn, and it costs the
+    /// owner nothing because it runs after their reply has already been sent.
+    ///
+    /// Never throws. A failed anchor costs latency, not correctness.
+    @discardableResult
+    public func anchorPromptCache(history: [BrainMessage], tools: [MCPTool]? = nil) async -> Bool {
+        guard !history.isEmpty else { return false }
+        do {
+            let catalogue: [MCPTool]
+            if let tools {
+                catalogue = tools
+            } else {
+                catalogue = try await availableTools()
+            }
+            // The catalogue and system prompt must match a real turn byte for
+            // byte, or the anchor plants its checkpoint on a sequence the next
+            // turn never asks for. Same discipline as `warmUp()`.
+            var messages: [BrainMessage] = [.system(systemPrompt)]
+            messages.append(contentsOf: history.filter { $0.role != .system })
+            _ = try await backend.complete(
+                BrainRequest(
+                    messages: messages,
+                    tools: catalogue.map(\.brainTool),
+                    temperature: configuration.temperature,
+                    // One token. We want the checkpoint, not the answer.
+                    maxOutputTokens: 1,
+                    reasoning: .disabled
+                )
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Runs one voice turn.
     ///
     /// - Parameters:

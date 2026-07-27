@@ -315,6 +315,28 @@ public actor VoiceBridgeDaemon {
             }
             estimator.record(Date().timeIntervalSince(started))
 
+            // Put a prompt-cache checkpoint where the next turn will begin.
+            //
+            // qwen3.5 is hybrid attention/SSM, so llama.cpp cannot trim the KV
+            // cache to an arbitrary position — "the context does not support
+            // partial sequence removal" — and can only rewind to a checkpoint.
+            // Checkpoints are spaced at least 8,192 tokens apart, more than this
+            // whole conversation, so the only recent one sits at the END of the
+            // last prompt: a few tokens past where the next turn diverges, hence
+            // invalid, hence a rewind to something ancient. Measured on the
+            // appliance, task 13434: a prompt matching the cache to 99.7% —
+            // ten new tokens — re-evaluated 2,401 tokens and cost 11.4 s.
+            //
+            // Replaying the conversation *without* the owner's next sentence
+            // plants a checkpoint exactly at the divergence, so the next turn
+            // restores there. Synthetic measurement: 10.76 s → 0.33 s.
+            //
+            // After the reply, like the SAGE ritual below, because the owner is
+            // no longer waiting. Ollama serves one slot at a time, so this does
+            // occupy the model briefly — acceptable only because it is short and
+            // nobody is blocked on it.
+            await loop.anchorPromptCache(history: histories[key] ?? [], tools: tools)
+
             // After the reply, never before. SAGE's turn discipline is the
             // appliance's own housekeeping and the owner must not wait on it —
             // but it must happen, because the server starts refusing non-SAGE
