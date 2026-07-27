@@ -167,7 +167,9 @@ func makeBackend(provider: String, model: String?, ollamaBaseURL: String?) throw
     case "groq":
         return try openAICompat(.groq, defaultModel: "llama-3.3-70b-versatile", keyVariable: "GROQ_API_KEY")
     case "gemini":
-        return try openAICompat(.gemini, defaultModel: "gemini-2.5-flash", keyVariable: "GEMINI_API_KEY")
+        // gemini-2.5-flash was two generations stale. 3.6 Flash went GA on
+        // 2026-07-21 and keeps the free tier this product depends on.
+        return try openAICompat(.gemini, defaultModel: "gemini-3.6-flash", keyVariable: "GEMINI_API_KEY")
     case "lmstudio":
         return try openAICompat(.lmStudio(), defaultModel: "local-model", keyVariable: nil)
 

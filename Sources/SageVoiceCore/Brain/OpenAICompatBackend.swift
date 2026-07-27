@@ -67,9 +67,15 @@ public struct OpenAICompatProvider: Sendable, Equatable {
 
     /// Google's OpenAI-compatibility layer.
     ///
-    /// Worth knowing: this is the *API-key* path. The zero-friction "sign in
-    /// with Google" path yields an OAuth token, which this same backend accepts
-    /// via a `BrainCredential` that refreshes it — the wire format is identical.
+    /// This is the *API-key* path, and it is the only one this backend serves.
+    ///
+    /// An earlier comment here claimed the zero-friction "sign in with Google"
+    /// path was the same wire format with a different `BrainCredential`. It is
+    /// not. An OAuth token sent to `generativelanguage` is rejected with
+    /// `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT` — Google routes consumer sign-in to
+    /// Code Assist at `cloudcode-pa.googleapis.com/v1internal`, which speaks a
+    /// different request and response shape entirely. That path needs its own
+    /// backend; see `CodeAssistBackend`.
     public static let gemini = OpenAICompatProvider(
         identifier: "gemini",
         displayName: "Google Gemini",
