@@ -83,19 +83,28 @@ public actor VoiceBridgeDaemon {
         /// second party — the bridge on its own number — the original argument
         /// holds and this becomes worth turning back on.
         public var sendsThinkingAcknowledgement: Bool
+        /// How long to wait for the rest of a thought before answering.
+        ///
+        /// "look up xyz and make a list" followed a second later by "oh and add
+        /// abc" is one request finished late, not two requests. See
+        /// `MessageCoalescer` for why this waits rather than starting and
+        /// cancelling.
+        public var messageQuietWindow: Duration
 
         public init(
             genericFailureReply: String = "Something went wrong handling that. It's logged.",
             replyPrefix: String = VoiceBridgeDaemon.Configuration.defaultReplyPrefix,
             historyTurnLimit: Int = 16,
             maximumTranscriptCharacters: Int = 4000,
-            sendsThinkingAcknowledgement: Bool = false
+            sendsThinkingAcknowledgement: Bool = false,
+            messageQuietWindow: Duration = MessageCoalescer.defaultQuietWindow
         ) {
             self.genericFailureReply = genericFailureReply
             self.replyPrefix = replyPrefix
             self.historyTurnLimit = historyTurnLimit
             self.maximumTranscriptCharacters = maximumTranscriptCharacters
             self.sendsThinkingAcknowledgement = sendsThinkingAcknowledgement
+            self.messageQuietWindow = messageQuietWindow
         }
     }
 
@@ -214,13 +223,34 @@ public actor VoiceBridgeDaemon {
 
         log("[daemon] listening for Signal messages")
 
-        for await message in signal.incomingMessages {
+        // Reading and answering are split so a follow-up sent while the previous
+        // one is still in flight lands somewhere, instead of sitting unread in
+        // the stream behind a turn that can now run five minutes.
+        let inbox = MessageInbox()
+        let reader = Task { [signal] in
+            for await message in signal.incomingMessages {
+                await inbox.append(message)
+            }
+            await inbox.close()
+        }
+        defer { reader.cancel() }
+
+        while true {
+            await inbox.waitForArrival()
+            let batch = await inbox.takeBatch(quietWindow: configuration.messageQuietWindow)
+            if batch.isEmpty {
+                if await inbox.isClosed { break }
+                continue
+            }
+            if batch.count > 1 {
+                log("[daemon] merging \(batch.count) messages sent together into one turn")
+            }
             // Sequential on purpose. Two voice notes answered concurrently would
             // interleave their tool calls against one SAGE node and race on the
             // thread history — and the model is the bottleneck anyway, so there
             // is no throughput to win.
-            let outcome = await handle(message)
-            log("[daemon] \(message.logDescription) -> \(outcome.logDescription)")
+            let outcome = await handle(batch)
+            log("[daemon] \(batch[0].logDescription) -> \(outcome.logDescription)")
         }
         log("[daemon] message stream finished")
     }
@@ -275,8 +305,19 @@ public actor VoiceBridgeDaemon {
     /// Exposed so a test can drive a synthetic message without a live daemon.
     @discardableResult
     public func handle(_ message: SignalIncomingMessage) async -> Outcome {
+        await handle([message])
+    }
+
+    /// Answers one turn, which may have arrived as several messages.
+    ///
+    /// Merging happens here rather than in the loop because a batch is not
+    /// several requests — it is one request the owner finished typing late, and
+    /// everything downstream (history, tools, the reply) should see exactly one
+    /// turn. See `MessageCoalescer`.
+    public func handle(_ batch: [SignalIncomingMessage]) async -> Outcome {
         let started = Date()
 
+        guard let message = batch.first else { return .ignoredEmpty }
         guard let recipient = message.replyRecipient else {
             // Nothing to reply to. Dropping is correct: the alternative is
             // guessing a destination, and guessing wrong means the owner's
@@ -286,10 +327,15 @@ public actor VoiceBridgeDaemon {
 
         let transcript: String
         do {
-            guard let raw = try await resolveTranscript(message) else {
-                return .ignoredEmpty
+            var parts: [String] = []
+            for item in batch {
+                // One unreadable voice note in a batch must not discard the text
+                // that came with it — the owner said both things.
+                if let raw = try await resolveTranscript(item) { parts.append(raw) }
             }
-            transcript = raw
+            let merged = MessageCoalescer.merge(parts)
+            guard !merged.isEmpty else { return .ignoredEmpty }
+            transcript = merged
         } catch {
             await reply("I couldn't read that voice note.", to: recipient)
             return .failed("transcription failed: \(error)")
@@ -325,7 +371,7 @@ public actor VoiceBridgeDaemon {
                 transcript: transcript,
                 tools: tools,
                 history: histories[key] ?? [],
-                images: resolveImages(message),
+                images: batch.flatMap { resolveImages($0) },
                 onToolDecision: { [weak self] chosen in
                     guard let self else { return }
                     let previous = await self.lastWorkingLine(for: key)
