@@ -28,8 +28,13 @@ public actor VoiceBridgeDaemon {
         ///
         /// The real fix is to give the bridge its own Signal number, at which
         /// point the thread has two genuine parties and Signal does this for us.
-        /// Until then, one glyph does the job a whole column of layout would.
-        public static let defaultReplyPrefix = "🧠 "
+        /// Until then, this does the job a whole column of layout would.
+        ///
+        /// Three rather than one, at the owner's request after living with one:
+        /// a single glyph reads as punctuation when you are scrolling, while a
+        /// run of them is a band of colour the eye lands on without reading.
+        /// It looks excessive written down and is correct on a phone.
+        public static let defaultReplyPrefix = "🧠🧠🧠 "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String
@@ -106,23 +111,39 @@ public actor VoiceBridgeDaemon {
     /// Measured turn times, so the acknowledgement can quote a real number.
     private var estimator = TurnDurationEstimator()
 
+    /// SAGE's own boot and per-turn discipline. Nil disables it — useful in
+    /// tests and for a bridge pointed at a non-SAGE MCP server.
+    private let ritual: SageRitual?
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
         loop: ToolLoop,
         configuration: Configuration = Configuration(),
+        ritual: SageRitual? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
         self.transcriber = transcriber
         self.loop = loop
         self.configuration = configuration
+        self.ritual = ritual
         self.log = log
     }
 
     /// Runs until the message stream finishes (i.e. until `signal.stop()`).
     public func run() async {
         await signal.start()
+
+        // SAGE's boot sequence, before the warm-up and not after. Inception's
+        // reply becomes part of the system prompt, and the warm-up's only value
+        // is a cached prefix that matches real requests byte for byte — warming
+        // first would cache a prompt no turn ever sends.
+        if let ritual {
+            if await ritual.boot() != nil {
+                loop.setSystemPrompt(await ritual.systemPrompt(base: loop.systemPrompt))
+            }
+        }
 
         // Pay the prefill before anyone is waiting on it. An appliance boots
         // once and then sits idle for hours, so this cost belongs at startup.
@@ -253,6 +274,21 @@ public actor VoiceBridgeDaemon {
                 }
             }
             estimator.record(Date().timeIntervalSince(started))
+
+            // After the reply, never before. SAGE's turn discipline is the
+            // appliance's own housekeeping and the owner must not wait on it —
+            // but it must happen, because the server starts refusing non-SAGE
+            // tool calls once enough of them pile up without a sage_turn, and
+            // web_search is a non-SAGE call. Skipping this would surface days
+            // later as "web search broke".
+            if let ritual {
+                await ritual.recordTurn(
+                    transcript: transcript,
+                    reply: result.reply,
+                    usedTools: result.trace.toolNames
+                )
+            }
+
             return .replied(
                 transcript: transcript,
                 reply: result.reply,

@@ -255,6 +255,28 @@ public final class ToolLoop: @unchecked Sendable {
     private let mcp: ToolProviding
     private let configuration: Configuration
 
+    /// Overrides `configuration.systemPrompt` once the session's SAGE context
+    /// is known. Set at boot, before the warm-up, and not touched again — the
+    /// lock is for publication rather than contention.
+    private let promptLock = NSLock()
+    private var systemPromptOverride: String?
+
+    /// The prompt actually sent. Every path must use this, including `warmUp`:
+    /// the warm-up's only value is that its prefix matches real requests byte
+    /// for byte, and a warm-up on the base prompt while turns use the augmented
+    /// one silently buys nothing.
+    public var systemPrompt: String {
+        promptLock.lock()
+        defer { promptLock.unlock() }
+        return systemPromptOverride ?? configuration.systemPrompt
+    }
+
+    public func setSystemPrompt(_ prompt: String) {
+        promptLock.lock()
+        defer { promptLock.unlock() }
+        systemPromptOverride = prompt
+    }
+
     /// The loop drives whatever `BrainBackend` it is handed. Which model — and
     /// whether it runs on this machine at all — is decided at setup and is not
     /// this type's business.
@@ -328,7 +350,7 @@ public final class ToolLoop: @unchecked Sendable {
             _ = try await backend.complete(
                 BrainRequest(
                     messages: [
-                        .system(configuration.systemPrompt),
+                        .system(systemPrompt),
                         .user(BrainPrompts.warmUpProbe)
                     ],
                     tools: catalogue.map(\.brainTool),
@@ -370,7 +392,7 @@ public final class ToolLoop: @unchecked Sendable {
         let brainTools = catalogue.map(\.brainTool)
         let knownToolNames = Set(catalogue.map(\.name))
 
-        var messages: [BrainMessage] = [.system(configuration.systemPrompt)]
+        var messages: [BrainMessage] = [.system(systemPrompt)]
         messages.append(contentsOf: history.filter { $0.role != .system })
         messages.append(.user(transcript))
 

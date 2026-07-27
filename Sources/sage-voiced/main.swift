@@ -19,6 +19,7 @@ func usage() -> Never {
       sage-voiced verify-sage <path/to/SAGE.app>
       sage-voiced search "<query>"
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
+                         [--reply-prefix "🧠🧠🧠 "] [--acknowledge]
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
     Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
@@ -415,7 +416,27 @@ func runDaemon(_ arguments: [String]) -> Never {
     // looked for in the raw arguments.
     let tools = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
     let loop = ToolLoop(backend: backend, mcp: tools)
-    let daemon = VoiceBridgeDaemon(signal: signal, transcriber: transcriber, loop: loop)
+    // Both of these are pure taste, and taste is only discoverable by living
+    // with it on a phone. Exposing them as flags means retuning is a daemon
+    // restart rather than a rebuild, a repackage, a resign and a redeploy.
+    var daemonConfiguration = VoiceBridgeDaemon.Configuration()
+    if let prefix = flags["reply-prefix"] {
+        daemonConfiguration.replyPrefix = prefix
+    }
+    if arguments.contains("--acknowledge") {
+        daemonConfiguration.sendsThinkingAcknowledgement = true
+    }
+    // Driven against the raw MCP client, not the composed catalogue: these are
+    // SAGE's own boot tools, deliberately outside the model's allowlist.
+    let daemon = VoiceBridgeDaemon(
+        signal: signal,
+        transcriber: transcriber,
+        loop: loop,
+        configuration: daemonConfiguration,
+        ritual: arguments.contains("--no-sage-ritual")
+            ? nil
+            : SageRitual(tools: mcp, log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) })
+    )
 
     runAndExit {
         do {
