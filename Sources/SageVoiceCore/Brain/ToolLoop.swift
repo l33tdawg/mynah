@@ -405,6 +405,7 @@ public final class ToolLoop: @unchecked Sendable {
 
             guard !response.toolCalls.isEmpty else {
                 reply = Self.speakable(response.message.content)
+                Self.warnIfSpeakableAteTheAnswer(raw: response.message.content, spoken: reply)
                 break
             }
 
@@ -521,6 +522,26 @@ public final class ToolLoop: @unchecked Sendable {
     /// Strips reasoning blocks and markdown scaffolding that TTS would read out
     /// as literal punctuation.
     /// Also useful directly from the TTS layer.
+    /// Shouts when the sanitiser removed most of the model's answer.
+    ///
+    /// This bug is invisible from the outside: the loop reports a healthy turn
+    /// with 151 tokens generated and the owner receives four words. Everything
+    /// upstream — token counts, timings, tool traces — looks correct, because
+    /// the damage happens after all of it. Set `SAGE_VOICE_DEBUG_RAW=1` to dump
+    /// the raw content and see exactly which rule ate it.
+    static func warnIfSpeakableAteTheAnswer(raw: String, spoken: String) {
+        let dumpRaw = ProcessInfo.processInfo.environment["SAGE_VOICE_DEBUG_RAW"] == "1"
+        guard raw.count > 80, spoken.count * 2 < raw.count else {
+            if dumpRaw { FileHandle.standardError.write(Data("[raw] \(raw)\n".utf8)) }
+            return
+        }
+        var message = "[warn] sanitiser cut the reply from \(raw.count) to \(spoken.count) characters"
+        if dumpRaw {
+            message += "\n[raw] \(raw)"
+        }
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+
     public static func speakable(_ content: String) -> String {
         var text = stripThinkTags(content)
         text = text.replacingOccurrences(

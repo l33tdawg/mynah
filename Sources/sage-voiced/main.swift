@@ -17,7 +17,11 @@ func usage() -> Never {
       sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
       sage-voiced setup
       sage-voiced verify-sage <path/to/SAGE.app>
+      sage-voiced search "<query>"
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
+
+    `brain` and `daemon` take --no-web to run with SAGE tools only.
+    Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
 
     brain providers:
       ollama (default, local)   openai     deepseek   moonshot
@@ -192,6 +196,40 @@ func makeBackend(provider: String, model: String?, ollamaBaseURL: String?) throw
     }
 }
 
+/// Everything the loop can call: SAGE's governed memory, plus the open internet.
+///
+/// SAGE is required and web search is not, which is the whole reason these are
+/// composed rather than merged. An appliance that cannot reach its own memory is
+/// broken; one that cannot reach Google is just offline, and the owner should
+/// still be able to ask it what is on their backlog.
+///
+/// `--no-web` exists for the case where that is a policy rather than a fault.
+func makeToolSource(mcp: MCPClient, allowWeb: Bool) -> ToolProviding {
+    guard allowWeb else { return mcp }
+
+    var sources: [CompositeToolSource.Source] = [
+        .init(
+            label: "SAGE MCP",
+            provider: mcp,
+            isRequired: true,
+            expectedToolNames: BrainPrompts.voiceToolAllowlist
+                .subtracting([WebSearchToolSource.toolName])
+        )
+    ]
+    sources.append(
+        .init(
+            label: "web search",
+            provider: WebSearchToolSource(
+                backends: WebSearchToolSource.defaultBackends(),
+                log: { print($0) }
+            ),
+            isRequired: false,
+            expectedToolNames: [WebSearchToolSource.toolName]
+        )
+    )
+    return CompositeToolSource(sources: sources, log: { print($0) })
+}
+
 func runBrain(_ arguments: [String]) -> Never {
     guard let transcript = arguments.first, !transcript.hasPrefix("--") else { usage() }
     let flags = parseFlags(Array(arguments.dropFirst()))
@@ -209,7 +247,10 @@ func runBrain(_ arguments: [String]) -> Never {
 
     let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
     let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
-    let loop = ToolLoop(backend: backend, mcp: mcp)
+    // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
+    // looked for in the raw arguments.
+    let tools = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let loop = ToolLoop(backend: backend, mcp: tools)
 
     runAndExit {
         defer { mcp.stop() }
@@ -294,6 +335,34 @@ func runVerifySage(_ arguments: [String]) -> Never {
 // MARK: - daemon
 
 /// The real thing: listen on Signal, act, reply.
+/// Runs one search and prints exactly what the model would be handed.
+///
+/// Worth a subcommand because the keyless provider is a scraper: when it breaks
+/// it will break as a bad spoken answer, three layers deep, and the first
+/// question will be whether search or the model was at fault. This answers that
+/// in one command, with no SAGE node and no model involved.
+func runSearch(_ arguments: [String]) -> Never {
+    guard let query = arguments.first, !query.hasPrefix("--") else { usage() }
+
+    let backends = WebSearchToolSource.defaultBackends()
+    let source = WebSearchToolSource(backends: backends, log: { print($0) })
+
+    runAndExit {
+        print("providers: \(backends.map(\.providerName).joined(separator: " → "))")
+        do {
+            let output = try await source.call(
+                name: WebSearchToolSource.toolName,
+                arguments: ["query": .string(query)]
+            )
+            print("---")
+            print(output)
+            return 0
+        } catch {
+            return fail("\(error)")
+        }
+    }
+}
+
 func runDaemon(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
 
@@ -342,7 +411,10 @@ func runDaemon(_ arguments: [String]) -> Never {
 
     let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
     let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
-    let loop = ToolLoop(backend: backend, mcp: mcp)
+    // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
+    // looked for in the raw arguments.
+    let tools = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let loop = ToolLoop(backend: backend, mcp: tools)
     let daemon = VoiceBridgeDaemon(signal: signal, transcriber: transcriber, loop: loop)
 
     runAndExit {
@@ -370,6 +442,7 @@ case "transcribe":  runTranscribe(Array(arguments.dropFirst()))
 case "brain":       runBrain(Array(arguments.dropFirst()))
 case "setup":       runSetup(Array(arguments.dropFirst()))
 case "verify-sage": runVerifySage(Array(arguments.dropFirst()))
+case "search":      runSearch(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 default:            usage()
 }

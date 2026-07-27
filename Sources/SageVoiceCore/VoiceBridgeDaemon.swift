@@ -18,6 +18,19 @@ import Foundation
 public actor VoiceBridgeDaemon {
 
     public struct Configuration: Sendable {
+        /// Marks a message as the appliance's rather than the owner's.
+        ///
+        /// The appliance is driven from Note-to-Self, and Signal draws that
+        /// entire thread as one column of the owner's own outgoing bubbles —
+        /// there is no incoming side to render on the left, so no styling,
+        /// alignment or read-receipt trick can separate the two speakers. The
+        /// only lever left is the text itself.
+        ///
+        /// The real fix is to give the bridge its own Signal number, at which
+        /// point the thread has two genuine parties and Signal does this for us.
+        /// Until then, one glyph does the job a whole column of layout would.
+        public static let defaultReplyPrefix = "🧠 "
+
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String
         /// Prefix on every reply, so a Signal thread makes it obvious which
@@ -32,16 +45,25 @@ public actor VoiceBridgeDaemon {
         public var maximumTranscriptCharacters: Int
         /// Send a short acknowledgement before the slow part starts.
         ///
-        /// Worth it: a real turn is 40–70s on this hardware, and silence for a
-        /// minute reads as "it's broken", not "it's thinking".
+        /// Off by default, and the reasoning that put it there was wrong. The
+        /// argument was that 40–70 s of silence reads as "it's broken" — true in
+        /// a two-sided chat. But the appliance is used from Note-to-Self, where
+        /// Signal renders *every* message as the owner's own outgoing bubble, so
+        /// an acknowledgement is not reassurance: it is a third indistinguishable
+        /// blue bubble between the question and the answer. Owner's verdict on
+        /// seeing it: "they sound very fake and don't make sense."
+        ///
+        /// Kept as a switch rather than deleted, because in a thread with a real
+        /// second party — the bridge on its own number — the original argument
+        /// holds and this becomes worth turning back on.
         public var sendsThinkingAcknowledgement: Bool
 
         public init(
             genericFailureReply: String = "Something went wrong handling that. It's logged.",
-            replyPrefix: String = "",
+            replyPrefix: String = VoiceBridgeDaemon.Configuration.defaultReplyPrefix,
             historyTurnLimit: Int = 6,
             maximumTranscriptCharacters: Int = 4000,
-            sendsThinkingAcknowledgement: Bool = true
+            sendsThinkingAcknowledgement: Bool = false
         ) {
             self.genericFailureReply = genericFailureReply
             self.replyPrefix = replyPrefix

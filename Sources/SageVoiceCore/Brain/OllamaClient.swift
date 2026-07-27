@@ -455,21 +455,46 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// Ollama runs on this machine; nothing leaves it.
     public let isLocal = true
 
+    /// Context window to ask Ollama for, in tokens.
+    ///
+    /// Ollama does not use the model's own context length — it defaults
+    /// `num_ctx` to 4096 regardless, and qwen3.5:4b advertises 262144. Under
+    /// that default this appliance overflows, and it overflows *silently*: the
+    /// prompt is kept and the generation is cut, so a turn reports success with
+    /// a healthy token count and the owner gets half a sentence. Measured:
+    ///
+    ///   system prompt + 15 tool schemas   ~3,000 tokens
+    ///   one web_search result             ~  400 tokens
+    ///   conversation history              ~  300 tokens
+    ///                                     ------------
+    ///                                      ~3,700, leaving ~400 of 4096
+    ///
+    /// which is why the answers died mid-sentence at 150–250 tokens, and why
+    /// this only became reproducible once search results entered the prompt —
+    /// before that the appliance was living just inside the ceiling.
+    ///
+    /// 8192 doubles the headroom and still leaves the KV cache small enough for
+    /// a 4B model on a 16 GB machine that is also running SAGE and WhisperKit.
+    public static let defaultContextTokens = 8192
+
     private let client: OllamaClient
     private let keepAlive: String?
     /// Applied when the request asks for `.automatic`.
     private let defaultThink: Bool?
+    private let contextTokens: Int?
 
     public init(
         client: OllamaClient = OllamaClient(),
         model: String = "qwen3.5:4b",
         keepAlive: String? = "30m",
-        defaultThink: Bool? = nil
+        defaultThink: Bool? = nil,
+        contextTokens: Int? = OllamaBackend.defaultContextTokens
     ) {
         self.client = client
         self.modelName = model
         self.keepAlive = keepAlive
         self.defaultThink = defaultThink
+        self.contextTokens = contextTokens
     }
 
     public func isAvailable() async -> Bool {
@@ -500,7 +525,11 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
                 temperature: request.temperature,
                 think: think,
                 keepAlive: keepAlive,
-                numPredict: request.maxOutputTokens
+                numPredict: request.maxOutputTokens,
+                // Must be identical on every request including the warm-up, or
+                // Ollama reloads the model with different runtime settings and
+                // throws away the prompt cache the warm-up just paid for.
+                extraOptions: contextTokens.map { ["num_ctx": .int($0)] } ?? [:]
             )
             return response.asBrainReply
         } catch let error as OllamaClientError {

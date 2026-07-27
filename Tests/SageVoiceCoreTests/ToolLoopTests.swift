@@ -426,3 +426,30 @@ final class DaemonHistoryTests: XCTestCase {
         XCTAssertEqual(Set(WaitingPhrases.all).count, WaitingPhrases.all.count, "duplicates")
     }
 }
+
+/// Two defaults that are product decisions rather than implementation details,
+/// both made after watching the appliance be used from Note-to-Self.
+final class DaemonPresentationTests: XCTestCase {
+
+    /// Signal draws Note-to-Self as a single column of the owner's own bubbles,
+    /// so an acknowledgement is not reassurance — it is a third identical blue
+    /// bubble between the question and the answer.
+    func testAcknowledgementsAreOffByDefault() {
+        XCTAssertFalse(VoiceBridgeDaemon.Configuration().sendsThinkingAcknowledgement)
+    }
+
+    /// The only thing that can distinguish speaker from appliance in a
+    /// one-sided thread is the text itself.
+    func testRepliesAreMarkedAsComingFromTheAppliance() {
+        let prefix = VoiceBridgeDaemon.Configuration().replyPrefix
+        XCTAssertFalse(prefix.isEmpty)
+        XCTAssertTrue(prefix.hasSuffix(" "), "the marker must not run into the first word")
+    }
+
+    /// Kept switchable rather than deleted: on a thread with a real second
+    /// party the original argument for acknowledgements comes back.
+    func testAcknowledgementsCanStillBeTurnedOn() {
+        let configuration = VoiceBridgeDaemon.Configuration(sendsThinkingAcknowledgement: true)
+        XCTAssertTrue(configuration.sendsThinkingAcknowledgement)
+    }
+}
