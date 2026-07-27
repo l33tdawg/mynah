@@ -1,0 +1,140 @@
+import Foundation
+
+/// How the owner wants to be answered.
+///
+/// This exists because two correct rules were in conflict. The brevity rules —
+/// 40 words, no markdown, no bullets — were written for text-to-speech, where a
+/// synthesiser reads "-" aloud as a hyphen and 200 words is unlistenable. Then
+/// the appliance shipped over Signal text, the owner asked for ramen shops near
+/// KLCC, and got prose that had been trimmed for a voice nobody was hearing.
+///
+/// The owner's framing, and it is the right one: the answer style should follow
+/// how they asked to be answered. Voice notes on means it will be spoken, so
+/// brevity wins. Voice notes off means it will be read on a phone screen, so
+/// completeness wins.
+public enum ReplyStyle: String, Sendable, Codable, CaseIterable {
+    /// Read aloud. Short, no markup.
+    case spoken
+    /// Read on screen. Complete, with lists and tappable links.
+    case written
+
+    /// Written.
+    ///
+    /// Voice notes are off by default, so this is what a new owner gets. It is
+    /// also the safer default of the two: a long answer to someone expecting a
+    /// short one is an annoyance, while a 40-word answer to someone who asked
+    /// for a list of shops with links has silently dropped what they asked for.
+    public static let `default` = ReplyStyle.written
+
+    /// Whether replies are spoken back as voice notes.
+    ///
+    /// The setting the owner actually sees is "answer with voice notes", not
+    /// "reply style" — they are choosing a medium, and the style follows from
+    /// it. This keeps that mapping in one place.
+    public init(voiceNotes: Bool) {
+        self = voiceNotes ? .spoken : .written
+    }
+
+    public var usesVoiceNotes: Bool { self == .spoken }
+
+    /// Hard token ceiling per model turn for this style.
+    ///
+    /// The cap exists to stop a reasoning runaway — qwen3.5:4b was measured
+    /// generating 4,069 tokens over 190 s and returning empty content — so it
+    /// cannot simply be removed. But 1,024 was sized against a 40-word spoken
+    /// answer, and a written reply listing six shops with full map URLs spends
+    /// most of that on the URLs alone: one
+    /// `https://www.google.com/maps/search/?api=1&query=...` is around 30
+    /// tokens before the place name.
+    ///
+    /// So the ceiling follows the style. Doubling it for written costs nothing
+    /// when the reply is short, because it is a ceiling and not a target.
+    public var maximumGeneratedTokens: Int {
+        switch self {
+        case .spoken: return 1024
+        case .written: return 2048
+        }
+    }
+
+    /// The HOW YOU SPEAK section of the system prompt.
+    var howYouSpeak: String {
+        switch self {
+        case .spoken:
+            return """
+            HOW YOU SPEAK
+            - Your reply is read aloud by a speech synthesiser. Answer in at most 40 words, \
+            one or two sentences.
+            - Lead with the answer in the first six words. No preamble, no restating the question.
+            - Give only what was asked. Do not add background, history or detail the owner did not \
+            ask for — offer to go deeper instead, and let them decide.
+            - Plain spoken English only. No markdown, no bullet points, no headings, no code blocks, \
+            no emoji, no raw IDs or hashes unless the owner asked for one specifically. The one \
+            exception is the text you pass to write_note: that is a document, not speech, so markdown \
+            belongs there.
+            - Do not narrate what you are about to do, and do not list the tools you used.
+            """
+        case .written:
+            return """
+            HOW YOU WRITE
+            - Your reply is read on a phone screen. Give the whole answer. If the owner asked for \
+            several things, give them all of them.
+            - Lead with the answer. No preamble, no restating the question, no "based on my research".
+            - When you are listing places, shops, links or options, put each on its own line \
+            starting with a dash. Keep each line to one line.
+            - Write every web address in full, starting with https://, so the owner can tap it. \
+            Never tell them to search for something themselves.
+            - No headings, no bold, no code blocks, no emoji, and no raw IDs or hashes unless the \
+            owner asked for one. Short lines and dashes are the whole format.
+            - Do not narrate what you are about to do, and do not list the tools you used.
+            """
+        }
+    }
+}
+
+/// Where the reply-style preference lives.
+///
+/// A small file rather than a flag, because the owner sets this in Mynah and the
+/// daemon is a separate long-running process — they need somewhere to meet. Same
+/// directory and same owner-only permissions as their provider keys and notes.
+public struct ReplyPreferences: Sendable {
+
+    private let fileURL: URL
+
+    public init(fileURL: URL = ReplyPreferences.defaultFileURL()) {
+        self.fileURL = fileURL
+    }
+
+    public static func defaultFileURL(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("reply-preferences.json", isDirectory: false)
+    }
+
+    private struct Stored: Codable {
+        var voiceNotes: Bool
+    }
+
+    /// The saved style, or the default when nothing is saved or the file is
+    /// unreadable.
+    ///
+    /// Never throws. A preferences file that will not parse should cost the
+    /// owner their preference, not their appliance.
+    public func style() -> ReplyStyle {
+        guard let data = try? Data(contentsOf: fileURL),
+              let stored = try? JSONDecoder().decode(Stored.self, from: data) else {
+            return .default
+        }
+        return ReplyStyle(voiceNotes: stored.voiceNotes)
+    }
+
+    public func save(voiceNotes: Bool) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try OwnerOnlyFileSecurity.prepareDirectory(directory)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(Stored(voiceNotes: voiceNotes)).write(to: fileURL, options: .atomic)
+        try OwnerOnlyFileSecurity.protectFile(fileURL)
+    }
+}

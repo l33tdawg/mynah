@@ -16,23 +16,40 @@ public enum BrainPrompts {
     ///    spurious `sage_inception` call.
     /// 3. The find-then-pipe chain. `sage_pipe` needs an exact address, and a
     ///    human name is not one.
-    public static let voiceAgentManager = """
-    You are SAGE, the voice-operated manager of the owner's agent federation. \
-    The owner speaks to you; you act across their connected SAGE nodes and answer out loud.
+    /// The prompt for the default reply style. See `voiceAgentManager(style:)`.
+    public static let voiceAgentManager = voiceAgentManager(style: .default)
 
-    HOW YOU SPEAK
-    - Your reply is read aloud by a speech synthesiser. Answer in at most 40 words, \
-    one or two sentences.
-    - Lead with the answer in the first six words. No preamble, no restating the question.
-    - Give only what was asked. Do not add background, history or detail the owner did not \
-    ask for — offer to go deeper instead, and let them decide.
-    - Plain spoken English only. No markdown, no bullet points, no headings, no code blocks, \
-    no emoji, no raw IDs or hashes unless the owner asked for one specifically. The one \
-    exception is the text you pass to write_note: that is a document, not speech, so markdown \
-    belongs there.
-    - Do not narrate what you are about to do, and do not list the tools you used.
+    /// The system prompt for a given reply style.
+    ///
+    /// The two styles are answers to a conflict that was live in the product:
+    /// the brevity rules were written for text-to-speech — 40 words, no
+    /// markdown, because a synthesiser reads "-" aloud as a hyphen — and then
+    /// the appliance shipped over Signal, where the owner asked for a list of
+    /// ramen shops and got a wall of prose that had been trimmed for a voice
+    /// nobody was listening to.
+    ///
+    /// Rather than pick one, the owner's own framing: the reply style follows
+    /// how they want to be answered. Voice notes on means spoken, so brevity and
+    /// no markup. Voice notes off means read on a screen, so give them
+    /// everything, in a list, with links they can tap.
+    ///
+    /// One caveat worth knowing before wiring a live toggle to this: the system
+    /// prompt is the prompt cache's prefix. Switching styles invalidates it and
+    /// costs one re-prefill on the next turn. Fine for a setting someone changes
+    /// occasionally; not something to flip per message.
+    public static func voiceAgentManager(style: ReplyStyle) -> String {
+        """
+        You are SAGE, the voice-operated manager of the owner's agent federation. \
+        The owner speaks to you; you act across their connected SAGE nodes and answer out loud.
 
-    WHEN TO USE A TOOL
+        \(style.howYouSpeak)
+
+        WHEN TO USE A TOOL
+        """ + voiceAgentManagerBody
+    }
+
+    private static let voiceAgentManagerBody = """
+
     - Call a tool whenever the owner asks for information you do not already have in this \
     conversation, or asks you to do something: recall a memory, store a note, create or check a \
     task, look at the backlog or inbox, check node or federation status, or send work to another agent.

@@ -290,7 +290,20 @@ func runBrain(_ arguments: [String]) -> Never {
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
     let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
-    let loop = ToolLoop(backend: backend, mcp: tools)
+    // The owner's choice, made in Mynah, read here. `--voice-notes` overrides
+    // it for a one-off test without touching what they saved.
+    let style: ReplyStyle = arguments.contains("--voice-notes")
+        ? .spoken
+        : ReplyPreferences().style()
+    let loop = ToolLoop(
+        backend: backend,
+        mcp: tools,
+        configuration: ToolLoop.Configuration(
+            systemPrompt: BrainPrompts.voiceAgentManager(style: style),
+            maxGeneratedTokens: style.maximumGeneratedTokens
+        )
+    )
+    FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
 
     runAndExit {
         defer { mcp.stop() }
