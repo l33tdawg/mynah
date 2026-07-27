@@ -80,10 +80,24 @@ public struct EnvironmentProbe {
     /// Injectable for the same reason `systemBinaryDirectories` is: a test has
     /// to be able to describe a machine without SAGE while running on a host
     /// that has it in /Applications.
-    public static let defaultSageBundleExecutables: [URL] = [
-        URL(fileURLWithPath: "/Applications/SAGE.app/Contents/MacOS/sage-gui"),
-        URL(fileURLWithPath: "/Applications/SAGE Voice Bridge.app/Contents/Resources/SAGE.app/Contents/MacOS/sage-gui")
-    ]
+    /// Ordered: the copy we vendored inside our own bundle comes first.
+    ///
+    /// That one is the normal case, not the fallback. A vendored SAGE.app is
+    /// codesigned as part of this app's bundle and inherits its notarization,
+    /// so it runs without Gatekeeper prompts and without the owner installing
+    /// anything. QuietType has shipped this arrangement for a while and it is
+    /// why its SAGE detection effectively never fails.
+    public static let defaultSageBundleExecutables: [URL] = {
+        var candidates: [URL] = []
+        if let vendored = SageNodeLocator.vendoredExecutableURL() {
+            candidates.append(vendored)
+        }
+        candidates.append(contentsOf: [
+            URL(fileURLWithPath: "/Applications/SAGE.app/Contents/MacOS/sage-gui"),
+            URL(fileURLWithPath: NSHomeDirectory() + "/Applications/SAGE.app/Contents/MacOS/sage-gui")
+        ])
+        return candidates
+    }()
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,

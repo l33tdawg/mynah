@@ -7,12 +7,16 @@ import SageVoiceCore
 //
 //   sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
 //   sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
+//   sage-voiced setup
+//   sage-voiced verify-sage <path/to/SAGE.app>
 
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
     usage:
       sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
       sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
+      sage-voiced setup
+      sage-voiced verify-sage <path/to/SAGE.app>
 
     brain providers:
       ollama (default, local)   openai     deepseek   moonshot
@@ -270,12 +274,29 @@ func runSetup(_ arguments: [String]) -> Never {
     }
 }
 
+/// Verifies a SAGE.app bundle the way the appliance will before running it.
+func runVerifySage(_ arguments: [String]) -> Never {
+    guard let path = arguments.first else {
+        exit(fail("usage: sage-voiced verify-sage <path/to/SAGE.app>"))
+    }
+    let app = URL(fileURLWithPath: path)
+    switch SageNodeLocator.verifyBundle(at: app) {
+    case .success(let executable):
+        print("ok: \(executable.path)")
+        print("version: \(SageNodeLocator.bundleVersion(at: app) ?? "unknown")")
+        exit(0)
+    case .failure(let error):
+        exit(fail("refused: \(error)"))
+    }
+}
+
 // MARK: - Dispatch
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
-case "transcribe": runTranscribe(Array(arguments.dropFirst()))
-case "brain":      runBrain(Array(arguments.dropFirst()))
-case "setup":      runSetup(Array(arguments.dropFirst()))
-default:           usage()
+case "transcribe":  runTranscribe(Array(arguments.dropFirst()))
+case "brain":       runBrain(Array(arguments.dropFirst()))
+case "setup":       runSetup(Array(arguments.dropFirst()))
+case "verify-sage": runVerifySage(Array(arguments.dropFirst()))
+default:            usage()
 }
