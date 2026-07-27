@@ -168,6 +168,30 @@ public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
     }
 }
 
+// MARK: - Tool source
+
+/// Where the loop gets its tools, and where it runs them.
+///
+/// The counterpart to `BrainBackend` on the other side of the loop. `MCPClient`
+/// is the only implementation that ships, but welding the loop to a concrete
+/// process-spawning class made it impossible to test without a live SAGE
+/// install — which is why it had no tests at all.
+public protocol ToolProviding: Sendable {
+    /// The catalogue this source publishes.
+    func listTools() async throws -> [MCPTool]
+
+    /// Runs a tool and returns its text output.
+    func call(name: String, arguments: [String: JSONValue]) async throws -> String
+}
+
+extension MCPClient: ToolProviding {
+    /// The protocol requirement takes no arguments; a defaulted parameter does
+    /// not satisfy it, so forward explicitly.
+    public func listTools() async throws -> [MCPTool] {
+        try await listTools(useCache: true)
+    }
+}
+
 // MARK: - Loop
 
 /// The agent loop: transcript in, spoken reply out, MCP tools in the middle.
@@ -228,13 +252,13 @@ public final class ToolLoop: @unchecked Sendable {
     }
 
     private let backend: BrainBackend
-    private let mcp: MCPClient
+    private let mcp: ToolProviding
     private let configuration: Configuration
 
     /// The loop drives whatever `BrainBackend` it is handed. Which model — and
     /// whether it runs on this machine at all — is decided at setup and is not
     /// this type's business.
-    public init(backend: BrainBackend, mcp: MCPClient, configuration: Configuration = Configuration()) {
+    public init(backend: BrainBackend, mcp: ToolProviding, configuration: Configuration = Configuration()) {
         self.backend = backend
         self.mcp = mcp
         self.configuration = configuration

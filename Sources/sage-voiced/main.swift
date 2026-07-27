@@ -232,11 +232,50 @@ func runBrain(_ arguments: [String]) -> Never {
     }
 }
 
+// MARK: - setup
+
+/// Runs the first-run environment probe and prints the menu the install screen
+/// would show. Read-only: this is the same code path the settings panel will
+/// re-run later to offer "move me to fully local".
+func runSetup(_ arguments: [String]) -> Never {
+    runAndExit {
+        let probe = await EnvironmentProbe().run()
+        let choices = BrainSetupPlanner().plan(for: probe)
+
+        print("== probe ==")
+        print("ollama:   \(probe.localRuntime)")
+        print("hardware: \(probe.hardware)")
+        print("sage:     \(probe.sage)")
+        print("keys:     \(probe.ambientAPIKeys.variableNames.isEmpty ? "none set" : probe.ambientAPIKeys.variableNames.joined(separator: ", "))")
+        for cli in probe.agentCLIs {
+            print("cli:      \(cli)")
+        }
+        print()
+        print("== options ==")
+        for option in choices.options {
+            let mark = option.availability.isAvailable ? "[ok]  " : "[--]  "
+            let privacy = option.keepsWordsOnDevice ? "on-device" : "leaves machine"
+            print("\(mark)\(option.label)  (\(option.requirement.rawValue), \(privacy))")
+            print("        \(option.summary)")
+            if let reason = option.availability.reason {
+                print("        unavailable: \(reason)")
+            }
+        }
+        if let recommendation = choices.recommendation {
+            print()
+            print("recommended: \(recommendation.optionID) — \(recommendation.rationale)")
+            print("(a recommendation, not a selection: the owner still has to pick)")
+        }
+        return 0
+    }
+}
+
 // MARK: - Dispatch
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "transcribe": runTranscribe(Array(arguments.dropFirst()))
 case "brain":      runBrain(Array(arguments.dropFirst()))
+case "setup":      runSetup(Array(arguments.dropFirst()))
 default:           usage()
 }
