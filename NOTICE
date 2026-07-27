@@ -1,0 +1,8 @@
+SAGE Voice Bridge
+Copyright (c) 2026 Dhillon Andrew Kannabhiran
+
+Sources/SageVoiceCore contains speech-to-text code lifted from QuietType
+(https://github.com/l33tdawg/quiettype), same author.
+
+The ASR runtime depends on argmax-oss-swift (WhisperKit / TTSKit),
+Copyright (c) 2024 argmax, inc. — MIT License.
