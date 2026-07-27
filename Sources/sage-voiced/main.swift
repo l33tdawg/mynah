@@ -1,67 +1,242 @@
 import Foundation
 import SageVoiceCore
 
-// Smoke harness for the lifted QuietType ASR core.
-// Usage: sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
+// Smoke harness for the subsystems, one subcommand each. Not the daemon —
+// the daemon (Signal transport wired to ASR -> brain -> TTS) lands on top of
+// these once the setup flow can tell it which backend to build.
 //
-// The real daemon (Signal transport + Ollama brain + TTS) lands on top of this.
+//   sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
+//   sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
 
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
-    usage: sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
+    usage:
+      sage-voiced transcribe <file.wav> [--endpoint URL] [--model NAME]
+      sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
+
+    brain providers:
+      ollama (default, local)   openai     deepseek   moonshot
+      anthropic                 gemini     groq       lmstudio (local)
+
+    Cloud providers read their key from the environment: ANTHROPIC_API_KEY,
+    OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, GROQ_API_KEY,
+    MOONSHOT_API_KEY.
 
     """.utf8))
     exit(2)
 }
 
-let args = Array(CommandLine.arguments.dropFirst())
-guard args.first == "transcribe", args.count >= 2 else { usage() }
-
-let path = args[1]
-var endpoint = URL(string: "http://127.0.0.1:50060/v1/audio/transcriptions")!
-var model = "large-v3"
-
-var i = 2
-while i + 1 < args.count {
-    switch args[i] {
-    case "--endpoint": endpoint = URL(string: args[i + 1]) ?? endpoint
-    case "--model": model = args[i + 1]
-    default: break
+/// Trailing `--flag value` pairs, whatever the subcommand.
+func parseFlags(_ arguments: [String]) -> [String: String] {
+    var flags: [String: String] = [:]
+    var index = 0
+    while index + 1 < arguments.count {
+        if arguments[index].hasPrefix("--") {
+            flags[String(arguments[index].dropFirst(2))] = arguments[index + 1]
+            index += 2
+        } else {
+            index += 1
+        }
     }
-    i += 2
+    return flags
 }
 
-let fileURL = URL(fileURLWithPath: path)
-guard FileManager.default.fileExists(atPath: fileURL.path) else {
-    FileHandle.standardError.write(Data("no such file: \(path)\n".utf8))
-    exit(1)
+/// Runs an async body from the top level and exits with its status.
+func runAndExit(_ body: @escaping () async -> Int32) -> Never {
+    let semaphore = DispatchSemaphore(value: 0)
+    var status: Int32 = 0
+    Task {
+        status = await body()
+        semaphore.signal()
+    }
+    semaphore.wait()
+    exit(status)
 }
 
-let transcriber = WhisperKitServerTranscriber(
-    endpoint: endpoint,
-    model: model,
-    language: "en",
-    timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
-)
+func fail(_ message: String) -> Int32 {
+    FileHandle.standardError.write(Data("\(message)\n".utf8))
+    return 1
+}
 
-let sem = DispatchSemaphore(value: 0)
-var status: Int32 = 0
+// MARK: - transcribe
 
-Task {
-    let started = Date()
-    do {
-        let text = try await transcriber.transcribe(
-            audioFile: fileURL,
-            options: AudioTranscriptionOptions()
+func runTranscribe(_ arguments: [String]) -> Never {
+    guard let path = arguments.first else { usage() }
+    let flags = parseFlags(Array(arguments.dropFirst()))
+
+    let endpoint = flags["endpoint"].flatMap { URL(string: $0) }
+        ?? URL(string: "http://127.0.0.1:50060/v1/audio/transcriptions")!
+    let fileURL = URL(fileURLWithPath: path)
+
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        exit(fail("no such file: \(path)"))
+    }
+
+    let transcriber = WhisperKitServerTranscriber(
+        endpoint: endpoint,
+        model: flags["model"] ?? "large-v3",
+        language: "en",
+        timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+    )
+
+    runAndExit {
+        let started = Date()
+        do {
+            let text = try await transcriber.transcribe(
+                audioFile: fileURL,
+                options: AudioTranscriptionOptions()
+            )
+            print(String(format: "[%.2fs] %@", Date().timeIntervalSince(started), text))
+            return 0
+        } catch {
+            return fail("transcribe failed: \(error)")
+        }
+    }
+}
+
+// MARK: - brain
+
+/// Builds a backend from a provider name, reading any key from the environment.
+///
+/// Deliberately explicit rather than auto-detecting: this is a test harness,
+/// and a harness that silently picks a different provider than the one you
+/// named is worse than useless when you are trying to compare them.
+struct HarnessError: Error, CustomStringConvertible {
+    let description: String
+    init(_ description: String) { self.description = description }
+}
+
+func makeBackend(provider: String, model: String?, ollamaBaseURL: String?) throws -> BrainBackend {
+    func environmentKey(_ name: String) throws -> String {
+        guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
+            throw HarnessError("\(name) is not set in the environment")
+        }
+        return value
+    }
+
+    func openAICompat(
+        _ compatProvider: OpenAICompatProvider,
+        defaultModel: String,
+        keyVariable: String?
+    ) throws -> BrainBackend {
+        let credential: BrainCredential
+        if let keyVariable {
+            credential = StaticAPIKeyCredential.bearer(
+                try environmentKey(keyVariable),
+                providerLabel: compatProvider.displayName
+            )
+        } else {
+            // A local server that wants no auth still needs a credential object.
+            credential = StaticAPIKeyCredential.bearer("local", providerLabel: compatProvider.displayName)
+        }
+        return OpenAICompatBackend(
+            provider: compatProvider,
+            modelName: model ?? defaultModel,
+            credential: credential
         )
-        let elapsed = Date().timeIntervalSince(started)
-        print(String(format: "[%.2fs] %@", elapsed, text))
-    } catch {
-        FileHandle.standardError.write(Data("transcribe failed: \(error)\n".utf8))
-        status = 1
     }
-    sem.signal()
+
+    switch provider {
+    case "ollama":
+        // `--ollama` points at a daemon over an SSH tunnel, so the appliance's
+        // model can be driven from a dev machine that has not pulled it.
+        let client = ollamaBaseURL.flatMap { URL(string: $0) }.map { OllamaClient(baseURL: $0) }
+            ?? OllamaClient()
+        return OllamaBackend(client: client, model: model ?? "qwen3.5:4b")
+    case "anthropic":
+        return AnthropicBackend(
+            modelName: model ?? "claude-opus-5",
+            apiKey: try environmentKey("ANTHROPIC_API_KEY")
+        )
+    case "openai":
+        return try openAICompat(.openAI, defaultModel: "gpt-5", keyVariable: "OPENAI_API_KEY")
+    case "deepseek":
+        return try openAICompat(.deepSeek, defaultModel: "deepseek-chat", keyVariable: "DEEPSEEK_API_KEY")
+    case "moonshot", "kimi":
+        return try openAICompat(.moonshot, defaultModel: "kimi-k2-0905-preview", keyVariable: "MOONSHOT_API_KEY")
+    case "groq":
+        return try openAICompat(.groq, defaultModel: "llama-3.3-70b-versatile", keyVariable: "GROQ_API_KEY")
+    case "gemini":
+        return try openAICompat(.gemini, defaultModel: "gemini-2.5-flash", keyVariable: "GEMINI_API_KEY")
+    case "lmstudio":
+        return try openAICompat(.lmStudio(), defaultModel: "local-model", keyVariable: nil)
+
+    case "openai-compat":
+        // Any `/v1/chat/completions` server, named by `--base-url`.
+        //
+        // Worth having beyond genericity: Ollama serves this shape too, so
+        // pointing it at a local daemon exercises the adapter's encoding
+        // against a real server — tool schemas, JSON-string arguments, null
+        // content on a tool-call turn, id matching — without a cloud key.
+        guard let raw = ollamaBaseURL, let url = URL(string: raw) else {
+            throw HarnessError("--provider openai-compat requires --base-url")
+        }
+        return try openAICompat(
+            OpenAICompatProvider(
+                identifier: "openai-compat",
+                displayName: url.host ?? "custom",
+                baseURL: url,
+                isLocal: LoopbackSecurity.isLoopback(url)
+            ),
+            defaultModel: "qwen3.5:4b",
+            keyVariable: nil
+        )
+
+    default:
+        throw HarnessError("unknown provider '\(provider)'")
+    }
 }
 
-sem.wait()
-exit(status)
+func runBrain(_ arguments: [String]) -> Never {
+    guard let transcript = arguments.first, !transcript.hasPrefix("--") else { usage() }
+    let flags = parseFlags(Array(arguments.dropFirst()))
+
+    let backend: BrainBackend
+    do {
+        backend = try makeBackend(
+            provider: flags["provider"] ?? "ollama",
+            model: flags["model"],
+            ollamaBaseURL: flags["ollama"] ?? flags["base-url"]
+        )
+    } catch {
+        exit(fail("\(error)"))
+    }
+
+    let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
+    let loop = ToolLoop(backend: backend, mcp: mcp)
+
+    runAndExit {
+        defer { mcp.stop() }
+        do {
+            print("backend: \(backend.displayDescription)")
+            let info = try await mcp.start()
+            print("mcp:     \(info.name) \(info.version)")
+
+            let tools = try await loop.availableTools()
+            print("tools:   \(tools.count) offered — \(tools.map(\.name).sorted().joined(separator: ", "))")
+            print("---")
+
+            let result = try await loop.run(transcript: transcript, tools: tools)
+            print(result.reply)
+            print("---")
+            print(result.trace.summary)
+            for call in result.trace.toolCalls {
+                print("  \(call.summary)")
+            }
+            return 0
+        } catch {
+            let stderr = mcp.stderrLog
+            return fail("brain failed: \(error)" + (stderr.isEmpty ? "" : "\n--- mcp stderr ---\n\(stderr)"))
+        }
+    }
+}
+
+// MARK: - Dispatch
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+switch arguments.first {
+case "transcribe": runTranscribe(Array(arguments.dropFirst()))
+case "brain":      runBrain(Array(arguments.dropFirst()))
+default:           usage()
+}
