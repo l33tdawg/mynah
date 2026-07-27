@@ -277,6 +277,39 @@ public final class ToolLoop: @unchecked Sendable {
         return systemPromptOverride ?? configuration.systemPrompt
     }
 
+    /// Waits out a rate limit instead of failing the turn.
+    ///
+    /// A turn costs two to four model calls, and Gemini's free tier allows ten
+    /// a minute — so a normal conversation runs out of allowance mid-turn,
+    /// after tools have already run. Killing the turn there wastes the work and
+    /// tells the owner their assistant is broken when it is merely busy.
+    ///
+    /// Only rate limits are retried. A rejected credential or a malformed
+    /// request will fail identically every time, and retrying those would just
+    /// make a permanent failure take three times as long to report.
+    ///
+    /// The provider's own `retryAfterSeconds` is preferred over a guess; the
+    /// fallback doubles, because a fixed delay against a per-minute window
+    /// tends to retry straight back into the same exhausted quota.
+    static let rateLimitRetries = 2
+    static let rateLimitFallbackDelaySeconds: TimeInterval = 6
+
+    private func completeWithRateLimitRetry(_ request: BrainRequest) async throws -> BrainReply {
+        var attempt = 0
+        while true {
+            do {
+                return try await backend.complete(request)
+            } catch let error as BrainBackendError {
+                guard case .rateLimited(_, let retryAfter) = error, attempt < Self.rateLimitRetries else {
+                    throw error
+                }
+                let delay = retryAfter ?? Self.rateLimitFallbackDelaySeconds * pow(2, Double(attempt))
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+    }
+
     /// Whether the model runs on this machine.
     ///
     /// Exposed because keeping a prompt cache warm is a purely local idea: it
@@ -416,7 +449,7 @@ public final class ToolLoop: @unchecked Sendable {
         for iteration in 1...cap {
             trace.iterations = iteration
 
-            let response = try await backend.complete(
+            let response = try await completeWithRateLimitRetry(
                 BrainRequest(
                     messages: messages,
                     tools: brainTools,
@@ -475,7 +508,7 @@ public final class ToolLoop: @unchecked Sendable {
             // user turn in the conversation, so the next thing the owner asks
             // gets answered from nothing instead of hitting SAGE.
             let summaryMessages = messages + [.user(BrainPrompts.forcedSummary)]
-            let response = try await backend.complete(
+            let response = try await completeWithRateLimitRetry(
                 BrainRequest(
                     messages: summaryMessages,
                     tools: [],

@@ -146,7 +146,12 @@ public actor VoiceBridgeDaemon {
 
         // Pay the prefill before anyone is waiting on it. An appliance boots
         // once and then sits idle for hours, so this cost belongs at startup.
-        if let tools = try? await toolCatalogue() {
+        //
+        // Local models only, for the same reason keep-warm is: this primes an
+        // on-device KV cache. A hosted model has none, so the request buys
+        // nothing — and against Gemini's ten-per-minute free tier it spends a
+        // tenth of the owner's first minute to do it.
+        if loop.backendIsLocal, let tools = try? await toolCatalogue() {
             let started = Date()
             let warmed = await loop.warmUp(tools: tools)
             log(String(
