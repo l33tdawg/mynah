@@ -95,4 +95,51 @@ final class RecallDisciplineTests: XCTestCase {
         )
         XCTAssertLessThanOrEqual(prompt.count, PromptLatencyBudgetTests.systemPromptCharacterBudget)
     }
+
+    // MARK: Corrections
+
+    /// The CODEBLUE conflation, and why it survived being corrected.
+    ///
+    /// "I'm in Tokyo in November for CODEBLUE" arrived in the same sentence as a
+    /// question about eurorack, and `sage_remember` stored them fused. The owner
+    /// corrected it — "CODEBLUE is not eurorack related" — and that turn called
+    /// `sage_remember` twice and `sage_forget` zero times. Both versions stayed
+    /// stored, and the next morning recall returned the contradiction and the
+    /// model merged it into a document heading reading "CODEBLUE Japan /
+    /// Festival of Modular Venues".
+    ///
+    /// Semantic embeddings made the correction reachable, which is why this
+    /// currently resolves in the owner's favour. It resolves by luck: the right
+    /// memory happens to outrank the wrong one. The wrong one is still there.
+    func testThePromptTreatsACorrectionAsAReplacement() {
+        XCTAssertTrue(
+            prompt.contains("A correction replaces a memory, it does not add one"),
+            "a correction still stores a second, contradicting memory"
+        )
+        XCTAssertTrue(prompt.contains("sage_forget"), "no tool is named for removing the wrong memory")
+        XCTAssertTrue(
+            prompt.contains("leaves both versions stored"),
+            "nothing explains the consequence, which is the part that makes the rule stick"
+        )
+    }
+
+    /// The other half of the same bug: the memory was wrong because it was
+    /// stored fused in the first place.
+    func testThePromptAsksForOneSubjectPerMemory() {
+        XCTAssertTrue(prompt.contains("Store one subject per memory"))
+        XCTAssertTrue(
+            prompt.contains("two memories in two domains"),
+            "nothing tells it what to do with a sentence carrying two subjects"
+        )
+    }
+
+    /// A rule naming a tool the model cannot see is a rule that cannot be
+    /// followed. `sage_forget` is in the allowlist — this fails if someone trims
+    /// the catalogue without reading the prompt.
+    func testTheToolTheRuleNamesIsActuallyOffered() {
+        XCTAssertTrue(
+            BrainPrompts.voiceToolAllowlist.contains("sage_forget"),
+            "the correction rule names a tool the model is never given"
+        )
+    }
 }

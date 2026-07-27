@@ -153,21 +153,19 @@ actor SageMemoryStore: MemoryStoring {
 
     private var client: MCPClient?
 
-    /// The node returns whatever the caller's key entitles them to see. Pinned
-    /// explicitly rather than left to the child's working directory, because a
-    /// GUI app's working directory is `/` and the resolution chain would then
-    /// derive a per-directory identity that has none of the appliance's
-    /// memories in it.
+    /// The identity this screen signs as.
+    ///
+    /// It used to resolve to `$SAGE_HOME/agent.key` — the *node operator* key —
+    /// because pinning was needed (a GUI app's working directory is `/`, so the
+    /// node's per-directory rule mints an identity with none of the owner's
+    /// memories in it) and the operator key was the only one that could see
+    /// anything. Correct diagnosis, wrong key: it made every browse sign with
+    /// the highest privilege on the machine.
+    ///
+    /// `MynahIdentity` is now the single answer for the whole app, and it
+    /// refuses to be the operator. See its doc comment for what that costs.
     private static var identityPath: String? {
-        let environment = ProcessInfo.processInfo.environment
-        for name in ["SAGE_IDENTITY_PATH", "SAGE_AGENT_KEY"] {
-            if let value = environment[name], !value.isEmpty { return value }
-        }
-        let home = environment["SAGE_HOME"].map { NSString(string: $0).expandingTildeInPath }
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".sage", isDirectory: true).path
-        let key = home + "/agent.key"
-        return FileManager.default.isReadableFile(atPath: key) ? key : nil
+        MynahIdentity.resolvedKeyPath()
     }
 
     /// The node bundled in this app first, then the machine-wide installs — the
@@ -759,10 +757,20 @@ struct MemoriesView: View {
                 action: { model.topic = nil }
             )
         } else {
+            // Careful with this sentence. It used to read "No memories yet —
+            // Mynah will start remembering once you talk to it", which was true
+            // only while the screen browsed as the node operator and could
+            // therefore see everything on the machine. Mynah now signs as
+            // itself (`MynahIdentity`), so an empty list means "nothing this
+            // agent can see", which is not the same claim as "nothing is
+            // there" — the owner may have hundreds of memories belonging to
+            // other agents. Saying the node is empty when it is not is the kind
+            // of small lie that costs an afternoon of debugging.
             EmptyState(
                 glyph: "text.append",
-                title: "No memories yet",
-                message: "Mynah will start remembering once you talk to it."
+                title: "Nothing here yet",
+                message: "Mynah keeps its own memories, separate from the other agents on your "
+                    + "SAGE node. This fills up as you talk to it."
             )
         }
     }

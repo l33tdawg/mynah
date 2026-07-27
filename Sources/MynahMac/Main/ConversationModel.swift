@@ -233,7 +233,14 @@ actor ToolLoopTurnEngine: TurnEngine {
     private var isPrepared = false
 
     init(backend: BrainBackend, memoryExecutable: URL, allowsWebSearch: Bool = true) {
-        let mcp = MCPClient(executableURL: memoryExecutable, arguments: ["mcp"])
+        // Same identity as every other spawn site. Passing no environment here
+        // is what gave the app a second identity: the node falls through to its
+        // per-directory rule, and for a GUI app that directory is `/`.
+        let mcp = MCPClient(
+            executableURL: memoryExecutable,
+            arguments: ["mcp"],
+            environment: MynahIdentity.childEnvironment()
+        )
         var sources: [CompositeToolSource.Source] = [
             CompositeToolSource.Source(
                 label: "memory",
