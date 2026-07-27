@@ -133,9 +133,9 @@ public struct ToolLoopResult: Sendable, Equatable {
     public var trace: ToolLoopTrace
     /// The full message history, so a caller can continue the conversation.
     /// Pass `messages.dropFirst()` back in as `history` on the next turn.
-    public var messages: [OllamaMessage]
+    public var messages: [BrainMessage]
 
-    public init(reply: String, trace: ToolLoopTrace, messages: [OllamaMessage]) {
+    public init(reply: String, trace: ToolLoopTrace, messages: [BrainMessage]) {
         self.reply = reply
         self.trace = trace
         self.messages = messages
@@ -182,20 +182,17 @@ public final class ToolLoop: @unchecked Sendable {
     public static let defaultMaxIterations = 5
 
     public struct Configuration: Sendable {
-        public var model: String
         public var systemPrompt: String
         public var maxIterations: Int
         public var temperature: Double?
-        /// Leave `nil` on tool-selection turns — reasoning is what makes a 4B
-        /// model route correctly. Measured on qwen3.5:4b with 14 tools:
-        /// `nil` → 12/12 correct; `false` → 3/10 correct.
-        public var think: Bool?
-        /// `think` for the final tools-withheld wrap-up turn. `false` there is
-        /// both faster (3.7 s vs 9.7 s measured) and immune to the reasoning
+        /// Reasoning on tool-selection turns. Leave `.automatic` — reasoning is
+        /// what makes a small model route correctly. Measured on qwen3.5:4b
+        /// with 14 tools: reasoning on → 12/12 correct; off → 3/10.
+        public var reasoning: ReasoningPreference
+        /// Reasoning on the final tools-withheld wrap-up turn. `.disabled` there
+        /// is both faster (3.7 s vs 9.7 s measured) and immune to the reasoning
         /// runaway described on `maxGeneratedTokens`.
-        public var thinkOnSummary: Bool?
-        /// Hold the model resident between voice notes.
-        public var keepAlive: String?
+        public var reasoningOnSummary: ReasoningPreference
         /// Hard token cap per model turn. Guards against a reasoning runaway:
         /// with no tools attached and a thin context, qwen3.5:4b was measured
         /// generating 4069 tokens over 190 s and returning empty content.
@@ -210,36 +207,35 @@ public final class ToolLoop: @unchecked Sendable {
         public var allowedToolNames: Set<String>
 
         public init(
-            model: String = "qwen3.5:4b",
             systemPrompt: String = BrainPrompts.voiceAgentManager,
             maxIterations: Int = ToolLoop.defaultMaxIterations,
             temperature: Double? = 0,
-            think: Bool? = nil,
-            thinkOnSummary: Bool? = false,
-            keepAlive: String? = "30m",
+            reasoning: ReasoningPreference = .automatic,
+            reasoningOnSummary: ReasoningPreference = .disabled,
             maxGeneratedTokens: Int? = 1024,
             maxToolResultCharacters: Int = 6000,
             allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist
         ) {
-            self.model = model
             self.systemPrompt = systemPrompt
             self.maxIterations = maxIterations
             self.temperature = temperature
-            self.think = think
-            self.thinkOnSummary = thinkOnSummary
-            self.keepAlive = keepAlive
+            self.reasoning = reasoning
+            self.reasoningOnSummary = reasoningOnSummary
             self.maxGeneratedTokens = maxGeneratedTokens
             self.maxToolResultCharacters = maxToolResultCharacters
             self.allowedToolNames = allowedToolNames
         }
     }
 
-    private let ollama: OllamaClient
+    private let backend: BrainBackend
     private let mcp: MCPClient
     private let configuration: Configuration
 
-    public init(ollama: OllamaClient, mcp: MCPClient, configuration: Configuration = Configuration()) {
-        self.ollama = ollama
+    /// The loop drives whatever `BrainBackend` it is handed. Which model — and
+    /// whether it runs on this machine at all — is decided at setup and is not
+    /// this type's business.
+    public init(backend: BrainBackend, mcp: MCPClient, configuration: Configuration = Configuration()) {
+        self.backend = backend
         self.mcp = mcp
         self.configuration = configuration
     }
@@ -286,7 +282,7 @@ public final class ToolLoop: @unchecked Sendable {
     public func run(
         transcript: String,
         tools: [MCPTool]? = nil,
-        history: [OllamaMessage] = []
+        history: [BrainMessage] = []
     ) async throws -> ToolLoopResult {
         let started = Date()
         let catalogue: [MCPTool]
@@ -298,34 +294,34 @@ public final class ToolLoop: @unchecked Sendable {
         guard !catalogue.isEmpty else {
             throw ToolLoopError.noTools
         }
-        let ollamaTools = catalogue.map(\.ollamaTool)
+        let brainTools = catalogue.map(\.brainTool)
         let knownToolNames = Set(catalogue.map(\.name))
 
-        var messages: [OllamaMessage] = [.system(configuration.systemPrompt)]
+        var messages: [BrainMessage] = [.system(configuration.systemPrompt)]
         messages.append(contentsOf: history.filter { $0.role != .system })
         messages.append(.user(transcript))
 
-        var trace = ToolLoopTrace(model: configuration.model, toolsOffered: catalogue.count)
+        var trace = ToolLoopTrace(model: backend.modelName, toolsOffered: catalogue.count)
         var reply = ""
         let cap = max(1, configuration.maxIterations)
 
         for iteration in 1...cap {
             trace.iterations = iteration
 
-            let response = try await ollama.chat(
-                model: configuration.model,
-                messages: messages,
-                tools: ollamaTools,
-                temperature: configuration.temperature,
-                think: configuration.think,
-                keepAlive: configuration.keepAlive,
-                numPredict: configuration.maxGeneratedTokens
+            let response = try await backend.complete(
+                BrainRequest(
+                    messages: messages,
+                    tools: brainTools,
+                    temperature: configuration.temperature,
+                    maxOutputTokens: configuration.maxGeneratedTokens,
+                    reasoning: configuration.reasoning
+                )
             )
             trace.modelCalls.append(
                 ModelCallRecord(
                     iteration: iteration,
-                    promptEvalCount: response.promptEvalCount,
-                    evalCount: response.evalCount,
+                    promptEvalCount: response.usage.inputTokens,
+                    evalCount: response.usage.outputTokens,
                     durationSeconds: response.wallClockSeconds,
                     requestedTools: response.toolCalls.map(\.name),
                     thinking: response.message.thinking,
@@ -345,7 +341,11 @@ public final class ToolLoop: @unchecked Sendable {
                 messages.append(
                     .toolResult(
                         name: call.name,
-                        content: Self.truncate(record.result, to: configuration.maxToolResultCharacters)
+                        content: Self.truncate(record.result, to: configuration.maxToolResultCharacters),
+                        // Carried so backends that match results to requests by
+                        // id (Anthropic, OpenAI) can pair them up. Ollama
+                        // matches by name and ignores it.
+                        id: call.id
                     )
                 )
             }
@@ -366,20 +366,20 @@ public final class ToolLoop: @unchecked Sendable {
             // user turn in the conversation, so the next thing the owner asks
             // gets answered from nothing instead of hitting SAGE.
             let summaryMessages = messages + [.user(BrainPrompts.forcedSummary)]
-            let response = try await ollama.chat(
-                model: configuration.model,
-                messages: summaryMessages,
-                tools: [],
-                temperature: configuration.temperature,
-                think: configuration.thinkOnSummary,
-                keepAlive: configuration.keepAlive,
-                numPredict: configuration.maxGeneratedTokens
+            let response = try await backend.complete(
+                BrainRequest(
+                    messages: summaryMessages,
+                    tools: [],
+                    temperature: configuration.temperature,
+                    maxOutputTokens: configuration.maxGeneratedTokens,
+                    reasoning: configuration.reasoningOnSummary
+                )
             )
             trace.modelCalls.append(
                 ModelCallRecord(
                     iteration: trace.iterations + 1,
-                    promptEvalCount: response.promptEvalCount,
-                    evalCount: response.evalCount,
+                    promptEvalCount: response.usage.inputTokens,
+                    evalCount: response.usage.outputTokens,
                     durationSeconds: response.wallClockSeconds,
                     requestedTools: [],
                     thinking: response.message.thinking,
@@ -401,7 +401,7 @@ public final class ToolLoop: @unchecked Sendable {
     // MARK: Tool execution
 
     private func execute(
-        _ call: OllamaToolCall,
+        _ call: BrainToolCall,
         iteration: Int,
         knownToolNames: Set<String>
     ) async -> ToolCallRecord {

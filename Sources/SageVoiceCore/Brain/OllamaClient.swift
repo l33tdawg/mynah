@@ -20,55 +20,33 @@ public enum OllamaClientError: Error, CustomStringConvertible, Equatable {
             return "Ollama response could not be understood: \(detail)"
         }
     }
+
+    /// Translate to the neutral vocabulary the daemon reacts to.
+    public var asBrainBackendError: BrainBackendError {
+        switch self {
+        case .invalidBaseURL(let value):
+            return .misconfigured("Ollama base URL is not usable: \(value)")
+        case .requestFailed(let detail):
+            return .unreachable(detail)
+        case .badResponse(let status, let body):
+            // Ollama has no auth, so a 404 here means the model was never
+            // pulled — by far the most common failure on a fresh machine, and
+            // worth a message that says so instead of "HTTP 404".
+            if status == 404 {
+                return .misconfigured("model not found on the Ollama daemon — pull it first (\(body))")
+            }
+            return .badResponse(status: status, body: body)
+        case .malformedResponse(let detail):
+            return .malformedResponse(detail)
+        }
+    }
 }
 
-// MARK: - Wire types
+// MARK: - Wire encoding
 
-/// A chat turn as Ollama's `/api/chat` understands it.
-public struct OllamaMessage: Sendable, Equatable {
-    public enum Role: String, Sendable, Equatable {
-        case system
-        case user
-        case assistant
-        case tool
-    }
-
-    public var role: Role
-    public var content: String
-    /// Reasoning text some models emit alongside `content`. Never spoken aloud.
-    public var thinking: String?
-    /// Present on assistant turns that requested tools; replayed back verbatim.
-    public var toolCalls: [OllamaToolCall]
-    /// Set on `.tool` turns so the model can match a result to its request.
-    public var toolName: String?
-
-    public init(
-        role: Role,
-        content: String,
-        thinking: String? = nil,
-        toolCalls: [OllamaToolCall] = [],
-        toolName: String? = nil
-    ) {
-        self.role = role
-        self.content = content
-        self.thinking = thinking
-        self.toolCalls = toolCalls
-        self.toolName = toolName
-    }
-
-    public static func system(_ content: String) -> OllamaMessage {
-        OllamaMessage(role: .system, content: content)
-    }
-
-    public static func user(_ content: String) -> OllamaMessage {
-        OllamaMessage(role: .user, content: content)
-    }
-
-    public static func toolResult(name: String, content: String) -> OllamaMessage {
-        OllamaMessage(role: .tool, content: content, toolName: name)
-    }
-
-    var wireObject: [String: Any] {
+private extension BrainMessage {
+    /// Ollama's `/api/chat` message shape.
+    var ollamaWireObject: [String: Any] {
         var object: [String: Any] = [
             "role": role.rawValue,
             "content": content
@@ -79,30 +57,14 @@ public struct OllamaMessage: Sendable, Equatable {
             object["tool_name"] = toolName
         }
         if !toolCalls.isEmpty {
-            object["tool_calls"] = toolCalls.map(\.wireObject)
+            object["tool_calls"] = toolCalls.map(\.ollamaWireObject)
         }
         return object
     }
 }
 
-/// One function the model asked us to run.
-public struct OllamaToolCall: Sendable, Equatable {
-    public var id: String?
-    public var name: String
-    public var arguments: [String: JSONValue]
-
-    public init(id: String? = nil, name: String, arguments: [String: JSONValue]) {
-        self.id = id
-        self.name = name
-        self.arguments = arguments
-    }
-
-    /// Compact JSON rendering of `arguments`, handy for traces and logging.
-    public var argumentsJSON: String {
-        JSONValue.object(arguments).jsonString()
-    }
-
-    var wireObject: [String: Any] {
+private extension BrainToolCall {
+    var ollamaWireObject: [String: Any] {
         var function: [String: Any] = [
             "name": name,
             "arguments": arguments.mapValues(\.foundationObject)
@@ -118,20 +80,8 @@ public struct OllamaToolCall: Sendable, Equatable {
     }
 }
 
-/// A JSON-schema function definition offered to the model.
-public struct OllamaTool: Sendable, Equatable {
-    public var name: String
-    public var description: String
-    /// JSON Schema object describing the arguments. Passed through untouched.
-    public var parameters: JSONValue
-
-    public init(name: String, description: String, parameters: JSONValue) {
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-    }
-
-    var wireObject: [String: Any] {
+private extension BrainTool {
+    var ollamaWireObject: [String: Any] {
         [
             "type": "function",
             "function": [
@@ -143,10 +93,16 @@ public struct OllamaTool: Sendable, Equatable {
     }
 }
 
-/// One `/api/chat` reply, including the counters callers need to report latency.
+// MARK: - Response
+
+/// One `/api/chat` reply, including the counters needed to report latency.
+///
+/// Kept as a distinct type from `BrainReply` because Ollama reports a richer
+/// breakdown (prompt-eval vs eval nanoseconds) that is genuinely useful when
+/// tuning a local model, and which no cloud provider exposes.
 public struct OllamaChatResponse: Sendable, Equatable {
     public var model: String
-    public var message: OllamaMessage
+    public var message: BrainMessage
     public var doneReason: String?
     public var promptEvalCount: Int?
     public var promptEvalDurationNanoseconds: Int?
@@ -158,7 +114,7 @@ public struct OllamaChatResponse: Sendable, Equatable {
 
     public init(
         model: String,
-        message: OllamaMessage,
+        message: BrainMessage,
         doneReason: String? = nil,
         promptEvalCount: Int? = nil,
         promptEvalDurationNanoseconds: Int? = nil,
@@ -178,7 +134,7 @@ public struct OllamaChatResponse: Sendable, Equatable {
         self.wallClockSeconds = wallClockSeconds
     }
 
-    public var toolCalls: [OllamaToolCall] { message.toolCalls }
+    public var toolCalls: [BrainToolCall] { message.toolCalls }
 
     /// Server-reported total, in seconds. Falls back to the measured wall clock.
     public var totalDurationSeconds: TimeInterval {
@@ -204,6 +160,27 @@ public struct OllamaChatResponse: Sendable, Equatable {
         let tokens = evalCount.map(String.init) ?? "?"
         let rate = tokensPerSecond.map { String(format: " (%.1f tok/s)", $0) } ?? ""
         return String(format: "%@ %@ tok in %.2fs%@", model, tokens, totalDurationSeconds, rate)
+    }
+
+    /// Project onto the provider-neutral reply type.
+    public var asBrainReply: BrainReply {
+        let stopReason: BrainStopReason
+        if !message.toolCalls.isEmpty {
+            stopReason = .toolUse
+        } else if wasTruncated {
+            stopReason = .maxTokens
+        } else if let doneReason, doneReason != "stop" {
+            stopReason = .other(doneReason)
+        } else {
+            stopReason = .endTurn
+        }
+        return BrainReply(
+            model: model,
+            message: message,
+            stopReason: stopReason,
+            usage: BrainUsage(inputTokens: promptEvalCount, outputTokens: evalCount),
+            wallClockSeconds: totalDurationSeconds
+        )
     }
 }
 
@@ -285,8 +262,8 @@ public final class OllamaClient: @unchecked Sendable {
     ///     empty `content`.
     public func chat(
         model: String,
-        messages: [OllamaMessage],
-        tools: [OllamaTool] = [],
+        messages: [BrainMessage],
+        tools: [BrainTool] = [],
         temperature: Double? = 0,
         think: Bool? = nil,
         keepAlive: String? = nil,
@@ -297,11 +274,11 @@ public final class OllamaClient: @unchecked Sendable {
 
         var body: [String: Any] = [
             "model": model,
-            "messages": messages.map(\.wireObject),
+            "messages": messages.map(\.ollamaWireObject),
             "stream": false
         ]
         if !tools.isEmpty {
-            body["tools"] = tools.map(\.wireObject)
+            body["tools"] = tools.map(\.ollamaWireObject)
         }
         var options: [String: Any] = extraOptions.mapValues(\.foundationObject)
         if let temperature {
@@ -388,10 +365,10 @@ public final class OllamaClient: @unchecked Sendable {
             throw OllamaClientError.malformedResponse("no message object in /api/chat reply")
         }
 
-        let role = OllamaMessage.Role(rawValue: messageObject["role"]?.stringValue ?? "assistant") ?? .assistant
+        let role = BrainRole(rawValue: messageObject["role"]?.stringValue ?? "assistant") ?? .assistant
         let thinking = messageObject["thinking"]?.stringValue
             ?? messageObject["reasoning"]?.stringValue
-        let message = OllamaMessage(
+        let message = BrainMessage(
             role: role,
             content: messageObject["content"]?.stringValue ?? "",
             thinking: (thinking?.isEmpty == false) ? thinking : nil,
@@ -417,11 +394,11 @@ public final class OllamaClient: @unchecked Sendable {
     ///  - `[{"function": {"name": ..., "arguments": "{\"q\":1}"}}]` (arguments
     ///    double-encoded as a JSON string — common with OpenAI-shaped templates)
     ///  - `[{"name": ..., "arguments": {...}}]` (function wrapper omitted)
-    public static func parseToolCalls(_ value: JSONValue?) -> [OllamaToolCall] {
+    public static func parseToolCalls(_ value: JSONValue?) -> [BrainToolCall] {
         guard let entries = value?.arrayValue else {
             return []
         }
-        return entries.compactMap { entry -> OllamaToolCall? in
+        return entries.compactMap { entry -> BrainToolCall? in
             guard let object = entry.objectValue else {
                 return nil
             }
@@ -430,7 +407,7 @@ public final class OllamaClient: @unchecked Sendable {
                 return nil
             }
             let id = object["id"]?.stringValue ?? function["id"]?.stringValue
-            return OllamaToolCall(
+            return BrainToolCall(
                 id: id,
                 name: name,
                 arguments: normalizeArguments(function["arguments"])
@@ -463,5 +440,71 @@ public final class OllamaClient: @unchecked Sendable {
             }
         }
         return [:]
+    }
+}
+
+// MARK: - BrainBackend adapter
+
+/// `BrainBackend` over a local Ollama daemon.
+///
+/// Holds the Ollama-specific knobs that have no neutral equivalent — `think`,
+/// `keep_alive` — so the rest of the system never has to know they exist.
+public final class OllamaBackend: BrainBackend, @unchecked Sendable {
+    public let identifier = "ollama"
+    public let modelName: String
+    /// Ollama runs on this machine; nothing leaves it.
+    public let isLocal = true
+
+    private let client: OllamaClient
+    private let keepAlive: String?
+    /// Applied when the request asks for `.automatic`.
+    private let defaultThink: Bool?
+
+    public init(
+        client: OllamaClient = OllamaClient(),
+        model: String = "qwen3.5:4b",
+        keepAlive: String? = "30m",
+        defaultThink: Bool? = nil
+    ) {
+        self.client = client
+        self.modelName = model
+        self.keepAlive = keepAlive
+        self.defaultThink = defaultThink
+    }
+
+    public func isAvailable() async -> Bool {
+        guard await client.isReachable() else {
+            return false
+        }
+        // Reachable is not enough — a daemon without the model pulled fails at
+        // the first real request, which on a voice turn means dead air.
+        guard let models = try? await client.listModels() else {
+            return false
+        }
+        return models.contains { $0 == modelName || $0 == "\(modelName):latest" }
+    }
+
+    public func complete(_ request: BrainRequest) async throws -> BrainReply {
+        let think: Bool?
+        switch request.reasoning {
+        case .automatic: think = defaultThink
+        case .enabled:   think = true
+        case .disabled:  think = false
+        }
+
+        do {
+            let response = try await client.chat(
+                model: modelName,
+                messages: request.messages,
+                tools: request.tools,
+                temperature: request.temperature,
+                think: think,
+                keepAlive: keepAlive,
+                numPredict: request.maxOutputTokens
+            )
+            return response.asBrainReply
+        } catch let error as OllamaClientError {
+            throw error.asBrainBackendError
+        }
     }
 }

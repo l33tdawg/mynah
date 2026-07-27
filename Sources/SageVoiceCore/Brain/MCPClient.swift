@@ -49,16 +49,16 @@ public struct MCPTool: Sendable, Equatable {
         self.inputSchema = inputSchema
     }
 
-    /// The same tool, shaped for Ollama's `tools` array.
+    /// The same tool, shaped for a `BrainBackend`'s tool catalogue.
     ///
     /// The schema is passed through as the server published it — the whole
     /// point is that nothing about SAGE's 27 tools is hardcoded here.
-    public var ollamaTool: OllamaTool {
+    public var brainTool: BrainTool {
         var parameters = inputSchema
         if parameters.objectValue == nil {
             parameters = .object(["type": .string("object"), "properties": .object([:])])
         }
-        return OllamaTool(name: name, description: description, parameters: parameters)
+        return BrainTool(name: name, description: description, parameters: parameters)
     }
 }
 
