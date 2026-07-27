@@ -166,24 +166,37 @@ public final class MCPClient: @unchecked Sendable {
         stop()
     }
 
-    public var isRunning: Bool {
+    /// Scoped access to the mutable state above.
+    ///
+    /// `NSLock.lock()`/`unlock()` are annotated `noasync` — a warning today, an
+    /// error under the Swift 6 language mode. The annotation is not pedantry:
+    /// a task that suspends between the two calls can resume on a different
+    /// thread, leaving the lock held by a thread that no longer owns the work.
+    ///
+    /// Because `body` is non-async there is no `await` you can write inside it,
+    /// so the invariant is enforced by the compiler rather than by remembering.
+    /// (`Synchronization.Mutex` does this properly, but needs macOS 15 and this
+    /// package targets 13.)
+    ///
+    /// - Important: must not be re-entered — that deadlocks, as with any mutex.
+    private func withState<Result>(_ body: () throws -> Result) rethrows -> Result {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return process?.isRunning == true
+        return try body()
+    }
+
+    public var isRunning: Bool {
+        withState { process?.isRunning == true }
     }
 
     /// Server identity, available after `start()`.
     public var serverInfo: MCPServerInfo? {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return handshakeInfo
+        withState { handshakeInfo }
     }
 
     /// Most recent stderr output from the child, for diagnostics.
     public var stderrLog: String {
-        stateLock.lock()
-        let data = stderrTail
-        stateLock.unlock()
+        let data = withState { stderrTail }
         return String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -201,22 +214,26 @@ public final class MCPClient: @unchecked Sendable {
 
         // Single-flight: concurrent callers await the same handshake rather than
         // each sending their own `initialize` on the shared stdin.
-        stateLock.lock()
-        if let inFlight = startTask {
-            stateLock.unlock()
-            return try await inFlight.value
+        //
+        // Claiming the slot and reading the incumbent happen in ONE critical
+        // section. Splitting them would reintroduce the race this exists to
+        // close: two callers could both observe an empty slot and both spawn.
+        let task = withState { () -> Task<MCPServerInfo, Error> in
+            if let inFlight = startTask {
+                return inFlight
+            }
+            let task = Task<MCPServerInfo, Error> { [weak self] in
+                guard let self else { throw MCPClientError.serverExited(-1, "client deallocated") }
+                return try await self.performHandshake()
+            }
+            startTask = task
+            return task
         }
-        let task = Task<MCPServerInfo, Error> { [weak self] in
-            guard let self else { throw MCPClientError.serverExited(-1, "client deallocated") }
-            return try await self.performHandshake()
-        }
-        startTask = task
-        stateLock.unlock()
 
         defer {
-            stateLock.lock()
-            if startTask == task { startTask = nil }
-            stateLock.unlock()
+            withState {
+                if startTask == task { startTask = nil }
+            }
         }
         return try await task.value
     }
@@ -246,9 +263,7 @@ public final class MCPClient: @unchecked Sendable {
         // Notification: no id, so the server sends nothing back.
         try notify(method: "notifications/initialized", params: .object([:]))
 
-        stateLock.lock()
-        handshakeInfo = info
-        stateLock.unlock()
+        withState { handshakeInfo = info }
         return info
     }
 
@@ -308,13 +323,8 @@ public final class MCPClient: @unchecked Sendable {
 
     /// The server's tool catalogue. Cached after the first call.
     public func listTools(useCache: Bool = true) async throws -> [MCPTool] {
-        if useCache {
-            stateLock.lock()
-            let cached = cachedTools
-            stateLock.unlock()
-            if let cached {
-                return cached
-            }
+        if useCache, let cached = withState({ cachedTools }) {
+            return cached
         }
 
         try await ensureStarted()
@@ -333,9 +343,7 @@ public final class MCPClient: @unchecked Sendable {
             )
         }
 
-        stateLock.lock()
-        cachedTools = tools
-        stateLock.unlock()
+        withState { cachedTools = tools }
         return tools
     }
 
