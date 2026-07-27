@@ -290,7 +290,12 @@ public actor VoiceBridgeDaemon {
             let result = try await loop.run(
                 transcript: transcript,
                 tools: tools,
-                history: histories[key] ?? []
+                history: histories[key] ?? [],
+                images: resolveImages(message),
+                onToolDecision: { [weak self] chosen in
+                    guard let self, let line = WorkingReply.line(forTools: chosen) else { return }
+                    await self.reply(line, to: recipient)
+                }
             )
             histories[key] = Self.trimmed(
                 Self.conversationOnly(result.messages),
@@ -351,7 +356,30 @@ public actor VoiceBridgeDaemon {
         if message.hasText {
             return message.text
         }
+        // A photo sent with no caption is still a request. Standing in for the
+        // owner with a plain question is better than ignoring the message,
+        // which is what "no text, no audio" used to do.
+        if !message.imageURLs.isEmpty {
+            return "What is in this picture?"
+        }
         return nil
+    }
+
+    /// The images on this message, downscaled and encoded for the model.
+    ///
+    /// Never throws. A photo that cannot be read is worth a log line and a turn
+    /// that proceeds on the words alone — refusing to answer "what is this?"
+    /// because one attachment was a malformed HEIC would be a worse appliance
+    /// than one that says it cannot see anything.
+    private func resolveImages(_ message: SignalIncomingMessage) -> [Data] {
+        message.imageURLs.compactMap { url in
+            do {
+                return try VisionAttachment.encoded(contentsOf: url)
+            } catch {
+                log("[daemon] could not read image \(url.lastPathComponent): \(error)")
+                return nil
+            }
+        }
     }
 
     private func toolCatalogue() async throws -> [MCPTool] {

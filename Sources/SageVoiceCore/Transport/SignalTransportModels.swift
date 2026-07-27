@@ -150,6 +150,36 @@ public struct SignalAttachment: Equatable, Sendable {
         let ext = String(candidate[candidate.index(after: dot)...]).lowercased()
         return SignalAttachmentLocator.audioFileExtensions.contains(ext)
     }
+
+    /// A still image a vision model could look at.
+    ///
+    /// MIME type first, extension as the fallback, mirroring `isAudio` — and
+    /// like it, this has to answer for attachments signal-cli reports with no
+    /// filename at all.
+    ///
+    /// GIFs are excluded on purpose: Signal sends them as `video/mp4`, and the
+    /// ones that do arrive as `image/gif` are animations whose first frame is
+    /// rarely the point.
+    public var isImage: Bool {
+        if let contentType, !contentType.isEmpty {
+            let normalized = contentType.lowercased()
+            if normalized == "image/gif" {
+                return false
+            }
+            if normalized.hasPrefix("image/") {
+                return true
+            }
+            if normalized.hasPrefix("audio/") || normalized.hasPrefix("video/") {
+                return false
+            }
+        }
+        let candidate = (filename ?? localURL?.lastPathComponent ?? "")
+        guard let dot = candidate.lastIndex(of: ".") else {
+            return false
+        }
+        let ext = String(candidate[candidate.index(after: dot)...]).lowercased()
+        return ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"].contains(ext)
+    }
 }
 
 // MARK: - Incoming messages
@@ -230,6 +260,21 @@ public struct SignalIncomingMessage: Equatable, Sendable {
     public var voiceNoteURL: URL? {
         audioAttachments.compactMap(\.localURL).first
     }
+
+    public var imageAttachments: [SignalAttachment] {
+        attachments.filter(\.isImage)
+    }
+
+    /// Images that exist on disk, ready for a vision model.
+    ///
+    /// Capped, because Signal will happily send twenty photos in one message and
+    /// each one costs context on a 4B model. The owner asking about "this
+    /// screenshot" means the one they just sent, not a gallery.
+    public var imageURLs: [URL] {
+        Array(imageAttachments.compactMap(\.localURL).prefix(SignalIncomingMessage.maximumImagesPerMessage))
+    }
+
+    public static let maximumImagesPerMessage = 3
 
     public var hasText: Bool {
         !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

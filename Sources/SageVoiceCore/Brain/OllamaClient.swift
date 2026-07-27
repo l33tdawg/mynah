@@ -56,6 +56,12 @@ private extension BrainMessage {
             // ignore the key, so sending it is always safe.
             object["tool_name"] = toolName
         }
+        if !images.isEmpty {
+            // Ollama takes bare base64 on the message — no data: prefix, no
+            // content array. Only sent when there is one, so a text turn's
+            // bytes are unchanged and the prompt cache prefix still matches.
+            object["images"] = images.map { $0.base64EncodedString() }
+        }
         if !toolCalls.isEmpty {
             object["tool_calls"] = toolCalls.map(\.ollamaWireObject)
         }
@@ -247,6 +253,39 @@ public final class OllamaClient: @unchecked Sendable {
         return models.compactMap { $0["name"]?.stringValue }
     }
 
+    /// How much reasoning to ask Ollama for.
+    ///
+    /// `think` is not a boolean on this build — it also takes an effort level,
+    /// and the difference is most of the appliance's remaining latency. Measured
+    /// on qwen3.5:4b, asking "what is 17*23, answer in one short sentence":
+    ///
+    ///     think        reasoning   answer   tokens   decode
+    ///     "medium"        498 ch    42 ch      214    11.9 s
+    ///     "high"        2,338 ch    31 ch      959    53.7 s
+    ///     false               0     31 ch       14     0.7 s
+    ///
+    /// The same answer, four and a half times faster. Reasoning is 97% of what
+    /// this model generates on a short reply, so it — not prefill, and not the
+    /// model's size — is the largest term left in a turn.
+    ///
+    /// `"low"` is not accepted by this build: it returns an error rather than a
+    /// completion, so `medium` is the floor.
+    public enum OllamaThinkMode: Sendable, Equatable {
+        case off
+        /// Model's own default effort, which for qwen3.5 is the 959-token mode.
+        case on
+        /// `"medium"` or `"high"`.
+        case effort(String)
+
+        var wireValue: Any {
+            switch self {
+            case .off:               return false
+            case .on:                return true
+            case .effort(let level): return level
+            }
+        }
+    }
+
     /// One non-streaming `/api/chat` round trip.
     ///
     /// - Parameters:
@@ -265,7 +304,7 @@ public final class OllamaClient: @unchecked Sendable {
         messages: [BrainMessage],
         tools: [BrainTool] = [],
         temperature: Double? = 0,
-        think: Bool? = nil,
+        think: OllamaThinkMode? = nil,
         keepAlive: String? = nil,
         numPredict: Int? = nil,
         extraOptions: [String: JSONValue] = [:]
@@ -291,7 +330,7 @@ public final class OllamaClient: @unchecked Sendable {
             body["options"] = options
         }
         if let think {
-            body["think"] = think
+            body["think"] = think.wireValue
         }
         if let keepAlive {
             body["keep_alive"] = keepAlive
@@ -501,17 +540,29 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// SAGE and WhisperKit, that fits with room to spare.
     public static let defaultContextTokens = 65536
 
+    /// Reasoning effort asked for when the caller says `.automatic`.
+    ///
+    /// Left unset, qwen3.5 reasons at its own default — which is the 959-token
+    /// mode, about 54 seconds of decode for a one-sentence answer. `"medium"`
+    /// produces the same answer from 214 tokens in 11.9 s. See
+    /// `OllamaClient.OllamaThinkMode` for the measurements.
+    ///
+    /// Not `.off`: reasoning is what makes a 4B model route tools correctly
+    /// (12/12 with, 3/10 without, measured on the 14-tool catalogue), so this
+    /// buys speed by shortening reasoning rather than removing it.
+    public static let defaultReasoningEffort = "medium"
+
     private let client: OllamaClient
     private let keepAlive: String?
     /// Applied when the request asks for `.automatic`.
-    private let defaultThink: Bool?
+    private let defaultThink: OllamaClient.OllamaThinkMode?
     private let contextTokens: Int?
 
     public init(
         client: OllamaClient = OllamaClient(),
         model: String = "qwen3.5:4b",
         keepAlive: String? = "30m",
-        defaultThink: Bool? = nil,
+        defaultThink: OllamaClient.OllamaThinkMode? = .effort(OllamaBackend.defaultReasoningEffort),
         contextTokens: Int? = OllamaBackend.defaultContextTokens
     ) {
         self.client = client
@@ -534,11 +585,11 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     }
 
     public func complete(_ request: BrainRequest) async throws -> BrainReply {
-        let think: Bool?
+        let think: OllamaClient.OllamaThinkMode?
         switch request.reasoning {
         case .automatic: think = defaultThink
-        case .enabled:   think = true
-        case .disabled:  think = false
+        case .enabled:   think = .effort(Self.defaultReasoningEffort)
+        case .disabled:  think = .off
         }
 
         do {

@@ -53,6 +53,16 @@ public struct BrainMessage: Sendable, Equatable {
     /// Never inspected by `ToolLoop` — only round-tripped.
     public var providerPayload: JSONValue?
 
+    /// Images attached to this turn, already downscaled and JPEG-encoded by
+    /// `VisionAttachment`. Raw bytes, not base64 — each backend base64s at its
+    /// own wire boundary, because they disagree about where the string goes.
+    ///
+    /// Only meaningful on a `.user` turn, and only reaches a model that
+    /// advertises vision. Deliberately *not* carried in conversation history:
+    /// re-sending a photo on every subsequent turn would re-pay its token cost
+    /// forever, and the model has already described it in its reply.
+    public var images: [Data]
+
     public init(
         role: BrainRole,
         content: String,
@@ -60,7 +70,8 @@ public struct BrainMessage: Sendable, Equatable {
         toolCalls: [BrainToolCall] = [],
         toolName: String? = nil,
         toolCallID: String? = nil,
-        providerPayload: JSONValue? = nil
+        providerPayload: JSONValue? = nil,
+        images: [Data] = []
     ) {
         self.role = role
         self.content = content
@@ -69,14 +80,15 @@ public struct BrainMessage: Sendable, Equatable {
         self.toolName = toolName
         self.toolCallID = toolCallID
         self.providerPayload = providerPayload
+        self.images = images
     }
 
     public static func system(_ content: String) -> BrainMessage {
         BrainMessage(role: .system, content: content)
     }
 
-    public static func user(_ content: String) -> BrainMessage {
-        BrainMessage(role: .user, content: content)
+    public static func user(_ content: String, images: [Data] = []) -> BrainMessage {
+        BrainMessage(role: .user, content: content, images: images)
     }
 
     public static func assistant(_ content: String) -> BrainMessage {

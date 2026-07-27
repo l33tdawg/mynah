@@ -436,10 +436,17 @@ public final class ToolLoop: @unchecked Sendable {
     ///     Passing it in is worth it per-utterance: it skips a `tools/list`.
     ///   - history: prior turns, to continue a conversation. The system prompt
     ///     is prepended automatically and must not be included here.
+    ///   - images: photos attached to this turn, already downscaled and encoded
+    ///     by `VisionAttachment`. Ignored by models without vision.
+    ///   - onToolDecision: called once, the moment the model has chosen its
+    ///     first tools and before any of them run. The appliance uses this to
+    ///     say something true while the owner waits — see `WorkingReply`.
     public func run(
         transcript: String,
         tools: [MCPTool]? = nil,
-        history: [BrainMessage] = []
+        history: [BrainMessage] = [],
+        images: [Data] = [],
+        onToolDecision: (@Sendable ([String]) async -> Void)? = nil
     ) async throws -> ToolLoopResult {
         let started = Date()
         let catalogue: [MCPTool]
@@ -456,7 +463,7 @@ public final class ToolLoop: @unchecked Sendable {
 
         var messages: [BrainMessage] = [.system(systemPrompt)]
         messages.append(contentsOf: history.filter { $0.role != .system })
-        messages.append(.user(transcript))
+        messages.append(.user(transcript, images: images))
 
         var trace = ToolLoopTrace(model: backend.modelName, toolsOffered: catalogue.count)
         var reply = ""
@@ -491,6 +498,14 @@ public final class ToolLoop: @unchecked Sendable {
                 reply = Self.speakable(response.message.content)
                 Self.warnIfSpeakableAteTheAnswer(raw: response.message.content, spoken: reply)
                 break
+            }
+
+            // Only on the first decision, and only once the model has actually
+            // committed to a tool. Announcing before this point would mean
+            // guessing, and a turn that says "looking that up" and then answers
+            // from memory is exactly the fake-sounding filler this replaced.
+            if iteration == 1, let onToolDecision {
+                await onToolDecision(response.toolCalls.map(\.name))
             }
 
             for call in response.toolCalls {
