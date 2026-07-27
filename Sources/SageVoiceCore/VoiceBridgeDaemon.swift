@@ -136,12 +136,22 @@ public actor VoiceBridgeDaemon {
     /// tests and for a bridge pointed at a non-SAGE MCP server.
     private let ritual: SageRitual?
 
+    /// The same instance the tool catalogue was built from, held here so the
+    /// reply can carry the documents that turn produced.
+    ///
+    /// A concrete type rather than a protocol, deliberately. There is exactly
+    /// one thing in this product that makes files, and the seam a protocol would
+    /// buy has no second implementation to justify it — the same argument
+    /// `CompositeToolSource` makes for web search not being an MCP server.
+    private let notes: NotesToolSource?
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
         loop: ToolLoop,
         configuration: Configuration = Configuration(),
         ritual: SageRitual? = nil,
+        notes: NotesToolSource? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -149,6 +159,7 @@ public actor VoiceBridgeDaemon {
         self.loop = loop
         self.configuration = configuration
         self.ritual = ritual
+        self.notes = notes
         self.log = log
     }
 
@@ -277,6 +288,14 @@ public actor VoiceBridgeDaemon {
             return .failed("transcript of \(transcript.count) characters exceeds the limit")
         }
 
+        // Anything left over from a turn that failed after writing a note. The
+        // file stays on disk — it is the owner's, and the turn that made it may
+        // simply have run out of iterations — but it must not ride out on the
+        // next unrelated reply, which is what happens without this line.
+        if let stale = notes?.drainWrittenNotes(), !stale.isEmpty {
+            log("[daemon] discarding \(stale.count) undelivered note(s) from an earlier turn")
+        }
+
         if configuration.sendsThinkingAcknowledgement {
             await reply(
                 WaitingPhrases.acknowledgement(estimatedSeconds: estimator.typicalSeconds),
@@ -301,7 +320,12 @@ public actor VoiceBridgeDaemon {
                 Self.conversationOnly(result.messages),
                 keepingLastTurns: configuration.historyTurnLimit
             )
-            await reply(result.reply, to: recipient)
+            // Documents this turn produced go out with the sentence that
+            // announces them, not as a second message. On Note-to-Self every
+            // message is the owner's own outgoing bubble, so a follow-up bubble
+            // carrying the file would read as a third indistinguishable blue
+            // block — the same reason the thinking acknowledgement is off.
+            await reply(result.reply, to: recipient, attaching: notes?.drainWrittenNotes() ?? [])
             log("[daemon] \(result.trace.summary)")
             // Cleanup should tidy a reply, not amputate it. A large gap between
             // what the model produced and what the owner receives means
@@ -430,13 +454,30 @@ public actor VoiceBridgeDaemon {
         return tools
     }
 
-    private func reply(_ text: String, to recipient: SignalRecipient) async {
+    private func reply(
+        _ text: String,
+        to recipient: SignalRecipient,
+        attaching attachments: [URL] = []
+    ) async {
         let body = configuration.replyPrefix.isEmpty ? text : configuration.replyPrefix + text
         do {
-            _ = try await signal.sendText(body, to: recipient)
+            _ = try await signal.send(
+                text: body,
+                attachmentPaths: attachments.map(\.path),
+                to: recipient
+            )
         } catch {
-            // Nowhere left to report to — the reply channel is what failed.
-            log("[daemon] could not send reply to \(recipient): \(error)")
+            // The words matter more than the file. signal-cli rejects the whole
+            // send if it cannot read one attachment, so a note with a name it
+            // dislikes would otherwise swallow the answer as well — retry
+            // without the files rather than leave the owner with silence.
+            guard !attachments.isEmpty else {
+                // Nowhere left to report to — the reply channel is what failed.
+                log("[daemon] could not send reply to \(recipient): \(error)")
+                return
+            }
+            log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")
+            await reply(text, to: recipient)
         }
     }
 

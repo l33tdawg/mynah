@@ -244,6 +244,16 @@ actor ToolLoopTurnEngine: TurnEngine {
                 // renamed memory catalogue would sail through leaving the model
                 // holding one tool and no memory, looking perfectly healthy.
                 expectedToolNames: ["sage_recall", "sage_remember"]
+            ),
+            // `.savedOnDisk` — the default, and load-bearing. Mynah has no
+            // attachment channel, so the appliance's "the file is attached to
+            // your reply" would be a lie here, and one the owner would only
+            // discover by looking for a file that never arrived.
+            CompositeToolSource.Source(
+                label: "notes",
+                provider: NotesToolSource(),
+                isRequired: true,
+                expectedToolNames: NotesToolSource.toolNames
             )
         ]
         if allowsWebSearch {

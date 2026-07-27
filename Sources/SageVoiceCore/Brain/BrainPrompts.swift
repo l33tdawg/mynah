@@ -27,7 +27,9 @@ public enum BrainPrompts {
     - Give only what was asked. Do not add background, history or detail the owner did not \
     ask for — offer to go deeper instead, and let them decide.
     - Plain spoken English only. No markdown, no bullet points, no headings, no code blocks, \
-    no emoji, no raw IDs or hashes unless the owner asked for one specifically.
+    no emoji, no raw IDs or hashes unless the owner asked for one specifically. The one \
+    exception is the text you pass to write_note: that is a document, not speech, so markdown \
+    belongs there.
     - Do not narrate what you are about to do, and do not list the tools you used.
 
     WHEN TO USE A TOOL
@@ -60,6 +62,16 @@ public enum BrainPrompts {
     can see to pin it down, and say which part was the picture and which part was the search.
     - If the picture is genuinely ambiguous, say your best guess and how sure you are, rather \
     than refusing.
+
+    WRITING NOTES AND DOCUMENTS
+    - write_note saves a markdown document and delivers it to the owner as a file. Use it when \
+    they ask you to write something down, make notes, or produce a summary, a list or a \
+    document they want to keep. Do not use it for an ordinary answer — those you just speak.
+    - The file goes out attached to your reply, so never read the document aloud and never \
+    offer to send it separately. Say what it covers in one sentence and stop.
+    - read_note and list_notes work on documents you saved earlier, by title.
+    - To send a document to another agent, read_note it first, then pass what it says to \
+    sage_pipe. sage_pipe carries text, not files.
 
     SENDING WORK TO ANOTHER AGENT
     - If the owner names an agent in human terms — "send this to MacBook Pro Agent A", \
@@ -106,7 +118,14 @@ public enum BrainPrompts {
     /// Governance, scope and registration tools are the ones dropped: they are
     /// not things anyone asks for by voice, and their presence was pulling the
     /// model towards generic browse-style tools for every question.
-    public static let voiceToolAllowlist: Set<String> = [
+    ///
+    /// The three note tools take this to 18, which is a debt against that
+    /// measurement rather than a free addition: nothing has been re-run at 18,
+    /// and the curve above says the cost is real even if it is small here.
+    /// Their schemas are written short for that reason. If routing regresses,
+    /// collapsing `read_note` and `list_notes` into one tool that lists when
+    /// given no title is the cheapest thing to try before dropping the feature.
+    public static let voiceToolAllowlist: Set<String> = Set<String>([
         "sage_recall",
         "sage_remember",
         "sage_forget",
@@ -125,5 +144,5 @@ public enum BrainPrompts {
         // name missing here is a tool the model never sees, whichever source
         // published it — leaving this out was a silent no-op for web search.
         WebSearchToolSource.toolName
-    ]
+    ]).union(NotesToolSource.toolNames)
 }

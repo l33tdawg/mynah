@@ -221,8 +221,15 @@ func makeBackend(
 /// still be able to ask it what is on their backlog.
 ///
 /// `--no-web` exists for the case where that is a policy rather than a fault.
-func makeToolSource(mcp: MCPClient, allowWeb: Bool) -> ToolProviding {
-    guard allowWeb else { return mcp }
+///
+/// Returns the notes source alongside the catalogue because the daemon needs
+/// that same instance: it is what knows which documents this turn produced, and
+/// therefore what the reply should carry.
+func makeToolSource(
+    mcp: MCPClient,
+    allowWeb: Bool
+) -> (tools: ToolProviding, notes: NotesToolSource) {
+    let notes = NotesToolSource(delivery: .attachedToReply, log: { print($0) })
 
     var sources: [CompositeToolSource.Source] = [
         .init(
@@ -231,20 +238,32 @@ func makeToolSource(mcp: MCPClient, allowWeb: Bool) -> ToolProviding {
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])
+                .subtracting(NotesToolSource.toolNames)
+        ),
+        // Required. Unlike search, this has no network to be down and no
+        // credential to expire — if it cannot list its three tools something is
+        // wrong with the appliance itself, and degrading quietly would hide it.
+        .init(
+            label: "notes",
+            provider: notes,
+            isRequired: true,
+            expectedToolNames: NotesToolSource.toolNames
         )
     ]
-    sources.append(
-        .init(
-            label: "web search",
-            provider: WebSearchToolSource(
-                backends: WebSearchToolSource.defaultBackends(),
-                log: { print($0) }
-            ),
-            isRequired: false,
-            expectedToolNames: [WebSearchToolSource.toolName]
+    if allowWeb {
+        sources.append(
+            .init(
+                label: "web search",
+                provider: WebSearchToolSource(
+                    backends: WebSearchToolSource.defaultBackends(),
+                    log: { print($0) }
+                ),
+                isRequired: false,
+                expectedToolNames: [WebSearchToolSource.toolName]
+            )
         )
-    )
-    return CompositeToolSource(sources: sources, log: { print($0) })
+    }
+    return (CompositeToolSource(sources: sources, log: { print($0) }), notes)
 }
 
 func runBrain(_ arguments: [String]) -> Never {
@@ -266,7 +285,7 @@ func runBrain(_ arguments: [String]) -> Never {
     let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
-    let tools = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
     let loop = ToolLoop(backend: backend, mcp: tools)
 
     runAndExit {
@@ -571,7 +590,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
-    let tools = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
     let loop = ToolLoop(backend: backend, mcp: tools)
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
@@ -592,7 +611,8 @@ func runDaemon(_ arguments: [String]) -> Never {
         configuration: daemonConfiguration,
         ritual: arguments.contains("--no-sage-ritual")
             ? nil
-            : SageRitual(tools: mcp, log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) })
+            : SageRitual(tools: mcp, log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }),
+        notes: notes
     )
 
     runAndExit {
