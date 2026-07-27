@@ -496,21 +496,42 @@ public actor VoiceBridgeDaemon {
     /// It also drops the system turn (`ToolLoop` prepends its own) and every
     /// assistant turn that carried only tool calls and no speakable text, since
     /// replaying those without their results is incoherent.
+    /// The one exception is URLs. See `SourceLinks`: dropping tool results also
+    /// dropped every link `web_search` found, so "can you give me links for
+    /// these please" could not be answered from context and forced a second
+    /// search across a conversation that by then held two subjects. The links
+    /// are kept, attached to the answer that used them; the facts are not.
     static func conversationOnly(_ messages: [BrainMessage]) -> [BrainMessage] {
-        messages.compactMap { message in
+        var carried: [BrainMessage] = []
+        // Links seen since the last answer, so they land on the turn that used
+        // them rather than on whatever comes next.
+        var pendingLinks: [String] = []
+
+        for message in messages {
             switch message.role {
-            case .system, .tool:
-                return nil
+            case .system:
+                continue
+            case .tool:
+                for url in SourceLinks.extract(from: message.content)
+                where !pendingLinks.contains(url) {
+                    pendingLinks.append(url)
+                }
             case .user:
-                return message
+                carried.append(message)
             case .assistant:
                 guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    return nil
+                    continue
                 }
                 // Strip the tool-call metadata; keep the sentence.
-                return BrainMessage(role: .assistant, content: ToolLoop.speakable(message.content))
+                let spoken = ToolLoop.speakable(message.content)
+                let links = Array(pendingLinks.prefix(SourceLinks.maximumPerTurn))
+                pendingLinks = []
+                carried.append(
+                    BrainMessage(role: .assistant, content: SourceLinks.annotated(spoken, links: links))
+                )
             }
         }
+        return carried
     }
 
     /// Keeps the last `turns` user/assistant exchanges.
