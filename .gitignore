@@ -5,3 +5,4 @@
 models/
 vendor/argmax-oss-swift/
 vendor/
+dist/

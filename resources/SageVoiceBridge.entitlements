@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Live voice calls. Phase 1 gets its audio from Signal attachments and
+       does not need this, but the entitlement must be present at first
+       signing or adding it later invalidates the signature. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- The appliance spawns SAGE (sage-gui) and talks to a local Ollama and
+       WhisperKit server. Under the hardened runtime a signed process may only
+       execute other processes signed by the same team unless this is set —
+       and Ollama is signed by Ollama, not by us. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
