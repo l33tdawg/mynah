@@ -30,11 +30,10 @@ public actor VoiceBridgeDaemon {
         /// point the thread has two genuine parties and Signal does this for us.
         /// Until then, this does the job a whole column of layout would.
         ///
-        /// Three rather than one, at the owner's request after living with one:
-        /// a single glyph reads as punctuation when you are scrolling, while a
-        /// run of them is a band of colour the eye lands on without reading.
-        /// It looks excessive written down and is correct on a phone.
-        public static let defaultReplyPrefix = "🧠🧠🧠 "
+        /// Bracketed rather than bare: one glyph alone reads as punctuation
+        /// while scrolling, and three in a row read as shouting. Delimiters do
+        /// the work instead — they say "label", which is what this is.
+        public static let defaultReplyPrefix = "‹🧠› "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String

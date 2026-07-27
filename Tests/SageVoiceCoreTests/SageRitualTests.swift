@@ -46,8 +46,37 @@ final class SageRitualTests: XCTestCase {
 
         let context = await ritual.boot()
 
-        XCTAssertEqual(tools.names, [SageRitual.Tool.inception])
+        XCTAssertEqual(tools.names, [SageRitual.Tool.register, SageRitual.Tool.inception])
         XCTAssertEqual(context, "You were migrating the voice bridge.")
+    }
+
+    /// SAGE gates its task surface on identity: `sage_backlog` answers "only to
+    /// signed agents or an authenticated CEREBRUM session", so an unregistered
+    /// appliance gets HTTP 401 on every task question while memory recall works
+    /// fine — which reads to the owner as a missing tool rather than a missing
+    /// identity.
+    func testBootClaimsAnOnChainIdentity() async {
+        let tools = RecordingToolSource()
+        let ritual = SageRitual(tools: tools)
+
+        await ritual.boot()
+
+        XCTAssertEqual(tools.names.first, SageRitual.Tool.register)
+        XCTAssertEqual(tools.recorded[0].arguments["name"]?.stringValue, SageRitual.agentName)
+    }
+
+    /// Memory still works unregistered, so a node that refuses registration
+    /// must not cost the owner everything else.
+    func testAFailedRegistrationStillBoots() async {
+        let tools = RecordingToolSource(
+            replies: [SageRitual.Tool.inception: "prior context"],
+            failing: [SageRitual.Tool.register]
+        )
+        let ritual = SageRitual(tools: tools)
+
+        let context = await ritual.boot()
+
+        XCTAssertEqual(context, "prior context")
     }
 
     /// The whole point of calling inception: it must reach the model, or the

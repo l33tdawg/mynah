@@ -31,11 +31,17 @@ public struct ToolCallRecord: Sendable, Equatable {
     public var argumentsJSON: String { JSONValue.object(arguments).jsonString() }
 
     public var summary: String {
-        String(
+        // The failure text, not just the word ERROR. A tool that failed in
+        // 0.02s is a rejection with a reason attached — logging only that it
+        // failed throws away the one thing needed to fix it.
+        let outcome = failed
+            ? "ERROR \(result.prefix(200).replacingOccurrences(of: "\n", with: " "))"
+            : "ok"
+        return String(
             format: "%@(%@) -> %@ in %.2fs",
             name,
             argumentsJSON,
-            failed ? "ERROR" : "ok",
+            outcome,
             durationSeconds
         )
     }

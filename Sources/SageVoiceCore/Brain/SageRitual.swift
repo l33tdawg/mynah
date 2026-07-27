@@ -33,7 +33,12 @@ public actor SageRitual {
         public static let inception = "sage_inception"
         public static let turn = "sage_turn"
         public static let reflect = "sage_reflect"
+        public static let register = "sage_register"
     }
+
+    /// Name the appliance registers under, so it is identifiable in the owner's
+    /// federation rather than appearing as another anonymous node.
+    public static let agentName = "SAGE Voice Bridge"
 
     /// How much of `sage_inception`'s reply to carry into the system prompt.
     ///
@@ -74,6 +79,7 @@ public actor SageRitual {
     /// prefill saving on the owner's first sentence.
     @discardableResult
     public func boot() async -> String? {
+        await register()
         do {
             let reply = try await tools.call(name: Tool.inception, arguments: [:])
             let trimmed = Self.condense(reply, to: Self.maximumBootContextCharacters)
@@ -86,6 +92,35 @@ public actor SageRitual {
             // cold — the owner is on a phone and cannot fix a SAGE node.
             log("[sage] inception failed, starting without prior context: \(error)")
             return nil
+        }
+    }
+
+    /// Claims an on-chain identity for the appliance.
+    ///
+    /// Not cosmetic. SAGE gates its task surface on identity — `sage_backlog`
+    /// answers "only to signed agents or an authenticated CEREBRUM session"
+    /// (`web/handler.go:2046`), so an unregistered appliance gets HTTP 401 on
+    /// every task question while memory recall works fine. The owner saw this
+    /// as the agent insisting it could not check its backlog, and reasonably
+    /// read it as a missing tool — but the tool was there and the identity
+    /// behind it was not.
+    ///
+    /// Idempotent server-side, so this runs every boot and returns the existing
+    /// record when there is one. Registration is a property of the appliance,
+    /// not a thing the owner should ever have to ask for by voice, which is why
+    /// it happens here rather than in the model's catalogue.
+    private func register() async {
+        do {
+            _ = try await tools.call(
+                name: Tool.register,
+                arguments: ["name": .string(Self.agentName)]
+            )
+            log("[sage] registered as \(Self.agentName)")
+        } catch {
+            // Non-fatal: memory still works unregistered, and an appliance that
+            // refuses to answer anything because it could not claim an identity
+            // is strictly worse than one that cannot read its backlog.
+            log("[sage] registration failed, task tools may return 401: \(error)")
         }
     }
 
