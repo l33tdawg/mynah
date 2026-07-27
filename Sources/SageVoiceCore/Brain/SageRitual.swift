@@ -36,9 +36,20 @@ public actor SageRitual {
         public static let register = "sage_register"
     }
 
-    /// Name the appliance registers under, so it is identifiable in the owner's
-    /// federation rather than appearing as another anonymous node.
-    public static let agentName = "SAGE Voice Bridge"
+    /// Name the phone appliance registers under.
+    public static let applianceAgentName = "SAGE Voice Bridge"
+
+    /// Name the Mac app registers under.
+    ///
+    /// Deliberately different from the appliance's. They are two agents with two
+    /// keys, and the whole point of the operator granting access per agent in
+    /// CEREBRUM is that the operator can tell them apart in the list. Two rows
+    /// both reading "SAGE Voice Bridge" makes "give this one read access" a
+    /// coin flip.
+    public static let appAgentName = "Mynah"
+
+    /// Back-compatible alias. New code should name which one it means.
+    public static let agentName = SageRitual.applianceAgentName
 
     /// How much of `sage_inception`'s reply to carry into the system prompt.
     ///
@@ -64,10 +75,19 @@ public actor SageRitual {
     /// if boot failed — the appliance still works, it just starts cold.
     public private(set) var bootContext: String?
 
-    public init(tools: ToolProviding, log: @escaping @Sendable (String) -> Void = { _ in }) {
+    /// - Parameter agentName: what this process registers as. Defaults to the
+    ///   appliance so existing call sites keep their identity.
+    public init(
+        tools: ToolProviding,
+        agentName: String = SageRitual.applianceAgentName,
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.tools = tools
+        self.agentName = agentName
         self.log = log
     }
+
+    private let agentName: String
 
     // MARK: - Boot
 
@@ -113,9 +133,9 @@ public actor SageRitual {
         do {
             _ = try await tools.call(
                 name: Tool.register,
-                arguments: ["name": .string(Self.agentName)]
+                arguments: ["name": .string(agentName)]
             )
-            log("[sage] registered as \(Self.agentName)")
+            log("[sage] registered as \(agentName)")
         } catch {
             // Non-fatal: memory still works unregistered, and an appliance that
             // refuses to answer anything because it could not claim an identity

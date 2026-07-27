@@ -279,7 +279,7 @@ actor ToolLoopTurnEngine: TurnEngine {
         self.loop = ToolLoop(backend: backend, mcp: CompositeToolSource(sources: sources))
         // The raw node, not the composed source: the boot ritual calls tools the
         // loop's allowlist deliberately withholds from the model.
-        self.ritual = SageRitual(tools: mcp)
+        self.ritual = SageRitual(tools: mcp, agentName: SageRitual.appAgentName)
     }
 
     func prepare() async throws {

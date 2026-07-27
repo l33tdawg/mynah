@@ -156,4 +156,24 @@ final class MynahIdentityTests: XCTestCase {
             MynahIdentity.keyURL(homeDirectory: home).path
         )
     }
+
+    // MARK: Telling the two agents apart
+
+    /// The operator's half of the owner's model — "operator goes into CEREBRUM
+    /// and sets access levels per domain" — only works if CEREBRUM's agent list
+    /// shows two distinguishable rows. The Mac app and the phone appliance are
+    /// two agents with two keys; two rows both reading "SAGE Voice Bridge" makes
+    /// "give this one read access" a coin flip.
+    func testTheAppAndTheApplianceRegisterUnderDifferentNames() {
+        XCTAssertNotEqual(SageRitual.appAgentName, SageRitual.applianceAgentName)
+        XCTAssertEqual(SageRitual.applianceAgentName, "SAGE Voice Bridge")
+        XCTAssertEqual(SageRitual.appAgentName, "Mynah")
+    }
+
+    /// The appliance must not be renamed by this change. It is already
+    /// registered on the owner's node under this name, and a rename would make
+    /// a second agent rather than move the first.
+    func testTheDefaultStaysTheApplianceSoExistingRegistrationsSurvive() {
+        XCTAssertEqual(SageRitual.agentName, SageRitual.applianceAgentName)
+    }
 }
