@@ -18,6 +18,8 @@ func usage() -> Never {
       sage-voiced setup
       sage-voiced verify-sage <path/to/SAGE.app>
       sage-voiced search "<query>"
+      sage-voiced key [--provider gemini] [--key <key>]   instructions, then verify
+      sage-voiced google [--provision] [--sign-out]        sign in with Google
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
                          [--reply-prefix "🧠🧠🧠 "] [--acknowledge]
 
@@ -116,8 +118,17 @@ struct HarnessError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-func makeBackend(provider: String, model: String?, ollamaBaseURL: String?) throws -> BrainBackend {
+func makeBackend(
+    provider: String,
+    model: String?,
+    ollamaBaseURL: String?,
+    // Supplied when the owner has just pasted a key and it is not in the
+    // environment yet — validating what they typed, rather than what happens
+    // to be exported, is the whole point of checking at all.
+    explicitKey: String? = nil
+) throws -> BrainBackend {
     func environmentKey(_ name: String) throws -> String {
+        if let explicitKey, !explicitKey.isEmpty { return explicitKey }
         guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
             throw HarnessError("\(name) is not set in the environment")
         }
@@ -366,6 +377,60 @@ func runSearch(_ arguments: [String]) -> Never {
     }
 }
 
+/// Prints the paste-a-key instructions, and proves a key actually works.
+///
+/// The shipping default for cloud brains. Google sign-in loses to it on policy
+/// rather than engineering: `cloud-platform` is a sensitive scope, so an
+/// unverified app's refresh tokens die after 7 days — an appliance that works
+/// for a week and then stops, on a machine nobody is sitting at.
+func runKey(_ arguments: [String]) -> Never {
+    let flags = parseFlags(arguments)
+    let providerID = flags["provider"] ?? "gemini"
+    guard let instructions = APIKeyOnboarding.instructions(forProvider: providerID) else {
+        exit(fail("no key instructions for provider '\(providerID)'"))
+    }
+
+    guard let raw = flags["key"] ?? ProcessInfo.processInfo.environment[
+        providerID == "gemini" ? "GEMINI_API_KEY"
+            : providerID == "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"
+    ] else {
+        print("""
+
+        Connect \(instructions.providerName)
+
+        \(instructions.steps.enumerated().map { "  \($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+
+          \(instructions.keyPageURL.absoluteString)
+
+        \(instructions.looksLikeHint)
+        \(instructions.costNote ?? "")
+
+        Then: sage-voiced key --provider \(providerID) --key <your key>
+
+        """)
+        exit(0)
+    }
+
+    let key = APIKeyOnboarding.normalise(raw)
+    if let problem = APIKeyOnboarding.shapeProblem(of: key, expecting: providerID) {
+        exit(fail(problem.spokenDescription))
+    }
+
+    let backend: BrainBackend
+    do {
+        backend = try makeBackend(provider: providerID, model: flags["model"], ollamaBaseURL: nil, explicitKey: key)
+    } catch {
+        exit(fail("\(error)"))
+    }
+
+    runAndExit {
+        print("checking the key against \(backend.displayDescription)…")
+        let verdict = await BrainKeyValidator().validate(backend)
+        print(verdict.spokenDescription)
+        return verdict.isUsable ? 0 : 1
+    }
+}
+
 /// Signs in to Google and, on request, provisions a Gemini key from it.
 ///
 /// A command rather than a buried step because this is the one part of setup
@@ -542,6 +607,7 @@ case "setup":       runSetup(Array(arguments.dropFirst()))
 case "verify-sage": runVerifySage(Array(arguments.dropFirst()))
 case "search":      runSearch(Array(arguments.dropFirst()))
 case "google":      runGoogle(Array(arguments.dropFirst()))
+case "key":         runKey(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 default:            usage()
 }
