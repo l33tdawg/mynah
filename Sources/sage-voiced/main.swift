@@ -17,6 +17,7 @@ func usage() -> Never {
       sage-voiced brain "<transcript>" [--provider NAME] [--model NAME] [--sage PATH]
       sage-voiced setup
       sage-voiced verify-sage <path/to/SAGE.app>
+      sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
 
     brain providers:
       ollama (default, local)   openai     deepseek   moonshot
@@ -290,6 +291,77 @@ func runVerifySage(_ arguments: [String]) -> Never {
     }
 }
 
+// MARK: - daemon
+
+/// The real thing: listen on Signal, act, reply.
+func runDaemon(_ arguments: [String]) -> Never {
+    let flags = parseFlags(arguments)
+
+    guard let allowRaw = flags["allow"] ?? ProcessInfo.processInfo.environment["SAGE_VOICE_ALLOW"] else {
+        exit(fail("""
+        --allow is required: the daemon refuses to serve anyone not named.
+
+          sage-voiced daemon --allow +6591234567 [--account +6591234567]
+
+        Pass your OWN Signal number. By default only Note-to-Self is served, so
+        you message yourself and the appliance answers in that thread.
+        """))
+    }
+
+    let allowlist: SignalSenderAllowlist
+    do {
+        allowlist = try SignalSenderAllowlist(commaSeparated: allowRaw)
+    } catch {
+        exit(fail("bad --allow: \(error)"))
+    }
+
+    let backend: BrainBackend
+    do {
+        backend = try makeBackend(
+            provider: flags["provider"] ?? "ollama",
+            model: flags["model"],
+            ollamaBaseURL: flags["ollama"]
+        )
+    } catch {
+        exit(fail("\(error)"))
+    }
+
+    let signal = SignalClient(configuration: .init(
+        allowlist: allowlist,
+        endpoint: flags["socket"].map { SignalEndpoint.unixSocket(path: $0) } ?? .defaultUnixSocket(),
+        account: flags["account"]
+    ))
+
+    let transcriber = WhisperKitServerTranscriber(
+        endpoint: flags["endpoint"].flatMap { URL(string: $0) }
+            ?? URL(string: "http://127.0.0.1:50060/v1/audio/transcriptions")!,
+        model: flags["asr-model"] ?? "large-v3",
+        language: "en",
+        timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+    )
+
+    let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
+    let loop = ToolLoop(backend: backend, mcp: mcp)
+    let daemon = VoiceBridgeDaemon(signal: signal, transcriber: transcriber, loop: loop)
+
+    runAndExit {
+        do {
+            let info = try await mcp.start()
+            let tools = try await loop.availableTools()
+            print("backend: \(backend.displayDescription)")
+            print("mcp:     \(info.name) \(info.version), \(tools.count) tools")
+            print("allow:   \(allowlist.identities.count) identity(ies), Note-to-Self only")
+            print("ready — send yourself a Signal message.")
+        } catch {
+            return fail("startup failed: \(error)\n\(mcp.stderrLog)")
+        }
+        await daemon.run()
+        mcp.stop()
+        return 0
+    }
+}
+
 // MARK: - Dispatch
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -298,5 +370,6 @@ case "transcribe":  runTranscribe(Array(arguments.dropFirst()))
 case "brain":       runBrain(Array(arguments.dropFirst()))
 case "setup":       runSetup(Array(arguments.dropFirst()))
 case "verify-sage": runVerifySage(Array(arguments.dropFirst()))
+case "daemon":      runDaemon(Array(arguments.dropFirst()))
 default:            usage()
 }

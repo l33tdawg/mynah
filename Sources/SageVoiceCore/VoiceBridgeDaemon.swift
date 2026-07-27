@@ -1,0 +1,246 @@
+import Foundation
+
+/// The loop that makes this a product rather than four smoke-test subcommands.
+///
+///     Signal message ──▶ ASR (if a voice note) ──▶ agent loop over SAGE MCP ──▶ reply
+///
+/// Text reply first, deliberately: it is the phase the owner asked to start
+/// with, it needs no TTS wired, and it makes every other part of the chain
+/// observable in a transcript you can scroll back through.
+///
+/// ## What it refuses to do
+///
+/// Every message is filtered by `SignalSenderAllowlist` inside `SignalClient`
+/// before it reaches `incomingMessages`, so this type never sees a stranger's
+/// message. It also never *initiates* — it only replies to a thread that was
+/// already addressed to the appliance. An agent manager that can message people
+/// unprompted is a different and much more dangerous product.
+public actor VoiceBridgeDaemon {
+
+    public struct Configuration: Sendable {
+        /// Spoken to the owner when a turn fails in a way we cannot explain.
+        public var genericFailureReply: String
+        /// Prefix on every reply, so a Signal thread makes it obvious which
+        /// messages came from the appliance rather than from a person.
+        public var replyPrefix: String
+        /// Conversation turns kept for context. Each turn re-sends the whole
+        /// history plus 14 tool schemas, and prefill measured ~130 tok/s on the
+        /// M2 — so history is the most expensive knob here, not the cheapest.
+        public var historyTurnLimit: Int
+        /// Refuse transcripts longer than this. A 20-minute voice note is
+        /// almost certainly a misfire, and it would cost minutes of model time.
+        public var maximumTranscriptCharacters: Int
+        /// Send a short acknowledgement before the slow part starts.
+        ///
+        /// Worth it: a real turn is 40–70s on this hardware, and silence for a
+        /// minute reads as "it's broken", not "it's thinking".
+        public var sendsThinkingAcknowledgement: Bool
+
+        public init(
+            genericFailureReply: String = "Something went wrong handling that. It's logged.",
+            replyPrefix: String = "",
+            historyTurnLimit: Int = 6,
+            maximumTranscriptCharacters: Int = 4000,
+            sendsThinkingAcknowledgement: Bool = true
+        ) {
+            self.genericFailureReply = genericFailureReply
+            self.replyPrefix = replyPrefix
+            self.historyTurnLimit = historyTurnLimit
+            self.maximumTranscriptCharacters = maximumTranscriptCharacters
+            self.sendsThinkingAcknowledgement = sendsThinkingAcknowledgement
+        }
+    }
+
+    /// What happened to one message. Returned for tests and logging; the owner
+    /// sees only the reply text.
+    public enum Outcome: Equatable, Sendable {
+        case replied(transcript: String, reply: String, seconds: TimeInterval)
+        /// Nothing actionable — no text and no audio.
+        case ignoredEmpty
+        /// Transcribed to nothing. Silence, or a failed download.
+        case ignoredBlankTranscript
+        case failed(String)
+    }
+
+    private let signal: SignalClient
+    private let transcriber: AudioFileTranscribing
+    private let loop: ToolLoop
+    private let configuration: Configuration
+    private let log: (String) -> Void
+
+    /// Per-thread conversation history, keyed by the recipient we reply to.
+    ///
+    /// Keyed by thread rather than held globally so a group and a direct
+    /// message cannot bleed into each other's context.
+    private var histories: [String: [BrainMessage]] = [:]
+
+    /// Fetched once and reused. `tools/list` costs a round trip and the
+    /// catalogue does not change while the server is up.
+    private var cachedTools: [MCPTool]?
+
+    public init(
+        signal: SignalClient,
+        transcriber: AudioFileTranscribing,
+        loop: ToolLoop,
+        configuration: Configuration = Configuration(),
+        log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+    ) {
+        self.signal = signal
+        self.transcriber = transcriber
+        self.loop = loop
+        self.configuration = configuration
+        self.log = log
+    }
+
+    /// Runs until the message stream finishes (i.e. until `signal.stop()`).
+    public func run() async {
+        await signal.start()
+        log("[daemon] listening for Signal messages")
+
+        for await message in signal.incomingMessages {
+            // Sequential on purpose. Two voice notes answered concurrently would
+            // interleave their tool calls against one SAGE node and race on the
+            // thread history — and the model is the bottleneck anyway, so there
+            // is no throughput to win.
+            let outcome = await handle(message)
+            log("[daemon] \(message.logDescription) -> \(outcome.logDescription)")
+        }
+        log("[daemon] message stream finished")
+    }
+
+    public func stop() async {
+        await signal.stop()
+    }
+
+    // MARK: One message
+
+    /// Exposed so a test can drive a synthetic message without a live daemon.
+    @discardableResult
+    public func handle(_ message: SignalIncomingMessage) async -> Outcome {
+        let started = Date()
+
+        guard let recipient = message.replyRecipient else {
+            // Nothing to reply to. Dropping is correct: the alternative is
+            // guessing a destination, and guessing wrong means the owner's
+            // agent messages a stranger.
+            return .failed("no reply recipient on \(message.logDescription)")
+        }
+
+        let transcript: String
+        do {
+            guard let raw = try await resolveTranscript(message) else {
+                return .ignoredEmpty
+            }
+            transcript = raw
+        } catch {
+            await reply("I couldn't read that voice note.", to: recipient)
+            return .failed("transcription failed: \(error)")
+        }
+
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .ignoredBlankTranscript
+        }
+        guard transcript.count <= configuration.maximumTranscriptCharacters else {
+            await reply("That was too long for me to act on — try a shorter one.", to: recipient)
+            return .failed("transcript of \(transcript.count) characters exceeds the limit")
+        }
+
+        if configuration.sendsThinkingAcknowledgement {
+            await reply("…on it.", to: recipient)
+        }
+
+        do {
+            let tools = try await toolCatalogue()
+            let key = recipient.description
+            let result = try await loop.run(
+                transcript: transcript,
+                tools: tools,
+                history: histories[key] ?? []
+            )
+            // Drop the system prompt; `ToolLoop` prepends its own every turn.
+            histories[key] = Self.trimmed(
+                Array(result.messages.dropFirst()),
+                keepingLastTurns: configuration.historyTurnLimit
+            )
+            await reply(result.reply, to: recipient)
+            log("[daemon] \(result.trace.summary)")
+            return .replied(
+                transcript: transcript,
+                reply: result.reply,
+                seconds: Date().timeIntervalSince(started)
+            )
+        } catch let error as BrainBackendError {
+            // These have sentences written for exactly this moment.
+            await reply(error.spokenDescription, to: recipient)
+            return .failed("\(error)")
+        } catch {
+            await reply(configuration.genericFailureReply, to: recipient)
+            return .failed("\(error)")
+        }
+    }
+
+    /// Voice note first, then text. A message carrying both is a voice note
+    /// with a caption, and the spoken part is the instruction.
+    private func resolveTranscript(_ message: SignalIncomingMessage) async throws -> String? {
+        if let audio = message.voiceNoteURL {
+            return try await transcriber.transcribe(
+                audioFile: audio,
+                options: AudioTranscriptionOptions()
+            )
+        }
+        if message.hasText {
+            return message.text
+        }
+        return nil
+    }
+
+    private func toolCatalogue() async throws -> [MCPTool] {
+        if let cachedTools {
+            return cachedTools
+        }
+        let tools = try await loop.availableTools()
+        cachedTools = tools
+        return tools
+    }
+
+    private func reply(_ text: String, to recipient: SignalRecipient) async {
+        let body = configuration.replyPrefix.isEmpty ? text : configuration.replyPrefix + text
+        do {
+            _ = try await signal.sendText(body, to: recipient)
+        } catch {
+            // Nowhere left to report to — the reply channel is what failed.
+            log("[daemon] could not send reply to \(recipient): \(error)")
+        }
+    }
+
+    /// Keeps the last `turns` user/assistant exchanges.
+    ///
+    /// Trimming from the front rather than summarising because a 4B model's
+    /// context is small and prefill is the dominant cost per turn; an old
+    /// exchange is not worth 15 seconds of re-prefill.
+    static func trimmed(_ messages: [BrainMessage], keepingLastTurns turns: Int) -> [BrainMessage] {
+        guard turns > 0 else { return [] }
+        var userIndices: [Int] = []
+        for (index, message) in messages.enumerated() where message.role == .user {
+            userIndices.append(index)
+        }
+        guard userIndices.count > turns else { return messages }
+        let cut = userIndices[userIndices.count - turns]
+        return Array(messages[cut...])
+    }
+}
+
+private extension VoiceBridgeDaemon.Outcome {
+    var logDescription: String {
+        switch self {
+        case let .replied(transcript, _, seconds):
+            return String(format: "replied in %.1fs to %@", seconds, transcript.prefix(60).description)
+        case .ignoredEmpty:
+            return "ignored (no text, no audio)"
+        case .ignoredBlankTranscript:
+            return "ignored (transcribed to nothing)"
+        case .failed(let reason):
+            return "FAILED \(reason)"
+        }
+    }
+}
