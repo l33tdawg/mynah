@@ -372,9 +372,26 @@ public actor VoiceBridgeDaemon {
     /// because one attachment was a malformed HEIC would be a worse appliance
     /// than one that says it cannot see anything.
     private func resolveImages(_ message: SignalIncomingMessage) -> [Data] {
-        message.imageURLs.compactMap { url in
+        // Logged unconditionally when anything is attached, because the failure
+        // this catches is silent by construction: an attachment that is not
+        // recognised as an image produces no error, no empty file and no
+        // exception — just a model that says it cannot see pictures. Knowing
+        // whether the MIME type, the on-disk lookup or the encoder was at fault
+        // is the difference between a one-line fix and another round trip.
+        if !message.attachments.isEmpty {
+            let described = message.attachments.map { attachment in
+                "\(attachment.contentType ?? "no-type")"
+                    + " image=\(attachment.isImage)"
+                    + " onDisk=\(attachment.localURL != nil)"
+            }
+            log("[daemon] attachments: \(described.joined(separator: ", "))")
+        }
+
+        return message.imageURLs.compactMap { url in
             do {
-                return try VisionAttachment.encoded(contentsOf: url)
+                let encoded = try VisionAttachment.encoded(contentsOf: url)
+                log("[daemon] image ready: \(url.lastPathComponent), \(encoded.count) bytes")
+                return encoded
             } catch {
                 log("[daemon] could not read image \(url.lastPathComponent): \(error)")
                 return nil
