@@ -271,6 +271,7 @@ struct ReadyStage: View {
 /// The sections in the sidebar. Order is the order they appear.
 enum MainSection: String, CaseIterable, Identifiable, Hashable {
     case home
+    case agents
     case memories
     case settings
 
@@ -279,6 +280,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .home: return "Home"
+        case .agents: return "Agents"
         case .memories: return "Memories"
         case .settings: return "Settings"
         }
@@ -286,9 +288,14 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
 
     /// A sidebar row is the one place in this app where `Label(_:systemImage:)`
     /// is correct — macOS sidebars use it, so removing it would look wrong.
+    ///
+    /// `person.2` for agents rather than a network or a node graph. The owner's
+    /// own words for this are "ask Perplexity to look it up"; they are asking
+    /// somebody, and a topology diagram is the operator's picture, not theirs.
     var glyph: String {
         switch self {
         case .home: return "waveform"
+        case .agents: return "person.2"
         case .memories: return "text.append"
         case .settings: return "gearshape"
         }
@@ -333,6 +340,12 @@ struct MainShell: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button(app.isPaused ? "Resume" : "Pause") { app.isPaused.toggle() }
+                            // A one-word toolbar button is where a Mac owner
+                            // expects to hover for the sentence. Without it,
+                            // "Pause" is a verb with no object — pause what?
+                            .help(app.isPaused
+                                  ? "Start answering your phone again"
+                                  : "Stop answering until you resume")
                     }
                 }
         }
@@ -343,13 +356,14 @@ struct MainShell: View {
     private var detail: some View {
         switch selection ?? .home {
         case .home: HomePane(onOpenSettings: { selection = .settings })
+        case .agents: AgentsView()
         case .memories: MemoriesView()
         case .settings: SettingsView(onOpenSection: { selection = $0 })
         }
     }
 }
 
-/// Wordmark, sections, and one status row at the bottom.
+/// The app's mark, the three sections, and one live status row at the bottom.
 ///
 /// No version number under the wordmark — that is a developer's instinct.
 /// Version belongs in Settings → About.
@@ -357,9 +371,11 @@ struct Sidebar: View {
     @Binding var selection: MainSection?
     @Environment(AppModel.self) private var app
 
+    @State private var isHoveringStatus = false
+
     var body: some View {
-        // The `List` is the column's root, with the wordmark and status row
-        // attached as safe-area insets.
+        // The `List` is the column's root, with the identity block and status
+        // row attached as safe-area insets.
         //
         // Wrapping the list in a `VStack` to stack them looks equivalent and is
         // not: measured here, the whole sidebar laid out at screen y = -5 with a
@@ -375,35 +391,78 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
+        // A sidebar row is as tall as its label unless it is told otherwise,
+        // which for a 13pt `Label` is about 24pt — noticeably tighter than Mail,
+        // Notes and System Settings, and the single thing that most made this
+        // column read as a web page's nav bar rather than a Mac sidebar. Three
+        // rows at 30pt also stop the selection capsule looking like a highlight
+        // dragged across a paragraph.
+        .environment(\.defaultMinListRowHeight, 30)
+        .safeAreaInset(edge: .top, spacing: 0) { identity }
+        .safeAreaInset(edge: .bottom, spacing: 0) { status }
+    }
+
+    /// The mark and the wordmark, where every recent Mac app that has an
+    /// identity to state puts it.
+    ///
+    /// The window has no title — `RootView` clears it, because a title beside
+    /// the traffic lights would be a second and worse wordmark — so this is the
+    /// only place the app says its own name. A word on its own did that job
+    /// and looked like a heading somebody forgot to style; the mark beside it is
+    /// what makes the column read as belonging to a product.
+    private var identity: some View {
+        HStack(spacing: s4) {
+            MynahMark(side: 26)
             Text("Mynah")
                 .mynahWordmark()
                 .foregroundStyle(Palette.ink.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, s5)
-                .padding(.bottom, s4)
+            Spacer(minLength: 0)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider().foregroundStyle(Palette.line.divider)
-                Button {
-                    selection = .settings
-                } label: {
-                    HStack(spacing: s3) {
-                        StatusDot(app.effectivePresence.tone)
-                        Text(app.effectivePresence.verb)
-                            .mynahFont(.label)
-                            .foregroundStyle(Palette.ink.secondary)
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                    .padding(.horizontal, s5)
-                    .padding(.vertical, s4)
+        .padding(.horizontal, s5)
+        .padding(.bottom, s5)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Mynah")
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// What MYNAH is doing, and a way to the screen that changes it.
+    ///
+    /// Insets and a rounded hover fill rather than a full-bleed press target:
+    /// the row now sits on the same rails as the selection capsules above it,
+    /// which is what stops the bottom of the column looking like a different
+    /// piece of software from the top of it.
+    private var status: some View {
+        VStack(spacing: 0) {
+            // `MynahDivider`, not `Divider`. `Divider().foregroundStyle(_:)`
+            // does not colour a divider — it was a no-op, and the separator
+            // here was the system's grey rather than the app's.
+            MynahDivider()
+            Button {
+                selection = .settings
+            } label: {
+                HStack(spacing: s3) {
+                    StatusDot(app.effectivePresence.tone)
+                    Text(app.effectivePresence.verb)
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .accessibilityLabel("Mynah is \(app.effectivePresence.verb). Open settings.")
+                .padding(.horizontal, s3)
+                .padding(.vertical, s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(RoundedRectangle.mynah(r.control))
+                .background(
+                    isHoveringStatus ? Palette.surface.well : .clear,
+                    in: RoundedRectangle.mynah(r.control)
+                )
             }
+            .buttonStyle(.plain)
+            .padding(.horizontal, s3)
+            .padding(.vertical, s3)
+            .onHover { isHoveringStatus = $0 }
+            .pointingHandCursor()
+            .mynahAnimation(Motion.fade, value: isHoveringStatus)
+            .accessibilityLabel("Mynah is \(app.effectivePresence.verb). Open settings.")
         }
     }
 }

@@ -491,6 +491,91 @@ struct SectionHeader: View {
     }
 }
 
+// MARK: - Grouped rows
+
+extension View {
+
+    /// The container a run of settings rows sits in.
+    ///
+    /// Rows used to sit bare on the canvas with hairlines between them, which is
+    /// what a web page does and what a Mac has not done since Ventura. This is
+    /// the same card the setup flow puts its welcome points and its closing
+    /// summary in — `surface.raised`, one hairline, `r.card` — so the window and
+    /// the flow that precedes it are visibly the same product.
+    ///
+    /// The vertical padding is deliberately `s2` rather than a density step:
+    /// `SettingsRow` already carries `s4` of its own, and stacking the two gave
+    /// the first and last rows twice the air of the ones between them.
+    func mynahGroupCard() -> some View {
+        padding(.horizontal, s5)
+            .padding(.vertical, s2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
+            .mynahBorder(r.card)
+    }
+}
+
+/// An `.eyebrow` heading and the rows it introduces, as one card.
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title)
+            VStack(alignment: .leading, spacing: 0) { content }
+                .mynahGroupCard()
+        }
+    }
+}
+
+// MARK: - Tabs
+
+/// The tab strip at the top of a pane.
+///
+/// A real `NSSegmentedControl` by way of `.segmented`, not a hand-drawn row of
+/// capsules. It is what Activity Monitor, Console and every Mac settings window
+/// that is not System Settings itself uses to divide a screen, so it arrives
+/// already knowing about keyboard focus, the owner's accent colour, both
+/// appearances and Increase Contrast — none of which a custom control would.
+struct MynahTabBar<Tab: Hashable & Identifiable>: View {
+    let tabs: [Tab]
+    let title: (Tab) -> String
+    @Binding var selection: Tab
+
+    init(tabs: [Tab], selection: Binding<Tab>, title: @escaping (Tab) -> String) {
+        self.tabs = tabs
+        self._selection = selection
+        self.title = title
+    }
+
+    var body: some View {
+        Picker("", selection: $selection) {
+            ForEach(tabs) { tab in
+                Text(title(tab)).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        // Its own width, not the column's.
+        //
+        // `.frame(maxWidth: .infinity)` looked like the obvious thing and was
+        // wrong twice: a segmented control does not stretch to fill an infinite
+        // frame, it *centres* in one — measured at 340pt sitting in the middle
+        // of a 640pt column, which put the strip's left edge 150pt right of the
+        // title above it. Five short words also do not want stretching; five
+        // segments of dead space is what a web page's tab bar looks like. At its
+        // natural size it starts where the title starts.
+        .fixedSize()
+        .mynahAnimation(Motion.fade, value: selection)
+    }
+}
+
 // MARK: - Status
 
 /// State is a 6pt dot, never a `checkmark.circle.fill`. The word beside it
