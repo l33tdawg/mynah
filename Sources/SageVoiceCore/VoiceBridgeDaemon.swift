@@ -127,6 +127,8 @@ public actor VoiceBridgeDaemon {
         case ignoredBlankTranscript
         /// The owner paused the appliance. Nothing was run and nothing was said.
         case paused
+        /// The message came from another appliance answering the same thread.
+        case ignoredSecondBridge
         case failed(String)
     }
 
@@ -168,6 +170,11 @@ public actor VoiceBridgeDaemon {
     /// every message the owner sends during a meeting is its own kind of noise.
     /// Cleared when the pause lifts, so the next pause says it again.
     private var hasSaidPaused: Set<String> = []
+
+    /// Threads already told that a second appliance is answering. Said once:
+    /// the whole problem is duplicate messages, so the warning must not become
+    /// one.
+    private var hasWarnedAboutSecondBridge: Set<String> = []
 
     /// Whether the owner has stopped the appliance answering.
     private let pause = PauseState()
@@ -434,6 +441,30 @@ public actor VoiceBridgeDaemon {
         // Checked after transcription so the log says what was ignored, and
         // before anything reaches the model — the point is that no answer is
         // produced, not that one is produced and withheld.
+        // A message wearing our own reply prefix did not come from the owner.
+        //
+        // This process never sees its OWN sends — signal-cli does not echo them
+        // back to the device that made them — so before a second bridge existed
+        // there was nothing to guard against. With two linked, each one sees the
+        // other's replies as ordinary syncSent messages from the owner and
+        // answers them. That is not duplicate replies; it is two appliances
+        // talking to each other forever, in the owner's thread, at a model call
+        // apiece.
+        if !configuration.replyPrefix.isEmpty,
+           transcript.hasPrefix(configuration.replyPrefix.trimmingCharacters(in: .whitespaces)) {
+            let thread = recipient.description
+            if !hasWarnedAboutSecondBridge.contains(thread) {
+                hasWarnedAboutSecondBridge.insert(thread)
+                await reply(
+                    "Another Mynah is answering this thread, so you'll get every reply twice. "
+                        + "Only one should be linked — quit the other one.",
+                    to: recipient
+                )
+            }
+            log("[daemon][SECURITY] another bridge is replying on this thread; ignoring its message")
+            return .ignoredSecondBridge
+        }
+
         let thread = recipient.description
         if pause.isPaused() {
             if !hasSaidPaused.contains(thread) {
@@ -828,6 +859,8 @@ private extension VoiceBridgeDaemon.Outcome {
             return "ignored (transcribed to nothing)"
         case .paused:
             return "ignored (paused)"
+        case .ignoredSecondBridge:
+            return "ignored (another bridge is replying on this thread)"
         case .failed(let reason):
             return "FAILED \(reason)"
         }

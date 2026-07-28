@@ -665,6 +665,15 @@ func runDaemon(_ arguments: [String]) -> Never {
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
     // restart rather than a rebuild, a repackage, a resign and a redeploy.
+    // Before anything expensive, and before Signal is touched. Two appliances
+    // on one Mac both read the same socket and both answer, so the owner gets
+    // every reply twice.
+    do {
+        try SingleInstance().acquire()
+    } catch {
+        exit(fail("\(error.localizedDescription)"))
+    }
+
     var daemonConfiguration = VoiceBridgeDaemon.Configuration()
     if let prefix = flags["reply-prefix"] {
         daemonConfiguration.replyPrefix = prefix
