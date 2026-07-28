@@ -856,14 +856,9 @@ func runDaemon(_ arguments: [String]) -> Never {
             notes: notes,
             conversations: ConversationStore(),
             synthesizer: synthesizer,
-            // The endpoint ships beside sage-gui in the bundle. Absent on a
-            // build that did not vendor it, in which case //call says so rather
-            // than pretending.
-            calls: CallHost(
-                endpointURL: URL(fileURLWithPath: sagePath)
-                    .deletingLastPathComponent()
-                    .appendingPathComponent("sage-voice-webrtc")
-            ),
+            // Absent on a build that did not vendor it, in which case //call
+            // says so rather than pretending.
+            calls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath)),
             // Decided once, from the backend that will actually answer.
             callRefusal: CallInvitation.refusal(forBackend: backend),
             // //call is several seconds of warning. Spent warming the model,
@@ -896,4 +891,39 @@ case "google":      runGoogle(Array(arguments.dropFirst()))
 case "key":         runKey(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 default:            usage()
+}
+
+
+/// Where the call endpoint is, looking in the sensible place first.
+///
+/// Beside this executable, because it is Mynah's own helper and that is where
+/// packaging puts it. The vendored SAGE.app is checked afterwards only because
+/// that is where it was hand-installed on the appliance during development, and
+/// a lookup that stops working the moment packaging is fixed would be a strange
+/// thing to ship.
+///
+/// This mismatch would have shipped: the daemon looked only beside sage-gui,
+/// packaging installs beside sage-voiced, and the appliance worked purely
+/// because the binary had been copied into the SAGE bundle by hand. Every
+/// packaged build would have answered //call with "the call endpoint is not
+/// installed".
+func callEndpointURL(sagePath: String) -> URL {
+    let candidates = [
+        Bundle.main.executableURL?.deletingLastPathComponent(),
+        URL(fileURLWithPath: CommandLine.arguments[0])
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent(),
+        URL(fileURLWithPath: sagePath).deletingLastPathComponent()
+    ].compactMap { $0 }
+
+    for directory in candidates {
+        let candidate = directory.appendingPathComponent("sage-voice-webrtc")
+        if FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return candidate
+        }
+    }
+    // Nothing found. Return the place it ought to be, so the error names the
+    // path somebody would actually go and look at.
+    return (candidates.first ?? URL(fileURLWithPath: "."))
+        .appendingPathComponent("sage-voice-webrtc")
 }

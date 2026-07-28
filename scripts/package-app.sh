@@ -57,6 +57,16 @@ WHISPERKIT_MODEL_SOURCE="${SAGE_VOICE_WHISPERKIT_MODEL:-$ASR_ROOT/models/openai_
 WHISPER_CPP_MODEL_SOURCE="${SAGE_VOICE_WHISPER_CPP_MODEL:-$ASR_ROOT/models/ggml-small.en.bin}"
 REQUIRE_ASR_ASSETS="${SAGE_VOICE_REQUIRE_ASR_ASSETS:-1}"
 SIGNAL_CLI_SOURCE="${SAGE_VOICE_SIGNAL_CLI:-$ROOT/vendor/signal/bin/signal-cli}"
+
+# The call endpoint. Built rather than vendored, because it links a static
+# libopus and so has to be compiled for the architecture it will run on —
+# scripts/build-endpoint.sh does that and refuses to hand over the wrong one.
+#
+# Required by default. A build without it installs an appliance where //call
+# answers "the call endpoint is not installed", which is a broken feature
+# wearing an error message rather than a missing one.
+WEBRTC_ENDPOINT_SOURCE="${SAGE_VOICE_WEBRTC_ENDPOINT:-$ROOT/.build/sage-voice-webrtc}"
+REQUIRE_WEBRTC_ENDPOINT="${SAGE_VOICE_REQUIRE_WEBRTC:-1}"
 REQUIRE_SIGNAL_CLI="${SAGE_VOICE_REQUIRE_SIGNAL_CLI:-1}"
 
 APP_VERSION="${SAGE_VOICE_VERSION:-}"
@@ -229,6 +239,23 @@ if [[ -x "$ARGMAX_CLI_SOURCE" ]]; then
 elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
   die "Required WhisperKit helper is missing: $ARGMAX_CLI_SOURCE
 Run scripts/provision-asr-assets.sh before packaging."
+fi
+
+if [[ -x "$WEBRTC_ENDPOINT_SOURCE" ]]; then
+  # Checked, not trusted. A Go toolchain running under Rosetta on an Apple
+  # Silicon Mac reports amd64 and silently produces an Intel binary; it packages
+  # and signs perfectly and then cannot run on the appliance.
+  ENDPOINT_ARCH="$(lipo -info "$WEBRTC_ENDPOINT_SOURCE" 2>/dev/null || echo unknown)"
+  case "$ENDPOINT_ARCH" in
+    *arm64*) ;;
+    *) die "The call endpoint is not arm64: $ENDPOINT_ARCH
+Build it with webrtc/scripts/build-endpoint.sh, which pins the architecture." ;;
+  esac
+  cp "$WEBRTC_ENDPOINT_SOURCE" "$APP/Contents/MacOS/sage-voice-webrtc"
+  chmod +x "$APP/Contents/MacOS/sage-voice-webrtc"
+elif [[ "$REQUIRE_WEBRTC_ENDPOINT" == "1" || "$REQUIRE_WEBRTC_ENDPOINT" == "true" ]]; then
+  die "Required call endpoint is missing: $WEBRTC_ENDPOINT_SOURCE
+Build it with: webrtc/scripts/build-endpoint.sh"
 fi
 
 if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
