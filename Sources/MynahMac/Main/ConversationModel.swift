@@ -637,9 +637,19 @@ final class ConversationModel {
 
     // MARK: Turns
 
+    /// Whether the owner has stopped Mynah answering.
+    ///
+    /// Read from the shared file rather than `AppModel`, so the window and the
+    /// appliance cannot disagree — and because `retry()` had no pause check at
+    /// all, which made it demonstrable without a phone: pause, hit "Ask again"
+    /// on a failed exchange, and a real turn ran under a header saying it would
+    /// not.
+    var isPaused: Bool { PauseState().isPaused() }
+
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isBusy else { return }
+        guard !text.isEmpty, !isBusy, !isPaused else { return }
         draft = ""
         let exchange = Exchange(question: text)
         exchanges.append(exchange)
@@ -649,7 +659,7 @@ final class ConversationModel {
     /// Re-asks a question that failed. The failed attempt contributed nothing to
     /// `history`, so this is a clean second try rather than a continuation.
     func retry(_ id: UUID) {
-        guard !isBusy, let index = exchanges.firstIndex(where: { $0.id == id }) else { return }
+        guard !isBusy, !isPaused, let index = exchanges.firstIndex(where: { $0.id == id }) else { return }
         let question = exchanges[index].question
         exchanges[index].askedAt = Date()
         exchanges[index].outcome = .thinking

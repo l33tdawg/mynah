@@ -1,5 +1,7 @@
 import AppKit
 import Observation
+import OSLog
+import SageVoiceCore
 import SwiftUI
 
 // MARK: - App-wide state
@@ -66,9 +68,24 @@ final class AppModel {
     var isPaused: Bool {
         didSet {
             defaults.set(isPaused, forKey: Key.paused)
+            // UserDefaults is this app's own store, and the thing that answers
+            // the owner's phone is a different process that has never read it.
+            // Until this line existed, Pause stopped nothing: the copy said "It
+            // won't answer your phone", every reader of `isPaused` was view
+            // code, and the appliance kept answering through the meeting the
+            // owner had paused it for.
+            do {
+                try PauseState().setPaused(isPaused)
+            } catch {
+                // Surfaced rather than swallowed: a Pause that silently failed
+                // to take is the exact bug being fixed.
+                Self.log.error("could not record pause state: \(String(describing: error), privacy: .public)")
+            }
             Task { await reconcileAnsweringService() }
         }
     }
+
+    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "pause")
 
     /// The daemon keeps running with the window closed. This is the owner's
     /// switch for the phone bridge, phrased in Settings as "Keep answering
@@ -151,6 +168,12 @@ final class AppModel {
            let steps = try? JSONDecoder().decode([DeferredStep].self, from: data) {
             self.deferredSetupSteps = steps
         }
+        // `didSet` does not fire during init, so without this an app that
+        // launches already paused would leave the daemon answering — the owner
+        // paused yesterday, quit, came back, and the switch reads Paused while
+        // the phone is being answered. The owner's saved preference is the
+        // intent; the file is how the other process hears about it.
+        try? PauseState().setPaused(self.isPaused)
     }
 
     private func persistDeferredSteps() {

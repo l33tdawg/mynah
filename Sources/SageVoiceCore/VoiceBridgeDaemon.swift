@@ -125,6 +125,8 @@ public actor VoiceBridgeDaemon {
         case ignoredEmpty
         /// Transcribed to nothing. Silence, or a failed download.
         case ignoredBlankTranscript
+        /// The owner paused the appliance. Nothing was run and nothing was said.
+        case paused
         case failed(String)
     }
 
@@ -158,6 +160,17 @@ public actor VoiceBridgeDaemon {
     /// question is answered and finished within one turn. Safe as a single value
     /// because turns are answered sequentially — see the intake loop.
     private var spokeOnArrival = false
+
+    /// Whether this thread has already been told the appliance is paused.
+    ///
+    /// Said once, not once per message. Silence alone reads as broken — which is
+    /// the failure this whole product keeps re-learning — but repeating it for
+    /// every message the owner sends during a meeting is its own kind of noise.
+    /// Cleared when the pause lifts, so the next pause says it again.
+    private var hasSaidPaused: Set<String> = []
+
+    /// Whether the owner has stopped the appliance answering.
+    private let pause = PauseState()
 
     /// Writes history after every turn.
     ///
@@ -415,6 +428,27 @@ public actor VoiceBridgeDaemon {
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .ignoredBlankTranscript
         }
+        // Read per message, never cached: a pause that needs a restart is not a
+        // pause, and the owner flips this because a meeting is starting now.
+        //
+        // Checked after transcription so the log says what was ignored, and
+        // before anything reaches the model — the point is that no answer is
+        // produced, not that one is produced and withheld.
+        let thread = recipient.description
+        if pause.isPaused() {
+            if !hasSaidPaused.contains(thread) {
+                hasSaidPaused.insert(thread)
+                await reply(
+                    "I'm paused, so I won't act on that. Turn me back on in Mynah when you want me.",
+                    to: recipient
+                )
+            }
+            log("[daemon] paused — ignoring: \(transcript.prefix(60))")
+            return .paused
+        }
+        // The next pause has to be able to say it again.
+        hasSaidPaused.remove(thread)
+
         guard transcript.count <= configuration.maximumTranscriptCharacters else {
             await reply("That was too long for me to act on — try a shorter one.", to: recipient)
             return .failed("transcript of \(transcript.count) characters exceeds the limit")
@@ -792,6 +826,8 @@ private extension VoiceBridgeDaemon.Outcome {
             return "ignored (no text, no audio)"
         case .ignoredBlankTranscript:
             return "ignored (transcribed to nothing)"
+        case .paused:
+            return "ignored (paused)"
         case .failed(let reason):
             return "FAILED \(reason)"
         }
