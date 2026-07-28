@@ -136,8 +136,17 @@ struct TalkView: View {
         if model.trouble != nil {
             return "Finish the one step below and Mynah will be ready to answer."
         }
-        return "Ask it below, or send it a voice note from your phone. Answers usually take "
-            + "about twenty seconds."
+        // Teaching, not greeting.
+        //
+        // "Say something to Mynah" told the owner nothing they did not already
+        // know from the box below it, and the twenty seconds it promised was
+        // measured against a local model on other hardware. This is the one
+        // screen every owner sees and nobody reads twice, so it says the two
+        // things that are not obvious: the phone is the real way in, and it
+        // remembers.
+        return "Send it a voice note from your phone — that is what it is for, and its "
+            + "answer appears here too. It remembers what you tell it, so you can pick up "
+            + "where you left off."
     }
 
     private var transcript: some View {

@@ -248,8 +248,11 @@ struct ReadyStage: View {
             return "Mynah will answer as soon as you finish it — and it's waiting in Settings "
                 + "whenever you're ready."
         }
+        // No figure. Twenty seconds was measured against a local model on a Mac
+        // mini; an API answers in three to nine, and a number in an interface is
+        // a promise that goes stale the moment the owner changes their brain.
         return "Send it a voice note and it will answer out loud. The first answer takes "
-            + "about twenty seconds."
+            + "a moment longer than the rest."
     }
 
     private var destination: String {

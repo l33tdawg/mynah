@@ -15,6 +15,8 @@ struct BrainStage: View {
     let titles: [String]
     @Bindable var model: SetupModel
 
+    @Environment(AppModel.self) private var app
+
     var body: some View {
         BrainPicker(
             titles: titles,
@@ -25,6 +27,20 @@ struct BrainStage: View {
             canContinue: model.canContinue,
             onBack: { model.goBack() },
             onContinue: {
+                // Choosing a brain that needs no key settles any key the owner
+                // deferred earlier.
+                //
+                // "Not now" on the Connect stage files an outstanding item, and
+                // only finishing that stage with a working key cleared it. So an
+                // owner who skipped an Anthropic key, went back, and chose to
+                // run everything on their own Mac arrived at the last screen
+                // being told to finish connecting Anthropic — for a brain that
+                // has no key and never asks for one. There is nothing they can
+                // do with that, and "One thing left" is a poor place to be stuck
+                // on a thing that is not left.
+                if model.selectedOption?.keyProviderIdentifier == nil {
+                    app.resolveDeferredStep(id: AppModel.DeferredStep.brainKeyID)
+                }
                 Task { await model.continueFromBrain() }
             },
             onLookAgain: lookAgain
