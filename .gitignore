@@ -11,3 +11,8 @@ dist/
 
 # Go build output for the WebRTC sidecar
 webrtc/sage-voice-webrtc
+
+# Built by scripts/build-opus.sh, not committed: an unreviewable binary in a
+# repository is provenance nobody can check.
+third_party/
+.opus-build/
