@@ -50,6 +50,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -59,6 +60,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callpage"
 )
@@ -73,6 +75,7 @@ func main() {
 		turnURL  = flag.String("turn", "", "TURN server for the local developer loop, e.g. turn:turn.example.com:3478")
 		token    = flag.String("token", "", "required path token; the call link is /<token>")
 
+		appliance       = flag.String("appliance", "", "unix socket where the appliance answers; without it, audio is looped back")
 		relayURL        = flag.String("relay", "", "call relay to wait at, e.g. https://call.sage.delivery")
 		relaySecretFile = flag.String("relay-secret-file", "", "file holding the secret this appliance authenticates with")
 	)
@@ -108,7 +111,7 @@ what stands between a private microphone and anyone who can reach it.`)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		calls := &callServer{ice: iceServers(*stunURL, *turnURL), token: *token}
+		calls := &callServer{ice: iceServers(*stunURL, *turnURL), token: *token, appliance: *appliance}
 		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, secret, calls); err != nil {
 			log.Fatal(err)
 		}
@@ -125,8 +128,9 @@ HTTP to a phone gets a microphone that never starts. Pass a certificate, or
 	}
 
 	server := &callServer{
-		ice:   iceServers(*stunURL, *turnURL),
-		token: *token,
+		ice:       iceServers(*stunURL, *turnURL),
+		token:     *token,
+		appliance: *appliance,
 	}
 	if *turnURL == "" {
 		log.Println("no TURN server configured: calls will fail behind symmetric NAT")
@@ -241,6 +245,10 @@ type callServer struct {
 	ice   []webrtc.ICEServer
 	token string
 
+	// Where the brain listens. Empty means loop the caller's audio back, which
+	// is how the transport gets tested without the appliance in the way.
+	appliance string
+
 	mu    sync.Mutex
 	calls int
 }
@@ -334,7 +342,7 @@ func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, 
 	// Declared before the answer so the SDP advertises both directions. A
 	// recvonly transceiver here would produce a call the owner can talk into and
 	// never hear anything back.
-	audio, err := webrtc.NewTrackLocalStaticRTP(
+	audio, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio", "mynah",
 	)
@@ -419,24 +427,31 @@ func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, 
 	// that already works.
 	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		audioOnce.Do(func() { close(audioArrived) })
-		log.Printf("receiving %s from the caller", remote.Codec().MimeType)
 
-		var packets uint64
-		defer func() {
-			log.Printf("caller's audio ended after %d packets", packets)
-		}()
-
-		buffer := make([]byte, 1500)
-		for {
-			n, _, readErr := remote.Read(buffer)
-			if readErr != nil {
-				return
-			}
-			packets++
-			if _, writeErr := audio.Write(buffer[:n]); writeErr != nil {
-				return
-			}
+		// No appliance means this is a transport test: loop the caller back to
+		// themselves. It proved ICE, DTLS-SRTP and the browser's echo
+		// cancellation before there was anything to say, and it is still the
+		// fastest way to tell a broken network from a broken brain.
+		if s.appliance == "" {
+			loopBack(remote, audio)
+			return
 		}
+
+		brain, err := net.Dial("unix", s.appliance)
+		if err != nil {
+			// The call stays up. A caller who hears nothing back has a problem
+			// they can describe; a call that drops when the daemon is restarting
+			// is one they cannot.
+			log.Printf("the appliance is not answering on %s: %v", s.appliance, err)
+			loopBack(remote, audio)
+			return
+		}
+		defer brain.Close()
+
+		talk := newConversation(brain, audio)
+		go talk.play()
+		talk.listen(remote)
+		talk.stop()
 	})
 
 	// What the phone actually offered as a route to itself.
@@ -595,4 +610,35 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 			"base-uri 'none'; form-action 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = w.Write([]byte(page))
+}
+
+// loopBack returns the caller's own audio, unchanged.
+//
+// The milestone that proved the hard parts before there was a pipeline: ICE
+// found a route, DTLS-SRTP came up, and the browser's echo cancellation is
+// suppressing the return. Kept because it still separates a transport problem
+// from an appliance problem in one call.
+func loopBack(remote *webrtc.TrackRemote, audio *webrtc.TrackLocalStaticSample) {
+	log.Printf("receiving %s from the caller (looping back)", remote.Codec().MimeType)
+	packets := 0
+	defer func() { log.Printf("caller's audio ended after %d packets", packets) }()
+
+	buffer := make([]byte, 1500)
+	for {
+		read, _, err := remote.Read(buffer)
+		if err != nil {
+			return
+		}
+		packets++
+		payload, ok := rtpPayload(buffer[:read])
+		if !ok {
+			continue
+		}
+		if err := audio.WriteSample(media.Sample{
+			Data:     append([]byte(nil), payload...),
+			Duration: 20 * time.Millisecond,
+		}); err != nil {
+			return
+		}
+	}
 }

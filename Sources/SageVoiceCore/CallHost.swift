@@ -89,7 +89,12 @@ public actor CallHost {
         process.arguments = [
             "-relay", relayURL,
             "-relay-secret-file", secretURL.path,
-            "-token", token
+            "-token", token,
+            // Where the brain answers. If nothing is listening the endpoint
+            // loops the caller back to themselves rather than dropping the
+            // call — which is also how a transport problem gets told apart from
+            // an appliance problem, in one call.
+            "-appliance", CallTurnServer.defaultSocket().path
         ]
         // Inherited, so a failed call is diagnosable from the same log as
         // everything else the appliance did that minute.

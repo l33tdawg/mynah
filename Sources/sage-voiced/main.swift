@@ -769,6 +769,44 @@ func runDaemon(_ arguments: [String]) -> Never {
         } catch {
             return fail("startup failed: \(error)\n\(mcp.stderrLog)")
         }
+        // Calls answer through the same brain as messages, and keep their own
+        // history. A call is a conversation: a caller made to repeat context
+        // they gave twenty seconds ago is talking to a search box.
+        //
+        // Synthesis runs at 48 kHz here and 22.05 elsewhere, because Opus runs
+        // at 48 and resampling in the audio path is a place a subtle error is
+        // inaudible in testing and awful on a real call.
+        var callVoice = SystemSpeechSynthesizer()
+        callVoice.sampleRate = 48_000
+        let callHistory = CallHistory()
+        let callServer = CallTurnServer(
+            configuration: CallTurnServer.Configuration(),
+            transcriber: transcriber,
+            synthesizer: callVoice,
+            answer: { heard in
+                let result = try await loop.run(
+                    transcript: heard,
+                    history: await callHistory.recent()
+                )
+                await callHistory.remember(result.messages)
+                return result.reply
+            },
+            log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+        )
+        // Detached, so a call that fails to start never stops Signal working.
+        // The socket is the only thing //call needs; everything else about the
+        // appliance carries on without it.
+        let callTask = Task {
+            do {
+                try await callServer.run()
+            } catch {
+                FileHandle.standardError.write(
+                    Data("[call] calling is unavailable: \(error)\n".utf8)
+                )
+            }
+        }
+        defer { callTask.cancel() }
+
         let daemon = VoiceBridgeDaemon(
             signal: signal,
             transcriber: transcriber,

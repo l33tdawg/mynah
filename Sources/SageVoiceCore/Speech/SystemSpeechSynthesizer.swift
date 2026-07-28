@@ -50,6 +50,15 @@ public struct SystemSpeechSynthesizer: SpeechSynthesizing, @unchecked Sendable {
 
     /// - Parameter voice: an exact `say -v` name, or `nil` to resolve the best
     ///   installed one from `preferredVoices`.
+    /// The rate synthesis is delivered at.
+    ///
+    /// 22.05 kHz is plenty for a voice note, which is played as a file. A call
+    /// is different: Opus runs at 48 kHz, and anything else has to be resampled
+    /// before it can be encoded. Asking afconvert for the rate we need costs
+    /// nothing and avoids a hand-written resampler in the audio path — the one
+    /// place a subtle error is inaudible in testing and awful on a real call.
+    public var sampleRate: Int = 22050
+
     public init(
         voice: String? = nil,
         runner: ProbeCommandRunning = ProbeCommandRunner(),
@@ -143,7 +152,7 @@ public struct SystemSpeechSynthesizer: SpeechSynthesizing, @unchecked Sendable {
         // OS, so nothing has to parse an audio format by hand.
         let converted = await runner.run(
             executable: URL(fileURLWithPath: "/usr/bin/afconvert"),
-            arguments: ["-f", "WAVE", "-d", "LEI16@22050", "-c", "1", aiff.path, wav.path],
+            arguments: ["-f", "WAVE", "-d", "LEI16@\(sampleRate)", "-c", "1", aiff.path, wav.path],
             timeout: 30
         )
         guard let converted, converted.exitCode == 0, fileManager.fileExists(atPath: wav.path) else {
