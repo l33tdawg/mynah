@@ -295,7 +295,16 @@ func runBrain(_ arguments: [String]) -> Never {
         exit(fail("\(error)"))
     }
 
-    let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    // The owner's node, then ours, then the conventional path.
+    //
+    // Normally the flag is set: the launchd job carries the path the app
+    // resolved at setup. This is for a daemon started by hand, and it agrees
+    // with that resolution rather than hardcoding a second answer — two places
+    // deciding which SAGE to run is how one of them ends up starting a duplicate
+    // beside the owner's.
+    let sagePath = flags["sage"]
+        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
+        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
     // memories the owner has.
@@ -642,7 +651,16 @@ func runDaemon(_ arguments: [String]) -> Never {
         account: flags["account"]
     ))
 
-    let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    // The owner's node, then ours, then the conventional path.
+    //
+    // Normally the flag is set: the launchd job carries the path the app
+    // resolved at setup. This is for a daemon started by hand, and it agrees
+    // with that resolution rather than hardcoding a second answer — two places
+    // deciding which SAGE to run is how one of them ends up starting a duplicate
+    // beside the owner's.
+    let sagePath = flags["sage"]
+        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
+        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
     // memories the owner has.
