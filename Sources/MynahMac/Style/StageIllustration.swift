@@ -135,7 +135,9 @@ private struct PhoneMark: View {
 /// that does the work, and the difference in size says which is which without a
 /// label.
 private struct WelcomeDrawing: View {
-    private let macWidth: CGFloat = 100
+    // The same two sizes the pairing drawing uses, so the later screen is
+    // recognisably these two objects again rather than a similar pair.
+    private let macWidth: CGFloat = 96
     private let phoneWidth: CGFloat = 36
 
     /// Four bars, tall in the middle: the shape of a voice note in every
@@ -156,7 +158,7 @@ private struct WelcomeDrawing: View {
                         .frame(width: 3, height: height)
                 }
             }
-            .position(x: 66, y: 70)
+            .position(x: 67, y: 70)
 
             MacMark(width: macWidth)
                 .position(x: 140, y: Mark.macCentre(macWidth))
@@ -283,14 +285,16 @@ private struct PhoneDrawing: View {
             MacMark(width: macWidth)
                 .position(x: 60, y: Mark.macCentre(macWidth))
 
+            // Long enough to touch both bodies. A link drawn with a gap at
+            // either end is a link that has not been made.
             Capsule()
                 .fill(Mark.quiet)
-                .frame(width: 32, height: 2)
-                .position(x: 132, y: linkY)
+                .frame(width: 44, height: 2)
+                .position(x: 130, y: linkY)
             Circle()
                 .fill(Mark.live)
                 .frame(width: 8, height: 8)
-                .position(x: 132, y: linkY)
+                .position(x: 130, y: linkY)
 
             PhoneMark(width: phoneWidth)
                 .position(x: 170, y: Mark.phoneCentre(phoneWidth))
@@ -318,7 +322,7 @@ private struct ReadyDrawing: View {
             Capsule()
                 .fill(Mark.quiet)
                 .frame(width: 176, height: 1)
-                .position(x: 100, y: 110)
+                .position(x: 100, y: 108)
 
             MacMark(width: macWidth) { listening }
                 .position(x: 100, y: Mark.macCentre(macWidth))
