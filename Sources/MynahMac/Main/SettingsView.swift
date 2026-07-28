@@ -253,9 +253,22 @@ final class SettingsModel {
     /// to the log; the synthesizer's own wording names ports and Python scripts.
     private(set) var callVoiceProblem: String?
 
+    // MARK: Updates
+    //
+    // Mirrored out of the preferences file for the same reason the call
+    // settings are: `@Observable` cannot see a file being written, so a row
+    // bound straight through the store would not redraw when the owner set it.
+
+    /// What the last check found. `nil` while the first one is still running,
+    /// which is the only state that means "asking".
+    private(set) var update: UpdateAvailability?
+    private(set) var checksForUpdates: Bool
+    private let updatePreferences: URL
+
     init(
         defaults: UserDefaults = .standard,
         callPreferences: URL = CallPreferences.defaultFileURL(),
+        updatePreferences: URL = UpdatePreferences.defaultFileURL(),
         phoneLink: any PhoneLinking = SignalPhoneLink()
     ) {
         // Call settings are a file rather than defaults, because the daemon has
@@ -270,6 +283,8 @@ final class SettingsModel {
         self.callVoice = calls.voice
         self.callSpeed = calls.speed
         self.sendsCallTranscript = calls.sendsTranscript
+        self.updatePreferences = updatePreferences
+        self.checksForUpdates = UpdatePreferences.load(from: updatePreferences).checksForUpdates
     }
 
     var canUnlinkPhone: Bool { phoneLink.canUnlink }
@@ -363,6 +378,34 @@ final class SettingsModel {
         }
     }
 
+    // MARK: A newer Mynah
+
+    /// Asks GitHub whether a newer version has been released.
+    ///
+    /// Nothing on this screen waits for this. The row draws as "asking" and is
+    /// replaced when an answer arrives, or is not. Whether today's request has
+    /// already been made is `UpdateCheck`'s decision, not this screen's — the
+    /// same limit has to hold however many places end up calling it.
+    func checkForUpdate() async {
+        update = await UpdateCheck(preferencesFile: updatePreferences).run()
+    }
+
+    /// Turning the check off stops the requests, not merely the reporting.
+    ///
+    /// Turning it back on clears the day's timestamp on purpose: an owner who
+    /// has just switched this on is asking to be told now, and being met with
+    /// "hasn't managed to check yet" until tomorrow reads as a control that did
+    /// nothing.
+    func setChecksForUpdates(_ isOn: Bool) {
+        checksForUpdates = isOn
+        UpdatePreferences.amend(at: updatePreferences) { preferences in
+            preferences.checksForUpdates = isOn
+            if isOn { preferences.lastCheckedAt = nil }
+        }
+        update = nil
+        Task { await checkForUpdate() }
+    }
+
     // MARK: Re-checking the key
 
     /// Does what a real turn does, rather than asking the provider whether the
@@ -421,6 +464,10 @@ final class SettingsModel {
 
         lines.append("App \(Self.appVersion)")
         lines.append("macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        // "It never tells me about updates" is a report somebody will make, and
+        // it has two completely different answers: the owner turned it off, or
+        // GitHub is not answering.
+        lines.append("Update check \(checksForUpdates ? "on" : "off"), \(updateSummary)")
 
         if let brain {
             lines.append("Brain \(brain.label) [\(brain.backendIdentifier)\(brain.modelName.map { " / \($0)" } ?? "")]")
@@ -460,6 +507,18 @@ final class SettingsModel {
         }
         lines.append("Key folder \(KeyStorage.url().deletingLastPathComponent().path)")
         return lines.joined(separator: "\n")
+    }
+
+    /// The last answer, in the shape whoever is helping would need it: which of
+    /// the three states it is in, and — when it could not check — which way it
+    /// failed.
+    private var updateSummary: String {
+        switch update {
+        case .none: return "not asked yet"
+        case .upToDate?: return "up to date"
+        case .newer(let version, _)?: return "\(version) available"
+        case .cannotTell(let problem)?: return "could not check (\(problem))"
+        }
     }
 
     static var appVersion: String {
@@ -550,6 +609,9 @@ struct SettingsView: View {
         .onAppear { model.refresh() }
         .task { await model.probeIfNeeded() }
         .task { await model.loadCallVoices() }
+        // Beside the screen, never in front of it. The row below carries its own
+        // "asking" state, and no part of this page is waiting on GitHub.
+        .task { await model.checkForUpdate() }
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
@@ -1109,6 +1171,24 @@ struct SettingsView: View {
             ) {
                 StatusPill("Only when needed", tone: .caution)
             }
+            MynahDivider()
+
+            // On this list because it is a thing that leaves. It is also the
+            // only one the owner did not cause by speaking — it happens on its
+            // own — which makes leaving it off the list the worst omission
+            // available. The switch is in About, named here so it can be found.
+            SettingsRow(
+                "Checking for a newer Mynah",
+                detail: "Once a day Mynah asks GitHub whether a newer version has been released. "
+                    + "GitHub learns that a Mac asked; it is told nothing about you or what you "
+                    + "have said. Nothing is downloaded or installed on its own. The switch for "
+                    + "it is under About."
+            ) {
+                StatusPill(
+                    model.checksForUpdates ? "Once a day" : "Turned off",
+                    tone: model.checksForUpdates ? .caution : .good
+                )
+            }
         }
     }
 
@@ -1264,6 +1344,28 @@ struct SettingsView: View {
             }
             MynahDivider()
 
+            updateRow
+            MynahDivider()
+
+            SettingsRow(
+                "Check GitHub for a newer version",
+                // No promise of a page to visit instead. This repository is
+                // private: a link most people would get a 404 from is worse
+                // than no link, which is why About carries none either.
+                detail: "Once a day. That request tells GitHub a Mac asked, which is a third "
+                    + "party learning this machine exists — it is the one thing Mynah does that "
+                    + "you did not ask for by speaking. Turn it off and Mynah never contacts "
+                    + "GitHub at all."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { model.checksForUpdates },
+                    set: { model.setChecksForUpdates($0) }
+                ))
+                .labelsHidden()
+                .mynahToggle()
+            }
+            MynahDivider()
+
             SettingsRow(
                 "SAGE",
                 detail: "What Mynah remembers, and the agent layer it thinks with. "
@@ -1304,6 +1406,60 @@ struct SettingsView: View {
             builtOnDisclosure
         }
         .padding(.top, s7)
+    }
+
+    /// Notice, tell, link — never fetch and swap.
+    ///
+    /// Mynah does not replace itself. It holds a live Signal connection and, on
+    /// a call, an open microphone, and software that rewrites its own binary
+    /// underneath either of those fails in a way nobody afterwards can explain.
+    /// So this row is an answer to a question, with a link the owner can act on
+    /// when it suits them.
+    ///
+    /// "Could not check" is its own state and looks nothing like "up to date".
+    /// This repository is private, which means GitHub answers an unauthenticated
+    /// request with a 404 — silence, not agreement — and an owner told they were
+    /// current on the strength of that would be told it every single day.
+    @ViewBuilder
+    private var updateRow: some View {
+        switch model.update {
+        case .none:
+            SettingsRow("A newer Mynah", detail: "Mynah is asking GitHub whether there is one.") {
+                ProgressView().controlSize(.small).tint(Palette.accent.fill)
+            }
+
+        case .upToDate?:
+            SettingsRow(
+                "A newer Mynah",
+                detail: "There isn't one. This is the newest version GitHub has been given."
+            ) {
+                StatusPill("Up to date", tone: .good)
+            }
+
+        case .newer(let version, let page)?:
+            SettingsRow(
+                "A newer Mynah",
+                detail: "Version \(version) has been released. Mynah does not replace itself — "
+                    + "download it and swap this copy over whenever it suits you."
+            ) {
+                HStack(spacing: s4) {
+                    StatusPill(version, tone: .caution, showsDot: false)
+                    MynahButton("Download", kind: .secondary) { open(page) }
+                }
+            }
+
+        // Turned off is a choice, not a failure, so it does not get the pill
+        // that means something went wrong.
+        case .cannotTell(.turnedOff)?:
+            SettingsRow("A newer Mynah", detail: UpdateCheckProblem.turnedOff.spokenDescription) {
+                StatusPill("Not checking", tone: .neutral)
+            }
+
+        case .cannotTell(let problem)?:
+            SettingsRow("A newer Mynah", detail: problem.spokenDescription) {
+                StatusPill("Couldn't check", tone: .neutral)
+            }
+        }
     }
 
     /// Folded, for the same reason Advanced is: eleven rows of licence names is
@@ -1600,7 +1756,16 @@ private struct SettingsPreviewHost: View {
                 defaults: defaults
             )
         }
-        self.model = SettingsModel(defaults: defaults, phoneLink: phone)
+        // A throwaway preferences file, with the check turned off in it before
+        // the screen is built. Opening a design canvas must not rewrite the
+        // owner's real preference, and it certainly must not send a request to
+        // GitHub from somebody's Xcode.
+        let updates = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah.settings.preview.\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("update-preferences.json", isDirectory: false)
+        UpdatePreferences.amend(at: updates) { $0.checksForUpdates = false }
+
+        self.model = SettingsModel(defaults: defaults, updatePreferences: updates, phoneLink: phone)
         self.app = AppModel(defaults: defaults)
     }
 
