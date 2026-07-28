@@ -8,3 +8,6 @@ models/
 vendor/argmax-oss-swift/
 vendor/
 dist/
+
+# Go build output for the WebRTC sidecar
+webrtc/sage-voice-webrtc
