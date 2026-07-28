@@ -14,6 +14,16 @@ public enum SageNodeProvisioning: Equatable, Sendable {
     /// Could not be obtained automatically; the releases page is the fallback.
     case unavailable(reason: String, releasesPage: URL)
 
+    /// A node the owner installed that could not be verified.
+    ///
+    /// Distinct from `unavailable` because the answer is the opposite: something
+    /// IS there, it belongs to the owner, and Mynah must leave it alone. The
+    /// previous behaviour was to download a replacement, which on a machine
+    /// belonging to anyone who works on SAGE — a local build, their own signing
+    /// certificate — meant overwriting the store holding their memories, agents
+    /// and keys because a signature check did not recognise it.
+    case unusable(executablePath: String, reason: String)
+
     /// Whether the caller can proceed without the owner doing anything.
     public var isReady: Bool {
         if case .alreadyPresent = self { return true }
@@ -82,9 +92,25 @@ public final class SageNodeInstaller: @unchecked Sendable {
                     version: SageNodeLocator.bundleVersion(at: appBundle)
                 )
             case .failure(let error):
-                // Present but not trustworthy. Do NOT fall through to running
-                // it; obtaining a known-good copy is the correct response.
-                return await download(becauseOf: "the installed SAGE bundle failed verification: \(error)")
+                // Present but not verifiable. Reported, never replaced.
+                //
+                // Downloading "a known-good copy" over somebody's own node is
+                // the one thing this must never do. Verification fails for
+                // ordinary reasons on a machine belonging to someone who works
+                // on SAGE — a local build, their own signing certificate, a
+                // bundle they moved — and none of those mean the appliance is
+                // entitled to overwrite the store holding their memories, their
+                // agents and their keys.
+                //
+                // The owner is told and decides. An appliance that silently
+                // replaces the thing it was asked to attach to has done
+                // something nobody asked for and cannot be undone.
+                return .unusable(
+                    executablePath: path,
+                    reason: "the SAGE already installed on this Mac could not be verified "
+                        + "(\(error)). Mynah will not replace it — reinstall SAGE yourself "
+                        + "if you want it repaired."
+                )
             }
         }
         return await download(becauseOf: "no SAGE node is installed on this Mac")

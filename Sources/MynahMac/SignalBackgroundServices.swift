@@ -24,11 +24,22 @@ struct SignalServiceConfiguration: Sendable, Equatable {
             return nil
         }
         let contents = appBundle.appendingPathComponent("Contents", isDirectory: true)
+
+        // The owner's node when they have one, ours only when they do not.
+        //
+        // This pointed at the vendored copy unconditionally, which on a Mac that
+        // already runs SAGE meant starting a second one beside it. Two nodes do
+        // not share memories, so the appliance would appear to forget everything
+        // it had been told through the other — and the owner would have two
+        // brains where they asked for one agent.
+        let vendored = contents.appendingPathComponent("Resources/SAGE.app/Contents/MacOS/sage-gui")
+        let node = SageNodeChoice.resolve(vendored: vendored)
+
         return SignalServiceConfiguration(
             account: account,
             signalCLI: signalCLI,
             bridge: contents.appendingPathComponent("MacOS/sage-voiced"),
-            sage: contents.appendingPathComponent("Resources/SAGE.app/Contents/MacOS/sage-gui"),
+            sage: node?.executable ?? vendored,
             provider: brain.backendIdentifier,
             model: brain.modelName,
             socketPath: SignalTooling.socketPath
