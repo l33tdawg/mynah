@@ -46,14 +46,55 @@ final class CallTranscriptTests: XCTestCase {
 
     /// Defaults to on: a call that leaves no trace is the surprising behaviour,
     /// not the safe one.
-    func testTranscriptsAreOnUnlessTurnedOff() {
-        let defaults = UserDefaults(suiteName: "transcript-test-\(UUID().uuidString)")!
-        XCTAssertTrue(TranscriptPreference(defaults: defaults).isEnabled)
+    ///
+    /// Against the shared file rather than UserDefaults, because that is the
+    /// only store both processes can see. A preference the app writes to its own
+    /// defaults domain is one the daemon never reads — the control moves, the
+    /// value is saved, and nothing changes.
+    func testTranscriptsAreOnUnlessTurnedOff() throws {
+        // A directory of its own: writing hardens the containing directory to
+        // owner-only, which cannot be done to the shared temp directory.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-prefs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("call-preferences.json")
 
-        defaults.set(false, forKey: TranscriptPreference.key)
-        XCTAssertFalse(TranscriptPreference(defaults: defaults).isEnabled)
+        XCTAssertTrue(CallPreferences.load(from: file).transcript, "unset should read as on")
 
-        defaults.set(true, forKey: TranscriptPreference.key)
-        XCTAssertTrue(TranscriptPreference(defaults: defaults).isEnabled)
+        try CallPreferences(transcript: false).save(to: file)
+        XCTAssertFalse(CallPreferences.load(from: file).transcript)
+
+        try CallPreferences(transcript: true).save(to: file)
+        XCTAssertTrue(CallPreferences.load(from: file).transcript)
     }
+
+    /// A speaking rate outside the usable range must not survive being read.
+    ///
+    /// The file is editable by hand, and a voice at 0.2 or 5.0 is one the owner
+    /// cannot understand and may not connect to the control that caused it.
+    func testTheSpeakingRateIsClamped() {
+        XCTAssertEqual(CallPreferences(speed: 9).clampedSpeed, CallPreferences.fastest)
+        XCTAssertEqual(CallPreferences(speed: 0.1).clampedSpeed, CallPreferences.slowest)
+        XCTAssertEqual(CallPreferences(speed: 1.15).clampedSpeed, 1.15)
+    }
+
+    /// The voice and rate must survive a round trip, or the Settings screen is
+    /// writing somewhere nothing reads.
+    func testChoicesSurviveARoundTrip() throws {
+        // A directory of its own: writing hardens the containing directory to
+        // owner-only, which cannot be done to the shared temp directory.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-prefs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("call-preferences.json")
+
+        try CallPreferences(voice: "bm_george", speed: 1.3, transcript: false).save(to: file)
+        let loaded = CallPreferences.load(from: file)
+        XCTAssertEqual(loaded.voice, "bm_george")
+        XCTAssertEqual(loaded.speed, 1.3)
+        XCTAssertFalse(loaded.transcript)
+    }
+
 }

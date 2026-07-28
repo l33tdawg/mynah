@@ -246,6 +246,7 @@ final class SettingsModel {
 
     private(set) var callVoices: CallVoiceCatalogue = .checking
     private(set) var callVoice: String
+    private(set) var callSpeed: Double
     private(set) var sendsCallTranscript: Bool
     private(set) var isPlayingCallVoice = false
     /// One sentence for the owner when a preview will not play. The reason goes
@@ -254,9 +255,12 @@ final class SettingsModel {
 
     init(
         defaults: UserDefaults = .standard,
+        callPreferences: URL = CallPreferences.defaultFileURL(),
         phoneLink: any PhoneLinking = SignalPhoneLink()
     ) {
-        let calls = CallSettingsStore(defaults: defaults)
+        // Call settings are a file rather than defaults, because the daemon has
+        // to read them and it does not share this process's defaults domain.
+        let calls = CallSettingsStore(fileURL: callPreferences)
         self.defaults = defaults
         self.phoneLink = phoneLink
         self.calls = calls
@@ -264,6 +268,7 @@ final class SettingsModel {
         self.speech = SpeechFacts.detect()
         self.phone = phoneLink.status
         self.callVoice = calls.voice
+        self.callSpeed = calls.speed
         self.sendsCallTranscript = calls.sendsTranscript
     }
 
@@ -325,6 +330,17 @@ final class SettingsModel {
         callVoiceProblem = nil
     }
 
+    /// How fast it talks on a call.
+    ///
+    /// Clamped here as well as on read. A slider cannot produce a value outside
+    /// its range today, but the preference is a file the owner can edit and the
+    /// consequence of an absurd rate is a voice they cannot understand.
+    func setCallSpeed(_ rate: Double) {
+        let clamped = min(max(rate, CallPreferences.slowest), CallPreferences.fastest)
+        callSpeed = clamped
+        calls.speed = clamped
+    }
+
     func setSendsCallTranscript(_ isOn: Bool) {
         sendsCallTranscript = isOn
         calls.sendsTranscript = isOn
@@ -336,7 +352,7 @@ final class SettingsModel {
         callVoiceProblem = nil
         defer { isPlayingCallVoice = false }
         do {
-            try await callPreview.play(voice: callVoice)
+            try await callPreview.play(voice: callVoice, speed: callSpeed)
         } catch {
             log.error("voice preview failed: \(String(describing: error), privacy: .public)")
             // Deliberately claims nothing about whether the voice would work on
@@ -951,6 +967,31 @@ struct SettingsView: View {
                         }
                         .labelsHidden()
                         .frame(width: 220)
+                    }
+                }
+                // Beside the voice, because they are one decision: a voice at
+                // the wrong pace is the wrong voice, and Listen plays both so
+                // the owner judges the thing they will actually hear rather
+                // than a number.
+                SettingsRow(
+                    "How fast it talks",
+                    detail: "The default is a little quicker than normal reading pace. "
+                        + "A call is an exchange, not an audiobook."
+                ) {
+                    HStack(spacing: s4) {
+                        Slider(
+                            value: Binding(
+                                get: { model.callSpeed },
+                                set: { model.setCallSpeed($0) }
+                            ),
+                            in: CallPreferences.slowest...CallPreferences.fastest
+                        )
+                        .frame(width: 180)
+                        Text(String(format: "%.2f×", model.callSpeed))
+                            .mynahFont(.mono)
+                            .foregroundStyle(Palette.ink.secondary)
+                            .frame(width: 52, alignment: .trailing)
+                            .monospacedDigit()
                     }
                 }
                 if let problem = model.callVoiceProblem {

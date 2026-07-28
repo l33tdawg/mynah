@@ -24,9 +24,23 @@ public actor CallTurnServer {
         /// The voice for calls.
         public var voice: String?
 
-        public init(socketURL: URL = CallTurnServer.defaultSocket(), voice: String? = nil) {
+        /// How fast it speaks, as a multiplier on the voice's natural rate.
+        ///
+        /// Slightly quick, deliberately. A synthesiser at its default rate reads
+        /// at the pace of an audiobook, which is right for listening to a
+        /// chapter and wrong for an exchange where the caller already knows what
+        /// they asked. Past about 1.3 the words start running together on a
+        /// phone speaker.
+        public var speed: Double
+
+        public init(
+            socketURL: URL = CallTurnServer.defaultSocket(),
+            voice: String? = nil,
+            speed: Double = 1.15
+        ) {
             self.socketURL = socketURL
             self.voice = voice
+            self.speed = speed
         }
     }
 
@@ -140,7 +154,7 @@ public actor CallTurnServer {
         guard !Task.isCancelled else { return nil }
 
         guard let audio = try? await synthesizer.synthesize(
-            SpeechRequest(text: opening, voice: configuration.voice)
+            SpeechRequest(text: opening, voice: configuration.voice, speed: configuration.speed)
         ) else {
             log("[call] could not prepare an opening")
             return nil
@@ -445,7 +459,7 @@ public actor CallTurnServer {
             if let opener = WorkingReply.opening(forRequest: heard, previous: lastOpener) {
                 lastOpener = opener.line
                 if let audio = try? await synthesizer.synthesize(
-                    SpeechRequest(text: opener.line, voice: configuration.voice)
+                    SpeechRequest(text: opener.line, voice: configuration.voice, speed: configuration.speed)
                 ) {
                     guard !Task.isCancelled else { return }
                     try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
@@ -465,12 +479,24 @@ public actor CallTurnServer {
                 guard !Task.isCancelled, let self else { return }
                 await self.sayStillWorking(over: writer)
             }
-            let reply = try await answer(heard)
+            let fullReply = try await answer(heard)
             waiting.cancel()
             let thought = Date()
             guard !Task.isCancelled else { return }
-            log("[call] replying: \(reply)")
-            transcript.said(reply)
+            log("[call] replying: \(fullReply)")
+
+            // A link read aloud is useless: nobody writes down a maps URL while
+            // holding a phone to their ear, and the synthesiser spends seconds
+            // delivering something the caller cannot act on. They leave by the
+            // channel that can carry them — the Signal thread is already open,
+            // and a link in it is one tap.
+            let split = SpokenReply.split(fullReply)
+            if let links = SpokenReply.message(links: split.links) {
+                await deliverTranscript?(links)
+                log("[call] sent \(split.links.count) link(s) to the thread")
+            }
+            let reply = split.spoken
+            transcript.said(fullReply)
 
             // Timed per stage rather than end to end. "A bit slow" is three
             // different problems — recognition, the model, synthesis — and they
@@ -481,7 +507,7 @@ public actor CallTurnServer {
             for sentence in CallTurnServer.sentences(in: reply) {
                 guard !Task.isCancelled else { return }
                 let speech = try await synthesizer.synthesize(
-                    SpeechRequest(text: sentence, voice: configuration.voice)
+                    SpeechRequest(text: sentence, voice: configuration.voice, speed: configuration.speed)
                 )
                 guard !Task.isCancelled else { return }
                 try writer.send(.replyAudio(CallTurnServer.samples(fromWAV: speech.wav)))
@@ -522,7 +548,7 @@ public actor CallTurnServer {
         // briefing failed. A plain hello beats silence.
         let greeting = CallTurnServer.greetings.randomElement() ?? "Hey, I'm here."
         guard let audio = try? await synthesizer.synthesize(
-            SpeechRequest(text: greeting, voice: configuration.voice)
+            SpeechRequest(text: greeting, voice: configuration.voice, speed: configuration.speed)
         ) else {
             log("[call] could not greet")
             return
@@ -543,7 +569,7 @@ public actor CallTurnServer {
     /// Posts what was said, if the owner wants it and anything was.
     private func postTranscript() async {
         guard let deliver = deliverTranscript else { return }
-        guard TranscriptPreference().isEnabled else { return }
+        guard CallPreferences.load().transcript else { return }
         guard let message = transcript.message() else { return }
         transcript = CallTranscript()
         await deliver(message)
@@ -555,7 +581,7 @@ public actor CallTurnServer {
         let line = WorkingReply.progressLine(completed: [], pending: nil)
             ?? "Still on it."
         guard let audio = try? await synthesizer.synthesize(
-            SpeechRequest(text: line, voice: configuration.voice)
+            SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
         ) else { return }
         try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
         log("[call] said \"\(line)\" while working")

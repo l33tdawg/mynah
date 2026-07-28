@@ -15,23 +15,34 @@ import SageVoiceCore
 /// to the daemon and the change that posts a finished transcript back into Signal
 /// read these exact strings; a prefix invented here would leave the owner setting
 /// a control that nothing on the other side is listening to.
+/// The three call preferences, stored where the daemon can read them.
+///
+/// A file, not UserDefaults, and that distinction is the entire point. The app
+/// and the daemon are separate processes with separate defaults domains, so a
+/// value written to this app's domain is a value the daemon never sees — the
+/// control moves, the preference is saved, and nothing changes. That is worse
+/// than having no control at all, because the owner has been told otherwise.
+///
+/// `CallPreferences` lives in the shared module for exactly this reason, and
+/// `ReplyPreferences` already solved the same problem the same way for the
+/// voice-notes switch.
 struct CallSettingsStore {
 
-    private enum Key {
-        /// No shared constant to point at: the daemon takes the voice as a
-        /// `--call-voice` launch flag, not by reading defaults, so this string
-        /// is the seam and the test that pins it is the only thing holding it.
-        static let voice = "callVoice"
-        /// Borrowed from the reader rather than spelled again. `TranscriptPreference`
-        /// is what consults this during a call, and one constant shared across
-        /// the two processes cannot drift the way two matching literals can.
-        static let transcript = TranscriptPreference.key
+    private let fileURL: URL
+
+    init(fileURL: URL = CallPreferences.defaultFileURL()) {
+        self.fileURL = fileURL
     }
 
-    private let defaults: UserDefaults
+    private var current: CallPreferences { CallPreferences.load(from: fileURL) }
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    private func update(_ change: (inout CallPreferences) -> Void) {
+        var preferences = current
+        change(&preferences)
+        // A preference that cannot be saved should not take the app down. The
+        // owner will notice the control springing back, which is a better
+        // failure than a crash.
+        try? preferences.save(to: fileURL)
     }
 
     /// The Kokoro voice calls speak in.
@@ -40,8 +51,18 @@ struct CallSettingsStore {
     /// never opened this screen sees what they would actually hear rather than a
     /// second default invented here.
     var voice: String {
-        get { defaults.string(forKey: Key.voice) ?? KokoroHTTPSynthesizer.defaultKokoroVoice }
-        nonmutating set { defaults.set(newValue, forKey: Key.voice) }
+        get { current.voice ?? KokoroHTTPSynthesizer.defaultKokoroVoice }
+        nonmutating set { update { $0.voice = newValue } }
+    }
+
+    /// How fast it speaks.
+    ///
+    /// Clamped on read as well as write, because the file is editable by hand
+    /// and a rate outside the usable range produces a voice the owner cannot
+    /// understand and may not connect to this control.
+    var speed: Double {
+        get { current.clampedSpeed }
+        nonmutating set { update { $0.speed = newValue } }
     }
 
     /// Whether a finished call gets posted back into the Signal thread.
@@ -49,8 +70,8 @@ struct CallSettingsStore {
     /// Absent means "never asked", and a call that leaves no record anywhere is
     /// the thing being fixed, so the unasked answer is yes.
     var sendsTranscript: Bool {
-        get { defaults.object(forKey: Key.transcript) as? Bool ?? true }
-        nonmutating set { defaults.set(newValue, forKey: Key.transcript) }
+        get { current.transcript }
+        nonmutating set { update { $0.transcript = newValue } }
     }
 }
 
@@ -186,10 +207,15 @@ final class CallVoicePreview {
 
     /// Returns when the clip has finished, so the caller can keep the button
     /// showing "playing" for exactly as long as something is playing.
-    func play(voice: String) async throws {
+    /// Plays the sample at the voice AND rate the owner has chosen.
+    ///
+    /// Both, because a preview at a different speed than the call is a preview
+    /// of something else — and speaking rate is exactly the setting nobody can
+    /// judge from a number.
+    func play(voice: String, speed: Double) async throws {
         let synthesizer = KokoroHTTPSynthesizer(voice: voice)
         let speech = try await synthesizer.synthesize(
-            SpeechRequest(text: Self.sample, voice: voice)
+            SpeechRequest(text: Self.sample, voice: voice, speed: speed)
         )
         stop()
         let player = try AVAudioPlayer(data: speech.wav)

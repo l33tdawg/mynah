@@ -666,7 +666,14 @@ func runDaemon(_ arguments: [String]) -> Never {
     // Which of Kokoro's 54 voices sounds like the appliance is pure taste, and
     // taste is only discoverable by hearing it on a call. A flag means trying
     // another one is a restart rather than a rebuild and a redeploy.
-    let callVoiceName = flags["call-voice"] ?? KokoroHTTPSynthesizer.defaultKokoroVoice
+    // Read from the file the Settings screen writes, so the controls the owner
+    // moves are the ones the daemon obeys. Flags still win, for trying a voice
+    // without touching a saved preference.
+    let callPreferences = CallPreferences.load()
+    let callVoiceName = flags["call-voice"]
+        ?? callPreferences.voice
+        ?? KokoroHTTPSynthesizer.defaultKokoroVoice
+    let callSpeed = flags["call-speed"].flatMap(Double.init) ?? callPreferences.clampedSpeed
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
     // restart rather than a rebuild, a repackage, a resign and a redeploy.
@@ -814,7 +821,10 @@ func runDaemon(_ arguments: [String]) -> Never {
         )
         let callHistory = CallHistory()
         let callServer = CallTurnServer(
-            configuration: CallTurnServer.Configuration(),
+            configuration: CallTurnServer.Configuration(
+                voice: callVoiceName,
+                speed: callSpeed
+            ),
             transcriber: transcriber,
             synthesizer: callVoice,
             answer: { heard in

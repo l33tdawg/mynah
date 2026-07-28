@@ -475,6 +475,8 @@ func (r *relay) handlePage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
+			// The app's own icon is inlined as a data URI; nothing is fetched.
+			"img-src data:; "+
 			"connect-src 'self' "+r.iceOrigins()+"; media-src blob: mediastream:; "+
 			"base-uri 'none'; form-action 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")

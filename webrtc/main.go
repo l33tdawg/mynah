@@ -620,6 +620,8 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	// network — and does it without an error the page can catch.
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
+			// The app's own icon is inlined as a data URI; nothing is fetched.
+			"img-src data:; "+
 			"connect-src 'self' "+s.iceOrigins()+"; media-src blob: mediastream:; "+
 			"base-uri 'none'; form-action 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")

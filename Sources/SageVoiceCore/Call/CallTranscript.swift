@@ -85,23 +85,3 @@ public struct CallTranscript: Sendable {
         }
     }
 }
-
-/// Whether the owner wants transcripts posted back.
-///
-/// Defaults to on. The argument for defaulting the other way is that a
-/// transcript is a written record of a private conversation — but it lands only
-/// in the owner's own Note-to-Self thread, which is where everything else they
-/// say to this appliance already lives, and a call that leaves no trace is the
-/// surprising behaviour rather than the safe one.
-public struct TranscriptPreference: Sendable {
-    public static let key = "callTranscript"
-
-    /// Read at construction rather than held, so this stays Sendable — a
-    /// UserDefaults reference is not, and this is consulted from the actor that
-    /// runs a call.
-    public let isEnabled: Bool
-
-    public init(defaults: UserDefaults = .standard) {
-        isEnabled = defaults.object(forKey: TranscriptPreference.key) as? Bool ?? true
-    }
-}
