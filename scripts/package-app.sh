@@ -341,6 +341,14 @@ fi
 [[ ! -f "$APP/Contents/MacOS/argmax-cli" ]] || sign "$APP/Contents/MacOS/argmax-cli"
 [[ ! -f "$APP/Contents/MacOS/whisper-cli" ]] || sign "$APP/Contents/MacOS/whisper-cli"
 [[ ! -f "$APP/Contents/MacOS/signal-cli" ]] || sign "$APP/Contents/MacOS/signal-cli"
+# The call endpoint. Staged above; this line is what makes it distributable.
+#
+# Its absence here cost a rejected notarization with exactly the three errors
+# this script's own troubleshooting text predicts for a helper added after the
+# signing pass: no Developer ID, no secure timestamp, no hardened runtime.
+# `codesign --verify` passed locally the whole time, because an ad-hoc signature
+# is a valid signature — it is only Apple that will not accept one.
+[[ ! -f "$APP/Contents/MacOS/sage-voice-webrtc" ]] || sign "$APP/Contents/MacOS/sage-voice-webrtc"
 sign "$APP/Contents/MacOS/$CLI_PRODUCT"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
