@@ -12,9 +12,15 @@ import (
 	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
 )
 
+func init() {
+	// The suite registers appliances; a real poll window would make every such
+	// test wait it out at Close().
+	pollWindow = 200 * time.Millisecond
+}
+
 func testRelay() *relay {
 	return &relay{
-		secret:     []byte("shared"),
+		secrets:    [][]byte{[]byte("shared"), []byte("another tester")},
 		stunURL:    "stun:stun.example.com:19302",
 		appliances: map[string]*appliance{},
 		pending:    map[string]*call{},
@@ -262,4 +268,61 @@ func TestThePageCarriesFreshTurnCredentialsAndAllowsThem(t *testing.T) {
 	if !strings.Contains(policy, "turn:turn.example.com:3478") {
 		t.Fatalf("connect-src omits the TURN server, so Chrome will block it: %q", policy)
 	}
+}
+
+// One tester must not be able to take another's call.
+//
+// The relay routes by token, so before ownership was recorded any
+// authenticated appliance could poll somebody else's token and join the same
+// queue — whichever polled first took delivery. That is a wiretap wearing a
+// race condition, and it is the reason a single shared secret cannot be
+// distributed in a DMG.
+func TestAnAppliuanceCannotClaimAnotherOwnersToken(t *testing.T) {
+	relay := testRelay()
+	server := httptest.NewServer(relay.routes())
+	defer server.Close()
+
+	// The rightful owner registers.
+	listen(t, server, "tok")
+
+	// A different tester, with a valid credential of their own, tries the same
+	// token.
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/appliance/listen",
+		strings.NewReader(`{"token":"tok"}`))
+	request.Header.Set("Authorization",
+		"Bearer "+rendezvous.ApplianceCredential([]byte("another tester"), time.Now()))
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a second tester claimed a token they do not own (%s); "+
+			"they would receive the owner's calls", response.Status)
+	}
+}
+
+// Every issued secret has to work, or distributing one per tester is pointless.
+func TestAnyIssuedSecretAuthenticates(t *testing.T) {
+	relay := testRelay()
+	server := httptest.NewServer(relay.routes())
+	defer server.Close()
+
+	for i, secret := range [][]byte{[]byte("shared"), []byte("another tester")} {
+		request, _ := http.NewRequest(http.MethodPost, server.URL+"/appliance/listen",
+			strings.NewReader(`{"token":"tok`+string(rune('a'+i))+`"}`))
+		request.Header.Set("Authorization",
+			"Bearer "+rendezvous.ApplianceCredential(secret, time.Now()))
+		// Not waiting for the poll window; the registration is what is under test.
+		go func() { _, _ = server.Client().Do(request) }()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if relay.count() == 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("only %d of 2 secrets registered", relay.count())
 }

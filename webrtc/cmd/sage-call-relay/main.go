@@ -59,22 +59,24 @@ import (
 	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
 )
 
-const (
-	// How long an appliance's poll is held open before it is answered empty.
-	// Long enough that an idle appliance is nearly silent on the wire, short
-	// enough that a dead connection is noticed and replaced rather than leaving
-	// the owner's next call ringing into a socket that is already gone.
-	pollWindow = 50 * time.Second
+// How long an appliance's poll is held open before it is answered empty.
+//
+// A var rather than a const so tests can shorten it. httptest.Server.Close
+// blocks on outstanding requests, so a held poll makes every test that
+// registers an appliance take the full window — a hundred seconds of a suite
+// that otherwise runs in one.
+var pollWindow = 50 * time.Second
 
+// How long an appliance may go unheard from before its token is forgotten.
+// Twice the poll window, so one lost poll is not one dropped registration.
+func applianceTTL() time.Duration { return 2 * pollWindow }
+
+const (
 	// How long a caller waits for the appliance to answer. Generous because the
 	// appliance spends most of it gathering ICE candidates, and a caller who has
 	// just tapped a link will wait a few seconds far more happily than they will
 	// tap again.
 	answerWindow = 30 * time.Second
-
-	// How long an appliance may go unheard from before its token is forgotten.
-	// Twice the poll window, so one lost poll is not one dropped registration.
-	applianceTTL = 2 * pollWindow
 
 	// How long a minted TURN credential lasts. It only has to survive the
 	// setup of one call.
@@ -86,7 +88,7 @@ func main() {
 		domain         = flag.String("domain", "", "hostname to serve and obtain a certificate for (required)")
 		email          = flag.String("email", "", "contact address for the certificate authority")
 		cacheDir       = flag.String("cert-cache", "/var/lib/sage-call-relay", "where to keep issued certificates")
-		secretFile     = flag.String("secret-file", "", "file holding the shared secret appliances authenticate with (required)")
+		secretFile     = flag.String("secret-file", "", "file of appliance secrets, one per line (required)")
 		stunURL        = flag.String("stun", "stun:stun.l.google.com:19302", "STUN server offered to callers")
 		turnHost       = flag.String("turn", "", "TURN server as host:port, e.g. turn.sage.delivery:3478")
 		turnSecretFile = flag.String("turn-secret-file", "", "file holding the TURN shared secret")
@@ -102,10 +104,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	secret, err := readSecret(*secretFile)
+	secrets, err := readSecrets(*secretFile)
 	if err != nil {
-		log.Fatalf("shared secret: %v", err)
+		log.Fatalf("appliance secrets: %v", err)
 	}
+	log.Printf("%d appliance secret(s) loaded", len(secrets))
 	var turnSecret []byte
 	if *turnSecretFile != "" {
 		if turnSecret, err = readSecret(*turnSecretFile); err != nil {
@@ -119,7 +122,7 @@ func main() {
 	}
 
 	relay := &relay{
-		secret:     secret,
+		secrets:    secrets,
 		stunURL:    *stunURL,
 		turnHost:   *turnHost,
 		turnSecret: turnSecret,
@@ -184,21 +187,46 @@ func main() {
 // unit file to anyone who can read it. This at least confines it to something
 // with permissions.
 func readSecret(path string) ([]byte, error) {
+	secrets, err := readSecrets(path)
+	if err != nil {
+		return nil, err
+	}
+	return secrets[0], nil
+}
+
+// readSecrets loads every appliance secret, one per line.
+//
+// Blank lines and # comments are skipped, so the file can say whose secret is
+// whose — which is the difference between revoking one tester and revoking all
+// of them.
+func readSecrets(path string) ([][]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	secret := strings.TrimSpace(string(raw))
-	if secret == "" {
-		return nil, fmt.Errorf("%s is empty", path)
+	var secrets [][]byte
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		secrets = append(secrets, []byte(line))
 	}
-	return []byte(secret), nil
+	if len(secrets) == 0 {
+		return nil, fmt.Errorf("%s holds no secrets", path)
+	}
+	return secrets, nil
 }
 
 // appliance is one Mac, waiting.
 type appliance struct {
 	offers   chan *call
 	lastSeen time.Time
+
+	// Which credential claimed this token. A token is a live microphone, and
+	// without this any authenticated appliance could poll somebody else's token
+	// and take delivery of their call.
+	owner string
 }
 
 // call is one offer travelling out and one answer travelling back.
@@ -209,7 +237,7 @@ type call struct {
 }
 
 type relay struct {
-	secret     []byte
+	secrets    [][]byte
 	stunURL    string
 	turnHost   string
 	turnSecret []byte
@@ -251,7 +279,7 @@ func (r *relay) count() int {
 // fails, the least diagnosable outcome available.
 func (r *relay) forgetStaleAppliances() {
 	for range time.Tick(pollWindow) {
-		cutoff := time.Now().Add(-applianceTTL)
+		cutoff := time.Now().Add(-applianceTTL())
 		r.mu.Lock()
 		for token, waiting := range r.appliances {
 			if waiting.lastSeen.Before(cutoff) {
@@ -263,13 +291,14 @@ func (r *relay) forgetStaleAppliances() {
 	}
 }
 
-func (r *relay) authenticate(w http.ResponseWriter, req *http.Request) bool {
+func (r *relay) authenticate(w http.ResponseWriter, req *http.Request) (string, bool) {
 	credential := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
-	if !rendezvous.VerifyAppliance(r.secret, credential, time.Now(), 5*time.Minute) {
+	who, ok := rendezvous.Identify(r.secrets, credential, time.Now(), 5*time.Minute)
+	if !ok {
 		http.Error(w, "not authorised", http.StatusUnauthorized)
-		return false
+		return "", false
 	}
-	return true
+	return who, true
 }
 
 // handleListen parks an appliance until someone calls it.
@@ -280,7 +309,8 @@ func (r *relay) authenticate(w http.ResponseWriter, req *http.Request) bool {
 // machine, each of which is a way for the owner's appliance to be quietly
 // unreachable.
 func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
-	if !r.authenticate(w, req) {
+	who, ok := r.authenticate(w, req)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -294,9 +324,17 @@ func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	waiting, known := r.appliances[body.Token]
 	if !known {
-		waiting = &appliance{offers: make(chan *call, 1)}
+		waiting = &appliance{offers: make(chan *call, 1), owner: who}
 		r.appliances[body.Token] = waiting
-		log.Printf("an appliance is listening")
+		log.Printf("appliance %s is listening", who)
+	} else if waiting.owner != who {
+		// Somebody else's token. Refused rather than shared: two appliances on
+		// one token means whichever polls first takes the call, which is a
+		// wiretap wearing a race condition.
+		r.mu.Unlock()
+		log.Printf("appliance %s tried to claim a token belonging to %s", who, waiting.owner)
+		http.Error(w, "not authorised", http.StatusUnauthorized)
+		return
 	}
 	waiting.lastSeen = time.Now()
 	r.mu.Unlock()
@@ -317,7 +355,7 @@ func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
 
 // handleAnswer takes the appliance's SDP back to the waiting caller.
 func (r *relay) handleAnswer(w http.ResponseWriter, req *http.Request) {
-	if !r.authenticate(w, req) {
+	if _, ok := r.authenticate(w, req); !ok {
 		return
 	}
 	var body struct {

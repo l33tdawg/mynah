@@ -35,6 +35,29 @@ func ApplianceCredential(secret []byte, now time.Time) string {
 	return stamp + "." + hex.EncodeToString(mac.Sum(nil))
 }
 
+// Identify checks a credential against every issued secret and reports which
+// one it was.
+//
+// Several secrets rather than one, because a single shared secret cannot be
+// distributed. Every copy of the app would hold the same credential, and the
+// relay keys appliances by token — so a second holder polling the same token
+// joins the same queue and can take delivery of somebody else's call. One
+// secret per appliance makes that impossible and makes revoking a single tester
+// possible without touching anyone else.
+//
+// Returns an opaque, stable identifier rather than the secret or its index: it
+// goes in logs and is compared against a registered token's owner, and neither
+// use should be able to leak the credential.
+func Identify(secrets [][]byte, credential string, now time.Time, tolerance time.Duration) (string, bool) {
+	for _, secret := range secrets {
+		if VerifyAppliance(secret, credential, now, tolerance) {
+			sum := sha256.Sum256(secret)
+			return hex.EncodeToString(sum[:6]), true
+		}
+	}
+	return "", false
+}
+
 // VerifyAppliance checks a credential against the secret and the clock.
 //
 // Tolerance runs both directions because the appliance's clock is not the
