@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mynah</title>
+<meta name="description" content="A private voice appliance that runs on a Mac you own. You reach it on Signal, and you can call it.">
+<meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c0e14" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<style>
+  /* Nothing is loaded from anywhere. No fonts, no scripts, no analytics.
+     A page about a private appliance has no business phoning home. */
+
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f9;
+    --surface: #ffffff;
+    --ink: #10121a;
+    --dim: #5c6370;
+    --faint: #8b929e;
+    --line: #e3e5ea;
+    --accent: #2f6bff;
+    --stays: #1f7a4d;
+    --leaves: #a8541c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0e14;
+      --surface: #12151d;
+      --ink: #f2f3f6;
+      --dim: #a3aab6;
+      --faint: #767d8a;
+      --line: #242936;
+      --accent: #7ba1ff;
+      --stays: #6fce9c;
+      --leaves: #e0a26a;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    padding:
+      max(2.5rem, env(safe-area-inset-top))
+      max(1.25rem, env(safe-area-inset-right))
+      max(3rem, env(safe-area-inset-bottom))
+      max(1.25rem, env(safe-area-inset-left));
+  }
+
+  main { max-width: 38rem; margin: 0 auto; }
+
+  /* Masthead */
+
+  .mark {
+    display: block;
+    color: var(--accent);
+    margin-bottom: 1.25rem;
+  }
+
+  h1 {
+    font-size: 2.25rem;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    margin: 0 0 0.5rem;
+  }
+
+  .standfirst {
+    font-size: 1.1875rem;
+    line-height: 1.5;
+    color: var(--dim);
+    margin: 0 0 3rem;
+    max-width: 30rem;
+  }
+
+  /* Sections */
+
+  section { margin: 0 0 3rem; }
+
+  h2 {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 1rem;
+    padding-bottom: 0.625rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  h3 {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    margin: 2rem 0 0.5rem;
+  }
+
+  p { margin: 0 0 1rem; }
+  p:last-child { margin-bottom: 0; }
+
+  strong { font-weight: 600; }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+  }
+
+  /* Plain lists */
+
+  ul.plain {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+  }
+  ul.plain > li {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  ul.plain > li:last-child { border-bottom: 0; padding-bottom: 0; }
+  ul.plain .what { display: block; font-weight: 600; }
+  ul.plain .why { display: block; color: var(--dim); }
+
+  /* Numbered walk-through */
+
+  ol.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+  }
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 1.25rem 2.5rem;
+  }
+  ol.steps > li:last-child { padding-bottom: 0; }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0.0625rem;
+    width: 1.625rem;
+    height: 1.625rem;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--dim);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5rem;
+    text-align: center;
+  }
+
+  /* The privacy ledger */
+
+  .ledger {
+    margin: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ledger > div {
+    padding: 0.875rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ledger dt {
+    font-weight: 600;
+    margin-bottom: 0.125rem;
+  }
+  .ledger dd {
+    margin: 0;
+    color: var(--dim);
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    vertical-align: 0.1em;
+    margin-left: 0.5rem;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .tag.stays { color: var(--stays); }
+  .tag.leaves { color: var(--leaves); }
+  .tag.depends { color: var(--faint); }
+
+  /* Pull-aside for the things worth stopping on */
+
+  .aside {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 1rem 1.125rem;
+    margin: 1.5rem 0;
+  }
+  .aside p:last-child { margin-bottom: 0; }
+
+  footer {
+    margin-top: 3.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+    color: var(--faint);
+    font-size: 0.9375rem;
+  }
+
+  a { color: var(--accent); }
+
+  @media (max-width: 30rem) {
+    body { font-size: 16px; }
+    h1 { font-size: 1.875rem; }
+    .standfirst { font-size: 1.0625rem; margin-bottom: 2.25rem; }
+    section { margin-bottom: 2.5rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- Drawn inline, because a logo fetched from somewhere else is a page that
+       tells somewhere else you opened it. -->
+  <svg class="mark" width="34" height="34" viewBox="0 0 34 34" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+    <path d="M3 17h3M10 10v14M17 5v24M24 10v14M31 17h-3"/>
+  </svg>
+
+  <h1>Mynah</h1>
+  <p class="standfirst">
+    A private voice appliance. It runs on a Mac you own. You reach it by
+    messaging yourself on Signal, and you can call it and talk.
+  </p>
+
+  <section>
+    <h2>What it is</h2>
+    <p>
+      Mynah is an agent that lives on one Mac. It remembers what you have told
+      it, it can search the web, write notes and keep a backlog, and it answers
+      in the same Signal thread you wrote to.
+    </p>
+    <p>
+      It is not a service. There is no account and nothing to sign into. The Mac
+      it runs on is yours, the Signal account is yours, and the model that
+      answers is either running on that same Mac or on an API key you supply.
+    </p>
+  </section>
+
+  <section>
+    <h2>What you need</h2>
+    <ul class="plain">
+      <li>
+        <span class="what">A Mac, left switched on</span>
+        <span class="why">
+          Apple Silicon, macOS 14 or later. A Mac mini is the usual choice. It
+          has to be awake to answer, so a laptop that sleeps in a bag is the
+          wrong machine for it.
+        </span>
+      </li>
+      <li>
+        <span class="what">Signal, on your phone</span>
+        <span class="why">
+          Mynah links to your existing account as a secondary device — the same
+          way Signal Desktop does. Your number does not change, your phone stays
+          the primary device, and you do not register anything new.
+        </span>
+      </li>
+      <li>
+        <span class="what">A model</span>
+        <span class="why">
+          Either one running on the Mac itself, which the app can install for
+          you, or an API key from a provider you choose. The setup screen tells
+          you, for each option, where your words end up.
+        </span>
+      </li>
+    </ul>
+    <p>
+      Calling needs one more thing, and it is described under
+      <a href="#calls">Calling it</a>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Messaging it</h2>
+    <p>
+      Open Signal and message yourself. Note to Self. Mynah reads that thread and
+      answers in it, so the whole conversation sits in the one place you already
+      keep things you write to yourself.
+    </p>
+    <p>
+      Text works. Voice notes work — they are transcribed on the Mac. Photos
+      work; send one with no caption and it will tell you what it sees. If you
+      send three messages in quick succession it waits a moment and answers the
+      thought rather than each fragment.
+    </p>
+    <p>
+      Slow answers say so. If it has gone to look something up, you get a line
+      telling you that, and then another only if there is something new to
+      report. Silence past a certain point is a failure, and the appliance is
+      built to not be silent.
+    </p>
+    <p>
+      Every reply is marked with a small label. Signal draws Note to Self as a
+      single column of your own messages, so without one there is no way to see
+      at a glance which lines are yours.
+    </p>
+  </section>
+
+  <section id="calls">
+    <h2>Calling it</h2>
+    <p>
+      Send <code>//call</code> and you get a link back. Tap it, allow the
+      microphone, and you are talking to it. There is nothing to install: the
+      link opens a web page, and the page is the whole client.
+    </p>
+    <p>
+      It is a real conversation. You can cut it off mid-sentence and it stops —
+      not at the end of its answer, within a fraction of a second. An assistant
+      you cannot interrupt is just a slower voice note.
+    </p>
+
+    <h3>What happens when you tap the link</h3>
+    <ol class="steps">
+      <li>
+        The page asks your browser for the microphone. The browser is doing real
+        work here: it cancels the echo of Mynah's own voice coming back through
+        your speaker, suppresses room noise, and levels your volume. Without the
+        first of those, full duplex is impossible — the appliance hears itself
+        and talks over its own answer.
+      </li>
+      <li>
+        Your phone and the Mac describe to each other how they can be reached.
+        That description goes through a relay, because it has to go somewhere
+        both of them can see.
+      </li>
+      <li>
+        They connect directly. On your home network that is your phone and the
+        Mac across the room, and nothing in between. On a network where a direct
+        path cannot be found, the audio is relayed instead — still sealed, and
+        still unreadable to the relay.
+      </li>
+      <li>
+        You talk. It waits until you have actually finished a sentence rather
+        than cutting in on the pause before you name something, and it starts
+        speaking its answer as soon as the first sentence of it is ready.
+      </li>
+    </ol>
+
+    <div class="aside">
+      <p>
+        <strong>Calling needs a fast model.</strong> A model running on the Mac
+        itself takes the better part of a minute to begin answering. In a message
+        that is a wait. In a call it is a dead line, so Mynah refuses the call and
+        says so. If you want to talk out loud, the model has to be an API one.
+        Messages and voice notes work either way.
+      </p>
+    </div>
+
+    <div class="aside">
+      <p>
+        <strong>Calling also needs a relay you run.</strong> It is a small program
+        on a rented host with a real domain name. The reason is unglamorous: a Mac
+        on a home network has no name a certificate authority will sign, and a
+        browser that distrusts the page it is holding will quietly refuse to
+        connect the call. So the page is served from somewhere with a proper
+        certificate, and the Mac dials out to it. Nothing is forwarded to your
+        home network and no port is opened.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where your words go</h2>
+    <p>
+      This is the product's whole argument, so it is worth being exact about it
+      rather than reassuring.
+    </p>
+
+    <dl class="ledger">
+      <div>
+        <dt>Signal messages <span class="tag stays">stays</span></dt>
+        <dd>
+          End-to-end encrypted, between your own devices, in your own Note to
+          Self thread. Mynah answers only there. Messages from anyone else, and
+          messages in groups, are refused before anything reads them.
+        </dd>
+      </div>
+      <div>
+        <dt>Voice notes and speech recognition <span class="tag stays">stays</span></dt>
+        <dd>
+          Transcribed on your Mac. The audio is not uploaded anywhere, and the
+          transcriber refuses to send it anywhere but the local machine.
+        </dd>
+      </div>
+      <div>
+        <dt>The voice you hear <span class="tag stays">stays</span></dt>
+        <dd>
+          Synthesised on your Mac.
+        </dd>
+      </div>
+      <div>
+        <dt>Notes and memory <span class="tag stays">stays</span></dt>
+        <dd>
+          Written to disk on your Mac, readable only by your account.
+        </dd>
+      </div>
+      <div>
+        <dt>The model <span class="tag depends">depends</span></dt>
+        <dd>
+          If you chose a local model, your words stay on the Mac. If you chose an
+          API, your words go to that provider and are handled under their terms.
+          That is a real difference and the setup screen states it per option
+          rather than leaving you to infer it.
+        </dd>
+      </div>
+      <div>
+        <dt>Web searches <span class="tag leaves">leaves</span></dt>
+        <dd>
+          When it looks something up, the search terms go to a search engine, as
+          searches do.
+        </dd>
+      </div>
+      <div>
+        <dt>Call audio <span class="tag stays">stays</span></dt>
+        <dd>
+          The audio goes directly between your phone and the Mac wherever a
+          direct path exists. It does not pass through the relay. Where no direct
+          path exists it is relayed, but it stays encrypted end to end the whole
+          way — the relay carries sealed packets and cannot listen to them.
+        </dd>
+      </div>
+      <div>
+        <dt>That a call happened <span class="tag leaves">leaves</span></dt>
+        <dd>
+          The relay sets the call up, so it necessarily learns that a call
+          occurred, when, and between which network addresses — that is what the
+          setup messages contain. It cannot hear the call. This is the honest
+          cost of calls working at all, and it is why the relay is a program you
+          run on a host you rent rather than a service you are asked to trust.
+        </dd>
+      </div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>What it is not</h2>
+    <p>
+      It does not listen. Nothing is recorded and nothing is transcribed until
+      you send it something. There is no wake word and no microphone open on the
+      Mac.
+    </p>
+    <p>
+      It does not start conversations. It answers the thread you wrote to, and
+      that is the only thing it does unprompted — nothing.
+    </p>
+    <p>
+      It is not always right. It is a language model with tools, and it can
+      misread a voice note, misjudge a search result, or be confidently wrong.
+      Everything it did during a turn ends up in the reply you read, which is the
+      point: you are the one checking it.
+    </p>
+    <p>
+      It is not finished. It works, it is in daily use, and there are rough
+      edges. If something breaks, say so — the logs on the Mac usually know
+      exactly where it stopped.
+    </p>
+  </section>
+
+  <footer>
+    Mynah is free software under the Apache 2.0 licence. This page is served as
+    plain HTML with nothing loaded from anywhere else.
+  </footer>
+
+</main>
+</body>
+</html>
