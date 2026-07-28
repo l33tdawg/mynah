@@ -143,7 +143,7 @@ struct ConnectKeyView: View {
                 detail: "Mynah can't answer until it has a \(provider) key."
             )
         )
-        model.advance()
+        model.skipKey()
     }
 
     /// Leaving this stage with a key that verified is the one thing that makes

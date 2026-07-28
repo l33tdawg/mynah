@@ -259,6 +259,49 @@ public final class OllamaClient: @unchecked Sendable {
         return models.compactMap { $0["name"]?.stringValue }
     }
 
+    /// Serves one embedding and returns its dimensionality.
+    ///
+    /// Ollama changed this endpoint from `/api/embeddings` to `/api/embed`.
+    /// Try the current shape first and retain the legacy fallback so an owner
+    /// with an already-running older daemon is adopted instead of being forced
+    /// onto Mynah's managed copy.
+    public func embeddingDimensions(model: String, input: String) async throws -> Int {
+        do {
+            return try await embeddingDimensions(
+                path: "api/embed",
+                payload: ["model": model, "input": input]
+            )
+        } catch {
+            return try await embeddingDimensions(
+                path: "api/embeddings",
+                payload: ["model": model, "prompt": input]
+            )
+        }
+    }
+
+    private func embeddingDimensions(path: String, payload: [String: Any]) async throws -> Int {
+        var request = URLRequest(url: endpoint(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeoutSeconds
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let data = try await send(request)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OllamaClientError.malformedResponse("embedding response was not an object")
+        }
+        if let error = object["error"] as? String, !error.isEmpty {
+            throw OllamaClientError.requestFailed(error)
+        }
+        if let embedding = object["embedding"] as? [Any] {
+            return embedding.count
+        }
+        if let embeddings = object["embeddings"] as? [[Any]], let first = embeddings.first {
+            return first.count
+        }
+        throw OllamaClientError.malformedResponse("embedding response contained no vector")
+    }
+
     /// One line of `/api/pull`'s streaming progress.
     public struct PullProgress: Sendable, Equatable {
         /// The daemon's own words: "pulling manifest", "verifying sha256

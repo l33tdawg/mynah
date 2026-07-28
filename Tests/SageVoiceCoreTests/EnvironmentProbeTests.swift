@@ -61,6 +61,19 @@ final class EnvironmentProbeTests: XCTestCase {
         XCTAssertFalse(unreachable.isReadyToServe)
     }
 
+    func testDaemonNeedsNomicMemoryModelBeforeItIsReady() {
+        let chatOnly = LocalModelRuntimeReport(
+            isRuntimeInstalled: true,
+            isDaemonReachable: true,
+            installedModels: ["qwen3.5:4b"]
+        )
+        XCTAssertFalse(chatOnly.isReadyToServe)
+
+        var complete = chatOnly
+        complete.installedModels.append("nomic-embed-text:latest")
+        XCTAssertTrue(complete.isReadyToServe)
+    }
+
     // MARK: - Credentials never leak
 
     /// A probe result is designed to be pasted into a support bundle. If any key

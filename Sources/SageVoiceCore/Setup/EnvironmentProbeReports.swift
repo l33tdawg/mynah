@@ -15,6 +15,12 @@ public enum LocalBrainModelCatalog {
     /// `toolCapableModels` is a plausible substitute, not an equal.
     public static let preferredModel = "qwen3.5:4b"
 
+    /// SAGE's semantic-memory model. Keeping this beside the chat model is
+    /// load-bearing: a local brain without it can answer, but memory silently
+    /// falls back to lexical search and the appliance feels forgetful.
+    public static let embeddingModel = "nomic-embed-text"
+    public static let embeddingDimensions = 768
+
     /// Models known to emit usable `tool_calls` against SAGE's schemas, in the
     /// order we would rather have them.
     ///
@@ -37,11 +43,15 @@ public enum LocalBrainModelCatalog {
     /// by this code.
     public static let approximateModelDownloadBytes: Int64 = 3_400_000_000
 
+    /// Ollama's current nomic embedding weights are roughly 274 MB.
+    public static let approximateEmbeddingModelDownloadBytes: Int64 = 274_000_000
+
     /// Order-of-magnitude estimate for the Ollama macOS app itself, needed only
     /// when no runtime is present. Not measured here — it exists so an install
     /// screen can say "about 4.4 GB in total" instead of "about 3.4 GB" and then
     /// surprise the owner.
-    public static let approximateRuntimeDownloadBytes: Int64 = 1_000_000_000
+    /// Exact compressed byte count of the pinned v0.31.1 macOS archive.
+    public static let approximateRuntimeDownloadBytes: Int64 = 129_037_451
 
     // MARK: Hardware thresholds
 
@@ -156,7 +166,12 @@ public struct LocalModelRuntimeReport: Sendable, Equatable, Codable {
     /// a daemon without the model fails on the first real request, which on a
     /// voice turn means dead air.
     public var isReadyToServe: Bool {
-        isDaemonReachable && preferredInstalledModel != nil
+        isDaemonReachable
+            && preferredInstalledModel != nil
+            && installedModels.contains {
+                LocalBrainModelCatalog.normalize($0)
+                    == LocalBrainModelCatalog.normalize(LocalBrainModelCatalog.embeddingModel)
+            }
     }
 }
 

@@ -56,6 +56,7 @@ final class SetupModel {
     private(set) var choices: BrainSetupChoices?
     private(set) var isProbing = false
     private(set) var probeFailure: String?
+    private(set) var localBrainPhase: LocalBrainInstaller.Phase?
 
     var selectedOptionID: BrainSetupOptionID?
     var pastedKey: String = ""
@@ -71,6 +72,15 @@ final class SetupModel {
     /// re-parsing copy this app wrote — which stops working the day someone
     /// rewords it, silently and in the owner's favour never.
     private(set) var lastVerdict: BrainKeyValidator.Verdict?
+    private let localBrainInstaller: LocalBrainInstaller
+
+    init(
+        localBrainInstaller: LocalBrainInstaller = LocalBrainInstaller(),
+        initialChoices: BrainSetupChoices? = nil
+    ) {
+        self.localBrainInstaller = localBrainInstaller
+        self.choices = initialChoices
+    }
 
     var selectedOption: BrainSetupOption? {
         guard let selectedOptionID, let choices else { return nil }
@@ -112,9 +122,9 @@ final class SetupModel {
             return true
         case .apiKey:
             return keyInstructions != nil
-        case .signIn, .download:
-            // Neither has a stage. The planner marks these unavailable, so this
-            // is the second lock on the same door rather than a live path.
+        case .download:
+            return option.id == .fullyLocal
+        case .signIn:
             return false
         }
     }
@@ -150,7 +160,9 @@ final class SetupModel {
             // Available *and* reachable. Availability is the planner's judgement
             // about this Mac; satisfiability is this flow's judgement about
             // whether it owns a screen that can finish the job.
-            return selectedOption?.isAvailable == true && selectionIsSatisfiable
+            return selectedOption?.isAvailable == true
+                && selectionIsSatisfiable
+                && localBrainPhase?.isFinished != false
         case .key:
             return !keyState.isBlocking
         case .phone:
@@ -196,6 +208,35 @@ final class SetupModel {
         }
     }
 
+    /// Continues from the brain picker, provisioning the private option first
+    /// when needed. The setup flow cannot reach Ready until real chat and
+    /// embedding probes have passed.
+    func continueFromBrain() async {
+        guard stage == .brain, let option = selectedOption else { return }
+        guard option.requirement == .download else {
+            advance()
+            return
+        }
+        guard option.id == .fullyLocal else { return }
+
+        localBrainPhase = .idle
+        let installed = await localBrainInstaller.install { [weak self] phase in
+            Task { @MainActor in self?.localBrainPhase = phase }
+        }
+        guard installed else { return }
+
+        // Re-run the source-of-truth probe so the persisted option records the
+        // model that actually answered, not merely the one we requested.
+        let selectedID = selectedOptionID
+        await probe()
+        selectedOptionID = selectedID
+        guard selectedOption?.requirement == .nothing else {
+            localBrainPhase = .failed("The local brain answered, but setup could not confirm it.")
+            return
+        }
+        advance()
+    }
+
     func goBack() {
         guard let previous = Stage(rawValue: stage.rawValue - 1) else { return }
         // Going forward skips `.key` for a brain that needs no key; going back
@@ -206,6 +247,14 @@ final class SetupModel {
             return
         }
         stage = previous
+    }
+
+    /// Deferring a key is an explicit navigation action, not a successful key
+    /// check. `advance()` correctly blocks an unverified key, so the old skip
+    /// button called it and did nothing.
+    func skipKey() {
+        guard stage == .key else { return }
+        stage = .phone
     }
 
     // MARK: Key

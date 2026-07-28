@@ -43,6 +43,9 @@ final class LocalBrainInstallerTests: XCTestCase {
             .startingRuntime,
             .downloadingModel(status: "", completedBytes: 0, totalBytes: 3_400_000_000),
             .downloadingModel(status: "", completedBytes: 3_400_000_000, totalBytes: 3_400_000_000),
+            .downloadingEmbeddingModel(status: "", completedBytes: 0, totalBytes: 274_000_000),
+            .downloadingEmbeddingModel(status: "", completedBytes: 274_000_000, totalBytes: 274_000_000),
+            .verifyingModels,
             .ready
         ]
         for step in steps {
@@ -62,6 +65,13 @@ final class LocalBrainInstallerTests: XCTestCase {
         XCTAssertNotNil(
             LocalBrainInstaller.Phase.downloadingModel(status: "pulling manifest", completedBytes: nil, totalBytes: nil)
                 .fraction
+        )
+        XCTAssertNotNil(
+            LocalBrainInstaller.Phase.downloadingEmbeddingModel(
+                status: "pulling manifest",
+                completedBytes: nil,
+                totalBytes: nil
+            ).fraction
         )
     }
 
@@ -112,20 +122,22 @@ final class LocalBrainInstallerTests: XCTestCase {
 
     // MARK: Sequencing
 
-    /// The runtime installer is not implemented yet, and it must fail loudly
-    /// rather than look like a working install that produced nothing.
-    func testTheUnimplementedRuntimeInstallerSaysSoInWordsTheOwnerCanRead() async {
-        let installer = OllamaRuntimeInstaller()
-        do {
-            try await installer.install { _, _ in }
-            XCTFail("the unimplemented installer reported success")
-        } catch {
-            let sentence = "\(error.localizedDescription)"
-            XCTAssertTrue(
-                sentence.localizedCaseInsensitiveContains("Ollama"),
-                "the owner is not told what to install: \(sentence)"
-            )
-        }
+    func testRuntimePinMatchesSAGEsKnownRelease() {
+        XCTAssertEqual(OllamaRuntimeInstaller.release, "v0.31.1")
+        XCTAssertEqual(OllamaRuntimeInstaller.archiveByteCount, 129_037_451)
+        XCTAssertEqual(OllamaRuntimeInstaller.archiveSHA256.count, 64)
+    }
+
+    func testRuntimeArchiveCannotWriteOutsideItsStagingDirectory() {
+        XCTAssertThrowsError(
+            try OllamaRuntimeInstaller.validateArchiveEntries("ollama\n../Library/LaunchAgents/evil\n")
+        )
+        XCTAssertThrowsError(
+            try OllamaRuntimeInstaller.validateArchiveEntries("/tmp/evil\n")
+        )
+        XCTAssertNoThrow(
+            try OllamaRuntimeInstaller.validateArchiveEntries("ollama\nlib/ollama/libmetal.dylib\n")
+        )
     }
 
     /// The last word must be `.ready` or `.failed` — a progress view that never
@@ -133,7 +145,7 @@ final class LocalBrainInstallerTests: XCTestCase {
     func testEveryRunEndsOnATerminalPhase() async {
         let installer = LocalBrainInstaller(
             client: OllamaClient(baseURL: URL(string: "http://127.0.0.1:1")!),
-            runtime: OllamaRuntimeInstaller()
+            runtime: FailingRuntime()
         )
 
         let phases = PhaseLog()
@@ -148,6 +160,14 @@ final class LocalBrainInstallerTests: XCTestCase {
         } else {
             XCTFail("an unreachable daemon and no installer should fail, not succeed")
         }
+    }
+
+    private struct FailingRuntime: OllamaRuntimeInstalling {
+        func install(onProgress: @Sendable (Int64, Int64?) -> Void) async throws {
+            throw OllamaRuntimeInstaller.Failure.downloadHTTP(503)
+        }
+
+        func start() async throws {}
     }
 
     /// A thread-safe recorder — `install` reports from its own actor context.

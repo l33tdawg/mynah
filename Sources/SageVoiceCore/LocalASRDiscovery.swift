@@ -104,6 +104,8 @@ public struct LocalASRDiscovery {
             "ggml-tiny.en.bin"
         ]
         let directories = [
+            (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+                .appendingPathComponent("Models", isDirectory: true),
             rootDirectory.appendingPathComponent("models"),
             rootDirectory.appendingPathComponent("resources/Models"),
             homeDirectory.appendingPathComponent("Library/Application Support/QuietType/Models"),
@@ -114,6 +116,59 @@ public struct LocalASRDiscovery {
         return directories.flatMap { directory in
             filenames.map { directory.appendingPathComponent($0) }
         }
+    }
+}
+
+/// Starts the best packaged speech engine and keeps the whisper.cpp fallback
+/// ready behind it.
+///
+/// The helpers and models are release assets, not runtime downloads. That keeps
+/// every executable inside the app's notarized signature and means first speech
+/// never asks the owner to install Python, Homebrew, or a command-line tool.
+public actor LocalASRRuntime {
+    public static let shared = LocalASRRuntime()
+
+    private var nativeSupervisor: WhisperKitServerSupervisor?
+
+    public init() {}
+
+    public func prepare(language: String = "en") async throws -> CascadingAudioFileTranscriber {
+        var backends: [AudioFileTranscribing] = []
+        var startupFailures: [String] = []
+
+        if let executable = WhisperKitServerBundleLocator.bundledExecutable() {
+            let supervisor: WhisperKitServerSupervisor
+            if let nativeSupervisor {
+                supervisor = nativeSupervisor
+            } else {
+                supervisor = WhisperKitServerSupervisor(executableURL: executable)
+                nativeSupervisor = supervisor
+            }
+            do {
+                try await supervisor.ensureRunning()
+                backends.append(WhisperKitServerTranscriber(
+                    endpoint: supervisor.baseURL.appendingPathComponent("v1/audio/transcriptions"),
+                    model: "large-v3-v20240930_626MB",
+                    language: language,
+                    timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+                ))
+            } catch {
+                startupFailures.append("WhisperKit: \(error)")
+            }
+        } else {
+            startupFailures.append("WhisperKit helper is not bundled")
+        }
+
+        if let fallback = LocalASRDiscovery().commandBackend(language: language) {
+            backends.append(fallback)
+        } else {
+            startupFailures.append("whisper.cpp helper or model is not bundled")
+        }
+
+        guard !backends.isEmpty else {
+            throw AudioTranscriberError.allBackendsFailed(startupFailures)
+        }
+        return CascadingAudioFileTranscriber(backends)
     }
 }
 

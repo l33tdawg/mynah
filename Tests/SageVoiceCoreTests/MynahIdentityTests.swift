@@ -309,4 +309,16 @@ final class MynahIdentityTests: XCTestCase {
             "\(loops) ToolLoop(s) but only \(configured) configured — an unconfigured one ignores the owner's reply-style setting"
         )
     }
+
+    func testLocalBrainTurnsOnSAGESemanticMemory() {
+        let environment = MynahIdentity.localSemanticEnvironment(
+            identityEnvironment: ["SAGE_IDENTITY_PATH": "/private/mynah.key"]
+        )
+
+        XCTAssertEqual(environment["SAGE_IDENTITY_PATH"], "/private/mynah.key")
+        XCTAssertEqual(environment["SAGE_EMBEDDING_PROVIDER"], "ollama")
+        XCTAssertEqual(environment["SAGE_EMBEDDING_MODEL"], "nomic-embed-text")
+        XCTAssertEqual(environment["SAGE_EMBEDDING_DIMENSION"], "768")
+        XCTAssertEqual(environment["SAGE_EMBEDDING_BASE_URL"], "http://127.0.0.1:11434")
+    }
 }

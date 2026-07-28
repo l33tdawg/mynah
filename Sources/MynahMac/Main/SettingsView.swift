@@ -178,6 +178,15 @@ struct SpeechFacts: Sendable, Equatable {
     }
 
     static func detect() -> SpeechFacts {
+        if let executable = WhisperKitServerBundleLocator.bundledExecutable(),
+           let model = WhisperKitModelLocator.localModelPath(
+                named: "openai_whisper-large-v3-v20240930_626MB"
+           ) {
+            return SpeechFacts(
+                transcriberPath: executable.path,
+                modelPath: model.path
+            )
+        }
         let discovery = LocalASRDiscovery()
         return SpeechFacts(
             transcriberPath: discovery.firstExecutable()?.path,

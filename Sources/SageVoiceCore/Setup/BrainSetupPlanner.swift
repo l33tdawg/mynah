@@ -333,9 +333,14 @@ public struct BrainSetupPlanner: Sendable {
             return (catalogIndex[lhs.id] ?? 0) < (catalogIndex[rhs.id] ?? 0)
         }
 
+        // Privacy is the product default. The local card is already rendered
+        // first structurally; recommend it too whenever this Mac can support
+        // the automated install. This is guidance, never a silent selection.
+        let recommended = ordered.first { $0.id == .fullyLocal && $0.isAvailable }
+            ?? ordered.first(where: \.isAvailable)
         return BrainSetupChoices(
             options: ordered,
-            recommendation: ordered.first(where: \.isAvailable).map(recommendation(for:))
+            recommendation: recommended.map(recommendation(for:))
         )
     }
 
@@ -583,8 +588,17 @@ public struct BrainSetupPlanner: Sendable {
             )
         }
 
-        let downloadBytes = LocalBrainModelCatalog.approximateModelDownloadBytes
-            + (runtime.isRuntimeInstalled ? 0 : LocalBrainModelCatalog.approximateRuntimeDownloadBytes)
+        let hasEmbeddingModel = runtime.installedModels.contains {
+            LocalBrainModelCatalog.normalize($0)
+                == LocalBrainModelCatalog.normalize(LocalBrainModelCatalog.embeddingModel)
+        }
+        let downloadBytes =
+            (runtime.preferredInstalledModel == nil
+                ? LocalBrainModelCatalog.approximateModelDownloadBytes : 0)
+            + (hasEmbeddingModel
+                ? 0 : LocalBrainModelCatalog.approximateEmbeddingModelDownloadBytes)
+            + (runtime.isRuntimeInstalled
+                ? 0 : LocalBrainModelCatalog.approximateRuntimeDownloadBytes)
         let runtimeNote = runtime.isRuntimeInstalled
             ? ""
             : " It needs the Ollama runtime on this Mac as well."
@@ -606,16 +620,9 @@ public struct BrainSetupPlanner: Sendable {
                 + "for.\(runtimeNote)\(tightNote)",
             requirement: .download,
             downloadBytes: downloadBytes,
-            availability: .unavailable(reason: manualDownloadReason(downloadBytes)),
+            availability: .available,
             model: LocalBrainModelCatalog.preferredModel
         )
-    }
-
-    /// Says what is missing and how big it is, and does not promise that pressing
-    /// anything here will fetch it.
-    private func manualDownloadReason(_ bytes: Int64) -> String {
-        "Mynah can't set this up for you yet. It needs a \(Self.gigabytes(bytes)) download "
-            + "that has to be done by hand first."
     }
 
     private func unsupportedHardwareReason(_ hardware: HardwareReport) -> String {
@@ -654,8 +661,7 @@ public struct BrainSetupPlanner: Sendable {
         case .installedCLINeedingSignIn:
             rationale = "This is installed already; signing in is the shortest path from here."
         case .fullyLocal:
-            rationale = "Nothing else was found on this Mac, and this one keeps everything you "
-                + "say on the machine."
+            rationale = "It keeps everything you say on this Mac, with no account or usage bill."
         }
         return BrainSetupRecommendation(optionID: option.id, rationale: rationale)
     }

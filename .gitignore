@@ -1,5 +1,7 @@
 .build/
 .swiftpm/
+.swiftpm-home/
+.clang-module-cache/
 *.xcodeproj
 .DS_Store
 models/

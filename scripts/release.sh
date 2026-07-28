@@ -45,6 +45,9 @@ swift test
 step "release build"
 swift build -c release --arch arm64
 
+step "provision signed speech assets"
+bash scripts/provision-asr-assets.sh
+
 step "package + sign"
 bash scripts/package-app.sh
 

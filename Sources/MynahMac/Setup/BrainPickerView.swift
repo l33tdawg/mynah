@@ -20,10 +20,13 @@ struct BrainStage: View {
             titles: titles,
             choices: model.choices,
             failure: model.probeFailure,
+            installPhase: model.localBrainPhase,
             selection: $model.selectedOptionID,
             canContinue: model.canContinue,
             onBack: { model.goBack() },
-            onContinue: { model.advance() },
+            onContinue: {
+                Task { await model.continueFromBrain() }
+            },
             onLookAgain: lookAgain
         )
     }
@@ -45,6 +48,7 @@ private struct BrainPicker: View {
     let titles: [String]
     let choices: BrainSetupChoices?
     let failure: String?
+    let installPhase: LocalBrainInstaller.Phase?
     @Binding var selection: BrainSetupOptionID?
     let canContinue: Bool
     let onBack: () -> Void
@@ -98,6 +102,21 @@ private struct BrainPicker: View {
                         .mynahFont(.callout)
                         .foregroundStyle(Palette.ink.secondary)
                         .mynahProse()
+                }
+
+                if let installPhase, installPhase != .idle {
+                    VStack(alignment: .leading, spacing: s2) {
+                        Text(installPhase.sentence)
+                            .mynahFont(.callout)
+                            .foregroundStyle(
+                                installPhase.isFinished ? Palette.ink.secondary : Palette.ink.primary
+                            )
+                        if let fraction = installPhase.fraction, !installPhase.isFinished {
+                            ProgressView(value: fraction)
+                                .progressViewStyle(.linear)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
                 }
 
                 ForEach(groups) { group in
@@ -382,6 +401,7 @@ private struct BrainPreviewPair: View {
             titles: SetupModel.Stage.allCases.map(\.title),
             choices: choices,
             failure: failure,
+            installPhase: nil,
             selection: $selection,
             canContinue: canContinue,
             onBack: {},

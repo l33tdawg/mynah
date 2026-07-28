@@ -48,6 +48,15 @@ SAGE_APP_SOURCE="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 SAGE_EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 SAGE_EXPECTED_ARCH="${SAGE_EXPECTED_ARCH:-arm64}"
 
+# Speech engines are release inputs, not things an owner installs. They are
+# staged before signing so Gatekeeper verifies the exact helpers we launch.
+ASR_ROOT="${SAGE_VOICE_ASR_ROOT:-$ROOT/vendor/asr}"
+ARGMAX_CLI_SOURCE="${SAGE_VOICE_ARGMAX_CLI:-$ASR_ROOT/bin/argmax-cli}"
+WHISPER_CLI_SOURCE="${SAGE_VOICE_WHISPER_CLI:-$ASR_ROOT/bin/whisper-cli}"
+WHISPERKIT_MODEL_SOURCE="${SAGE_VOICE_WHISPERKIT_MODEL:-$ASR_ROOT/models/openai_whisper-large-v3-v20240930_626MB}"
+WHISPER_CPP_MODEL_SOURCE="${SAGE_VOICE_WHISPER_CPP_MODEL:-$ASR_ROOT/models/ggml-small.en.bin}"
+REQUIRE_ASR_ASSETS="${SAGE_VOICE_REQUIRE_ASR_ASSETS:-1}"
+
 APP_VERSION="${SAGE_VOICE_VERSION:-}"
 APP_BUILD="${SAGE_VOICE_BUILD:-}"
 RELEASE_LABEL="${SAGE_VOICE_RELEASE_LABEL:-}"
@@ -198,6 +207,44 @@ cp "$APP_BIN" "$APP/Contents/MacOS/$APP_PRODUCT"
 cp "$CLI_BIN" "$APP/Contents/MacOS/$CLI_PRODUCT"
 chmod +x "$APP/Contents/MacOS/$APP_PRODUCT" "$APP/Contents/MacOS/$CLI_PRODUCT"
 
+if [[ -x "$ARGMAX_CLI_SOURCE" ]]; then
+  cp "$ARGMAX_CLI_SOURCE" "$APP/Contents/MacOS/argmax-cli"
+  chmod +x "$APP/Contents/MacOS/argmax-cli"
+elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
+  die "Required WhisperKit helper is missing: $ARGMAX_CLI_SOURCE
+Run scripts/provision-asr-assets.sh before packaging."
+fi
+
+if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
+  cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
+  chmod +x "$APP/Contents/MacOS/whisper-cli"
+elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
+  die "Required whisper.cpp fallback is missing: $WHISPER_CLI_SOURCE
+Run scripts/provision-asr-assets.sh before packaging."
+fi
+
+if [[ -d "$WHISPERKIT_MODEL_SOURCE" ]]; then
+  for item in AudioEncoder.mlmodelc MelSpectrogram.mlmodelc TextDecoder.mlmodelc \
+      config.json generation_config.json tokenizer.json tokenizer_config.json
+  do
+    [[ -e "$WHISPERKIT_MODEL_SOURCE/$item" ]] \
+      || die "WhisperKit model is incomplete; missing $WHISPERKIT_MODEL_SOURCE/$item"
+  done
+  mkdir -p "$APP/Contents/Resources/WhisperKit"
+  cp -R "$WHISPERKIT_MODEL_SOURCE" "$APP/Contents/Resources/WhisperKit/"
+elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
+  die "Required WhisperKit model is missing: $WHISPERKIT_MODEL_SOURCE
+Run scripts/provision-asr-assets.sh before packaging."
+fi
+
+if [[ -f "$WHISPER_CPP_MODEL_SOURCE" ]]; then
+  mkdir -p "$APP/Contents/Resources/Models"
+  cp "$WHISPER_CPP_MODEL_SOURCE" "$APP/Contents/Resources/Models/ggml-small.en.bin"
+elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
+  die "Required whisper.cpp fallback model is missing: $WHISPER_CPP_MODEL_SOURCE
+Run scripts/provision-asr-assets.sh before packaging."
+fi
+
 # A plist that names a file that is not there is a bundle that opens nothing at
 # all, with no error the owner can see. Check both directions.
 DECLARED_EXEC="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
@@ -232,6 +279,8 @@ if [[ -d "$APP/Contents/Resources/SAGE.app" ]]; then
 fi
 
 # 2. Our CLI helper. Also no entitlements — it never opens an audio device.
+[[ ! -f "$APP/Contents/MacOS/argmax-cli" ]] || sign "$APP/Contents/MacOS/argmax-cli"
+[[ ! -f "$APP/Contents/MacOS/whisper-cli" ]] || sign "$APP/Contents/MacOS/whisper-cli"
 sign "$APP/Contents/MacOS/$CLI_PRODUCT"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
@@ -257,6 +306,8 @@ GRANTED="$(capture codesign --display --entitlements :- "$APP")"
 for binary in \
   "$APP/Contents/MacOS/$APP_PRODUCT" \
   "$APP/Contents/MacOS/$CLI_PRODUCT" \
+  "$APP/Contents/MacOS/argmax-cli" \
+  "$APP/Contents/MacOS/whisper-cli" \
   "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-gui" \
   "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-tray"
 do

@@ -76,22 +76,28 @@ func runTranscribe(_ arguments: [String]) -> Never {
     guard let path = arguments.first else { usage() }
     let flags = parseFlags(Array(arguments.dropFirst()))
 
-    let endpoint = flags["endpoint"].flatMap { URL(string: $0) }
-        ?? URL(string: "http://127.0.0.1:50060/v1/audio/transcriptions")!
     let fileURL = URL(fileURLWithPath: path)
 
     guard FileManager.default.fileExists(atPath: fileURL.path) else {
         exit(fail("no such file: \(path)"))
     }
 
-    let transcriber = WhisperKitServerTranscriber(
-        endpoint: endpoint,
-        model: flags["model"] ?? "large-v3",
-        language: "en",
-        timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
-    )
-
     runAndExit {
+        let transcriber: AudioFileTranscribing
+        do {
+            if let endpoint = flags["endpoint"].flatMap({ URL(string: $0) }) {
+                transcriber = WhisperKitServerTranscriber(
+                    endpoint: endpoint,
+                    model: flags["model"] ?? "large-v3",
+                    language: "en",
+                    timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+                )
+            } else {
+                transcriber = try await LocalASRRuntime.shared.prepare()
+            }
+        } catch {
+            return fail("local speech recognition is not ready: \(error)")
+        }
         let started = Date()
         do {
             let text = try await transcriber.transcribe(
@@ -289,10 +295,14 @@ func runBrain(_ arguments: [String]) -> Never {
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
     // memories the owner has.
+    let identityEnvironment = MynahIdentity.applianceEnvironment()
+    let memoryEnvironment = backend.identifier == "ollama"
+        ? MynahIdentity.localSemanticEnvironment(identityEnvironment: identityEnvironment)
+        : identityEnvironment
     let mcp = MCPClient(
         executableURL: URL(fileURLWithPath: sagePath),
         arguments: ["mcp"],
-        environment: MynahIdentity.applianceEnvironment()
+        environment: memoryEnvironment
     )
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
@@ -611,14 +621,6 @@ func runDaemon(_ arguments: [String]) -> Never {
         account: flags["account"]
     ))
 
-    let transcriber = WhisperKitServerTranscriber(
-        endpoint: flags["endpoint"].flatMap { URL(string: $0) }
-            ?? URL(string: "http://127.0.0.1:50060/v1/audio/transcriptions")!,
-        model: flags["asr-model"] ?? "large-v3",
-        language: "en",
-        timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
-    )
-
     let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
@@ -652,23 +654,32 @@ func runDaemon(_ arguments: [String]) -> Never {
     }
     // Driven against the raw MCP client, not the composed catalogue: these are
     // SAGE's own boot tools, deliberately outside the model's allowlist.
-    let daemon = VoiceBridgeDaemon(
-        signal: signal,
-        transcriber: transcriber,
-        loop: loop,
-        configuration: daemonConfiguration,
-        ritual: arguments.contains("--no-sage-ritual")
-            ? nil
-            : SageRitual(
-                tools: mcp,
-                displayName: SageRitual.applianceDisplayName,
-                log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
-            ),
-        notes: notes,
-        conversations: ConversationStore()
-    )
-
     runAndExit {
+        if backend.identifier == "ollama" {
+            let ready = await LocalBrainInstaller(
+                runtime: OllamaRuntimeInstaller.shared
+            ).install()
+            guard ready else {
+                return fail("the local Ollama runtime, chat model, or nomic memory model is not ready")
+            }
+        }
+
+        let transcriber: AudioFileTranscribing
+        do {
+            if let endpoint = flags["endpoint"].flatMap({ URL(string: $0) }) {
+                transcriber = WhisperKitServerTranscriber(
+                    endpoint: endpoint,
+                    model: flags["asr-model"] ?? "large-v3",
+                    language: "en",
+                    timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+                )
+            } else {
+                transcriber = try await LocalASRRuntime.shared.prepare()
+            }
+        } catch {
+            return fail("local speech recognition is not ready: \(error)")
+        }
+
         do {
             let info = try await mcp.start()
             let tools = try await loop.availableTools()
@@ -679,6 +690,21 @@ func runDaemon(_ arguments: [String]) -> Never {
         } catch {
             return fail("startup failed: \(error)\n\(mcp.stderrLog)")
         }
+        let daemon = VoiceBridgeDaemon(
+            signal: signal,
+            transcriber: transcriber,
+            loop: loop,
+            configuration: daemonConfiguration,
+            ritual: arguments.contains("--no-sage-ritual")
+                ? nil
+                : SageRitual(
+                    tools: mcp,
+                    displayName: SageRitual.applianceDisplayName,
+                    log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+                ),
+            notes: notes,
+            conversations: ConversationStore()
+        )
         await daemon.run()
         mcp.stop()
         return 0

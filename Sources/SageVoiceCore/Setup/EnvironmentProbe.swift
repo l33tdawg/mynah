@@ -181,7 +181,17 @@ public struct EnvironmentProbe {
     }
 
     private func probeLocalRuntime() async -> LocalModelRuntimeReport {
-        let executable = locate(["ollama"], homeRelativePaths: [".local/bin/ollama"])
+        let managedRoot = "Library/Application Support/SAGE Voice Bridge/Runtime/"
+            + "ollama-\(OllamaRuntimeInstaller.release)"
+        let executable = locate(
+            ["ollama"],
+            homeRelativePaths: [
+                ".local/bin/ollama",
+                "\(managedRoot)/ollama",
+                "\(managedRoot)/bin/ollama",
+                "\(managedRoot)/ollama/ollama"
+            ]
+        )
 
         let baseURL = Self.ollamaBaseURL(environment: environment)
         var report = LocalModelRuntimeReport(
@@ -372,7 +382,10 @@ public struct EnvironmentProbe {
         if let override = nonEmptyEnvironmentValue("OLLAMA_MODELS") {
             return URL(fileURLWithPath: override)
         }
-        return homeDirectory.appendingPathComponent(".ollama/models")
+        return homeDirectory.appendingPathComponent(
+            "Library/Application Support/SAGE Voice Bridge/Ollama/Models",
+            isDirectory: true
+        )
     }
 
     // MARK: SAGE

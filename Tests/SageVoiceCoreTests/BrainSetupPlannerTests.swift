@@ -34,7 +34,7 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertFalse(claude.isAvailable, "Nothing can serve an agent CLI yet")
         XCTAssertTrue(try XCTUnwrap(claude.availability.reason).contains("Claude Code"))
         XCTAssertNotEqual(choices.recommendation?.optionID, .claudeCodeCLI)
-        XCTAssertEqual(choices.recommendation?.optionID, .anthropicAPIKey)
+        XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
     }
 
     /// The majority case the product is aimed at, and the one that had no screen
@@ -54,7 +54,7 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// An ambient key needs no input, so it outranks a key the owner has to go
     /// and fetch — but it still bills per token, which is why it is tier 2 rather
     /// than tier 0.
-    func testAmbientAPIKeyIsZeroInputAndBecomesTheRecommendation() throws {
+    func testAmbientAPIKeyIsZeroInputButPrivacyRemainsTheRecommendation() throws {
         let probe = EnvironmentProbeResult.machine(
             ambientKeys: AmbientAPIKeyReport(providers: [.openAI], variableNames: ["OPENAI_API_KEY"])
         )
@@ -64,7 +64,7 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertEqual(openAI.requirement, BrainSetupRequirement.nothing, "An ambient key needs nothing typed")
         XCTAssertEqual(openAI.tier, .ambientAPIKey)
 
-        XCTAssertEqual(choices.recommendation?.optionID, .openAIAPIKey)
+        XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
         XCTAssertLessThan(
             try XCTUnwrap(index(of: .openAIAPIKey, in: choices)),
             try XCTUnwrap(index(of: .anthropicAPIKey, in: choices))
@@ -86,7 +86,7 @@ final class BrainSetupPlannerTests: XCTestCase {
             try XCTUnwrap(index(of: .claudeCodeCLI, in: choices)),
             try XCTUnwrap(index(of: .anthropicAPIKey, in: choices))
         )
-        XCTAssertEqual(choices.recommendation?.optionID, .anthropicAPIKey)
+        XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
     }
 
     /// Unavailable options are kept so the UI can explain them, but they must
@@ -241,9 +241,8 @@ final class BrainSetupPlannerTests: XCTestCase {
         hardware.freeDiskBytes = nil
         let local = try XCTUnwrap(planner.plan(for: .machine(hardware: hardware)).option(withID: .fullyLocal))
 
-        let reason = try XCTUnwrap(local.availability.reason)
-        XCTAssertFalse(reason.contains("free"), "Unknown free space must not read as a full disk: \(reason)")
-        XCTAssertTrue(reason.contains("download"), "The real obstacle is the download: \(reason)")
+        XCTAssertTrue(local.isAvailable, "A failed disk measurement is not evidence of a full disk")
+        XCTAssertEqual(local.requirement, .download)
     }
 
     /// With unknown free space *and* the model already pulled there is nothing
@@ -265,7 +264,11 @@ final class BrainSetupPlannerTests: XCTestCase {
         let local = try XCTUnwrap(planner.plan(for: probe).option(withID: .fullyLocal))
 
         XCTAssertEqual(local.requirement, .download)
-        XCTAssertEqual(local.approximateDownloadBytes, LocalBrainModelCatalog.approximateModelDownloadBytes)
+        XCTAssertEqual(
+            local.approximateDownloadBytes,
+            LocalBrainModelCatalog.approximateModelDownloadBytes
+                + LocalBrainModelCatalog.approximateEmbeddingModelDownloadBytes
+        )
     }
 
     /// Quoting 3.4 GB and then also installing a runtime is the kind of surprise
@@ -277,6 +280,7 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertEqual(
             local.approximateDownloadBytes,
             LocalBrainModelCatalog.approximateModelDownloadBytes
+                + LocalBrainModelCatalog.approximateEmbeddingModelDownloadBytes
                 + LocalBrainModelCatalog.approximateRuntimeDownloadBytes
         )
         XCTAssertTrue(local.summary.contains("Ollama"), "The extra install must be stated: \(local.summary)")
@@ -507,14 +511,15 @@ final class BrainSetupPlannerTests: XCTestCase {
         }
     }
 
-    /// Setup owns two screens: "paste a key" and "nothing to do". An offered
-    /// option whose requirement is neither is a requirement with no way to
-    /// satisfy it, which the flow used to resolve by skipping ahead to Ready.
+    /// Setup owns key entry and the local provisioner. No other unsatisfied
+    /// requirement may be offered.
     func testNoOfferedOptionAsksForSomethingSetupCannotDeliver() {
         for probe in Self.plausibleMachines {
             for option in planner.plan(for: probe).availableOptions {
                 XCTAssertTrue(
-                    option.requirement == .nothing || option.requirement == .apiKey,
+                    option.requirement == .nothing
+                        || option.requirement == .apiKey
+                        || (option.id == .fullyLocal && option.requirement == .download),
                     "\(option.id) is offered with requirement \(option.requirement), "
                         + "which no stage in setup can satisfy"
                 )
@@ -522,11 +527,9 @@ final class BrainSetupPlannerTests: XCTestCase {
         }
     }
 
-    /// Nothing performs the model download, so the card must not promise one.
-    /// The option stays listed with its size and a reason — it is the only
-    /// choice that keeps the owner's words on the machine, and hiding it would
-    /// tell them nothing.
-    func testFullyLocalIsNotOfferedWhenItWouldNeedADownloadNothingPerforms() throws {
+    /// Missing runtime and model states are all handled by the idempotent local
+    /// provisioner, so the card remains actionable throughout recovery.
+    func testFullyLocalIsOfferedWhenItNeedsAutomatedProvisioning() throws {
         let states: [LocalModelRuntimeReport] = [
             LocalModelRuntimeReport(),
             LocalModelRuntimeReport(isRuntimeInstalled: true),
@@ -536,10 +539,10 @@ final class BrainSetupPlannerTests: XCTestCase {
             let local = try XCTUnwrap(
                 planner.plan(for: .machine(localRuntime: runtime)).option(withID: .fullyLocal)
             )
-            XCTAssertFalse(local.isAvailable, "A download nothing performs must not be offered")
+            XCTAssertTrue(local.isAvailable, "The provisioner can finish this state")
             XCTAssertEqual(local.requirement, .download)
-            XCTAssertNotNil(local.approximateDownloadBytes, "The size is still worth stating")
-            XCTAssertNotNil(local.availability.reason)
+            XCTAssertNotNil(local.approximateDownloadBytes)
+            XCTAssertNil(local.availability.reason)
         }
     }
 
@@ -639,7 +642,7 @@ extension LocalModelRuntimeReport {
             isRuntimeInstalled: true,
             runtimeExecutablePath: "/usr/local/bin/ollama",
             isDaemonReachable: true,
-            installedModels: ["qwen3.5:4b", "embeddinggemma:300m"]
+            installedModels: ["qwen3.5:4b", "nomic-embed-text"]
         )
     }
 }

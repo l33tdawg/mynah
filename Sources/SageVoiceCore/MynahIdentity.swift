@@ -155,6 +155,21 @@ public enum MynahIdentity {
         [environmentVariable: resolvedKeyPath(environment: environment, homeDirectory: homeDirectory)]
     }
 
+    /// Makes a spawned SAGE node use the local semantic model that Mynah has
+    /// already pulled and probed. SAGE defaults to deterministic hash vectors;
+    /// merely downloading `nomic-embed-text` would otherwise leave federation
+    /// and recall working but silently non-semantic.
+    public static func localSemanticEnvironment(
+        identityEnvironment: [String: String]
+    ) -> [String: String] {
+        identityEnvironment.merging([
+            "SAGE_EMBEDDING_PROVIDER": "ollama",
+            "SAGE_EMBEDDING_BASE_URL": "http://127.0.0.1:11434",
+            "SAGE_EMBEDDING_MODEL": LocalBrainModelCatalog.embeddingModel,
+            "SAGE_EMBEDDING_DIMENSION": "\(LocalBrainModelCatalog.embeddingDimensions)"
+        ]) { identity, _ in identity }
+    }
+
     /// The phone appliance's key.
     ///
     /// Separate from the app's because they are two agents with two grants —

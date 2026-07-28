@@ -229,6 +229,7 @@ actor ToolLoopTurnEngine: TurnEngine {
     private let mcp: MCPClient
     private let loop: ToolLoop
     private let ritual: SageRitual
+    private let localProvisioner: LocalBrainInstaller?
     private var catalogue: [MCPTool]?
     private var isPrepared = false
 
@@ -236,10 +237,14 @@ actor ToolLoopTurnEngine: TurnEngine {
         // Same identity as every other spawn site. Passing no environment here
         // is what gave the app a second identity: the node falls through to its
         // per-directory rule, and for a GUI app that directory is `/`.
+        let identityEnvironment = MynahIdentity.childEnvironment()
+        let memoryEnvironment = backend.identifier == "ollama"
+            ? MynahIdentity.localSemanticEnvironment(identityEnvironment: identityEnvironment)
+            : identityEnvironment
         let mcp = MCPClient(
             executableURL: memoryExecutable,
             arguments: ["mcp"],
-            environment: MynahIdentity.childEnvironment()
+            environment: memoryEnvironment
         )
         var sources: [CompositeToolSource.Source] = [
             CompositeToolSource.Source(
@@ -277,6 +282,9 @@ actor ToolLoopTurnEngine: TurnEngine {
         }
         self.mcp = mcp
         self.loop = ToolLoop(backend: backend, mcp: CompositeToolSource(sources: sources))
+        self.localProvisioner = backend.identifier == "ollama"
+            ? LocalBrainInstaller(runtime: OllamaRuntimeInstaller.shared)
+            : nil
         // The raw node, not the composed source: the boot ritual calls tools the
         // loop's allowlist deliberately withholds from the model.
         self.ritual = SageRitual(tools: mcp, agentName: SageRitual.appAgentName, displayName: SageRitual.appDisplayName)
@@ -284,6 +292,13 @@ actor ToolLoopTurnEngine: TurnEngine {
 
     func prepare() async throws {
         guard !isPrepared else { return }
+        if let localProvisioner {
+            guard await localProvisioner.install() else {
+                throw BrainBackendError.unreachable(
+                    "the managed local runtime or one of its required models is not ready"
+                )
+            }
+        }
         _ = try await mcp.start()
         let tools = try await loop.availableTools()
         catalogue = tools
