@@ -326,3 +326,27 @@ func TestAnyIssuedSecretAuthenticates(t *testing.T) {
 	}
 	t.Fatalf("only %d of 2 secrets registered", relay.count())
 }
+
+// A new link revokes the previous one.
+//
+// The owner assumes the most recent link they were sent is the only one that
+// works, and a call link is a live microphone. Before this, every //call left
+// its predecessor serving a page for as long as anything kept polling it.
+func TestIssuingALinkRevokesTheLast(t *testing.T) {
+	relay := testRelay()
+	server := httptest.NewServer(relay.routes())
+	defer server.Close()
+
+	listen(t, server, "first")
+	listen(t, server, "second")
+
+	response, err := server.Client().Get(server.URL + "/first")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("the previous link still answers %s; it is still a live microphone",
+			response.Status)
+	}
+}

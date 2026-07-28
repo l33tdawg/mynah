@@ -324,6 +324,19 @@ func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	waiting, known := r.appliances[body.Token]
 	if !known {
+		// Issuing a link revokes the last one.
+		//
+		// An appliance has exactly one live token, because the owner assumes the
+		// most recent link they were sent is the only one that works — and a
+		// call link is a live microphone. Without this, every //call left its
+		// predecessor serving a page forever, and old links in a Signal thread
+		// stayed usable indefinitely.
+		for token, other := range r.appliances {
+			if other.owner == who {
+				delete(r.appliances, token)
+				log.Printf("appliance %s issued a new link; the previous one is revoked", who)
+			}
+		}
 		waiting = &appliance{offers: make(chan *call, 1), owner: who}
 		r.appliances[body.Token] = waiting
 		log.Printf("appliance %s is listening", who)

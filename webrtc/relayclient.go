@@ -39,6 +39,17 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 	}
 
 	log.Printf("waiting for a call at %s/%s", endpoint, token)
+
+	// A link that is never used must not stay usable.
+	//
+	// The endpoint kept polling after a call ended, so a link sent over Signal
+	// remained a live microphone indefinitely — an old message in the thread was
+	// still an open door. Exiting takes the token with it: the relay serves 404
+	// for a token nobody is listening on.
+	//
+	// Generous enough to survive a dropped call and a reconnect, short enough
+	// that a forgotten link is not a standing invitation.
+	idle := time.Now()
 	var backoff time.Duration
 	for {
 		if err := ctx.Err(); err != nil {
@@ -50,6 +61,11 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 			case <-ctx.Done():
 				return nil
 			}
+		}
+
+		if time.Since(idle) > idleLifetime {
+			log.Printf("no call in %s; this link is now closed", idleLifetime)
+			return nil
 		}
 
 		incoming, err := poll(ctx, client, endpoint, token, secret)
@@ -70,6 +86,7 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 			continue // Nobody called. Poll again.
 		}
 
+		idle = time.Now()
 		log.Println("a call is coming in")
 		answer, err := calls.answerOffer(incoming.Offer, incoming.iceServers())
 		if err != nil {
@@ -81,6 +98,9 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 		}
 	}
 }
+
+// How long a link survives with nobody using it.
+const idleLifetime = 15 * time.Minute
 
 // nextBackoff grows the wait between failed polls, to a ceiling.
 //

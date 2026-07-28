@@ -151,19 +151,16 @@ func TestARealCallOverTheRelay(t *testing.T) {
 		}
 	}()
 
-	// Hearing yourself back is the loopback endpoint's behaviour, and proof the
-	// return path works. Against an appliance it is the wrong expectation: the
-	// audio goes to recognition, and this test sends packets that are not real
-	// speech, so there is correctly nothing to answer. Asserted only when the
-	// endpoint under test is looping back.
-	if os.Getenv("SAGE_CALL_EXPECT_ECHO") == "" {
-		t.Log("connected and sending; set SAGE_CALL_EXPECT_ECHO=1 against a " +
-			"loopback endpoint to assert the return path")
-		return
-	}
+	// Audio must come back without anyone having said anything.
+	//
+	// The appliance greets on connect, which makes the return path testable
+	// without speech: a loopback endpoint returns the caller's own audio, and a
+	// real one returns "Hey, I'm here." Either way silence here is the failure
+	// the owner reported as "I hear nothing" — a call that is up and carries
+	// nothing in the direction that matters.
 	select {
 	case <-heardBack:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the call connected but no audio came back")
+	case <-time.After(25 * time.Second):
+		t.Fatal("the call connected but nothing came back: no greeting, no echo")
 	}
 }
