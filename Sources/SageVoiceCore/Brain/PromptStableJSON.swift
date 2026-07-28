@@ -28,7 +28,34 @@ enum PromptStableJSON {
 
     /// The request body, with every object's keys in ascending order at every
     /// depth.
+    ///
+    /// Checked before encoding, because `JSONSerialization` does not report an
+    /// unencodable object by throwing a Swift error — it raises an Objective-C
+    /// exception, which `try` cannot catch and which terminates the process.
+    /// Every call site here is wrapped in a `do/catch` that reads as though it
+    /// handles this and does not.
+    ///
+    /// It cost a crash: the Ollama pull request was built with `JSONValue`
+    /// rather than Foundation values, and the app aborted the moment anybody
+    /// chose to run the model on their own Mac. A mistake of that shape should
+    /// surface as a failed request, which the setup screen can explain, not as
+    /// the application disappearing.
     static func data(from object: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        guard JSONSerialization.isValidJSONObject(object) else {
+            throw Failure.notEncodable(String(describing: type(of: object)))
+        }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    enum Failure: Error, CustomStringConvertible {
+        case notEncodable(String)
+
+        var description: String {
+            switch self {
+            case .notEncodable(let type):
+                return "a request body of type \(type) cannot be encoded as JSON; "
+                    + "it must be built from Foundation values, not Swift enums"
+            }
+        }
     }
 }

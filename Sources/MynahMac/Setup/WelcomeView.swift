@@ -40,7 +40,6 @@ struct WelcomeStage: View {
                         }
                     }
                 }
-                expectation.padding(.top, s3)
             }
             .frame(maxWidth: MynahWidth.stageColumn)
         } actions: {
@@ -70,21 +69,6 @@ struct WelcomeStage: View {
         .sheet(isPresented: $isExplaining) {
             WhatIsMynahSheet { isExplaining = false }
         }
-    }
-
-    /// The honest answer time, stated once, calmly, before the first wait.
-    ///
-    /// Every later screen has to live with whatever expectation this line sets,
-    /// so it uses the same sentence the waiting indicator will use. The number is
-    /// `.medium` rather than a larger size — a big "20" would read as a target
-    /// the machine is about to miss.
-    private var expectation: some View {
-        (Text(MynahCopy.firstTurnExpectation).fontWeight(.medium)
-            + Text(" It thinks before it speaks and looks through what it remembers, "
-                + "so a pause is normal — nothing has gone wrong while you wait."))
-            .mynahFont(.body)
-            .foregroundStyle(Palette.ink.secondary)
-            .mynahProse()
     }
 }
 
@@ -220,7 +204,7 @@ private struct ExplainerSection: Identifiable {
         ),
         ExplainerSection(
             id: "time",
-            title: "Answers take about twenty seconds",
+            title: "It thinks before it answers",
             body: "Mynah thinks before it speaks and looks through what it remembers. "
                 + "Twenty seconds is normal, and a question that needs a lot of "
                 + "remembering can take a minute. Nothing has gone wrong while you're "

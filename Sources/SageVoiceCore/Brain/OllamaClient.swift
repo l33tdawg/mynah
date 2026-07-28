@@ -352,7 +352,11 @@ public final class OllamaClient: @unchecked Sendable {
         // Deliberately unbounded. A model pull legitimately runs for many
         // minutes, and this client's normal budget is sized for a chat turn.
         request.timeoutInterval = .infinity
-        let body: [String: JSONValue] = ["model": .string(model), "stream": .bool(true)]
+        // Foundation values, not JSONValue. JSONSerialization encodes NSString,
+        // NSNumber and friends; a Swift enum is not one of those, and handing it
+        // one crashed the app outright the first time anybody chose to run the
+        // model on their own Mac.
+        let body: [String: Any] = ["model": model, "stream": true]
         request.httpBody = try PromptStableJSON.data(from: body)
 
         let (bytes, response) = try await session.bytes(for: request)

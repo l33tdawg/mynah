@@ -56,7 +56,14 @@ enum MynahCopy {
 
     /// Shown under the indicator on the owner's very first turn, once, never
     /// animated. Sets the expectation before the wait rather than during it.
-    static let firstTurnExpectation = "Answers usually take about twenty seconds."
+    ///
+    /// No number any more. It said twenty seconds, which was true of a local
+    /// model on a Mac mini and is not true of an API one — measured turns now
+    /// run three to nine seconds, and a search runs longer. A specific figure in
+    /// the interface is a promise that goes stale the moment the owner changes
+    /// their brain, and being told to expect twenty seconds and waiting four is
+    /// its own small failure of trust.
+    static let firstTurnExpectation = "The first answer takes a moment longer than the rest."
 
     /// "21s", "1m 14s". How long a turn took, in the smallest honest unit.
     ///
