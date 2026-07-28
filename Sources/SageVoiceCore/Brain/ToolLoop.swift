@@ -131,6 +131,56 @@ public struct ToolLoopProgress: Sendable {
     }
 }
 
+/// What a turn is doing right now, readable from outside the loop.
+///
+/// Exists because progress cannot be driven from loop position. The check used
+/// to sit inside the iteration body, below the `guard !response.toolCalls
+/// .isEmpty else { break }` that ends a turn — so the iteration which produces
+/// the *answer* exited before it could ever speak, and the entire second half of
+/// a one-tool turn was silent. On a model whose calls take 40-60s that is the
+/// 80-140 seconds of nothing the owner reported twice as a hang.
+///
+/// A wall clock does not care where the loop is, so the ticker reads this and
+/// the loop just keeps it current.
+final class TurnProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed: [String] = []
+    private var pending: String?
+    private var lastResult: String?
+    private var sent = 0
+
+    func choosing(_ tool: String?) {
+        lock.lock(); defer { lock.unlock() }
+        pending = tool
+    }
+
+    func finished(_ tool: String, result: String) {
+        lock.lock(); defer { lock.unlock() }
+        completed.append(tool)
+        lastResult = result
+        if pending == tool { pending = nil }
+    }
+
+    /// The next update, or `nil` when there is nothing worth saying.
+    ///
+    /// Counts a *sent* message rather than an attempt, so a tick with no news
+    /// does not spend one of the owner's three.
+    func nextUpdate(request: String) -> ToolLoopProgress? {
+        lock.lock(); defer { lock.unlock() }
+        guard sent < WorkingReply.maximumProgressMessages else { return nil }
+        let update = ToolLoopProgress(
+            completed: completed,
+            pending: pending,
+            index: sent,
+            lastResult: lastResult,
+            request: request
+        )
+        guard update.line != nil else { return nil }
+        sent += 1
+        return update
+    }
+}
+
 /// Everything the loop did, for logging and for latency reporting.
 public struct ToolLoopTrace: Sendable, Equatable {
     public var model: String
@@ -716,12 +766,23 @@ public final class ToolLoop: @unchecked Sendable {
         var reply = ""
         let cap = max(1, configuration.maxIterations)
 
-        // Progress cadence. Measured from the last thing the owner heard — which
-        // is the first `onToolDecision` line, not the start of the turn — so the
-        // two never arrive together.
-        var progressCount = 0
-        var lastSpokeAt = started
+        // Progress on a wall clock, in its own task, because the loop's position
+        // is not a clock. See `TurnProgress`.
         var lastToolResult: String?
+        let progress = TurnProgress()
+        let ticker: Task<Void, Never>? = onProgress.map { report in
+            Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(WorkingReply.progressAfterSeconds))
+                    guard !Task.isCancelled else { return }
+                    guard let update = progress.nextUpdate(request: transcript) else { continue }
+                    await report(update)
+                }
+            }
+        }
+        // Every exit path, including a throw: a ticker that outlives its turn
+        // narrates the next one.
+        defer { ticker?.cancel() }
 
         for iteration in 1...cap {
             // Checked before the call, not after, and never on the first pass:
@@ -798,27 +859,7 @@ public final class ToolLoop: @unchecked Sendable {
                 await onToolDecision(response.toolCalls.map(\.name))
             }
 
-            // Check in before running the next batch, not after: "checking
-            // online now" is worth saying while it is still true, and a message
-            // that lands after the work it describes has finished is noise.
-            if let onProgress,
-               progressCount < WorkingReply.maximumProgressMessages,
-               Date().timeIntervalSince(lastSpokeAt) >= WorkingReply.progressAfterSeconds {
-                let update = ToolLoopProgress(
-                    completed: trace.toolCalls.map(\.name),
-                    pending: response.toolCalls.first?.name,
-                    index: progressCount,
-                    lastResult: lastToolResult,
-                    request: transcript
-                )
-                // A turn with nothing new to report stays quiet and does not
-                // burn one of its three updates doing so.
-                if update.line != nil {
-                    await onProgress(update)
-                    progressCount += 1
-                    lastSpokeAt = Date()
-                }
-            }
+            progress.choosing(response.toolCalls.first?.name)
 
             // The deadline is only checked between iterations, so a model that
             // fans out inside one is unbounded by it: `defaultMaxIterations`
@@ -833,6 +874,7 @@ public final class ToolLoop: @unchecked Sendable {
                 let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
                 trace.toolCalls.append(record)
                 lastToolResult = record.result
+                progress.finished(record.name, result: record.result)
                 messages.append(
                     .toolResult(
                         name: call.name,

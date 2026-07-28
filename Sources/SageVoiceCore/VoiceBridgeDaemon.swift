@@ -427,13 +427,21 @@ public actor VoiceBridgeDaemon {
         // it needs nothing from the model and is not a prediction about it.
         spokeOnArrival = false
         let threadKey = recipient.description
-        if let opener = WorkingReply.instantLine(
+        if let opener = WorkingReply.opening(
             forRequest: transcript,
             previous: lastWorkingLines[threadKey]
         ) {
-            spokeOnArrival = true
-            lastWorkingLines[threadKey] = opener
-            await reply(opener, to: recipient)
+            // Only a *specific* opener suppresses the tool-decision line.
+            //
+            // Suppressing behind any opener at all silently killed every
+            // hand-written per-tool line in production: the catch-all matches
+            // essentially every request, so `spokeOnArrival` was true on every
+            // turn and the ~25 lines in `lines(forTools:)` were unreachable. A
+            // generic "On it." has told the owner nothing except that the
+            // message arrived, so "Looking that up online" is still news.
+            spokeOnArrival = opener.isSpecific
+            lastWorkingLines[threadKey] = opener.line
+            await reply(opener.line, to: recipient)
         }
 
         // Anything left over from a turn that failed after writing a note. The

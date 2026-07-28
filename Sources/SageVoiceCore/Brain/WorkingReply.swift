@@ -56,16 +56,43 @@ public enum WorkingReply {
     /// Silence remains the default. Anything that cannot be classified with
     /// confidence says nothing, because a wrong instant line is exactly the
     /// failure this is trying not to repeat.
+    /// An opening line, and whether it actually knew anything.
+    ///
+    /// The distinction is load-bearing. A specific opener ("Let me check your
+    /// backlog") has already told the owner what is happening, so the later
+    /// tool-decision line would be repetition. The catch-all ("On it.") has told
+    /// them nothing except that the message arrived — and suppressing the
+    /// tool-decision line behind it silently killed every hand-written per-tool
+    /// line in production, because the catch-all matches essentially everything.
+    public struct Opening: Sendable, Equatable {
+        public let line: String
+        /// True when a branch matched, false for the catch-all.
+        public let isSpecific: Bool
+    }
+
+    public static func opening(
+        forRequest request: String,
+        previous: String? = nil,
+        chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
+    ) -> Opening? {
+        guard let options = instantOptions(forRequest: request), !options.isEmpty else { return nil }
+        let fresh = options.filter { $0 != previous }
+        let pool = fresh.isEmpty ? options : fresh
+        let line = pool[min(max(chooser(pool.count), 0), pool.count - 1)]
+        return Opening(line: line, isSpecific: !catchAllOptions.contains(line))
+    }
+
     public static func instantLine(
         forRequest request: String,
         previous: String? = nil,
         chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
     ) -> String? {
-        guard let options = instantOptions(forRequest: request), !options.isEmpty else { return nil }
-        let fresh = options.filter { $0 != previous }
-        let pool = fresh.isEmpty ? options : fresh
-        return pool[min(max(chooser(pool.count), 0), pool.count - 1)]
+        opening(forRequest: request, previous: previous, chooser: chooser)?.line
     }
+
+    /// The catch-all pool, named once so `opening` can recognise it rather than
+    /// re-deriving which branch fired.
+    static let catchAllOptions = ["Let me have a look.", "One moment.", "On it."]
 
     /// Classifies the request from its wording alone. Deliberately conservative:
     /// every branch here has to be true of *any* turn that reaches it.
@@ -131,11 +158,7 @@ public enum WorkingReply {
         // Safe as a default because these three name nothing: no tool, no
         // source, no claim beyond having received the message. They are true of
         // any turn that reaches here, which small talk and fast writes do not.
-        return [
-            "Let me have a look.",
-            "One moment.",
-            "On it."
-        ]
+        return catchAllOptions
     }
 
     // MARK: - Not saying it twice
@@ -286,7 +309,9 @@ public enum WorkingReply {
     /// tool — a second or two in — and a tool-calling turn on this appliance runs
     /// 30–90 s per iteration. Shorter than this and two messages arrive close
     /// enough together to read as a stuck loop rather than someone working.
-    public static let progressAfterSeconds: TimeInterval = 45
+    /// Settable so a test can exercise the cadence without waiting 45 real
+    /// seconds. Never changed in production.
+    nonisolated(unsafe) public static var progressAfterSeconds: TimeInterval = 45
 
     /// How many progress messages one turn may send.
     ///
@@ -399,10 +424,6 @@ public enum WorkingReply {
         index: Int = 0,
         findings: Findings = .none
     ) -> String? {
-        // Nothing has finished yet: the first line already said this, and
-        // repeating it with no new information is the filler this avoids.
-        guard let last = completed.last else { return nil }
-
         let searched = completed.contains { $0 == "web_search" }
         let recalled = completed.contains { $0.hasPrefix("sage_") }
         // "a few options in Tokyo" — only when something was actually found and
@@ -425,6 +446,12 @@ public enum WorkingReply {
             default:
                 break
             }
+        }
+
+        // Nothing has finished and nothing is pending: there is genuinely no
+        // news, and repeating the opener is the filler this avoids.
+        guard let last = completed.last else {
+            return index == 0 ? nil : "Still going — this one's taking a while."
         }
 
         switch index {
