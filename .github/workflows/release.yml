@@ -1,0 +1,106 @@
+name: Release
+
+# Tag-driven, so the artifact and the tag cannot disagree about what shipped.
+# The manual trigger exists for dry runs: it builds and verifies but publishes
+# nothing.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Optional prerelease label (e.g. rc.1). Empty for stable."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      SAGE_VOICE_CODESIGN_IDENTITY: "Developer ID Application: Dhillon Kannabhiran (2N7GKZ8D8Z)"
+      MYNAH_RELEASE_LABEL: ${{ github.event.inputs.label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Decided once, up front, so every later step agrees about whether this is
+      # a real release. A half-signed artifact is worse than an unsigned one:
+      # it looks publishable.
+      - name: Check for signing secrets
+        id: secrets
+        env:
+          CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [[ -n "$CERT" && -n "$APPLE_ID" ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No signing secrets — building an ad-hoc artifact that will NOT be published."
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.secrets.outputs.signed == 'true'
+        env:
+          CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          CERT="$RUNNER_TEMP/developer-id.p12"
+          echo -n "$CERT_BASE64" | base64 --decode -o "$CERT"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          # Without this, codesign blocks on a GUI prompt no runner can answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$CERT"
+
+      - name: Build, sign, notarize, verify
+        env:
+          MYNAH_NOTARIZE: ${{ steps.secrets.outputs.signed }}
+          MYNAH_APPLE_ID: ${{ secrets.APPLE_ID }}
+          MYNAH_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MYNAH_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.secrets.outputs.signed }}" != "true" ]]; then
+            export SAGE_VOICE_CODESIGN_IDENTITY="-"
+          fi
+          bash scripts/release.sh
+
+      - name: Publish
+        # Tags only, and only when the artifact is genuinely signed and stapled.
+        # A workflow_dispatch dry run reaches here and stops, which is the point.
+        if: startsWith(github.ref, 'refs/tags/v') && steps.secrets.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DMG="$(ls dist/Mynah-*.dmg | head -1)"
+          PRERELEASE=""
+          # A tag carrying a hyphen is a prerelease by semver convention —
+          # v1.2.0-rc.1 must not land on the release page as the current build.
+          [[ "${GITHUB_REF_NAME}" == *-* ]] && PRERELEASE="--prerelease"
+          gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" \
+            --title "Mynah $GITHUB_REF_NAME" \
+            --generate-notes \
+            $PRERELEASE
+
+      - name: Keep the artifact even when publishing is skipped
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mynah-dmg
+          path: |
+            dist/Mynah-*.dmg
+            dist/Mynah-*.dmg.sha256
+          if-no-files-found: warn
