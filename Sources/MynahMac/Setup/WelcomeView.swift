@@ -20,7 +20,7 @@ struct WelcomeStage: View {
         StageShell(
             stageTitles: titles,
             currentIndex: SetupModel.Stage.welcome.rawValue,
-            glyph: "waveform",
+            glyph: StageIllustration.mark(.welcome),
             title: "Talk to Mynah from your phone.",
             subtitle: "Send it a voice note and it answers out loud, using what it "
                 + "remembers about you."

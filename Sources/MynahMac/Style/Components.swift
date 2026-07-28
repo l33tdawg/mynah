@@ -778,7 +778,7 @@ struct StageShell<Content: View, Actions: View>: View {
     private var column: some View {
         HStack(alignment: .top, spacing: s8) {
             if let glyph {
-                HeroGlyph(glyph)
+                StageMark(glyph)
                     .frame(width: MynahWidth.stageMarkColumn, alignment: .leading)
             }
 

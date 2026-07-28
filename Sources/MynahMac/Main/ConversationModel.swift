@@ -234,10 +234,19 @@ actor ToolLoopTurnEngine: TurnEngine {
     private var isPrepared = false
 
     init(backend: BrainBackend, memoryExecutable: URL, allowsWebSearch: Bool = true) {
-        // Same identity as every other spawn site. Passing no environment here
-        // is what gave the app a second identity: the node falls through to its
-        // per-directory rule, and for a GUI app that directory is `/`.
-        let identityEnvironment = MynahIdentity.childEnvironment()
+        // The appliance's identity, not one of its own.
+        //
+        // This used childEnvironment(), which resolves a different key —
+        // agent.key rather than appliance-agent.key — and a different key is a
+        // different agent. The node was right to show two: "MYNAH (Mac App)"
+        // beside "MYNAH (SAGE Voice Bridge Agent)", both with zero memories,
+        // because nothing said through one was visible to the other.
+        //
+        // One appliance is one agent. The owner grants a domain to a thing they
+        // installed once, and asking them to grant it twice — then wondering why
+        // the window cannot recall what the phone was told — is a split brain
+        // wearing two names.
+        let identityEnvironment = MynahIdentity.applianceEnvironment()
         let memoryEnvironment = backend.identifier == "ollama"
             ? MynahIdentity.localSemanticEnvironment(identityEnvironment: identityEnvironment)
             : identityEnvironment
@@ -287,7 +296,12 @@ actor ToolLoopTurnEngine: TurnEngine {
             : nil
         // The raw node, not the composed source: the boot ritual calls tools the
         // loop's allowlist deliberately withholds from the model.
-        self.ritual = SageRitual(tools: mcp, agentName: SageRitual.appAgentName, displayName: SageRitual.appDisplayName)
+        // Registered as the appliance, for the same reason it signs as it.
+        self.ritual = SageRitual(
+            tools: mcp,
+            agentName: SageRitual.applianceAgentName,
+            displayName: SageRitual.applianceDisplayName
+        )
     }
 
     func prepare() async throws {

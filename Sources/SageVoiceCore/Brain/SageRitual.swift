@@ -47,24 +47,35 @@ public actor SageRitual {
     /// unreachable by the name the existing ones answer to.
     public static let applianceAgentName = "SAGE Voice Bridge"
 
-    /// What the Mac app registers as.
+    /// Deliberately absent: a separate name for the Mac app.
     ///
-    /// Also becomes an immutable `RegisteredName`, so it is chosen to be what a
-    /// person says out loud rather than what looks good in a list: "send this to
-    /// Mynah". The list gets `applianceDisplayName` / `appDisplayName` instead.
-    public static let appAgentName = "Mynah"
+    /// There was one, and it registered a second agent. The window and the
+    /// daemon are one appliance — they answer the same owner, from the same
+    /// Mac, about the same things — but they signed with different keys and so
+    /// became "MYNAH (Mac App)" and "MYNAH (SAGE Voice Bridge Agent)" on the
+    /// node, each holding memories the other could not see, each needing its own
+    /// grant from the operator.
+    ///
+    /// The argument for the split was that "Mynah" is what a person says out
+    /// loud. That is a good argument for what the ONE agent should be called,
+    /// not for having two.
 
     /// What CEREBRUM shows for the appliance.
+    ///
+    /// Changed from "MYNAH (SAGE Voice Bridge Agent)", which read like a
+    /// component in a system diagram rather than the name of the thing the
+    /// owner installed. The registered name above is deliberately NOT changed
+    /// with it — it is immutable on the node, every appliance already carries
+    /// it, and renaming the constant would only make the next fresh install
+    /// unreachable by the name the existing ones answer to.
     ///
     /// The operator grants domain access per agent, so the row has to say which
     /// agent it is. `Name` is mutable (`sage_rename` → AgentUpdate) while
     /// `RegisteredName` is not, and `sage_find_agent` matches both — so the
     /// descriptive name here and the spoken name above are two views of one
     /// agent rather than a trade-off.
-    public static let applianceDisplayName = "MYNAH (SAGE Voice Bridge Agent)"
+    public static let applianceDisplayName = "Mynah - Sage Voice Bridge"
 
-    /// What CEREBRUM shows for the Mac app.
-    public static let appDisplayName = "MYNAH (Mac App)"
 
     /// Back-compatible alias. New code should name which one it means.
     public static let agentName = SageRitual.applianceAgentName

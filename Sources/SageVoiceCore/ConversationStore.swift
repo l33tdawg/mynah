@@ -124,27 +124,37 @@ public struct ConversationStore: @unchecked Sendable {
 
     // MARK: Load and save
 
+    /// Both file shapes merged into one, or empty when there is nothing
+    /// readable.
+    ///
+    /// Legacy threads inherit the file-level stamp, which is the best age
+    /// available for them and expires them rather than resurrecting them. One
+    /// copy rather than three: `load`, `save` and `threadsForDisplay` all have
+    /// to agree about what is on disk, and a fourth reader that merged the two
+    /// shapes slightly differently would surface as a conversation that resumes
+    /// but does not display, or the reverse.
+    private func storedThreads() -> [String: StoredThread] {
+        guard let data = try? Data(contentsOf: fileURL),
+              let file = try? JSONDecoder().decode(StoredFile.self, from: data) else {
+            return [:]
+        }
+        var merged: [String: StoredThread] = [:]
+        for (key, turns) in file.threads ?? [:] {
+            merged[key] = StoredThread(savedAt: file.savedAt, turns: turns)
+        }
+        for (key, thread) in file.conversations ?? [:] {
+            merged[key] = thread
+        }
+        return merged
+    }
+
     /// Saved histories, or empty when there is nothing usable.
     ///
     /// Never throws. A conversation that cannot be read is worth exactly one log
     /// line and a fresh start — refusing to boot the appliance because a cache
     /// file is corrupt would turn a cosmetic problem into an outage.
     public func load(now: Date = Date()) -> [String: [BrainMessage]] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let file = try? JSONDecoder().decode(StoredFile.self, from: data) else {
-            return [:]
-        }
-
-        // Merge both shapes, so a file written by the previous version still
-        // loads. Legacy threads inherit the file-level stamp, which is the best
-        // age available for them and expires them rather than resurrecting them.
-        var aged: [String: StoredThread] = [:]
-        for (key, turns) in file.threads ?? [:] {
-            aged[key] = StoredThread(savedAt: file.savedAt, turns: turns)
-        }
-        for (key, thread) in file.conversations ?? [:] {
-            aged[key] = thread
-        }
+        let aged = storedThreads()
 
         var expired = false
         var restored: [String: [BrainMessage]] = [:]
@@ -172,6 +182,82 @@ public struct ConversationStore: @unchecked Sendable {
         return restored
     }
 
+    // MARK: Reading it back to show it
+
+    /// One turn, in the only two voices this file can hold.
+    ///
+    /// Its own type rather than `BrainMessage`, for the reason `StoredTurn` is
+    /// not one either: a list built to be drawn must not be *able* to carry a
+    /// tool call or a system prompt, and reusing the model's message type is how
+    /// one eventually would.
+    public struct DisplayTurn: Equatable, Sendable {
+
+        public enum Speaker: Equatable, Sendable {
+            case owner
+            case mynah
+        }
+
+        public let speaker: Speaker
+        public let content: String
+
+        public init(speaker: Speaker, content: String) {
+            self.speaker = speaker
+            self.content = content
+        }
+    }
+
+    /// One saved conversation, as it stands on disk right now.
+    public struct DisplayThread: Equatable, Sendable, Identifiable {
+        /// Which conversation this is — a number, or `group:` and an id. Carried
+        /// so a caller holding more than one can tell them apart, not as
+        /// something to put in front of the owner as it stands.
+        public let id: String
+        /// When this conversation was last spoken in, and the only time this
+        /// file records. There is no per-turn stamp and nothing may invent one:
+        /// a wrong time in a transcript is worse than no time at all.
+        public let lastActivity: Date
+        public let turns: [DisplayTurn]
+    }
+
+    /// Every saved conversation, most recently spoken in first — with no expiry
+    /// applied and nothing removed from disk.
+    ///
+    /// Alongside `load(now:)` rather than inside it, because the two answer
+    /// different questions. `load` answers "what may the appliance carry into
+    /// the next turn?", where six hours old is the same as absent, and it
+    /// deletes what has aged out on the way past. This answers "what did the
+    /// owner and Mynah actually say to each other?" — and a window that emptied
+    /// itself six hours after the last message would read as broken rather than
+    /// tidy, while a *read* that deleted the words being read would be worse
+    /// still. Expiry stays exactly where the daemon put it.
+    ///
+    /// Never throws, for `load`'s reason: a file that will not parse is worth an
+    /// empty window and one log line, never a window that will not open.
+    public func threadsForDisplay() -> [DisplayThread] {
+        storedThreads()
+            .compactMap { key, thread -> DisplayThread? in
+                let turns: [DisplayTurn] = thread.turns.compactMap { turn in
+                    switch turn.role {
+                    case "user": return DisplayTurn(speaker: .owner, content: turn.content)
+                    case "assistant": return DisplayTurn(speaker: .mynah, content: turn.content)
+                    // `load`'s rule: anything else was never written by this
+                    // type, and dropping it beats guessing who said it.
+                    default: return nil
+                    }
+                }
+                guard !turns.isEmpty else { return nil }
+                return DisplayThread(id: key, lastActivity: thread.savedAt, turns: turns)
+            }
+            .sorted {
+                // The key breaks a tie, so the order never wobbles between two
+                // reads of an unchanged file: the daemon persists every thread
+                // in the same instant, so identical stamps are ordinary.
+                $0.lastActivity == $1.lastActivity
+                    ? $0.id < $1.id
+                    : $0.lastActivity > $1.lastActivity
+            }
+    }
+
     /// Best-effort rewrite dropping whatever has aged out. Never throws: this
     /// runs during boot and a tidy-up that cannot complete must not stop the
     /// appliance from starting.
@@ -193,16 +279,7 @@ public struct ConversationStore: @unchecked Sendable {
         // The daemon hands over *every* history on every turn, so stamping `now`
         // across the board is what let one active conversation keep every other
         // one alive forever.
-        var previous: [String: StoredThread] = [:]
-        if let data = try? Data(contentsOf: fileURL),
-           let file = try? JSONDecoder().decode(StoredFile.self, from: data) {
-            for (key, turns) in file.threads ?? [:] {
-                previous[key] = StoredThread(savedAt: file.savedAt, turns: turns)
-            }
-            for (key, thread) in file.conversations ?? [:] {
-                previous[key] = thread
-            }
-        }
+        let previous = storedThreads()
 
         var conversations: [String: StoredThread] = [:]
         for (key, messages) in histories {

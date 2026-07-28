@@ -195,6 +195,7 @@ struct ConnectKeyScreen: View {
         StageShell(
             stageTitles: titles,
             currentIndex: currentIndex,
+            glyph: StageIllustration.mark(.connect),
             title: "Paste your \(provider) key.",
             subtitle: "It takes two clicks on \(provider)'s own site. Mynah keeps the key on "
                 + "this Mac and never shows it again."

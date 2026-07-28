@@ -201,7 +201,11 @@ struct ReadyStage: View {
         StageShell(
             stageTitles: titles,
             currentIndex: SetupModel.Stage.ready.rawValue,
-            glyph: unfinished.isEmpty ? "checkmark" : "iphone.gen3",
+            // The drawing is the end of the setup story — a machine settled and
+            // listening — and it is only true when there is nothing left to do.
+            // The unfinished branch keeps a plain glyph because "one thing left"
+            // is not that ending.
+            glyph: unfinished.isEmpty ? StageIllustration.mark(.ready) : "iphone.gen3",
             title: unfinished.isEmpty ? "Mynah is ready." : "One thing left.",
             subtitle: subtitle
         ) {

@@ -82,6 +82,7 @@ private struct BrainPicker: View {
         StageShell(
             stageTitles: titles,
             currentIndex: SetupModel.Stage.brain.rawValue,
+            glyph: StageIllustration.mark(.brain),
             title: "Where should your words go?",
             subtitle: "Mynah needs somewhere to do its thinking, and this is the one "
                 + "choice that decides whether what you say ever leaves this Mac. You "

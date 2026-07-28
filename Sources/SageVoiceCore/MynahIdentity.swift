@@ -173,7 +173,7 @@ public enum MynahIdentity {
     /// The phone appliance's key.
     ///
     /// Separate from the app's because they are two agents with two grants —
-    /// see `SageRitual.appAgentName` — and separate from the node operator's
+    /// see `SageRitual.applianceAgentName` — and separate from the node operator's
     /// for the same reason everything else here is.
     ///
     /// This exists because the daemon had no pinned identity at all: it spawned

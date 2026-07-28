@@ -853,6 +853,7 @@ struct SignalLinkStage: View {
         StageShell(
             stageTitles: titles,
             currentIndex: currentIndex,
+            glyph: StageIllustration.mark(.phone),
             title: title,
             subtitle: subtitle
         ) {

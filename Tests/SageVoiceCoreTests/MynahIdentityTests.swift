@@ -212,17 +212,36 @@ final class MynahIdentityTests: XCTestCase {
         )
     }
 
-    // MARK: Telling the two agents apart
+    // MARK: One appliance, one agent
 
-    /// The operator's half of the owner's model — "operator goes into CEREBRUM
-    /// and sets access levels per domain" — only works if CEREBRUM's agent list
-    /// shows two distinguishable rows. The Mac app and the phone appliance are
-    /// two agents with two keys; two rows both reading "SAGE Voice Bridge" makes
-    /// "give this one read access" a coin flip.
-    func testTheAppAndTheApplianceRegisterUnderDifferentNames() {
-        XCTAssertNotEqual(SageRitual.appAgentName, SageRitual.applianceAgentName)
+    /// The window and the daemon must sign as the same agent.
+    ///
+    /// They did not. The app resolved agent.key and the daemon
+    /// appliance-agent.key, and a different key is a different agent — so the
+    /// node showed "MYNAH (Mac App)" beside "MYNAH (SAGE Voice Bridge Agent)",
+    /// both with zero memories, because nothing said through one was visible to
+    /// the other. The owner would also have had to grant every domain twice.
+    ///
+    /// Asserted through the environment each side actually spawns with, because
+    /// that is what decides it. Names are cosmetic; the key is the identity.
+    func testTheWindowAndTheDaemonSignAsTheSameAgent() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let daemon = MynahIdentity.applianceEnvironment(environment: [:], homeDirectory: home)
+        XCTAssertEqual(
+            daemon[MynahIdentity.environmentVariable],
+            MynahIdentity.applianceKeyURL(homeDirectory: home).path,
+            "the daemon no longer signs with the appliance key"
+        )
+    }
+
+    /// And there is no second name to register one with.
+    ///
+    /// The constants that made a separate Mac-app agent possible are gone. This
+    /// fails to compile if they come back, which is the point — the split was
+    /// reintroduced easily precisely because both names looked reasonable.
+    func testThereIsOnlyOneAgentName() {
         XCTAssertEqual(SageRitual.applianceAgentName, "SAGE Voice Bridge")
-        XCTAssertEqual(SageRitual.appAgentName, "Mynah")
+        XCTAssertEqual(SageRitual.agentName, SageRitual.applianceAgentName)
     }
 
     /// The appliance must not be renamed by this change. It is already
@@ -237,11 +256,13 @@ final class MynahIdentityTests: XCTestCase {
     /// (`internal/mcp/tools.go` matchesAgentName), so these are two views of one
     /// agent rather than a trade-off between addressable and descriptive.
     func testTheSpokenNameAndTheListedNameAreBothCovered() {
-        XCTAssertEqual(SageRitual.applianceDisplayName, "MYNAH (SAGE Voice Bridge Agent)")
-        XCTAssertEqual(SageRitual.appDisplayName, "MYNAH (Mac App)")
-        XCTAssertTrue(SageRitual.applianceDisplayName.contains("MYNAH"))
-        XCTAssertTrue(SageRitual.appDisplayName.contains("MYNAH"))
-        XCTAssertNotEqual(SageRitual.applianceDisplayName, SageRitual.appDisplayName)
+        XCTAssertEqual(SageRitual.applianceDisplayName, "Mynah - Sage Voice Bridge")
+        // The registered name is immutable on the node and is NOT renamed with
+        // the display name — doing so would not move the existing agent, it
+        // would leave the next fresh install answering to a name none of the
+        // deployed ones do.
+        XCTAssertEqual(SageRitual.applianceAgentName, "SAGE Voice Bridge")
+        XCTAssertTrue(SageRitual.applianceDisplayName.localizedCaseInsensitiveContains("mynah"))
     }
 
     /// The registered name becomes `RegisteredName`, which the node makes
@@ -254,7 +275,6 @@ final class MynahIdentityTests: XCTestCase {
             "SAGE Voice Bridge",
             "every appliance already on a node registered under this; it cannot be renamed by editing it here"
         )
-        XCTAssertEqual(SageRitual.appAgentName, "Mynah", "the name a person says when addressing the Mac app")
     }
 
     /// Both entry points must pin, and this is asserted because the first
