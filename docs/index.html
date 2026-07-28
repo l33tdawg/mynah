@@ -160,6 +160,32 @@
     text-align: center;
   }
 
+  /* Commands */
+
+  .cmds {
+    margin: 0 0 1rem;
+    border-top: 1px solid var(--line);
+  }
+  .cmds > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.75rem;
+    align-items: baseline;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .cmds .cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--accent);
+    flex: 0 0 auto;
+  }
+  .cmds .says {
+    flex: 1 1 14rem;
+    color: var(--dim);
+  }
+
   /* The privacy ledger */
 
   .ledger {
@@ -279,13 +305,15 @@
         <span class="why">
           Either one running on the Mac itself, which the app can install for
           you, or an API key from a provider you choose. The setup screen tells
-          you, for each option, where your words end up.
+          you, for each option, where your words end up. Messages and voice notes
+          work with either. Calling needs the API one, for a reason worth reading
+          under <a href="#calls">Calling it</a>.
         </span>
       </li>
     </ul>
     <p>
-      Calling needs one more thing, and it is described under
-      <a href="#calls">Calling it</a>.
+      Calling needs one further thing — a small relay you run — also described
+      under <a href="#calls">Calling it</a>.
     </p>
   </section>
 
@@ -312,6 +340,40 @@
       Every reply is marked with a small label. Signal draws Note to Self as a
       single column of your own messages, so without one there is no way to see
       at a glance which lines are yours.
+    </p>
+
+    <h3>Two things you can type</h3>
+    <p>
+      Anything else you send is just a question. These two are instructions to
+      the program, and it answers them itself rather than passing them to the
+      model.
+    </p>
+    <div class="cmds">
+      <div>
+        <span class="cmd">//help</span>
+        <span class="says">
+          Lists what you can say, and tells you whether calling will work on the
+          model you are running. Also answers to <code>//commands</code> and
+          <code>//?</code>.
+        </span>
+      </div>
+      <div>
+        <span class="cmd">//call</span>
+        <span class="says">
+          Sets up a voice call and sends back a link.
+        </span>
+      </div>
+    </div>
+    <p>
+      If you remember one thing, make it <code>//help</code>. You are in a
+      message thread and not reading a manual, and a command nobody has mentioned
+      to you does not exist as far as you are concerned — so that is the one that
+      goes and finds the others.
+    </p>
+    <p>
+      Both have to be the whole message. Writing <em>how do I use //call</em> is a
+      question and gets answered as one, not treated as an instruction to open a
+      microphone on your phone.
     </p>
   </section>
 
@@ -357,11 +419,20 @@
 
     <div class="aside">
       <p>
-        <strong>Calling needs a fast model.</strong> A model running on the Mac
-        itself takes the better part of a minute to begin answering. In a message
-        that is a wait. In a call it is a dead line, so Mynah refuses the call and
-        says so. If you want to talk out loud, the model has to be an API one.
-        Messages and voice notes work either way.
+        <strong>Calling needs an API model.</strong> A model running on the Mac
+        itself takes the better part of a minute to begin answering, because it
+        is sharing the machine with everything else Mynah is doing. In a message
+        thread that is a wait, and Mynah is built to make waiting bearable — it
+        tells you it has gone to look, and tells you again if it is taking a
+        while. In a conversation none of that helps. You would be listening to
+        silence on an open line, and a caller will not sit through a pause a
+        reader barely notices.
+      </p>
+      <p>
+        So Mynah refuses the call rather than letting you discover this halfway
+        through one. It tells you which model is running, why it will not do, and
+        that changing the model in its settings fixes it. Messages and voice
+        notes keep working on either kind, and it says that too.
       </p>
     </div>
 
@@ -410,7 +481,9 @@
       <div>
         <dt>Notes and memory <span class="tag stays">stays</span></dt>
         <dd>
-          Written to disk on your Mac, readable only by your account.
+          Written to disk on your Mac, readable only by your account. Mynah can
+          also pass something to another agent if you ask it to — but only if you
+          have connected one, and only when you ask.
         </dd>
       </div>
       <div>
@@ -430,12 +503,21 @@
         </dd>
       </div>
       <div>
-        <dt>Call audio <span class="tag stays">stays</span></dt>
+        <dt>Call audio, on a direct path <span class="tag stays">stays</span></dt>
         <dd>
-          The audio goes directly between your phone and the Mac wherever a
-          direct path exists. It does not pass through the relay. Where no direct
-          path exists it is relayed, but it stays encrypted end to end the whole
-          way — the relay carries sealed packets and cannot listen to them.
+          Usually there is one. Your phone and the Mac work out how to reach each
+          other, and on a home network that is the two of them across the room.
+          The audio goes straight between them and never touches the relay.
+        </dd>
+      </div>
+      <div>
+        <dt>Call audio, when there is no direct path <span class="tag leaves">leaves</span></dt>
+        <dd>
+          Some networks — mobile networks especially — allow no direct route at
+          all. The audio is then carried by a separate relay server, so the
+          packets do cross a rented machine. They stay sealed end to end the whole
+          way and cannot be listened to there. Running that server yourself is
+          what keeps even the fact of it in your hands.
         </dd>
       </div>
       <div>

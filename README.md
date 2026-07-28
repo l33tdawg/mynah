@@ -18,7 +18,30 @@ same mechanism Signal Desktop uses. Nothing is exposed to the internet.
 
 **Calls.** You send `//call`, get a link back, tap it, and talk. It is a real
 conversation: full duplex, you can cut it off mid-sentence and it stops. The link
-opens a web page, so there is nothing to install on the phone.
+opens a web page, so there is nothing to install on the phone. Calling needs an
+API model, for a reason set out under [Calls](#calls) below.
+
+## Commands
+
+Two, both intercepted before the model ever sees them. Everything else you send
+is just a question.
+
+    //help     what you can say. Also //commands and //?
+    //call     set up a voice call and send back a link
+
+`//help` exists because nothing else discovers a slash command. You are in a
+Signal thread, not reading this file, and a command nobody has told you about
+does not exist as far as you are concerned. It is also why `//help` is answered
+by the daemon rather than the model: asking a language model which commands it
+supports gets a confident guess, which is worse than no answer.
+
+`//help` describes what calling needs as part of the list rather than as a
+footnote, so on a local model you learn why `//call` will refuse before you try
+it and get told no.
+
+Both are anchored. A message that merely mentions `//call` — "how do I use
+//call" — is a question, not a command. That matters more than it looks: the cost
+of getting it wrong is a microphone opening on your phone.
 
 ## What it runs on
 
@@ -26,6 +49,7 @@ opens a web page, so there is nothing to install on the phone.
 - Signal, on a phone. Mynah links as a secondary device; your number and your
   primary phone are unchanged.
 - A model. Either local, via Ollama on the same Mac, or an API key you provide.
+  Messages and voice notes work on either. Calls need the API one.
 - [SAGE](https://github.com/l33tdawg/sage), which is where its memory lives. The
   app bundles a copy.
 
@@ -100,16 +124,32 @@ again" works.
 
 ## Calls
 
-`//call` is a slash command and not something the model classifies. "Call me" is
-a thing you might say about someone else, and the cost of getting it wrong is a
-microphone opening on your phone. It is anchored, so a message that merely
-mentions `//call` is a question.
+You send `//call`, you get a link, you tap it and talk. What that costs, and what
+it takes to make it work, is below.
 
-It refuses when the model is local. A 4B model on this hardware takes the best
-part of a minute to produce a first token. In a message that is a wait; in a call
-it is a dead line. The refusal names the model and says what to do about it.
+### Calling needs an API model
 
-What happens when you send it:
+This is a constraint with a reason, not a preference, and the appliance refuses
+rather than degrading.
+
+A model running on this Mac is competing with the appliance itself for the same
+GPU, and the measured floor is tens of seconds to a first token — 40 to 60
+seconds for a 4B. In a message thread that is a wait, and the whole progress
+apparatus above exists to make it a bearable one. In a conversation it is a dead
+line. A reader will tolerate a pause that a caller will not. Nothing else in the
+pipeline can absorb it either: the model is where the seconds are.
+
+So `//call` on a local model replies saying which model is running, why it will
+not work, and that switching the backend in Mynah's settings fixes it. Voice
+notes and messages still work either way, and it says that too — the point is to
+leave you with something to do rather than a refusal.
+
+The test is whether the backend is local, not a list of model names. The property
+that actually matters is time to first token; `isLocal` is a proxy for it that
+happens to be exactly right on this hardware today. A local model that got fast
+enough would need this revisited.
+
+### What happens when you send `//call`
 
 1. The Mac starts the call endpoint, which dials the relay and registers an
    unguessable 128-bit token. Issuing a link revokes the previous one — a call
@@ -212,8 +252,12 @@ failure that surfaces days later as "web search broke".
 
 ## Which model answers
 
-Chosen at install time, not compile time. The setup screen probes what this Mac
-can offer, ranks the options, and says per option where your words go.
+Chosen at install time, not compile time, and changeable afterwards in Mynah's
+settings. The setup screen probes what this Mac can offer, ranks the options, and
+says per option where your words go.
+
+The choice decides two things: where your words go, and whether you can call.
+Messages and voice notes work on anything.
 
 - **Local** — Ollama, `qwen3.5:4b` by default. The app can install the runtime
   and pull the model. Needs Apple Silicon and at least 8 GB of memory; 16 GB or
@@ -275,14 +319,16 @@ places where that is not exactly true are worth stating precisely.
   call happened, when, and between which addresses. That is a real cost, and it
   is why the relay is a binary you run on a host you rent rather than a service
   anyone is asked to trust.
-- **Calls: the media** does not go through the relay. ICE negotiates a direct
-  path, and on a home network that is your phone and the Mac across the room.
+- **Calls: the media** never reaches the relay, on any call. ICE negotiates a
+  direct path, and on a home network that is your phone and the Mac across the
+  room. Even a relayed call is carried by TURN and stays sealed under DTLS-SRTP,
+  so the signalling relay does not see media in either case.
 - **When no direct path exists** — symmetric NAT, which is common on cellular —
-  TURN relays the media. It stays sealed under DTLS-SRTP so the relay cannot
-  listen to it, but it does see that a call happened, for how long, and between
-  which addresses. Running your own TURN server keeps even that metadata in your
-  hands, which is why the endpoint takes a URL rather than shipping someone
-  else's.
+  the TURN server carries the audio. That is a second, separate server, though
+  in practice you will run it on the same host. It cannot read what it carries,
+  but it does see that a call happened, for how long, and between which
+  addresses. Running your own keeps even that metadata in your hands, which is
+  why the endpoint takes a URL rather than shipping someone else's.
 - **STUN defaults to Google's public server.** Point it elsewhere if that matters
   to you.
 - **The call page** loads nothing external — no CDN, no font, no analytics —
