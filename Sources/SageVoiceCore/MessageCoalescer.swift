@@ -137,7 +137,7 @@ actor MessageInbox {
         pending = deferred
 
         while batch.count < MessageCoalescer.maximumMerged {
-            let before = pending.count + batch.count
+            let sizeBeforeWaiting = batch.count
             try? await Task.sleep(for: quietWindow)
             guard !pending.isEmpty else { break }
 
@@ -150,9 +150,14 @@ actor MessageInbox {
                 }
             }
             pending = stillDeferred
-            // Nothing for this thread arrived during the window, so waiting
-            // again would only delay a turn that is already complete.
-            if pending.count + batch.count == before { break }
+            // Only *this batch* growing earns another window.
+            //
+            // The condition used to count everything queued, so a second thread
+            // typing steadily kept restarting the window for the first one:
+            // measured at 1.86 s for a one-message batch that should have left
+            // after 0.1 s. The owner's turn was being delayed by someone else's
+            // typing — and on Note-to-Self, by their own other conversation.
+            if batch.count == sizeBeforeWaiting { break }
         }
         return batch
     }

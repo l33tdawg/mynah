@@ -154,4 +154,106 @@ final class ConversationStoreTests: XCTestCase {
             FileManager.default.fileExists(atPath: directory.appendingPathComponent("conversations.json").path)
         )
     }
+
+    // MARK: Found by review
+
+    /// `savedAt` was one stamp for the whole file, and the daemon persists every
+    /// history on every turn — so one active conversation kept every other one
+    /// alive. A three-day-old thread survived the six-hour expiry because a
+    /// different thread said hello.
+    func testAnIdleThreadIsNotKeptAliveByAnActiveOne() throws {
+        let now = Date()
+        let threeDaysAgo = now.addingTimeInterval(-3 * 24 * 60 * 60)
+
+        try store.save(["+A": [.user("shops in Chiang Mai"), .assistant("here they are")]], now: threeDaysAgo)
+
+        var histories = store.load(now: threeDaysAgo.addingTimeInterval(60))
+        histories["+B"] = [.user("hello"), .assistant("hi")]
+        try store.save(histories, now: now)
+
+        let restored = store.load(now: now)
+        XCTAssertNil(restored["+A"], "a three-day-old thread was refreshed by another thread's turn")
+        XCTAssertEqual(restored["+B"]?.count, 2, "the active thread should still be there")
+    }
+
+    /// Re-saving an unchanged conversation is not the owner speaking, so it must
+    /// not restart that conversation's clock.
+    func testResavingUnchangedContentDoesNotRestartTheClock() throws {
+        let now = Date()
+        let fiveHoursAgo = now.addingTimeInterval(-5 * 60 * 60)
+        let turns: [BrainMessage] = [.user("shops in Tokyo"), .assistant("Clockface Modular.")]
+
+        try store.save([thread: turns], now: fiveHoursAgo)
+        try store.save([thread: turns], now: now)
+
+        XCTAssertNil(
+            store.load(now: fiveHoursAgo.addingTimeInterval(ConversationStore.maximumAge + 60))[thread],
+            "an unchanged thread had its expiry pushed forward by a routine save"
+        )
+    }
+
+    /// "Expires after six hours" was a read-time filter only. The owner's
+    /// plaintext stayed on disk indefinitely — a 48-hour-old file loaded as empty
+    /// while still containing what they had said.
+    func testExpiryActuallyRemovesTheWords() throws {
+        try store.save(
+            [thread: [.user("my landlord's bank details are 1234"), .assistant("noted")]],
+            now: Date().addingTimeInterval(-48 * 60 * 60)
+        )
+
+        XCTAssertTrue(store.load(now: Date()).isEmpty)
+
+        let file = directory.appendingPathComponent("conversations.json")
+        let raw = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        XCTAssertFalse(raw.contains("landlord"), "expired plaintext is still on disk")
+    }
+
+    /// `conversationOnly` drops tool results, but `SourceLinks` lifts their URLs
+    /// onto the assistant turn — and a URL is frequently the secret itself.
+    /// Persisting a booking link recalled from SAGE is the leak this file is
+    /// documented not to have.
+    func testURLsHarvestedFromToolResultsAreNotPersisted() throws {
+        let carried = VoiceBridgeDaemon.conversationOnly([
+            .user("what did we say about the villa"),
+            .toolResult(
+                name: "sage_recall",
+                content: "villa booking https://private.example.com/booking/SECRET-TOKEN-123",
+                id: "1"
+            ),
+            .assistant("You booked it in March.")
+        ])
+        // The live conversation still carries them — that is the feature.
+        XCTAssertTrue(carried.last?.content.contains("SECRET-TOKEN-123") == true)
+
+        try store.save([thread: carried])
+        let raw = try String(contentsOf: directory.appendingPathComponent("conversations.json"), encoding: .utf8)
+        XCTAssertFalse(raw.contains("SECRET-TOKEN-123"), "a tool-result URL reached the disk")
+        XCTAssertTrue(
+            store.load()[thread]?.last?.content.contains("You booked it in March") == true,
+            "stripping the sources line ate the answer"
+        )
+    }
+
+    /// A file written by the previous version has no per-thread stamps. It must
+    /// still load, and its threads must expire on the file's age rather than be
+    /// treated as brand new.
+    func testAFileFromThePreviousVersionStillLoadsAndStillExpires() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("conversations.json")
+
+        func writeLegacy(ageInHours: Double) throws {
+            let savedAt = Date().addingTimeInterval(-ageInHours * 60 * 60)
+            let payload: [String: Any] = [
+                "savedAt": savedAt.timeIntervalSinceReferenceDate,
+                "threads": [thread: [["role": "user", "content": "legacy turn"]]]
+            ]
+            try JSONSerialization.data(withJSONObject: payload).write(to: file)
+        }
+
+        try writeLegacy(ageInHours: 1)
+        XCTAssertEqual(store.load()[thread]?.first?.content, "legacy turn", "an upgrade lost the conversation")
+
+        try writeLegacy(ageInHours: 48)
+        XCTAssertTrue(store.load().isEmpty, "a legacy file was treated as new rather than expired")
+    }
 }

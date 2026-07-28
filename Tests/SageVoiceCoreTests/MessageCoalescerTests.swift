@@ -157,4 +157,28 @@ final class MessageCoalescerTests: XCTestCase {
         XCTAssertLessThanOrEqual(MessageCoalescer.defaultQuietWindow, .seconds(3))
         XCTAssertGreaterThanOrEqual(MessageCoalescer.defaultQuietWindow, .seconds(1))
     }
+
+    /// A second thread typing steadily kept restarting the first thread's quiet
+    /// window: measured at 1.86s for a one-message batch that should have left
+    /// after one window. On Note-to-Self that is the owner delaying themselves.
+    func testAChattySecondThreadDoesNotDelayTheFirst() async {
+        let inbox = MessageInbox()
+        await inbox.append(message("look up xyz", from: "+60123821767"))
+
+        let noise = Task {
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(20))
+                if Task.isCancelled { return }
+                await inbox.append(message("noise", from: "+15550000000"))
+            }
+        }
+
+        let started = ContinuousClock.now
+        let batch = await inbox.takeBatch(quietWindow: .milliseconds(60))
+        let waited = ContinuousClock.now - started
+        noise.cancel()
+
+        XCTAssertEqual(batch.count, 1)
+        XCTAssertLessThan(waited, .milliseconds(300), "another thread's traffic held this batch open")
+    }
 }

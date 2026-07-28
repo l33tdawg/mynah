@@ -21,6 +21,14 @@ import Foundation
 /// last turn's memory dump stops calling tools and recycles it — so this file
 /// never holds a SAGE memory dump or a page of search results.
 ///
+/// One exception had to be closed by hand. `SourceLinks` appends a
+/// `(sources: ...)` line to an assistant turn carrying the URLs a tool returned,
+/// which is why "give me the links for those" works. Those URLs came out of tool
+/// results, and a URL can be a secret — a signed download, a booking
+/// confirmation, a share link recalled from SAGE. Carrying them for the rest of
+/// a live conversation is the feature; writing them to disk to be reloaded
+/// tomorrow is not, so `strippingSourceLinks` removes them on the way in.
+///
 /// It does hold the owner's own words, which is why it is written with the same
 /// owner-only permissions as their provider keys and their notes.
 /// `@unchecked` for the injected `FileManager`, which is not `Sendable`. The
@@ -69,14 +77,49 @@ public struct ConversationStore: @unchecked Sendable {
     /// and provider-specific reasoning text, none of which is persisted here —
     /// and making it `Codable` would invite a future change to start persisting
     /// them, which is the thing this must not do.
-    private struct StoredTurn: Codable {
+    private struct StoredTurn: Codable, Equatable {
         var role: String
         var content: String
     }
 
-    private struct StoredFile: Codable {
+    private struct StoredThread: Codable, Equatable {
+        /// When *this* conversation was last spoken in.
+        ///
+        /// Per thread, not per file. A single `savedAt` looked equivalent and was
+        /// not: the daemon persists every history on every turn, so one active
+        /// thread stamped a fresh time onto all of them and kept a conversation
+        /// nobody had touched for days permanently resumable. Verified: a
+        /// three-day-old thread survived the six-hour expiry because a different
+        /// thread said hello.
         var savedAt: Date
-        var threads: [String: [StoredTurn]]
+        var turns: [StoredTurn]
+    }
+
+    private struct StoredFile: Codable {
+        /// Kept for files written by the previous version, which had no
+        /// per-thread stamp. Used as the fallback age for those threads so an
+        /// upgrade expires them correctly instead of treating them as new.
+        var savedAt: Date
+        var threads: [String: [StoredTurn]]?
+        var conversations: [String: StoredThread]?
+    }
+
+    /// Removes the `(sources: ...)` line `SourceLinks.annotated` appends.
+    ///
+    /// Those URLs originate in tool results — the one thing this file is
+    /// documented never to hold. They are worth carrying inside a live
+    /// conversation and are not worth persisting: a URL is frequently the secret
+    /// itself, and a booking link recalled from SAGE would otherwise sit in
+    /// plaintext on disk long after the conversation that produced it.
+    ///
+    /// Matched on the exact prefix `SourceLinks` writes, and only at the start of
+    /// a line, so an answer that happens to discuss sources keeps its words.
+    static func strippingSourceLinks(_ content: String) -> String {
+        guard content.contains("\n(sources: ") else { return content }
+        let kept = content
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.hasPrefix("(sources: ") }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: Load and save
@@ -91,11 +134,26 @@ public struct ConversationStore: @unchecked Sendable {
               let file = try? JSONDecoder().decode(StoredFile.self, from: data) else {
             return [:]
         }
-        guard now.timeIntervalSince(file.savedAt) <= Self.maximumAge else { return [:] }
 
+        // Merge both shapes, so a file written by the previous version still
+        // loads. Legacy threads inherit the file-level stamp, which is the best
+        // age available for them and expires them rather than resurrecting them.
+        var aged: [String: StoredThread] = [:]
+        for (key, turns) in file.threads ?? [:] {
+            aged[key] = StoredThread(savedAt: file.savedAt, turns: turns)
+        }
+        for (key, thread) in file.conversations ?? [:] {
+            aged[key] = thread
+        }
+
+        var expired = false
         var restored: [String: [BrainMessage]] = [:]
-        for (key, turns) in file.threads {
-            let messages: [BrainMessage] = turns.compactMap { turn in
+        for (key, thread) in aged {
+            guard now.timeIntervalSince(thread.savedAt) <= Self.maximumAge else {
+                expired = true
+                continue
+            }
+            let messages: [BrainMessage] = thread.turns.compactMap { turn in
                 switch turn.role {
                 case "user": return .user(turn.content)
                 case "assistant": return .assistant(turn.content)
@@ -106,7 +164,23 @@ public struct ConversationStore: @unchecked Sendable {
             }
             if !messages.isEmpty { restored[key] = messages }
         }
+        // Expiry has to remove the words, not just decline to read them. Before
+        // this, "expires after six hours" was a read-time filter and the owner's
+        // plaintext stayed on disk indefinitely — verified with a 48-hour-old
+        // file that loaded as empty while still containing what they had said.
+        if expired { purge(keeping: restored, now: now) }
         return restored
+    }
+
+    /// Best-effort rewrite dropping whatever has aged out. Never throws: this
+    /// runs during boot and a tidy-up that cannot complete must not stop the
+    /// appliance from starting.
+    private func purge(keeping survivors: [String: [BrainMessage]], now: Date) {
+        if survivors.isEmpty {
+            try? fileManager.removeItem(at: fileURL)
+            return
+        }
+        try? save(survivors, now: now)
     }
 
     /// Writes atomically with owner-only permissions.
@@ -115,15 +189,49 @@ public struct ConversationStore: @unchecked Sendable {
     /// half-written history file is worse than none — it would decode as a
     /// truncated conversation and be resumed as if complete.
     public func save(_ histories: [String: [BrainMessage]], now: Date = Date()) throws {
-        var threads: [String: [StoredTurn]] = [:]
-        for (key, messages) in histories {
-            let turns = messages
-                .filter { $0.role == .user || $0.role == .assistant }
-                .suffix(Self.maximumTurnsPerThread)
-                .map { StoredTurn(role: $0.role.rawValue, content: $0.content) }
-            if !turns.isEmpty { threads[key] = Array(turns) }
+        // What is already on disk, so an untouched thread keeps its own age.
+        // The daemon hands over *every* history on every turn, so stamping `now`
+        // across the board is what let one active conversation keep every other
+        // one alive forever.
+        var previous: [String: StoredThread] = [:]
+        if let data = try? Data(contentsOf: fileURL),
+           let file = try? JSONDecoder().decode(StoredFile.self, from: data) {
+            for (key, turns) in file.threads ?? [:] {
+                previous[key] = StoredThread(savedAt: file.savedAt, turns: turns)
+            }
+            for (key, thread) in file.conversations ?? [:] {
+                previous[key] = thread
+            }
         }
-        guard !threads.isEmpty else {
+
+        var conversations: [String: StoredThread] = [:]
+        for (key, messages) in histories {
+            let turns = Array(
+                messages
+                    .filter { $0.role == .user || $0.role == .assistant }
+                    .suffix(Self.maximumTurnsPerThread)
+                    .map {
+                        StoredTurn(
+                            role: $0.role.rawValue,
+                            content: Self.strippingSourceLinks($0.content)
+                        )
+                    }
+            )
+            guard !turns.isEmpty else { continue }
+
+            // Unchanged content means nothing was said in this thread, so its
+            // clock does not restart.
+            let stamp: Date
+            if let old = previous[key], old.turns == turns {
+                stamp = old.savedAt
+            } else {
+                stamp = now
+            }
+            guard now.timeIntervalSince(stamp) <= Self.maximumAge else { continue }
+            conversations[key] = StoredThread(savedAt: stamp, turns: turns)
+        }
+
+        guard !conversations.isEmpty else {
             try? fileManager.removeItem(at: fileURL)
             return
         }
@@ -135,7 +243,12 @@ public struct ConversationStore: @unchecked Sendable {
         // Stable on disk so a diff between two saves shows what the owner said,
         // not a reshuffled dictionary.
         encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(StoredFile(savedAt: now, threads: threads))
+        // `threads` is left nil: the legacy shape is read for upgrades and never
+        // written again, so an old file converts to the per-thread shape the
+        // first time anything is saved.
+        let data = try encoder.encode(
+            StoredFile(savedAt: now, threads: nil, conversations: conversations)
+        )
         try data.write(to: fileURL, options: .atomic)
         try OwnerOnlyFileSecurity.protectFile(fileURL, fileManager: fileManager)
     }

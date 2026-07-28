@@ -123,4 +123,29 @@ final class LinkifyTests: XCTestCase {
         let once = Linkify.promotingBareDomains(in: "check mamaison.com.my and kyotokatsu.com")
         XCTAssertEqual(Linkify.promotingBareDomains(in: once), once)
     }
+
+    // MARK: Found by review
+
+    /// A bare domain inside a query string is a parameter, not a link.
+    /// Rewriting it changes where the link goes.
+    func testADomainInsideAnExistingURLIsNotRewritten() {
+        let text = "https://translate.google.com/translate?u=example.com"
+        XCTAssertEqual(Linkify.promotingBareDomains(in: text), text)
+    }
+
+    /// The appliance says its own bundle names out loud.
+    func testMacAppBundlesAreNotLinks() {
+        for text in ["open Mynah.app to see it", "verify SAGE.app before installing"] {
+            XCTAssertEqual(Linkify.promotingBareDomains(in: text), text)
+        }
+    }
+
+    /// SAGE memory ids are short hex and get spoken in sentences.
+    func testIdentifierShapedTokensAreNotLinks() {
+        let text = "the memory is 7f3a.9c21.co"
+        XCTAssertEqual(Linkify.promotingBareDomains(in: text), text)
+        XCTAssertTrue(Linkify.isIdentifierShaped("7f3a.9c21.co"))
+        XCTAssertFalse(Linkify.isIdentifierShaped("sage.my"), "a real host was called an identifier")
+        XCTAssertFalse(Linkify.isIdentifierShaped("mamaison.com.my"))
+    }
 }
