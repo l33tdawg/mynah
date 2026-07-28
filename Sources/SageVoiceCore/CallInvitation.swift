@@ -18,6 +18,42 @@ public enum CallInvitation {
         return trimmed == command || trimmed.hasPrefix(command + " ")
     }
 
+    /// `//help`, because nothing else discovers a slash command.
+    ///
+    /// The owner is in a Signal thread, not reading a README, and a command
+    /// nobody has told them about does not exist as far as they are concerned.
+    /// This is the only place a feature like //call can announce itself at the
+    /// moment somebody wonders whether there is one.
+    public static let helpCommand = "//help"
+
+    public static func isHelpRequest(_ transcript: String) -> Bool {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed == helpCommand || trimmed == "//commands" || trimmed == "//?"
+    }
+
+    /// What `//help` says.
+    ///
+    /// Describes what calling needs as part of the list rather than as a
+    /// footnote, so an owner on a local model learns why //call will refuse
+    /// before they try it and are told no.
+    public static func help(callingAvailable: Bool, model: String) -> String {
+        let calling = callingAvailable
+            ? "//call — I set up a voice call and send you a link. Tap it and talk; you can interrupt me any time."
+            : "//call — a voice call. Not available on \(model), which runs on this Mac and takes the best part "
+                + "of a minute to answer. Switch to an API model in Mynah and it will work. Voice notes work either way."
+
+        return """
+            Things you can say:
+
+            \(calling)
+
+            //help — this.
+
+            Anything else is just a question. Talk normally — text or a voice \
+            note, whichever suits. I remember what we have talked about.
+            """
+    }
+
     /// Why a call cannot happen, in words the owner can act on.
     public enum Refusal: Sendable, Equatable {
         case backendTooSlow(model: String)

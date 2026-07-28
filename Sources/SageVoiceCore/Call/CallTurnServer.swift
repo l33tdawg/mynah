@@ -42,8 +42,18 @@ public actor CallTurnServer {
     /// The opening line, made ready before anyone is listening.
     private var preparation: Task<Data?, Never>?
 
+    /// Its words, so the transcript opens with what the caller actually heard.
+    private var preparedOpening: String?
+
     /// When the last call ended, so the opening can know how long it has been.
     private var lastCallEnded: Date?
+
+    /// What has been said on the call in progress.
+    private var transcript = CallTranscript()
+
+    /// Where a finished transcript goes. Set after construction, because the
+    /// thing that can post to Signal is built after this is.
+    private var deliverTranscript: (@Sendable (String) async -> Void)?
 
     /// So two turns running do not open with the same line, which is the tell
     /// that makes a stock phrase sound like a stock phrase.
@@ -61,6 +71,11 @@ public actor CallTurnServer {
         self.synthesizer = synthesizer
         self.answer = answer
         self.log = log
+    }
+
+    /// Where finished transcripts are posted.
+    public func onTranscript(_ deliver: @escaping @Sendable (String) async -> Void) {
+        deliverTranscript = deliver
     }
 
     public static func defaultSocket(
@@ -131,6 +146,7 @@ public actor CallTurnServer {
             return nil
         }
         log("[call] opening ready in \(String(format: "%.1f", Date().timeIntervalSince(started)))s: \(opening)")
+        preparedOpening = opening
         return CallTurnServer.samples(fromWAV: audio.wav)
     }
 
@@ -289,6 +305,7 @@ public actor CallTurnServer {
         let reader = CallFrameReader(descriptor: connection)
         let writer = CallFrameWriter(descriptor: connection)
         log("[call] a call connected")
+        transcript = CallTranscript()
 
         // Speak first.
         //
@@ -311,9 +328,12 @@ public actor CallTurnServer {
             } catch CallFrameReader.Failure.closed {
                 log("[call] the call ended")
                 lastCallEnded = Date()
+                await postTranscript()
                 return
             } catch {
                 log("[call] the endpoint stopped: \(error)")
+                lastCallEnded = Date()
+                await postTranscript()
                 return
             }
 
@@ -399,6 +419,7 @@ public actor CallTurnServer {
             let recognised = Date()
             guard !Task.isCancelled else { return }
             log("[call] heard: \(heard)")
+        transcript.heard(heard)
 
             // Say something before thinking, not after.
             //
@@ -439,6 +460,7 @@ public actor CallTurnServer {
             let thought = Date()
             guard !Task.isCancelled else { return }
             log("[call] replying: \(reply)")
+            transcript.said(reply)
 
             // Timed per stage rather than end to end. "A bit slow" is three
             // different problems — recognition, the model, synthesis — and they
@@ -481,6 +503,7 @@ public actor CallTurnServer {
         if let prepared = await preparation?.value {
             try? writer.send(.replyAudio(prepared))
             log("[call] opened with the prepared briefing")
+            if let opening = preparedOpening { transcript.said(opening) }
             preparation = nil
             return
         }
@@ -496,6 +519,7 @@ public actor CallTurnServer {
         }
         try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
         log("[call] greeted: \(greeting)")
+        transcript.said(greeting)
     }
 
     static let greetings = [
@@ -505,6 +529,16 @@ public actor CallTurnServer {
         "Hey. Go ahead.",
         "Yep, I'm here."
     ]
+
+    /// Posts what was said, if the owner wants it and anything was.
+    private func postTranscript() async {
+        guard let deliver = deliverTranscript else { return }
+        guard TranscriptPreference().isEnabled else { return }
+        guard let message = transcript.message() else { return }
+        transcript = CallTranscript()
+        await deliver(message)
+        log("[call] transcript posted to the thread")
+    }
 
     /// Fills a long think with something human.
     private func sayStillWorking(over writer: CallFrameWriter) async {

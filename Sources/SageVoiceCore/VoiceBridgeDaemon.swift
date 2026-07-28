@@ -137,6 +137,9 @@ public actor VoiceBridgeDaemon {
 
     /// Called the moment //call arrives, before the link is even built.
     private var onCallRequested: (@Sendable () async -> Void)?
+
+    /// Who asked for the last call, so its transcript goes back to them.
+    private var lastCallRecipient: SignalRecipient?
     private let loop: ToolLoop
     private let configuration: Configuration
     private let log: (String) -> Void
@@ -490,6 +493,23 @@ public actor VoiceBridgeDaemon {
             return .replied(transcript: transcript, reply: "call", seconds: 0)
         }
 
+        // Also before the model: asking a language model what commands it
+        // supports gets a confident guess, which is worse than no answer.
+        if CallInvitation.isHelpRequest(transcript) {
+            await reply(
+                CallInvitation.help(
+                    callingAvailable: callRefusal == nil,
+                    model: callRefusal.map { refusal in
+                        if case .backendTooSlow(let model) = refusal { return model }
+                        return "this model"
+                    } ?? ""
+                ),
+                to: recipient,
+                allowSpeaking: false
+            )
+            return .replied(transcript: transcript, reply: "help", seconds: 0)
+        }
+
         let thread = recipient.description
         if pause.isPaused() {
             if !hasSaidPaused.contains(thread) {
@@ -742,6 +762,9 @@ public actor VoiceBridgeDaemon {
         // a microphone. Everything the first turn needs — the model, SAGE, the
         // voice, recognition — can be warm before they arrive, and the opening
         // itself already spoken.
+        // Remembered so a transcript can be posted back to the thread that
+        // asked for the call, once it ends.
+        lastCallRecipient = recipient
         await onCallRequested?()
 
         do {
@@ -782,6 +805,16 @@ public actor VoiceBridgeDaemon {
             log("[daemon] could not speak the reply, sending text only: \(error)")
             return []
         }
+    }
+
+    /// Posts a call transcript into the thread that asked for the call.
+    ///
+    /// Speaking is suppressed: this is a written record, and having the
+    /// appliance read a transcript of itself aloud as a voice note would be
+    /// absurd.
+    public func postCallTranscript(_ text: String) async {
+        guard let recipient = lastCallRecipient else { return }
+        await reply(text, to: recipient, allowSpeaking: false)
     }
 
     private func reply(

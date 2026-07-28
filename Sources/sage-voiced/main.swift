@@ -871,6 +871,12 @@ func runDaemon(_ arguments: [String]) -> Never {
             // the caller arrives to something ready rather than to a pause.
             onCallRequested: { await callServer.prepare() }
         )
+        // After construction, because the transcript goes out through the same
+        // Signal path as everything else and the daemon owns it.
+        await callServer.onTranscript { [weak daemon] transcript in
+            await daemon?.postCallTranscript(transcript)
+        }
+
         await daemon.run()
         mcp.stop()
         return 0
