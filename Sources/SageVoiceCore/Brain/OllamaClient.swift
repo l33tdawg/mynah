@@ -259,6 +259,93 @@ public final class OllamaClient: @unchecked Sendable {
         return models.compactMap { $0["name"]?.stringValue }
     }
 
+    /// One line of `/api/pull`'s streaming progress.
+    public struct PullProgress: Sendable, Equatable {
+        /// The daemon's own words: "pulling manifest", "verifying sha256
+        /// digest", "writing manifest", "success", or "pulling <digest>".
+        public var status: String
+        public var completedBytes: Int64?
+        public var totalBytes: Int64?
+
+        public init(status: String, completedBytes: Int64? = nil, totalBytes: Int64? = nil) {
+            self.status = status
+            self.completedBytes = completedBytes
+            self.totalBytes = totalBytes
+        }
+
+        public var fraction: Double? {
+            guard let completedBytes, let totalBytes, totalBytes > 0 else { return nil }
+            return min(1, max(0, Double(completedBytes) / Double(totalBytes)))
+        }
+
+        /// Ollama says "success" on the last line and then closes the stream.
+        public var isFinished: Bool { status == "success" }
+    }
+
+    /// Downloads a model, reporting progress as it goes.
+    ///
+    /// The piece the setup screen has been missing. `EnvironmentProbe` could
+    /// already see that a model was absent and `BrainSetupPlanner` could say so,
+    /// but nothing in this product could *fetch* one — so "Fully on this Mac"
+    /// stayed permanently unavailable with a reason amounting to "do this
+    /// yourself in a terminal", on the one option that keeps the owner's words
+    /// on their machine.
+    ///
+    /// Streamed rather than awaited whole: a 3.4 GB pull on a domestic line runs
+    /// for minutes, and a progress bar is the difference between waiting and
+    /// giving up.
+    ///
+    /// - Parameter onProgress: called for every line the daemon emits. Not
+    ///   throttled here — that is a UI concern, and this cannot know what the UI
+    ///   intends to do with it.
+    public func pull(
+        model: String,
+        onProgress: @Sendable (PullProgress) -> Void = { _ in }
+    ) async throws {
+        try validateBaseURL()
+        var request = URLRequest(url: endpoint("api/pull"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Deliberately unbounded. A model pull legitimately runs for many
+        // minutes, and this client's normal budget is sized for a chat turn.
+        request.timeoutInterval = .infinity
+        let body: [String: JSONValue] = ["model": .string(model), "stream": .bool(true)]
+        request.httpBody = try PromptStableJSON.data(from: body)
+
+        let (bytes, response) = try await session.bytes(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw OllamaClientError.malformedResponse("/api/pull returned HTTP \(http.statusCode)")
+        }
+
+        var sawSuccess = false
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let root = JSONValue.parse(Data(trimmed.utf8)) else { continue }
+
+            // Ollama reports a failed pull in the body with HTTP 200, so an
+            // unknown model name looks like success to anything checking only
+            // the status code.
+            if let error = root["error"]?.stringValue, !error.isEmpty {
+                throw OllamaClientError.malformedResponse("pull failed: \(error)")
+            }
+
+            let progress = PullProgress(
+                status: root["status"]?.stringValue ?? "",
+                completedBytes: root["completed"]?.intValue.map(Int64.init),
+                totalBytes: root["total"]?.intValue.map(Int64.init)
+            )
+            if progress.isFinished { sawSuccess = true }
+            onProgress(progress)
+        }
+
+        // The stream ending is not the same as the pull succeeding — a dropped
+        // connection ends it too, and a half-pulled model that reports success
+        // fails at the first real request, which on a voice turn is dead air.
+        guard sawSuccess else {
+            throw OllamaClientError.malformedResponse("pull ended without reporting success")
+        }
+    }
+
     /// How much reasoning to ask Ollama for.
     ///
     /// `think` is not a boolean on this build — it also takes an effort level,
