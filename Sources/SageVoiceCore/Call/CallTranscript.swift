@@ -85,3 +85,65 @@ public struct CallTranscript: Sendable {
         }
     }
 }
+
+/// What the last call was about, kept so the next one does not have to remember.
+///
+/// The appliance asked the model what they had last been working on, and the
+/// model answered from memory — which is retrieved by relevance, not by time.
+/// Live, that produced "last we talked, you were heading to bed" on an evening
+/// whose actual last exchange had been about tonkatsu shops. Both were in
+/// memory; "goodnight" is simply a more distinctive thing to recall than a
+/// restaurant search, and nothing in the question said which was more recent.
+///
+/// So this is a fact the appliance carries rather than a question it asks. It
+/// held the transcript already; it just threw it away.
+///
+/// On disk because a daemon restart is routine — an update, a crash, a Mac that
+/// slept — and "what did we just talk about" surviving only until the next
+/// restart is the same bug wearing a different hat.
+public struct LastCall: Sendable, Codable, Equatable {
+    public var ended: Date
+    /// The tail of the conversation, not the whole thing. What matters to the
+    /// next call is where the last one got to, and a full transcript would push
+    /// the rest of the briefing out of a small model's attention.
+    public var closing: String
+
+    public init(ended: Date, closing: String) {
+        self.ended = ended
+        self.closing = closing
+    }
+
+    public static func defaultFileURL(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("last-call.json", isDirectory: false)
+    }
+
+    public static func load(from url: URL = LastCall.defaultFileURL()) -> LastCall? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(LastCall.self, from: data)
+    }
+
+    public func save(to url: URL = LastCall.defaultFileURL()) throws {
+        try OwnerOnlyFileSecurity.write(try JSONEncoder().encode(self), to: url)
+    }
+
+    /// Builds a record from a finished call.
+    ///
+    /// Returns nothing when the owner never spoke: a call they joined and left
+    /// is not something the next one should open by referring to.
+    public static func from(_ transcript: CallTranscript, characters: Int = 700) -> LastCall? {
+        guard transcript.lines.contains(where: { $0.speaker == .owner }) else { return nil }
+
+        var closing = ""
+        for line in transcript.lines.reversed() {
+            let speaker = line.speaker == .owner ? "They said" : "I said"
+            let piece = "\(speaker): \(line.text)\n"
+            if closing.count + piece.count > characters { break }
+            closing = piece + closing
+        }
+        return LastCall(ended: Date(), closing: closing.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}

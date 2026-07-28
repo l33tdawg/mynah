@@ -13,8 +13,8 @@ final class HeardSpeechTests: XCTestCase {
     }
 
     func testTheOtherStockPhrasesAreNotSpeech() {
-        for phrase in ["Thank you.", "Thanks for watching!", "you", "Bye.",
-                       "[BLANK_AUDIO]", "(silence)", "Subtitles by the Amara.org community"] {
+        for phrase in ["Thanks for watching!", "[BLANK_AUDIO]",
+                       "Subtitles by the Amara.org community"] {
             XCTAssertTrue(
                 HeardSpeech.isNothing(phrase, milliseconds: 700),
                 "\(phrase) should be treated as silence"
@@ -45,13 +45,23 @@ final class HeardSpeechTests: XCTestCase {
         }
     }
 
-    /// A caller who genuinely says "thank you" must be heard.
+    /// Saying thanks must reach it.
     ///
-    /// The length guard is what makes filtering a common courtesy safe: over
-    /// four seconds of audio it is taken at face value, and only the
-    /// suspiciously brief version is treated as the artefact.
-    func testAGenuineThankYouOverEnoughAudioIsSpeech() {
-        XCTAssertTrue(HeardSpeech.isNothing("Thank you.", milliseconds: 600))
-        XCTAssertFalse(HeardSpeech.isNothing("Thank you.", milliseconds: 5000))
+    /// This filter used to swallow "thank you" as an artefact, and the call went
+    /// silent when the owner thanked it. Whisper does invent that phrase over
+    /// silence — but it is also among the most ordinary things anyone says to an
+    /// assistant, and no length check separates the two.
+    ///
+    /// The costs are not symmetric, which is what decides it. Filtering real
+    /// speech means ignoring the owner, who cannot tell why. Not filtering a
+    /// hallucination means answering a quiet room, which is merely odd.
+    func testSayingThanksIsHeard() {
+        for thanks in ["Thanks.", "Thank you.", "thanks bro", "Thanks, that's great.",
+                       "Cheers.", "yes", "no", "you"] {
+            XCTAssertFalse(
+                HeardSpeech.isNothing(thanks, milliseconds: 700),
+                "\(thanks) was discarded; the owner would be ignored with no way to know why"
+            )
+        }
     }
 }

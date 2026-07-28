@@ -143,9 +143,14 @@ public actor CallTurnServer {
         // The briefing is best-effort. A call that opens with a plain hello is
         // fine; a call that opens with nothing because a tool timed out is not.
         var opening = greeting
+        let previous = LastCall.load()
         let request = CallTurnServer.briefingRequest(
             now: Date(),
-            sinceLastCall: lastCallEnded.map { Date().timeIntervalSince($0) }
+            // From the record on disk when this process has not itself taken a
+            // call — a restart is routine, and "what did we just talk about"
+            // surviving only until the next one is the same bug again.
+            sinceLastCall: (lastCallEnded ?? previous?.ended).map { Date().timeIntervalSince($0) },
+            lastCall: previous
         )
         if let briefing = try? await answer(request),
            !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -181,7 +186,11 @@ public actor CallTurnServer {
     /// ever said it, and if it is not, asking once and remembering is what a
     /// person would do — far better than an appliance that either guesses or
     /// never uses it.
-    static func briefingRequest(now: Date, sinceLastCall: TimeInterval?) -> String {
+    static func briefingRequest(
+        now: Date,
+        sinceLastCall: TimeInterval?,
+        lastCall: LastCall? = nil
+    ) -> String {
         let clock = DateFormatter()
         clock.dateFormat = "EEEE h:mm a"
         var context = "It is \(clock.string(from: now)) where I am."
@@ -189,6 +198,27 @@ public actor CallTurnServer {
             context += " We last spoke on a call \(spokenGap(gap)) ago."
         } else {
             context += " This is our first call today."
+        }
+
+        // Stated, not recalled.
+        //
+        // Asking the model what we last talked about retrieves by relevance
+        // rather than by time, and the most memorable exchange is rarely the
+        // most recent one. Live, that produced "last we talked, you were heading
+        // to bed" on an evening whose actual last conversation had been about
+        // tonkatsu shops — both in memory, and nothing in the question said
+        // which came last.
+        if let lastCall {
+            context += """
+
+
+                This is how our last call actually ended. Use it rather than \
+                searching your memory for what is most recent, because your \
+                memory returns what is most relevant and that is not the same \
+                thing:
+
+                \(lastCall.closing)
+                """
         }
 
         return """
@@ -352,11 +382,13 @@ public actor CallTurnServer {
             } catch CallFrameReader.Failure.closed {
                 log("[call] the call ended")
                 lastCallEnded = Date()
+                rememberThisCall()
                 await postTranscript()
                 return
             } catch {
                 log("[call] the endpoint stopped: \(error)")
                 lastCallEnded = Date()
+                rememberThisCall()
                 await postTranscript()
                 return
             }
@@ -567,6 +599,12 @@ public actor CallTurnServer {
     ]
 
     /// Posts what was said, if the owner wants it and anything was.
+    /// Keeps what this call was about, for the next one to open with.
+    private func rememberThisCall() {
+        guard let record = LastCall.from(transcript) else { return }
+        try? record.save()
+    }
+
     private func postTranscript() async {
         guard let deliver = deliverTranscript else { return }
         guard CallPreferences.load().transcript else { return }

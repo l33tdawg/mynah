@@ -27,21 +27,29 @@ public enum HeardSpeech {
     /// Compared after normalisation, so punctuation and case do not matter. Kept
     /// short deliberately: every entry here is a phrase a caller might one day
     /// genuinely say, and the length guard below is what keeps that safe.
+    /// Only phrases nobody says to an appliance.
+    ///
+    /// This list was longer and it cost the owner a turn: "thanks" was filtered
+    /// as an artefact and the call simply did not answer. A short "thank you" is
+    /// both what Whisper invents over silence AND one of the most ordinary
+    /// things anyone says to an assistant, and no amount of length checking
+    /// separates them.
+    ///
+    /// The costs are not symmetric. Filtering real speech means the appliance
+    /// ignores its owner, who has no idea why. Not filtering a hallucination
+    /// means it says "you're welcome" to a quiet room, which is a curiosity. So
+    /// this keeps only what is unambiguously subtitle furniture — nobody
+    /// telephones their own Mac to say "thanks for watching" — and lets the
+    /// rest through.
     static let stockPhrases: Set<String> = [
         "ありがとうございました",
         "ご視聴ありがとうございました",
-        "thank you",
         "thanks for watching",
         "thank you for watching",
         "please subscribe",
         "subtitles by the amaraorg community",
         "amaraorg",
-        "you",
-        "bye",
-        "blankaudio",
-        "silence",
-        "music",
-        "applause"
+        "blankaudio"
     ]
 
     /// Whether a transcript should be treated as nothing having been said.
