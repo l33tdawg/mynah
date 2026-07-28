@@ -315,6 +315,7 @@ func runBrain(_ arguments: [String]) -> Never {
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
 
+
     runAndExit {
         defer { mcp.stop() }
         do {
@@ -662,6 +663,10 @@ func runDaemon(_ arguments: [String]) -> Never {
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
+    // Which of Kokoro's 54 voices sounds like the appliance is pure taste, and
+    // taste is only discoverable by hearing it on a call. A flag means trying
+    // another one is a restart rather than a rebuild and a redeploy.
+    let callVoiceName = flags["call-voice"] ?? KokoroHTTPSynthesizer.defaultKokoroVoice
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
     // restart rather than a rebuild, a repackage, a resign and a redeploy.
@@ -776,8 +781,25 @@ func runDaemon(_ arguments: [String]) -> Never {
         // Synthesis runs at 48 kHz here and 22.05 elsewhere, because Opus runs
         // at 48 and resampling in the audio path is a place a subtle error is
         // inaudible in testing and awful on a real call.
-        var callVoice = SystemSpeechSynthesizer()
-        callVoice.sampleRate = 48_000
+        // Kokoro if it is running, `say` if it is not.
+        //
+        // macOS ships two classes of voice and only the good ones require a
+        // download with no command-line path — which on a headless appliance
+        // means the robotic compact voices are what a caller actually hears.
+        // Kokoro is Apache 2.0, runs on this machine, and measures at a
+        // real-time factor near 0.3, so naturalness costs nothing in latency.
+        // Qwen3-TTS sounds better still and takes nine seconds a sentence,
+        // which is a dead line rather than a voice.
+        //
+        // The fallback matters: a call must not stop working because a Python
+        // service did. A robotic voice is a complaint, silence is a fault.
+        let kokoro = KokoroHTTPSynthesizer(voice: callVoiceName)
+        var systemVoice = SystemSpeechSynthesizer()
+        systemVoice.sampleRate = 48_000
+        let callVoice: any SpeechSynthesizing = await kokoro.isAvailable() ? kokoro : systemVoice
+        FileHandle.standardError.write(Data(
+            "[call] voice: \(await kokoro.isAvailable() ? "kokoro \(callVoiceName)" : "say (kokoro unreachable)")\n".utf8
+        ))
         // A call is answered in the spoken style regardless of the owner's voice
         // note setting, because the medium is not a choice here — it is being
         // read aloud down a phone line. The written style is right for a screen

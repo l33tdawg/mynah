@@ -39,6 +39,10 @@ public actor CallTurnServer {
     private var listening: Int32 = -1
     private var turn: Task<Void, Never>?
 
+    /// So two turns running do not open with the same line, which is the tell
+    /// that makes a stock phrase sound like a stock phrase.
+    private var lastOpener: String?
+
     public init(
         configuration: Configuration,
         transcriber: any AudioFileTranscribing,
@@ -186,6 +190,7 @@ public actor CallTurnServer {
         let started = Date()
         do {
             let heard = try await transcribe(wav)
+            let recognised = Date()
             guard !Task.isCancelled else { return }
             guard !heard.isEmpty else {
                 // Recognition found nothing — a cough, a door, a car. Saying
@@ -196,10 +201,52 @@ public actor CallTurnServer {
             }
             log("[call] heard: \(heard)")
 
+            // Say something before thinking, not after.
+            //
+            // The silence while the model works is the whole of what "it feels
+            // slow" means. On a call it is worse than in a message thread: a
+            // Signal thread at least shows the question was delivered, while a
+            // silent line is indistinguishable from a dropped one, and the
+            // caller starts saying "hello?" into it.
+            //
+            // This costs nothing to produce. The opener is derived from the
+            // caller's own sentence, so it needs no model call — which is the
+            // only reason it can arrive before the model rather than after.
+            if let opener = WorkingReply.opening(forRequest: heard, previous: lastOpener) {
+                lastOpener = opener.line
+                if let audio = try? await synthesizer.synthesize(
+                    SpeechRequest(text: opener.line, voice: configuration.voice)
+                ) {
+                    guard !Task.isCancelled else { return }
+                    try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+                    log("[call] said \"\(opener.line)\" after \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
+                }
+            }
+
+            // A second acknowledgement, for the answers that take a while.
+            //
+            // The opener buys about eight seconds of patience. A tool call can
+            // run well past that, and the silence after an opener is worse than
+            // the silence before one — the caller has been told it is working
+            // and then hears nothing, which reads as the thing having crashed
+            // mid-sentence rather than merely being slow.
+            let waiting = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled, let self else { return }
+                await self.sayStillWorking(over: writer)
+            }
             let reply = try await answer(heard)
+            waiting.cancel()
+            let thought = Date()
             guard !Task.isCancelled else { return }
             log("[call] replying: \(reply)")
 
+            // Timed per stage rather than end to end. "A bit slow" is three
+            // different problems — recognition, the model, synthesis — and they
+            // have nothing in common except that the caller waits through all of
+            // them. Only the first-sentence figure is what they actually
+            // experience; the rest is spoken while they are already listening.
+            var firstSpoken: Date?
             for sentence in CallTurnServer.sentences(in: reply) {
                 guard !Task.isCancelled else { return }
                 let speech = try await synthesizer.synthesize(
@@ -207,15 +254,34 @@ public actor CallTurnServer {
                 )
                 guard !Task.isCancelled else { return }
                 try writer.send(.replyAudio(CallTurnServer.samples(fromWAV: speech.wav)))
+                if firstSpoken == nil { firstSpoken = Date() }
             }
             try writer.send(.replyEnd)
-            log("[call] answered in \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
+
+            let seconds = { (from: Date, to: Date) in
+                String(format: "%.1f", to.timeIntervalSince(from))
+            }
+            log("[call] heard in \(seconds(started, recognised))s, "
+                + "thought in \(seconds(recognised, thought))s, "
+                + "spoke in \(seconds(thought, firstSpoken ?? thought))s "
+                + "— talking after \(seconds(started, firstSpoken ?? thought))s")
         } catch is CancellationError {
             return
         } catch {
             log("[call] could not answer: \(error)")
             try? writer.send(.turnFailed("\(error)"))
         }
+    }
+
+    /// Fills a long think with something human.
+    private func sayStillWorking(over writer: CallFrameWriter) async {
+        let line = WorkingReply.progressLine(completed: [], pending: nil)
+            ?? "Still on it."
+        guard let audio = try? await synthesizer.synthesize(
+            SpeechRequest(text: line, voice: configuration.voice)
+        ) else { return }
+        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        log("[call] said \"\(line)\" while working")
     }
 
     private func transcribe(_ wav: Data) async throws -> String {
