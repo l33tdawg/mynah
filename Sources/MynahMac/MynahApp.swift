@@ -28,7 +28,7 @@ final class AppModel {
         var verb: String {
             switch self {
             case .answering: return "Answering"
-            case .listening: return "Listening"
+            case .listening: return "Online"
             case .sleeping: return "Sleeping"
             case .needsOwner: return "Needs you"
             }

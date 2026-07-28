@@ -231,31 +231,40 @@ public struct ConversationStore: @unchecked Sendable {
     /// tidy, while a *read* that deleted the words being read would be worse
     /// still. Expiry stays exactly where the daemon put it.
     ///
+    /// Read as an inbox rather than as the screen itself. This file is the
+    /// daemon's working memory: it trims to the last sixteen turns and is
+    /// rewritten on every one of them, so anything drawn straight from it would
+    /// lose messages whenever the appliance tidied up. The app accumulates what
+    /// arrives here into its own record and shows that.
+    ///
     /// Never throws, for `load`'s reason: a file that will not parse is worth an
     /// empty window and one log line, never a window that will not open.
     public func threadsForDisplay() -> [DisplayThread] {
-        storedThreads()
-            .compactMap { key, thread -> DisplayThread? in
-                let turns: [DisplayTurn] = thread.turns.compactMap { turn in
-                    switch turn.role {
-                    case "user": return DisplayTurn(speaker: .owner, content: turn.content)
-                    case "assistant": return DisplayTurn(speaker: .mynah, content: turn.content)
-                    // `load`'s rule: anything else was never written by this
-                    // type, and dropping it beats guessing who said it.
-                    default: return nil
-                    }
+        var threads: [DisplayThread] = []
+        for (key, thread) in storedThreads() {
+            var turns: [DisplayTurn] = []
+            for turn in thread.turns {
+                switch turn.role {
+                case "user":
+                    turns.append(DisplayTurn(speaker: .owner, content: turn.content))
+                case "assistant":
+                    turns.append(DisplayTurn(speaker: .mynah, content: turn.content))
+                // `load`'s rule: anything else was never written by this type,
+                // and dropping it beats guessing who said it.
+                default:
+                    continue
                 }
-                guard !turns.isEmpty else { return nil }
-                return DisplayThread(id: key, lastActivity: thread.savedAt, turns: turns)
             }
-            .sorted {
-                // The key breaks a tie, so the order never wobbles between two
-                // reads of an unchanged file: the daemon persists every thread
-                // in the same instant, so identical stamps are ordinary.
-                $0.lastActivity == $1.lastActivity
-                    ? $0.id < $1.id
-                    : $0.lastActivity > $1.lastActivity
-            }
+            guard !turns.isEmpty else { continue }
+            threads.append(DisplayThread(id: key, lastActivity: thread.savedAt, turns: turns))
+        }
+        // The key breaks a tie, so the order never wobbles between two reads of
+        // an unchanged file: the daemon persists every thread in the same
+        // instant, so identical stamps are ordinary.
+        return threads.sorted { first, second in
+            if first.lastActivity == second.lastActivity { return first.id < second.id }
+            return first.lastActivity > second.lastActivity
+        }
     }
 
     /// Best-effort rewrite dropping whatever has aged out. Never throws: this

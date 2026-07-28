@@ -483,7 +483,15 @@ final class ConversationModel {
         case .ready(let destination, let staysOnDevice):
             return Health(
                 tone: .good,
-                title: isBusy ? "Answering" : "Listening",
+                // "Online", not "Listening".
+                //
+                // Listening is what a microphone does. On an appliance that
+                // holds private conversations it reads as something switched on
+                // in the room and pointed at you — which is the opposite of what
+                // is true here: nothing on this Mac records anything, the owner
+                // speaks into their phone. "Online" says the same thing about
+                // readiness without the implication.
+                title: isBusy ? "Answering" : "Online",
                 detail: staysOnDevice
                     ? "your words stay on this Mac"
                     : "your words go to \(destination)"

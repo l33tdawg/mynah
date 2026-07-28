@@ -9,6 +9,18 @@ import SwiftUI
 /// place to say something. No metric tiles, no session counters, no chart of how
 /// many memories exist — this is a conversation, and every pixel that is not the
 /// conversation is competing with it.
+///
+/// The conversation shown is the *real* one — the Signal thread the appliance
+/// answers, accumulated from the daemon's own record by `ConversationMirror`. It
+/// used to be this window's private chat, which made the screen a second source
+/// of truth that knew nothing about the voice note the owner sent ten minutes
+/// ago and had answered on their phone. Typing here still works and its turns
+/// are appended below, labelled, so the two are never mistaken for one another.
+///
+/// Nothing on this screen can reach the phone. Clearing empties the window's own
+/// record and leaves every message where it is, which is what the line beside
+/// the button says — and the reverse holds too: a thread cleared on the phone,
+/// or expired by the appliance, does not take this screen's copy with it.
 @MainActor
 struct TalkView: View {
 
@@ -25,6 +37,9 @@ struct TalkView: View {
     private static let questionInset: CGFloat = 120
 
     let model: ConversationModel
+    /// The conversation as it happened on the phone. Read-only, and re-read
+    /// while this pane is on screen.
+    let mirror: ConversationMirror
     /// Supplied by the shell so the recovery banner can jump straight to
     /// Settings. Absent is fine — the explanation names the action in words, so
     /// nothing here is ever a button that does nothing.
@@ -32,12 +47,22 @@ struct TalkView: View {
 
     @Environment(AppModel.self) private var app
     @FocusState private var isComposerFocused: Bool
+    /// Whether the owner is reading the newest messages or has scrolled back
+    /// through them. A message arriving from the phone follows them down only in
+    /// the first case; in the second, taking the page away mid-sentence is the
+    /// rudest thing a live transcript can do.
+    @State private var isAtBottom = true
 
     /// `nil` means the one shared conversation. Defaulted in the body rather
     /// than in the signature: a default argument is evaluated in the caller's
     /// context, so naming a main-actor value there is an isolation error.
-    init(model: ConversationModel? = nil, onOpenSettings: (() -> Void)? = nil) {
+    init(
+        model: ConversationModel? = nil,
+        mirror: ConversationMirror? = nil,
+        onOpenSettings: (() -> Void)? = nil
+    ) {
         self.model = model ?? .shared
+        self.mirror = mirror ?? .shared
         self.onOpenSettings = onOpenSettings
     }
 
@@ -53,6 +78,10 @@ struct TalkView: View {
             await model.connect()
             app.presence = presence
         }
+        // Its own task, so the poll starts while the engine is still connecting
+        // — the phone's conversation is on disk already and has nothing to wait
+        // for. Cancelled with the pane, so nothing polls from Settings.
+        .task { await mirror.follow() }
         .onChange(of: model.isBusy) { _, _ in app.presence = presence }
         .onChange(of: model.readiness) { _, _ in app.presence = presence }
     }
@@ -77,13 +106,53 @@ struct TalkView: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
             Spacer(minLength: s5)
-            if !model.exchanges.isEmpty {
-                MynahButton("Start again", kind: .quiet) { model.clear() }
-            }
+            if canClear { clearControl }
         }
         .padding(.horizontal, s8)
         .padding(.vertical, s5)
         .mynahAnimation(Motion.fade, value: health)
+    }
+
+    private var canClear: Bool { !model.exchanges.isEmpty || !mirror.messages.isEmpty }
+
+    /// The button, and the one thing the owner needs to know before pressing it.
+    ///
+    /// Said here rather than in a confirmation sheet. What is on screen looks
+    /// exactly like their phone's conversation, so "clear" invites precisely the
+    /// fear it should answer — and an app that could delete a person's chat
+    /// history because they tidied a window would deserve it. This one cannot:
+    /// it empties its own record and never writes to the messages.
+    ///
+    /// The sentence is dropped, not truncated, when the window is too narrow for
+    /// it. Half a promise is worse than none, and the hint below keeps it for
+    /// VoiceOver either way.
+    private var clearControl: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: s4) {
+                clearNote
+                clearButton
+            }
+            clearButton
+        }
+    }
+
+    private var clearNote: some View {
+        Text("Clearing here changes nothing on your phone.")
+            .mynahFont(.label)
+            .foregroundStyle(Palette.ink.secondary)
+            .lineLimit(1)
+    }
+
+    private var clearButton: some View {
+        MynahButton("Clear this window", kind: .quiet) { clearWindow() }
+            .accessibilityHint("Clears this window only. Your phone keeps the conversation.")
+    }
+
+    /// Both halves of what is on screen: the turns typed here, and the window's
+    /// own record of the conversation. Neither reaches the phone.
+    private func clearWindow() {
+        model.clear()
+        mirror.clear()
     }
 
     private static let pausedHealth = ConversationModel.Health(
@@ -103,7 +172,10 @@ struct TalkView: View {
 
     @ViewBuilder
     private var conversation: some View {
-        if model.exchanges.isEmpty {
+        // Nothing said on the phone *and* nothing asked here. A fresh install
+        // has no saved conversation at all, which is not a failure and must not
+        // be drawn as one — see `emptyMessage`.
+        if mirror.messages.isEmpty && model.exchanges.isEmpty {
             emptyState
         } else {
             transcript
@@ -153,23 +225,26 @@ struct TalkView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: s8) {
-                    ForEach(model.exchanges) { exchange in
-                        ExchangeView(
-                            exchange: exchange,
-                            questionInset: Self.questionInset,
-                            answerWidth: Self.answerWidth,
-                            showsFirstTurnHint: !model.hasEverAnswered,
-                            onStop: { model.stop() },
-                            onRetry: { model.retry(exchange.id) }
-                        )
-                        .id(exchange.id)
+                    if phoneComesFirst {
+                        phoneConversation
+                        typedHere
+                    } else {
+                        typedHere
+                        phoneConversation
                     }
                     // A zero-height anchor rather than scrolling to the last
                     // exchange: an answer that is still growing would otherwise
                     // pin its own top edge and scroll the owner backwards.
+                    //
+                    // It doubles as the "are they at the bottom?" sensor. In a
+                    // lazy stack a row that is off screen is not built, so the
+                    // anchor appearing and disappearing is exactly the question
+                    // being asked — and it costs no measurement code.
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bottomAnchor)
+                        .onAppear { isAtBottom = true }
+                        .onDisappear { isAtBottom = false }
                 }
                 .frame(maxWidth: Self.column, alignment: .leading)
                 .frame(maxWidth: .infinity)
@@ -183,11 +258,82 @@ struct TalkView: View {
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
             .onChange(of: model.exchanges) { _, _ in
+                // The owner did this themselves a moment ago, so following it
+                // down is what they are expecting.
+                withAnimation(Motion.snap) {
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            }
+            .onChange(of: mirror.messages) { _, _ in
+                // Nobody asked this window for this message — it arrived from
+                // the phone while the owner may well have been reading
+                // something further up. Follow it only if they were already at
+                // the bottom, where new messages are what they are watching for.
+                guard isAtBottom else { return }
                 withAnimation(Motion.snap) {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
         }
+    }
+
+    /// The Signal thread, oldest message at the top.
+    ///
+    /// Labelled whenever there is anything to show, because "this came off your
+    /// phone" is the fact that makes the screen make sense — it is the reason an
+    /// answer the owner has never seen in this window is sitting in it.
+    @ViewBuilder
+    private var phoneConversation: some View {
+        if !mirror.messages.isEmpty {
+            ConversationSourceLabel(text: "From your phone")
+            ForEach(mirror.messages) { message in
+                switch message.speaker {
+                case .owner:
+                    OwnerMessage(text: message.text, inset: Self.questionInset)
+                case .mynah:
+                    MynahMessage(text: message.text, maxWidth: Self.answerWidth)
+                }
+            }
+        }
+    }
+
+    /// What the owner has asked in this window, with the waiting and failure
+    /// states the phone's record cannot carry.
+    ///
+    /// Labelled only when the phone's conversation is also on screen. On its own
+    /// it needs no explanation — the composer is directly underneath it.
+    @ViewBuilder
+    private var typedHere: some View {
+        if !model.exchanges.isEmpty {
+            if !mirror.messages.isEmpty {
+                ConversationSourceLabel(text: "In this window")
+            }
+            ForEach(model.exchanges) { exchange in
+                ExchangeView(
+                    exchange: exchange,
+                    questionInset: Self.questionInset,
+                    answerWidth: Self.answerWidth,
+                    showsFirstTurnHint: !model.hasEverAnswered,
+                    onStop: { model.stop() },
+                    onRetry: { model.retry(exchange.id) }
+                )
+                .id(exchange.id)
+            }
+        }
+    }
+
+    /// Which block sits at the bottom, decided on the only two times that are
+    /// real: when the saved conversation was last spoken in, and when the owner
+    /// last asked something here.
+    ///
+    /// Newest at the bottom is what every messaging app does and what the eye
+    /// expects. Pinning the phone above the window permanently would have been
+    /// simpler and would put a message from a moment ago above one from an hour
+    /// before it, which is the one thing a transcript may not do.
+    private var phoneComesFirst: Bool {
+        guard let lastAskedHere = model.exchanges.last?.askedAt,
+              let lastSpokenOnPhone = mirror.lastActivity else { return true }
+        return lastSpokenOnPhone <= lastAskedHere
     }
 
     private static let bottomAnchor = "mynah.transcript.bottom"
@@ -368,31 +514,15 @@ private struct ExchangeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: s5) {
-            question
+            // The same bubble the mirrored thread draws, deliberately: a
+            // question typed here and one sent from the phone are the same act,
+            // and two hand-written copies of one shape drift the first time
+            // either is touched.
+            OwnerMessage(text: exchange.question, inset: questionInset)
             outcome
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .mynahAnimation(Motion.snap, value: exchange.outcome)
-    }
-
-    /// The owner's words are a discrete object they sent, so they get an edge.
-    /// The answer below is the page itself, so it does not.
-    private var question: some View {
-        // A flexible leading spacer rather than `.frame(maxWidth:)`: a maximum
-        // width *expands* to its limit, so every card would be the same size and
-        // a three-word question would sit in a mostly empty box.
-        HStack(spacing: 0) {
-            Spacer(minLength: questionInset)
-            Text(exchange.question)
-                .mynahFont(.body)
-                .foregroundStyle(Palette.ink.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, s5)
-                .padding(.vertical, s4)
-                .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
-                .mynahBorder(r.card)
-        }
     }
 
     @ViewBuilder
@@ -430,12 +560,7 @@ private struct AnswerBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: s3) {
-            Text(answer.text)
-                .mynahFont(.body)
-                .foregroundStyle(Palette.ink.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: maxWidth, alignment: .leading)
+            MynahMessage(text: answer.text, maxWidth: maxWidth)
             provenance
         }
     }
@@ -587,10 +712,31 @@ private struct HoldToTalkButton: View {
     TalkPreview(model: TalkPreviewFixtures.error())
 }
 
+/// The screen as most owners will actually meet it: everything on it was said
+/// on the phone, and nothing was typed here.
+#Preview("Talk — the phone's conversation") {
+    TalkPreview(
+        model: TalkPreviewFixtures.empty(),
+        mirror: TalkPreviewFixtures.phoneConversation()
+    )
+}
+
+/// Both at once, which is the layout that has to prove the labels earn their
+/// place: a voice note answered on the phone, then a question typed here.
+#Preview("Talk — phone and window") {
+    TalkPreview(
+        model: TalkPreviewFixtures.midTurn(),
+        mirror: TalkPreviewFixtures.phoneConversation()
+    )
+}
+
 /// Light and dark side by side, because half of the donor app's colour bugs are
 /// invisible until you look at both at once.
 private struct TalkPreview: View {
     let model: ConversationModel
+    /// Empty by default, and never `.shared`: a preview must not open the
+    /// developer's own saved conversation and draw it in a screenshot.
+    var mirror: ConversationMirror = ConversationMirror(messages: [])
 
     var body: some View {
         HStack(spacing: 0) {
@@ -601,7 +747,7 @@ private struct TalkPreview: View {
     }
 
     private var pane: some View {
-        TalkView(model: model)
+        TalkView(model: model, mirror: mirror)
             .environment(AppModel(defaults: TalkPreviewFixtures.defaults()))
     }
 }
@@ -719,6 +865,31 @@ private enum TalkPreviewFixtures {
                 )
             ],
             readiness: .ready(destination: "Google", staysOnDevice: false)
+        )
+    }
+
+    /// A voice note and its answer, as the daemon would have saved them. No
+    /// durations and no tool phrases, because the file records neither — the
+    /// preview has to show the owner exactly what the screen can show.
+    static func phoneConversation() -> ConversationMirror {
+        ConversationMirror(
+            messages: [
+                MirroredMessage(id: 0, speaker: .owner, text: "remind me what the roofer said"),
+                MirroredMessage(
+                    id: 1,
+                    speaker: .mynah,
+                    text: "He quoted two and a half thousand for the whole roof and said he could "
+                        + "start the week after next. You told him you wanted it in writing first."
+                ),
+                MirroredMessage(id: 2, speaker: .owner, text: "did I ever send that email"),
+                MirroredMessage(
+                    id: 3,
+                    speaker: .mynah,
+                    text: "Not that I know of. You asked me to remind you on Monday and it's "
+                        + "Thursday, so it's probably still sitting in your drafts."
+                )
+            ],
+            lastActivity: Date(timeIntervalSinceNow: -600)
         )
     }
 

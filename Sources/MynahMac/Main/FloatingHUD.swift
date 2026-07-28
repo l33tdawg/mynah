@@ -500,7 +500,7 @@ struct MynahHUDView: View {
         // way. Handled anyway, because the alternative is a panel that says "on
         // and waiting" while the owner is mid-sentence on the day voice lands.
         if conversation.isRecording {
-            return Line(tone: .good, title: "Listening", detail: MynahCopy.floatingPanelListening)
+            return Line(tone: .good, title: "Online", detail: MynahCopy.floatingPanelListening)
         }
         if conversation.isBusy, let waiting = conversation.exchanges.last(where: { $0.isThinking }) {
             // Deliberately no detail: the thinking line is time-driven, so it is
@@ -513,7 +513,7 @@ struct MynahHUDView: View {
         case .ready(let destination, let staysOnDevice):
             return Line(
                 tone: .good,
-                title: "Listening",
+                title: "Online",
                 detail: MynahCopy.floatingPanelResting(
                     destination: destination,
                     staysOnDevice: staysOnDevice
