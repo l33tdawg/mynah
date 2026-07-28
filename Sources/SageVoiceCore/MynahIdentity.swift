@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The key Mynah signs SAGE requests with.
@@ -177,6 +178,109 @@ public enum MynahIdentity {
             .appendingPathComponent("appliance-agent.key", isDirectory: false)
     }
 
+    // MARK: - Migration
+
+    /// Reproduces the node's per-project key derivation.
+    ///
+    /// Ported from `cmd/sage-gui/mcp.go` — `providerProjectAgentDir` at :206 and
+    /// `legacyProjectAgentPath` at :224 — and verified against the directories
+    /// this appliance actually accumulated: `sha256("agent\0/Users/ableton")`
+    /// gives `849d657e` and `sha256("agent\0/tmp")` gives `57aab6cb`, which are
+    /// the two real names on disk.
+    ///
+    /// Computed rather than guessed on purpose. Scanning `~/.sage/agents/*` and
+    /// taking whatever is there would happily adopt a Claude Code project agent
+    /// that has nothing to do with this appliance.
+    static func derivedKeyCandidates(
+        sageHome: URL,
+        workingDirectory: String,
+        provider: String?
+    ) -> [URL] {
+        let absolute = URL(fileURLWithPath: workingDirectory).standardizedFileURL.path
+        let base = sanitizedDirName(URL(fileURLWithPath: absolute).lastPathComponent)
+        let agents = sageHome.appendingPathComponent("agents", isDirectory: true)
+
+        // Empty SAGE_PROVIDER becomes "agent", matching mcp.go:212-214.
+        let resolvedProvider = {
+            let trimmed = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            return trimmed.isEmpty ? "agent" : trimmed
+        }()
+
+        func shortHash(_ input: String) -> String {
+            SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8).description
+        }
+
+        let providerDir = "\(base)-\(sanitizedDirName(resolvedProvider))-\(shortHash(resolvedProvider + "\u{0}" + absolute))"
+        let legacyDir = "\(base)-\(shortHash(absolute))"
+
+        return [providerDir, legacyDir].map {
+            agents.appendingPathComponent($0, isDirectory: true)
+                .appendingPathComponent("agent.key", isDirectory: false)
+        }
+    }
+
+    /// `[^a-zA-Z0-9._-]` → `-`, matching `sanitizeDirName` at mcp.go:266.
+    static func sanitizedDirName(_ name: String) -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        let mapped = String(name.trimmingCharacters(in: .whitespaces).unicodeScalars.map {
+            allowed.contains($0) ? Character($0) : "-"
+        })
+        return (mapped.isEmpty || mapped == "." || mapped == "..") ? "unknown" : mapped
+    }
+
+    /// Adopts the identity this appliance was already using, once.
+    ///
+    /// Without it the pin is a data-loss bug wearing a fix's clothing: pointing
+    /// an existing appliance at a fresh path means the node mints a new key,
+    /// which is a new agent id, which is an appliance that has forgotten
+    /// everything it ever stored — silently, on upgrade, for every install that
+    /// is not the one machine where this was done by hand.
+    ///
+    /// Copying the bytes is what makes it a migration rather than a new
+    /// identity: same key, same agent id, same memories, nothing re-registered
+    /// and nothing to reconcile on the node.
+    ///
+    /// Runs only when the pinned key is absent, so it is a no-op on every boot
+    /// after the first and on a genuinely fresh install.
+    @discardableResult
+    public static func migrateApplianceKeyIfNeeded(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        workingDirectory: String = FileManager.default.currentDirectoryPath,
+        fileManager: FileManager = .default,
+        log: (String) -> Void = { _ in }
+    ) -> URL? {
+        let destination = applianceKeyURL(homeDirectory: homeDirectory)
+        guard !fileManager.fileExists(atPath: destination.path) else { return nil }
+
+        let sageHome = environment["SAGE_HOME"].flatMap { value -> URL? in
+            let expanded = NSString(string: value).expandingTildeInPath
+            return expanded.isEmpty ? nil : URL(fileURLWithPath: expanded, isDirectory: true)
+        } ?? homeDirectory.appendingPathComponent(".sage", isDirectory: true)
+
+        let candidates = derivedKeyCandidates(
+            sageHome: sageHome,
+            workingDirectory: workingDirectory,
+            provider: environment["SAGE_PROVIDER"]
+        )
+        guard let source = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) else {
+            return nil
+        }
+
+        do {
+            let key = try Data(contentsOf: source)
+            try OwnerOnlyFileSecurity.write(key, to: destination, fileManager: fileManager)
+            log("[identity] adopted the appliance's existing key from \(source.path)")
+            return destination
+        } catch {
+            // Better a new identity than no appliance. The owner loses recall,
+            // which is visible and recoverable; a daemon that refuses to boot
+            // over a key copy is not.
+            log("[identity] could not adopt \(source.path): \(error)")
+            return nil
+        }
+    }
+
     /// Environment for the daemon's `sage-gui mcp`.
     ///
     /// Migration matters more than the pin here. Pointing an existing appliance
@@ -196,6 +300,11 @@ public enum MynahIdentity {
             guard URL(fileURLWithPath: expanded).standardizedFileURL.path != operatorKey else { continue }
             return [environmentVariable: expanded]
         }
+        migrateApplianceKeyIfNeeded(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+        )
         return [environmentVariable: applianceKeyURL(homeDirectory: homeDirectory).path]
     }
 }
