@@ -5,10 +5,16 @@ import SwiftUI
 
 /// Where the owner spends their time.
 ///
-/// Three regions and nothing else: one line of health, the conversation, and the
-/// place to say something. No metric tiles, no session counters, no chart of how
-/// many memories exist — this is a conversation, and every pixel that is not the
-/// conversation is competing with it.
+/// Four regions and nothing else: one line of health, the board, the
+/// conversation, and the place to say something. No metric tiles, no session
+/// counters, no chart of how many memories exist.
+///
+/// The board is the top of this screen because the question somebody walks over
+/// to the Mac to answer is "what is happening with my things" — Mynah is an
+/// agent manager first and an assistant second. A transcript answers a different
+/// question ("what did I say"), which is why the conversation now sits
+/// underneath it: it is how work gets *made* and asked about, not the thing to
+/// stare at.
 ///
 /// The conversation shown is the *real* one — the Signal thread the appliance
 /// answers, accumulated from the daemon's own record by `ConversationMirror`. It
@@ -30,16 +36,34 @@ struct TalkView: View {
     /// question hugs the right edge and an answer the left, so both margins are
     /// used and neither line ever runs the full width.
     private static let column: CGFloat = 640
-    private static let answerWidth: CGFloat = 520
-    /// How much of the column a question may never occupy. Guarantees the
-    /// asymmetry survives even a one-word question, which is what stops the
-    /// transcript reading as a single ragged left margin.
-    private static let questionInset: CGFloat = 120
+    /// How much of the column a card on either side may never occupy.
+    ///
+    /// One number for both sides, so the two margins are equal and the column
+    /// reads as one conversation rather than two lists that happen to be
+    /// adjacent. It also guarantees the asymmetry survives a one-word message,
+    /// which is what stops the transcript collapsing into a single ragged left
+    /// margin.
+    private static let cardInset: CGFloat = 120
+    /// The failure banner is not a card in the exchange — it is a notice about
+    /// one — so it takes the width the answer card would have had rather than
+    /// shrinking to its sentence.
+    private static let answerWidth: CGFloat = column - cardInset
+
+    /// How much of the window the conversation keeps once the board is above it.
+    ///
+    /// A fixed height rather than a draggable split. A split view would be the
+    /// richer answer and it is the one to reach for later; today nobody can see
+    /// this screen running, and a divider whose behaviour cannot be checked is
+    /// exactly the kind of thing that ships subtly broken. 280pt holds an
+    /// exchange and the start of the next on every window this app opens at.
+    private static let conversationHeight: CGFloat = 280
 
     let model: ConversationModel
     /// The conversation as it happened on the phone. Read-only, and re-read
     /// while this pane is on screen.
     let mirror: ConversationMirror
+    /// What is on the owner's plate. Read-only — see `SageTaskSource`.
+    let board: TaskBoardModel
     /// Supplied by the shell so the recovery banner can jump straight to
     /// Settings. Absent is fine — the explanation names the action in words, so
     /// nothing here is ever a button that does nothing.
@@ -59,10 +83,12 @@ struct TalkView: View {
     init(
         model: ConversationModel? = nil,
         mirror: ConversationMirror? = nil,
+        board: TaskBoardModel? = nil,
         onOpenSettings: (() -> Void)? = nil
     ) {
         self.model = model ?? .shared
         self.mirror = mirror ?? .shared
+        self.board = board ?? .shared
         self.onOpenSettings = onOpenSettings
     }
 
@@ -70,7 +96,13 @@ struct TalkView: View {
         VStack(spacing: 0) {
             healthLine
             MynahDivider()
+            TaskBoardView(model: board)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            MynahDivider()
+            // Below the board and given a fixed share of the window, because
+            // this is now where work is made rather than where it is watched.
             conversation
+                .frame(height: Self.conversationHeight)
             composer
         }
         .background(Palette.surface.canvas)
@@ -82,6 +114,9 @@ struct TalkView: View {
         // — the phone's conversation is on disk already and has nothing to wait
         // for. Cancelled with the pane, so nothing polls from Settings.
         .task { await mirror.follow() }
+        // And its own again, so a node that is slow to answer cannot hold up the
+        // conversation underneath it.
+        .task { await board.follow() }
         .onChange(of: model.isBusy) { _, _ in app.presence = presence }
         .onChange(of: model.readiness) { _, _ in app.presence = presence }
     }
@@ -277,7 +312,7 @@ struct TalkView: View {
         }
     }
 
-    /// The Signal thread, oldest message at the top.
+    /// The Signal thread, oldest exchange at the top.
     ///
     /// Labelled whenever there is anything to show, because "this came off your
     /// phone" is the fact that makes the screen make sense — it is the reason an
@@ -286,13 +321,8 @@ struct TalkView: View {
     private var phoneConversation: some View {
         if !mirror.messages.isEmpty {
             ConversationSourceLabel(text: "From your phone")
-            ForEach(mirror.messages) { message in
-                switch message.speaker {
-                case .owner:
-                    OwnerMessage(text: message.text, inset: Self.questionInset)
-                case .mynah:
-                    MynahMessage(text: message.text, maxWidth: Self.answerWidth)
-                }
+            ForEach(MirroredExchange.group(mirror.messages)) { exchange in
+                MirroredExchangeView(exchange: exchange, inset: Self.cardInset)
             }
         }
     }
@@ -311,7 +341,7 @@ struct TalkView: View {
             ForEach(model.exchanges) { exchange in
                 ExchangeView(
                     exchange: exchange,
-                    questionInset: Self.questionInset,
+                    inset: Self.cardInset,
                     answerWidth: Self.answerWidth,
                     showsFirstTurnHint: !model.hasEverAnswered,
                     onStop: { model.stop() },
@@ -504,21 +534,24 @@ struct TalkView: View {
 // MARK: - One exchange
 
 /// A question and whatever came back, as one block.
+///
+/// The same shapes the phone's exchanges are drawn with, and the same spacing
+/// inside them, because a question typed here and one sent from a phone are the
+/// same act. What this one has that a mirrored exchange cannot is the middle of
+/// the turn: the waiting, what the appliance did while it waited, and a failure
+/// with a way out of it. None of that is recorded on the phone's side, so none
+/// of it is faked there.
 private struct ExchangeView: View {
     let exchange: Exchange
-    let questionInset: CGFloat
+    let inset: CGFloat
     let answerWidth: CGFloat
     let showsFirstTurnHint: Bool
     let onStop: () -> Void
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: s5) {
-            // The same bubble the mirrored thread draws, deliberately: a
-            // question typed here and one sent from the phone are the same act,
-            // and two hand-written copies of one shape drift the first time
-            // either is touched.
-            OwnerMessage(text: exchange.question, inset: questionInset)
+        VStack(alignment: .leading, spacing: s4) {
+            AskedCard(text: exchange.question, inset: inset)
             outcome
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -529,15 +562,29 @@ private struct ExchangeView: View {
     private var outcome: some View {
         switch exchange.outcome {
         case .thinking:
-            ThinkingRow(
-                startedAt: exchange.askedAt,
-                showsFirstTurnHint: showsFirstTurnHint,
-                onStop: onStop
-            )
+            // In the answer's own card rather than a row of its own, so the
+            // answer arrives *where the owner is already looking* instead of
+            // replacing a differently shaped thing somewhere else.
+            AnsweredCard(inset: inset) {
+                ThinkingRow(
+                    startedAt: exchange.askedAt,
+                    showsFirstTurnHint: showsFirstTurnHint,
+                    onStop: onStop
+                )
+            }
         case .answered(let answer):
-            AnswerBlock(answer: answer, maxWidth: answerWidth)
+            AnsweredCard(inset: inset) {
+                AnsweredText(text: answer.text)
+                if !answer.activity.isEmpty || answer.seconds > 0 {
+                    ProvenanceRow(answer: answer)
+                }
+            }
         case .failed(let failure):
-            // Only ever "Ask again" here: a fix that lives in Settings is named
+            // Not in the answer card: this is a notice *about* the exchange
+            // rather than something Mynah said, and dressing it as a reply would
+            // put words in its mouth. `InlineBanner` carries its own tone.
+            //
+            // Only ever "Ask again" here — a fix that lives in Settings is named
             // in the explanation, because a button in the middle of a transcript
             // that navigates away from it would lose the owner's place.
             InlineBanner(
@@ -552,22 +599,21 @@ private struct ExchangeView: View {
     }
 }
 
-// MARK: - Answer
+// MARK: - What it did to answer
 
-private struct AnswerBlock: View {
+/// How long it took and what it did, quietly, at the foot of the answer it
+/// belongs to.
+///
+/// This is the one place the window shows the appliance working rather than
+/// describing it — "Looked through what it remembers" under an answer is worth
+/// more than any sentence about memory. It is inside the card because it is part
+/// of that answer's provenance, and it exists only for turns run here: nothing
+/// about tools survives into the daemon's record, so an exchange from the phone
+/// gets no such line rather than a guessed one.
+private struct ProvenanceRow: View {
     let answer: Exchange.Answer
-    let maxWidth: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: s3) {
-            MynahMessage(text: answer.text, maxWidth: maxWidth)
-            provenance
-        }
-    }
-
-    /// How long it took and what it did, quietly. The owner learns what normal
-    /// looks like without ever being shown a tool name.
-    private var provenance: some View {
         // Baseline rather than centre: the duration is `.mono` at 12pt and the
         // phrases are `.label` at 11, so centring them would leave the row
         // visibly askew.
@@ -605,7 +651,12 @@ private struct ThinkingRow: View {
     private static let hintSeconds: TimeInterval = 12
 
     var body: some View {
-        HStack(alignment: .top, spacing: s4) {
+        // No greedy spacer before Stop any more. This row now sits inside the
+        // card the answer will land in, and a spacer would hold that card at its
+        // full width while it waits — a wide empty box, and a visible snap
+        // narrower the moment a short answer arrived. Stop sits beside the words
+        // it belongs to instead, which is also where the hand already is.
+        HStack(alignment: .top, spacing: s5) {
             // Outside the `TimelineView` so its repeating animation is never
             // restarted by the once-a-second text update.
             ThinkingIndicator()
@@ -628,7 +679,6 @@ private struct ThinkingRow: View {
                         .mynahAnimation(Motion.fade, value: secondLine(elapsed))
                 }
             }
-            Spacer(minLength: s5)
             MynahButton("Stop", kind: .quiet, action: onStop)
         }
     }
@@ -696,6 +746,36 @@ private struct HoldToTalkButton: View {
 
 // MARK: - Previews
 
+/// Home as an owner with work on actually meets it: the plate first, the
+/// conversation underneath.
+#Preview("Home — the plate") {
+    TalkPreview(
+        model: TalkPreviewFixtures.empty(),
+        mirror: TalkPreviewFixtures.phoneConversation(),
+        board: TalkPreviewFixtures.plate()
+    )
+}
+
+/// Nothing on the plate — which must read as "nothing to do", not as a screen
+/// that failed to load. Note the Done column, which says something different
+/// again: it cannot see finished work at all.
+#Preview("Home — nothing on the plate") {
+    TalkPreview(
+        model: TalkPreviewFixtures.empty(),
+        board: TaskBoardModel(board: TaskBoard())
+    )
+}
+
+/// The distinction this screen exists to keep. The owner may well have twelve
+/// tasks; the node is not answering, so the board says that instead of showing
+/// three empty columns.
+#Preview("Home — node unreachable") {
+    TalkPreview(
+        model: TalkPreviewFixtures.empty(),
+        board: TaskBoardModel(board: nil, trouble: TaskBoardTrouble.cannotReach)
+    )
+}
+
 #Preview("Talk — empty") {
     TalkPreview(model: TalkPreviewFixtures.empty())
 }
@@ -737,6 +817,8 @@ private struct TalkPreview: View {
     /// Empty by default, and never `.shared`: a preview must not open the
     /// developer's own saved conversation and draw it in a screenshot.
     var mirror: ConversationMirror = ConversationMirror(messages: [])
+    /// Likewise never `.shared` — that one would go and start a node.
+    var board: TaskBoardModel = TaskBoardModel(board: TaskBoard())
 
     var body: some View {
         HStack(spacing: 0) {
@@ -747,7 +829,7 @@ private struct TalkPreview: View {
     }
 
     private var pane: some View {
-        TalkView(model: model, mirror: mirror)
+        TalkView(model: model, mirror: mirror, board: board)
             .environment(AppModel(defaults: TalkPreviewFixtures.defaults()))
     }
 }
@@ -868,6 +950,44 @@ private enum TalkPreviewFixtures {
         )
     }
 
+    /// A plate with real shapes on it: work waiting, work under way, one task
+    /// another agent has picked up. No due dates and no priorities, because the
+    /// node publishes neither and a preview that shows them is how they end up
+    /// in the product.
+    static func plate() -> TaskBoardModel {
+        TaskBoardModel(
+            board: TaskBoard(
+                planned: [
+                    BoardTask(
+                        id: "1",
+                        title: "Get a written quote from the roofer before agreeing anything",
+                        progress: .planned,
+                        domain: "house",
+                        createdAt: Date(timeIntervalSinceNow: -7_200)
+                    ),
+                    BoardTask(
+                        id: "2",
+                        title: "Call your sister back about the weekend",
+                        progress: .planned,
+                        domain: "general",
+                        createdAt: Date(timeIntervalSinceNow: -86_400)
+                    )
+                ],
+                inProgress: [
+                    BoardTask(
+                        id: "3",
+                        title: "Find three plumbers who work Saturdays and compare their call-out fees",
+                        progress: .inProgress,
+                        domain: "house",
+                        carrier: .pickedUpBy("kimi-cli/errands"),
+                        createdAt: Date(timeIntervalSinceNow: -3_600)
+                    )
+                ],
+                done: nil
+            )
+        )
+    }
+
     /// A voice note and its answer, as the daemon would have saved them. No
     /// durations and no tool phrases, because the file records neither — the
     /// preview has to show the owner exactly what the screen can show.
@@ -882,8 +1002,12 @@ private enum TalkPreviewFixtures {
                         + "start the week after next. You told him you wanted it in writing first."
                 ),
                 MirroredMessage(id: 2, speaker: .owner, text: "did I ever send that email"),
+                // Two in a row, because people do that — and because it is the
+                // case that proves the grouping: both belong to the one answer
+                // below them, and the spacing has to show it.
+                MirroredMessage(id: 3, speaker: .owner, text: "the one about the quote I mean"),
                 MirroredMessage(
-                    id: 3,
+                    id: 4,
                     speaker: .mynah,
                     text: "Not that I know of. You asked me to remind you on Monday and it's "
                         + "Thursday, so it's probably still sitting in your drafts."

@@ -602,6 +602,114 @@ final class ConversationMirrorTests: XCTestCase {
     }
 }
 
+// MARK: - Reading it as exchanges
+
+/// The record is a flat run of turns, because that is all the daemon writes.
+/// The window groups it into what-was-asked and what-came-back so a pair can be
+/// held together on screen — by adjacency alone, since there is nothing else to
+/// go on.
+final class MirroredExchangeGroupingTests: XCTestCase {
+
+    private func message(_ id: Int, _ speaker: MirroredMessage.Speaker, _ text: String) -> MirroredMessage {
+        MirroredMessage(id: id, speaker: speaker, text: text)
+    }
+
+    func testAConversationBecomesOneExchangePerQuestion() {
+        let exchanges = MirroredExchange.group([
+            message(0, .owner, "what did we agree"),
+            message(1, .mynah, "Dinner at seven."),
+            message(2, .owner, "and the wine"),
+            message(3, .mynah, "You said you'd bring it.")
+        ])
+
+        XCTAssertEqual(exchanges.count, 2)
+        XCTAssertEqual(exchanges.first?.asked.map(\.text), ["what did we agree"])
+        XCTAssertEqual(exchanges.first?.answered.map(\.text), ["Dinner at seven."])
+        XCTAssertEqual(exchanges.last?.asked.map(\.text), ["and the wine"])
+    }
+
+    /// Two voice notes in a row are one exchange, not two — the appliance
+    /// answered them together, and splitting them would put an empty answer
+    /// under the first.
+    func testMessagesSentInARowBelongToOneExchange() {
+        let exchanges = MirroredExchange.group([
+            message(0, .owner, "what did we agree"),
+            message(1, .owner, "about thursday I mean"),
+            message(2, .mynah, "Dinner at seven.")
+        ])
+
+        XCTAssertEqual(exchanges.count, 1)
+        XCTAssertEqual(exchanges.first?.asked.count, 2)
+        XCTAssertEqual(exchanges.first?.answered.count, 1)
+    }
+
+    /// The appliance answers in more than one message often enough — a working
+    /// line, then the answer. Both belong to the question that prompted them.
+    func testTwoAnswersToOneQuestionStayInThatExchange() {
+        let exchanges = MirroredExchange.group([
+            message(0, .owner, "find me a plumber"),
+            message(1, .mynah, "Looking that up online."),
+            message(2, .mynah, "Three near you, all open Saturday.")
+        ])
+
+        XCTAssertEqual(exchanges.count, 1)
+        XCTAssertEqual(exchanges.first?.answered.count, 2)
+    }
+
+    /// The daemon trims from the front, so a conversation can legitimately begin
+    /// with an answer whose question is gone. Drawing it alone is honest;
+    /// inventing a question for it would not be.
+    func testAnAnswerWhoseQuestionWasTrimmedStillAppears() {
+        let exchanges = MirroredExchange.group([
+            message(0, .mynah, "…and the roofer starts on the 14th."),
+            message(1, .owner, "thanks"),
+            message(2, .mynah, "Any time.")
+        ])
+
+        XCTAssertEqual(exchanges.count, 2)
+        XCTAssertTrue(exchanges.first?.asked.isEmpty == true)
+        XCTAssertEqual(exchanges.first?.answered.map(\.text), ["…and the roofer starts on the 14th."])
+        XCTAssertEqual(exchanges.last?.asked.map(\.text), ["thanks"])
+    }
+
+    /// A question still waiting for its answer on the phone is an exchange with
+    /// nothing in the second half, not a dropped message.
+    func testAQuestionWithNoAnswerYetIsStillAnExchange() {
+        let exchanges = MirroredExchange.group([message(0, .owner, "you there")])
+
+        XCTAssertEqual(exchanges.count, 1)
+        XCTAssertEqual(exchanges.first?.asked.count, 1)
+        XCTAssertTrue(exchanges.first?.answered.isEmpty == true)
+    }
+
+    func testAnEmptyConversationHasNoExchanges() {
+        XCTAssertTrue(MirroredExchange.group([]).isEmpty)
+    }
+
+    /// Every exchange needs its own identity or the list draws one of them.
+    func testExchangesAreDistinctlyIdentified() {
+        let exchanges = MirroredExchange.group([
+            message(0, .owner, "ok"),
+            message(1, .mynah, "ok"),
+            message(2, .owner, "ok"),
+            message(3, .mynah, "ok")
+        ])
+
+        XCTAssertEqual(Set(exchanges.map(\.id)).count, exchanges.count)
+    }
+
+    /// Nothing is lost or duplicated in the regrouping — every message comes out
+    /// exactly once, in the order it was said.
+    func testEveryMessageSurvivesTheGrouping() {
+        let messages = (0..<12).map { index in
+            message(index, index.isMultiple(of: 3) ? .mynah : .owner, "turn \(index)")
+        }
+
+        let regrouped = MirroredExchange.group(messages).flatMap { $0.asked + $0.answered }
+        XCTAssertEqual(regrouped, messages)
+    }
+}
+
 // MARK: - The matching itself
 
 /// The rule that decides what is new, exercised directly. It is the one piece of
