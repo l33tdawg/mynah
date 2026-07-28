@@ -39,6 +39,12 @@ public actor CallTurnServer {
     private var listening: Int32 = -1
     private var turn: Task<Void, Never>?
 
+    /// The opening line, made ready before anyone is listening.
+    private var preparation: Task<Data?, Never>?
+
+    /// When the last call ended, so the opening can know how long it has been.
+    private var lastCallEnded: Date?
+
     /// So two turns running do not open with the same line, which is the tell
     /// that makes a stock phrase sound like a stock phrase.
     private var lastOpener: String?
@@ -77,6 +83,137 @@ public actor CallTurnServer {
                 return "could not open the call socket: \(reason)"
             }
         }
+    }
+
+    /// Gets ready for a call that has been asked for but not yet joined.
+    ///
+    /// `//call` is several seconds of warning: the owner has to receive the
+    /// link, read it, tap it and grant a microphone. All of that is time this
+    /// appliance currently spends idle, and every second of it is a second the
+    /// caller would otherwise wait through after saying hello.
+    ///
+    /// So the opening is built now — greeting and briefing together, through
+    /// the same brain and tools as any other turn, so it can say what is
+    /// actually open rather than something generic. By the time the call
+    /// connects it is a buffer to hand over rather than work to start.
+    ///
+    /// Discarded if the call never happens. That costs one model call the owner
+    /// asked for by typing //call, which is the cheapest thing in this exchange.
+    public func prepare() {
+        preparation?.cancel()
+        preparation = Task { [weak self] in
+            guard let self else { return nil }
+            return await self.buildOpening()
+        }
+    }
+
+    private func buildOpening() async -> Data? {
+        let started = Date()
+        let greeting = CallTurnServer.greetings.randomElement() ?? "Hey, I'm here."
+
+        // The briefing is best-effort. A call that opens with a plain hello is
+        // fine; a call that opens with nothing because a tool timed out is not.
+        var opening = greeting
+        let request = CallTurnServer.briefingRequest(
+            now: Date(),
+            sinceLastCall: lastCallEnded.map { Date().timeIntervalSince($0) }
+        )
+        if let briefing = try? await answer(request),
+           !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            opening = briefing
+        }
+        guard !Task.isCancelled else { return nil }
+
+        guard let audio = try? await synthesizer.synthesize(
+            SpeechRequest(text: opening, voice: configuration.voice)
+        ) else {
+            log("[call] could not prepare an opening")
+            return nil
+        }
+        log("[call] opening ready in \(String(format: "%.1f", Date().timeIntervalSince(started)))s: \(opening)")
+        return CallTurnServer.samples(fromWAV: audio.wav)
+    }
+
+    /// What the appliance is asked before the caller arrives.
+    ///
+    /// Written as an instruction about a call rather than a question, because
+    /// the answer is spoken to someone who has just picked up the phone and
+    /// wants to know where things stand — not read on a screen.
+    ///
+    /// Given the context a person answering the phone would already have —
+    /// what time it is, how long since they last spoke — rather than a list of
+    /// phrases to pick from. Canned warmth is worse than none: it is identical
+    /// every time, so it stops meaning anything by the third call. Real context
+    /// produces "morning" in the morning and "that was quick" when it was,
+    /// without anyone writing either line.
+    ///
+    /// The name is asked for rather than assumed. It is in memory if they have
+    /// ever said it, and if it is not, asking once and remembering is what a
+    /// person would do — far better than an appliance that either guesses or
+    /// never uses it.
+    static func briefingRequest(now: Date, sinceLastCall: TimeInterval?) -> String {
+        let clock = DateFormatter()
+        clock.dateFormat = "EEEE h:mm a"
+        var context = "It is \(clock.string(from: now)) where I am."
+        if let gap = sinceLastCall {
+            context += " We last spoke on a call \(spokenGap(gap)) ago."
+        } else {
+            context += " This is our first call today."
+        }
+
+        return """
+            \(context)
+
+            I'm about to join a voice call with you. Greet me by name in a few
+            words — if you don't know my name, ask me for it and remember it when
+            I tell you. Then say where things stand: anything open on my task
+            list, and what we were last working on.
+
+            Two or three short sentences, spoken aloud — no lists, no markdown.
+            If there's genuinely nothing open, say so briefly. Let the time of
+            day and how long it's been sound natural rather than announced.
+            """
+    }
+
+    /// "a few minutes", "about an hour", "two days" — the way someone would say
+    /// it, not a duration.
+    static func spokenGap(_ seconds: TimeInterval) -> String {
+        switch seconds {
+        case ..<120: return "a minute or two"
+        case ..<3600: return "\(Int(seconds / 60)) minutes"
+        case ..<7200: return "about an hour"
+        case ..<86400: return "\(Int(seconds / 3600)) hours"
+        case ..<172800: return "a day"
+        default: return "\(Int(seconds / 86400)) days"
+        }
+    }
+
+    /// A short stretch of silence, as a WAV recognition will accept.
+    ///
+    /// Used only to warm the path — the transcript is discarded, and would be
+    /// discarded anyway, since silence is precisely what Whisper confabulates
+    /// over.
+    static func silence(milliseconds: Int) -> Data {
+        let rate = 16000
+        let samples = rate * milliseconds / 1000
+        var wav = Data()
+        func append<T: FixedWidthInteger>(_ value: T) {
+            withUnsafeBytes(of: value.littleEndian) { wav.append(contentsOf: $0) }
+        }
+        wav.append(contentsOf: Array("RIFF".utf8))
+        append(UInt32(36 + samples * 2))
+        wav.append(contentsOf: Array("WAVEfmt ".utf8))
+        append(UInt32(16))
+        append(UInt16(1))
+        append(UInt16(1))
+        append(UInt32(rate))
+        append(UInt32(rate * 2))
+        append(UInt16(2))
+        append(UInt16(16))
+        wav.append(contentsOf: Array("data".utf8))
+        append(UInt32(samples * 2))
+        wav.append(Data(count: samples * 2))
+        return wav
     }
 
     /// Opens the socket and answers calls until cancelled.
@@ -162,7 +299,7 @@ public actor CallTurnServer {
         //
         // Safe to send immediately — this connection is only made once media is
         // already flowing from the caller, so the path back is up.
-        await greet(over: writer)
+        await openTheCall(over: writer)
 
         while !Task.isCancelled {
             let frame: CallFrame
@@ -173,6 +310,7 @@ public actor CallTurnServer {
                 frame = try await withoutBlockingTheActor { try reader.next() }
             } catch CallFrameReader.Failure.closed {
                 log("[call] the call ended")
+                lastCallEnded = Date()
                 return
             } catch {
                 log("[call] the endpoint stopped: \(error)")
@@ -338,7 +476,17 @@ public actor CallTurnServer {
     ///
     /// Varied, because the same words every single time is the tell that turns
     /// a greeting into a recording — and this is the first thing anyone hears.
-    private func greet(over writer: CallFrameWriter) async {
+    private func openTheCall(over writer: CallFrameWriter) async {
+        // Prepared at //call, so this is usually already waiting.
+        if let prepared = await preparation?.value {
+            try? writer.send(.replyAudio(prepared))
+            log("[call] opened with the prepared briefing")
+            preparation = nil
+            return
+        }
+
+        // Nothing prepared — the endpoint was started some other way, or the
+        // briefing failed. A plain hello beats silence.
         let greeting = CallTurnServer.greetings.randomElement() ?? "Hey, I'm here."
         guard let audio = try? await synthesizer.synthesize(
             SpeechRequest(text: greeting, voice: configuration.voice)

@@ -134,6 +134,9 @@ public actor VoiceBridgeDaemon {
 
     private let signal: SignalClient
     private let transcriber: AudioFileTranscribing
+
+    /// Called the moment //call arrives, before the link is even built.
+    private var onCallRequested: (@Sendable () async -> Void)?
     private let loop: ToolLoop
     private let configuration: Configuration
     private let log: (String) -> Void
@@ -251,6 +254,7 @@ public actor VoiceBridgeDaemon {
         synthesizer: SpeechSynthesizing? = nil,
         calls: CallHost? = nil,
         callRefusal: CallInvitation.Refusal? = nil,
+        onCallRequested: (@Sendable () async -> Void)? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -263,6 +267,7 @@ public actor VoiceBridgeDaemon {
         self.synthesizer = synthesizer
         self.calls = calls
         self.callRefusal = callRefusal
+        self.onCallRequested = onCallRequested
         self.log = log
     }
 
@@ -733,6 +738,12 @@ public actor VoiceBridgeDaemon {
             await reply(refusal.sentence, to: recipient)
             return
         }
+        // The link takes seconds to reach the owner, be read, tapped and granted
+        // a microphone. Everything the first turn needs — the model, SAGE, the
+        // voice, recognition — can be warm before they arrive, and the opening
+        // itself already spoken.
+        await onCallRequested?()
+
         do {
             let url = try await calls.start()
             log("[daemon] call ready at \(url)")
