@@ -172,7 +172,11 @@ func makeBackend(
         // model can be driven from a dev machine that has not pulled it.
         let client = ollamaBaseURL.flatMap { URL(string: $0) }.map { OllamaClient(baseURL: $0) }
             ?? OllamaClient()
-        return OllamaBackend(client: client, model: model ?? "qwen3.5:4b")
+        return OllamaBackend(
+            client: client,
+            model: model ?? "qwen3.5:4b",
+            managedRuntime: ollamaBaseURL == nil ? OllamaRuntimeInstaller.shared : nil
+        )
     case "anthropic":
         return AnthropicBackend(
             modelName: model ?? "claude-opus-5",
@@ -652,6 +656,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     if arguments.contains("--acknowledge") {
         daemonConfiguration.sendsThinkingAcknowledgement = true
     }
+    daemonConfiguration.speaksReplies = style.usesVoiceNotes
     // Driven against the raw MCP client, not the composed catalogue: these are
     // SAGE's own boot tools, deliberately outside the model's allowlist.
     runAndExit {
@@ -680,6 +685,25 @@ func runDaemon(_ arguments: [String]) -> Never {
             return fail("local speech recognition is not ready: \(error)")
         }
 
+        let synthesizer: SpeechSynthesizing?
+        if style.usesVoiceNotes {
+            _ = VoiceNote.discardStale()
+            let kokoro = KokoroHTTPSynthesizer()
+            if await kokoro.isAvailable() {
+                synthesizer = kokoro
+            } else {
+                let system = SystemSpeechSynthesizer()
+                synthesizer = await system.isAvailable() ? system : nil
+            }
+            if synthesizer == nil {
+                FileHandle.standardError.write(
+                    Data("[daemon] no local speech synthesizer is available; replies will be text\n".utf8)
+                )
+            }
+        } else {
+            synthesizer = nil
+        }
+
         do {
             let info = try await mcp.start()
             let tools = try await loop.availableTools()
@@ -703,7 +727,8 @@ func runDaemon(_ arguments: [String]) -> Never {
                     log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
                 ),
             notes: notes,
-            conversations: ConversationStore()
+            conversations: ConversationStore(),
+            synthesizer: synthesizer
         )
         await daemon.run()
         mcp.stop()

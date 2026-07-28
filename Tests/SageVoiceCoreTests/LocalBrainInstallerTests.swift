@@ -162,12 +162,52 @@ final class LocalBrainInstallerTests: XCTestCase {
         }
     }
 
+    /// Startup readiness is not enough for an unattended appliance. If Ollama
+    /// dies later, the next completion must restore the managed sidecar instead
+    /// of turning a Signal message into silence.
+    func testRuntimeRecoveryReentersTheInstallerWhenTheSidecarDisappears() async {
+        let runtime = RecordingFailingRuntime()
+        let installer = LocalBrainInstaller(
+            client: OllamaClient(baseURL: URL(string: "http://127.0.0.1:1")!),
+            runtime: runtime
+        )
+
+        do {
+            try await installer.ensureRuntimeAvailable()
+            XCTFail("an unreachable runtime whose reinstall fails cannot be ready")
+        } catch {
+            XCTAssertEqual(error as? OllamaRuntimeInstaller.Failure, .downloadHTTP(503))
+        }
+
+        let counts = await runtime.counts
+        XCTAssertEqual(counts.install, 1)
+        XCTAssertEqual(counts.start, 0)
+    }
+
     private struct FailingRuntime: OllamaRuntimeInstalling {
         func install(onProgress: @Sendable (Int64, Int64?) -> Void) async throws {
             throw OllamaRuntimeInstaller.Failure.downloadHTTP(503)
         }
 
         func start() async throws {}
+    }
+
+    private actor RecordingFailingRuntime: OllamaRuntimeInstalling {
+        private var installCount = 0
+        private var startCount = 0
+
+        func install(onProgress: @Sendable (Int64, Int64?) -> Void) async throws {
+            installCount += 1
+            throw OllamaRuntimeInstaller.Failure.downloadHTTP(503)
+        }
+
+        func start() async throws {
+            startCount += 1
+        }
+
+        var counts: (install: Int, start: Int) {
+            (installCount, startCount)
+        }
     }
 
     /// A thread-safe recorder — `install` reports from its own actor context.

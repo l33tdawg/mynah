@@ -38,7 +38,10 @@ enum BrainFactory {
 
         switch plan {
         case .localOllama:
-            return OllamaBackend(model: option.modelName ?? LocalBrainModelCatalog.preferredModel)
+            return OllamaBackend(
+                model: option.modelName ?? LocalBrainModelCatalog.preferredModel,
+                managedRuntime: OllamaRuntimeInstaller.shared
+            )
 
         case .anthropic:
             return AnthropicBackend(

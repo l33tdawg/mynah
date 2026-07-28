@@ -218,6 +218,27 @@ public actor LocalBrainInstaller {
         }
     }
 
+    /// Restores the sidecar after a crash without paying the model-readiness
+    /// probes on every turn.
+    ///
+    /// `install()` remains the startup/setup gate: it checks both model
+    /// manifests and serves a real chat and embedding request. Once that has
+    /// passed, a completion only needs this cheap loopback probe. If Ollama
+    /// disappeared while the app was idle, the verified managed binary is
+    /// started again before the owner's request reaches the backend.
+    public func ensureRuntimeAvailable() async throws {
+        if await client.isReachable() {
+            return
+        }
+        try await runtime.install { _, _ in }
+        try await runtime.start()
+        guard await client.isReachable(timeoutSeconds: 30) else {
+            throw BrainBackendError.unreachable(
+                "the managed local runtime started but did not become reachable"
+            )
+        }
+    }
+
     private func hasModel() async throws -> Bool {
         let installed = try await client.listModels()
         return has(model, in: installed)

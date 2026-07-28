@@ -690,6 +690,7 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
 
     private let client: OllamaClient
     private let keepAlive: String?
+    private let localInstaller: LocalBrainInstaller?
     /// Applied when the request asks for `.automatic`.
     private let defaultThink: OllamaClient.OllamaThinkMode?
     private let contextTokens: Int?
@@ -699,13 +700,17 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
         model: String = "qwen3.5:4b",
         keepAlive: String? = "30m",
         defaultThink: OllamaClient.OllamaThinkMode? = .effort(OllamaBackend.defaultReasoningEffort),
-        contextTokens: Int? = OllamaBackend.defaultContextTokens
+        contextTokens: Int? = OllamaBackend.defaultContextTokens,
+        managedRuntime: OllamaRuntimeInstalling? = nil
     ) {
         self.client = client
         self.modelName = model
         self.keepAlive = keepAlive
         self.defaultThink = defaultThink
         self.contextTokens = contextTokens
+        self.localInstaller = managedRuntime.map {
+            LocalBrainInstaller(client: client, model: model, runtime: $0)
+        }
     }
 
     public func isAvailable() async -> Bool {
@@ -721,6 +726,9 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     }
 
     public func complete(_ request: BrainRequest) async throws -> BrainReply {
+        if let localInstaller {
+            try await localInstaller.ensureRuntimeAvailable()
+        }
         let think: OllamaClient.OllamaThinkMode?
         switch request.reasoning {
         case .automatic: think = defaultThink

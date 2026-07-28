@@ -90,6 +90,13 @@ public actor VoiceBridgeDaemon {
         /// `MessageCoalescer` for why this waits rather than starting and
         /// cancelling.
         public var messageQuietWindow: Duration
+        /// Send the answer as a voice note as well as text.
+        ///
+        /// Follows `ReplyStyle.usesVoiceNotes`, and until now nothing acted on
+        /// it: the style made replies short and markdown-free — the shape for
+        /// speech — and then sent them as text. The switch promised audio and
+        /// delivered terseness, which is worse than leaving it off.
+        public var speaksReplies: Bool
 
         public init(
             genericFailureReply: String = "Something went wrong handling that. It's logged.",
@@ -97,7 +104,8 @@ public actor VoiceBridgeDaemon {
             historyTurnLimit: Int = 16,
             maximumTranscriptCharacters: Int = 4000,
             sendsThinkingAcknowledgement: Bool = false,
-            messageQuietWindow: Duration = MessageCoalescer.defaultQuietWindow
+            messageQuietWindow: Duration = MessageCoalescer.defaultQuietWindow,
+            speaksReplies: Bool = false
         ) {
             self.genericFailureReply = genericFailureReply
             self.replyPrefix = replyPrefix
@@ -105,6 +113,7 @@ public actor VoiceBridgeDaemon {
             self.maximumTranscriptCharacters = maximumTranscriptCharacters
             self.sendsThinkingAcknowledgement = sendsThinkingAcknowledgement
             self.messageQuietWindow = messageQuietWindow
+            self.speaksReplies = speaksReplies
         }
     }
 
@@ -199,6 +208,11 @@ public actor VoiceBridgeDaemon {
     /// `nil` disables persistence entirely, which is what the tests use.
     private let conversations: ConversationStore?
 
+    /// Turns the answer into audio. `nil` disables speaking regardless of the
+    /// configuration, which is what every test wants and what a machine with no
+    /// working synthesizer gets.
+    private let synthesizer: SpeechSynthesizing?
+
     public init(
         signal: SignalClient,
         transcriber: AudioFileTranscribing,
@@ -207,6 +221,7 @@ public actor VoiceBridgeDaemon {
         ritual: SageRitual? = nil,
         notes: NotesToolSource? = nil,
         conversations: ConversationStore? = nil,
+        synthesizer: SpeechSynthesizing? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -216,6 +231,7 @@ public actor VoiceBridgeDaemon {
         self.ritual = ritual
         self.notes = notes
         self.conversations = conversations
+        self.synthesizer = synthesizer
         self.log = log
     }
 
@@ -609,10 +625,41 @@ public actor VoiceBridgeDaemon {
         return tools
     }
 
+    /// The answer as an m4a, or nothing.
+    ///
+    /// Returns empty rather than throwing on every failure path, because none of
+    /// them are worth losing the answer over: a missing synthesizer, a wedged
+    /// `say`, an encoder that would not run. The owner gets the text, which is
+    /// what they got before this existed.
+    ///
+    /// Skipped entirely when the turn already carries a file. Signal shows one
+    /// attachment row per file, and a written document plus a spoken summary of
+    /// the same thing is two things to tap where the owner asked for one.
+    private func voiceNote(for text: String, attachments: [URL]) async -> [URL] {
+        guard configuration.speaksReplies, attachments.isEmpty, let synthesizer else { return [] }
+        let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spokenText.isEmpty else { return [] }
+
+        do {
+            let preferences = VoicePreferences()
+            let speech = try await synthesizer.synthesize(
+                SpeechRequest(text: spokenText, voice: preferences.voice(), speed: preferences.speed())
+            )
+            let file = try await VoiceNote.write(speech)
+            log(String(format: "[daemon] spoke %.1fs of audio in %.1fs",
+                       speech.duration, speech.generationDuration))
+            return [file]
+        } catch {
+            log("[daemon] could not speak the reply, sending text only: \(error)")
+            return []
+        }
+    }
+
     private func reply(
         _ text: String,
         to recipient: SignalRecipient,
-        attaching attachments: [URL] = []
+        attaching attachments: [URL] = [],
+        allowSpeaking: Bool = true
     ) async {
         // On the way out only. The model writes bare domains — "check their
         // website mamaison.com.my" — and Signal linkifies nothing without a
@@ -621,6 +668,20 @@ public actor VoiceBridgeDaemon {
         // actually said, and nothing about this can reach routing.
         let linked = Linkify.promotingBareDomains(in: text)
         let body = configuration.replyPrefix.isEmpty ? linked : configuration.replyPrefix + linked
+        // Spoken as well as written, never instead of. A voice note the owner
+        // cannot play — on a watch, in a meeting, on a bad connection — would
+        // otherwise be an answer they cannot read, and the text costs nothing.
+        let spoken = allowSpeaking
+            ? await voiceNote(for: text, attachments: attachments)
+            : []
+        defer {
+            // Only the generated note belongs to this method. Other
+            // attachments can be caller-owned exports and must survive send.
+            for file in spoken {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+        let attachments = attachments + spoken
         do {
             _ = try await signal.send(
                 text: body,
@@ -638,7 +699,9 @@ public actor VoiceBridgeDaemon {
                 return
             }
             log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")
-            await reply(text, to: recipient)
+            // Do not synthesize the same attachment again: the point of this
+            // retry is an unconditionally plain-text path.
+            await reply(text, to: recipient, allowSpeaking: false)
         }
     }
 
