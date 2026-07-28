@@ -187,4 +187,64 @@ final class ApplianceKeyMigrationTests: XCTestCase {
             "applianceEnvironment did not run the migration"
         )
     }
+
+    // MARK: The legacy-directory trap
+
+    /// The severe one, found in review, reproduced from the author's own
+    /// machine.
+    ///
+    /// The node reaches its pre-provider directory ONLY for claude-code and
+    /// claude-desktop (mcp.go:246-253). The first port offered it to everyone,
+    /// and the appliance runs with no provider — so a daemon launched by launchd
+    /// or Finder (cwd `/`) found no provider directory, fell to the legacy one,
+    /// and adopted `~/.sage/agents/--8a5edab2/agent.key`: a live Claude Code
+    /// agent holding thousands of memories.
+    ///
+    /// Mynah would have become that agent — writing voice turns into its corpus,
+    /// inheriting its grants, with `sage_forget` still in its tool allowlist.
+    func testAProviderlessApplianceNeverAdoptsALegacyClaudeCodeKey() throws {
+        // Exactly the reachable shape: legacy directory present, provider
+        // directory absent.
+        let legacyName = "--8a5edab2"
+        let legacy = sageHome
+            .appendingPathComponent("agents", isDirectory: true)
+            .appendingPathComponent(legacyName, isDirectory: true)
+            .appendingPathComponent("agent.key", isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: legacy.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("somebody-elses-claude-code-agent".utf8).write(to: legacy)
+
+        let migrated = MynahIdentity.migrateApplianceKeyIfNeeded(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertNil(migrated, "the appliance adopted a Claude Code agent's identity")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: MynahIdentity.applianceKeyURL(homeDirectory: home).path),
+            "another agent's key was copied into the appliance's identity"
+        )
+    }
+
+    /// The candidate list itself, so the gate cannot be loosened without this
+    /// failing rather than a migration quietly widening.
+    func testTheLegacyCandidateIsOfferedOnlyToTheProvidersTheNodeOffersItTo() {
+        let sage = URL(fileURLWithPath: "/Users/tester/.sage", isDirectory: true)
+        func candidates(_ provider: String?) -> [URL] {
+            MynahIdentity.derivedKeyCandidates(
+                sageHome: sage, workingDirectory: "/Users/tester/project", provider: provider
+            )
+        }
+
+        XCTAssertEqual(candidates(nil).count, 1, "a providerless caller was offered the legacy directory")
+        XCTAssertEqual(candidates("").count, 1)
+        XCTAssertEqual(candidates("codex").count, 1, "a non-Claude provider was offered the legacy directory")
+
+        // mcp.go:246-253 — these two, and only these two.
+        XCTAssertEqual(candidates("claude-code").count, 2)
+        XCTAssertEqual(candidates("Claude-Desktop").count, 2, "the node compares case-insensitively")
+    }
 }

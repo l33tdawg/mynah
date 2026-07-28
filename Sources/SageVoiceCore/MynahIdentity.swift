@@ -210,10 +210,32 @@ public enum MynahIdentity {
             SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8).description
         }
 
-        let providerDir = "\(base)-\(sanitizedDirName(resolvedProvider))-\(shortHash(resolvedProvider + "\u{0}" + absolute))"
-        let legacyDir = "\(base)-\(shortHash(absolute))"
+        var directories = ["\(base)-\(sanitizedDirName(resolvedProvider))-\(shortHash(resolvedProvider + "\u{0}" + absolute))"]
 
-        return [providerDir, legacyDir].map {
+        // The pre-provider directory is reachable ONLY for claude-code and
+        // claude-desktop (mcp.go:246-253); every other provider — including the
+        // empty one the appliance runs with — goes straight to the
+        // provider-specific path at :254.
+        //
+        // Offering it unconditionally was a severe bug, and a reachable one. On
+        // the author's own machine the provider directory for cwd `/` does not
+        // exist while the legacy one does, so a daemon launched by launchd or
+        // Finder (cwd `/`) skipped the correct candidate and adopted
+        // `~/.sage/agents/--8a5edab2/agent.key` — a live Claude Code agent
+        // holding thousands of memories. Mynah would have become that agent,
+        // inherited its domain grants, written voice turns into its corpus, and
+        // kept `sage_forget` in its tool allowlist.
+        //
+        // The commit that introduced this claimed the computed approach avoided
+        // exactly that, which is why the gate is mirrored from the node line for
+        // line rather than approximated.
+        let trimmedProvider = (provider ?? "").trimmingCharacters(in: .whitespaces)
+        if trimmedProvider.caseInsensitiveCompare("claude-code") == .orderedSame
+            || trimmedProvider.caseInsensitiveCompare("claude-desktop") == .orderedSame {
+            directories.append("\(base)-\(shortHash(absolute))")
+        }
+
+        return directories.map {
             agents.appendingPathComponent($0, isDirectory: true)
                 .appendingPathComponent("agent.key", isDirectory: false)
         }
