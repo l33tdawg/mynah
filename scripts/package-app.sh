@@ -41,6 +41,7 @@ SIGN_IDENTITY="${SAGE_VOICE_CODESIGN_IDENTITY:--}"
 # Hardened runtime is required for notarization.
 SIGN_OPTIONS="${SAGE_VOICE_CODESIGN_OPTIONS:---options runtime}"
 ENTITLEMENTS="${SAGE_VOICE_ENTITLEMENTS:-$ROOT/resources/SageVoiceBridge.entitlements}"
+SIGNAL_ENTITLEMENTS="${SAGE_VOICE_SIGNAL_ENTITLEMENTS:-$ROOT/resources/SignalCLI.entitlements}"
 ICON_SOURCE="${SAGE_VOICE_ICON:-$ROOT/resources/Mynah.icns}"
 
 BUNDLE_SAGE="${SAGE_VOICE_BUNDLE_SAGE:-1}"
@@ -340,7 +341,12 @@ fi
 # 2. Our CLI helper. Also no entitlements — it never opens an audio device.
 [[ ! -f "$APP/Contents/MacOS/argmax-cli" ]] || sign "$APP/Contents/MacOS/argmax-cli"
 [[ ! -f "$APP/Contents/MacOS/whisper-cli" ]] || sign "$APP/Contents/MacOS/whisper-cli"
-[[ ! -f "$APP/Contents/MacOS/signal-cli" ]] || sign "$APP/Contents/MacOS/signal-cli"
+# signal-cli needs one entitlement of its own, and the reason is written on
+# resources/SignalCLI.entitlements: it unpacks libsignal to a temp path and
+# dlopens it, which the hardened runtime refuses without this. Without it the
+# phone step fails for every owner, and only on a Developer ID build.
+[[ ! -f "$APP/Contents/MacOS/signal-cli" ]] \
+  || sign "$APP/Contents/MacOS/signal-cli" --entitlements "$SIGNAL_ENTITLEMENTS"
 # The call endpoint. Staged above; this line is what makes it distributable.
 #
 # Its absence here cost a rejected notarization with exactly the three errors

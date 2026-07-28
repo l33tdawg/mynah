@@ -79,7 +79,9 @@ else
 A disk image containing signal-cli must carry the GPL text it is distributed under."
 fi
 
-hdiutil create -volname "Mynah ${VERSION}${VOLUME_SUFFIX}" -srcfolder "$STAGING" \
+# The volume carries the explanation too, since for most people the mounted disk
+# is the first place the name appears at all.
+hdiutil create -volname "Mynah (Sage Voice Bridge) ${VERSION}${VOLUME_SUFFIX}" -srcfolder "$STAGING" \
   -ov -format UDRW "$TMP_DMG" >/dev/null
 hdiutil convert "$TMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
 rm -rf "$STAGING" "$TMP_DMG"

@@ -30,7 +30,7 @@
   <key>CFBundleName</key>
   <string>Mynah</string>
   <key>CFBundleDisplayName</key>
-  <string>Mynah</string>
+  <string>Mynah (Sage Voice Bridge)</string>
 
   <!-- Contents/Resources/Mynah.icns, drawn by scripts/make-icon.sh. -->
   <key>CFBundleIconFile</key>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the bundled signal-cli, and for nothing else.
+
+  signal-cli is a GraalVM native image that carries libsignal inside itself and
+  unpacks it at runtime — it writes libsignal_jni_aarch64.dylib into a temporary
+  directory and dlopens it. Under the hardened runtime, library validation
+  refuses to load a dylib that is not signed by the same team, and the extracted
+  copy is signed by nobody. signal-cli reports that as:
+
+      Failed to call libsignal-client: Can't load library:
+        /var/folders/…/libsignal_jni_aarch64.dylib
+      Missing required native library dependency: libsignal-client
+
+  and exits. Every attempt to link a phone therefore ended in "That didn't
+  finish" with no QR code ever appearing.
+
+  This is the failure the main entitlements file predicts and explains: an
+  ad-hoc signature has no Team ID, so library validation is not enforced at all
+  on a development build, and the whole class of bug is invisible until a
+  Developer ID build runs on somebody's Mac.
+
+  What that file gets wrong is where the fix belongs. Library validation governs
+  code loaded into a process's own address space, and the process loading this
+  library is signal-cli — not Mynah. Adding the key to Mynah's entitlements
+  would weaken every future load in the GUI and would not have fixed this.
+
+  So the entitlement lives here, applied to one helper, which is the smallest
+  grant that makes linking work. Mynah's own entitlements are unchanged and
+  still do not disable library validation.
+-->
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

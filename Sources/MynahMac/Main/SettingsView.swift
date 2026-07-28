@@ -1336,7 +1336,14 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader("About")
 
-            SettingsRow("Mynah", detail: "A private voice appliance. It answers only your phone.") {
+            // The full name here, and only here. In running copy it stays
+            // "Mynah" — "Mynah (Sage Voice Bridge) keeps what you tell it" is a
+            // sentence nobody wants to read twice. The parenthetical exists to
+            // answer "what IS this" once, in the place someone goes to ask.
+            SettingsRow(
+                "Mynah (Sage Voice Bridge)",
+                detail: "A private voice appliance. It answers only your phone."
+            ) {
                 Text(SettingsModel.appVersion)
                     .mynahFont(.mono)
                     .foregroundStyle(Palette.ink.secondary)

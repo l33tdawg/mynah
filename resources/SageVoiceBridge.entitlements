@@ -53,9 +53,18 @@
       "Library validation failed" or code signature 0xd (SIGKILL, CODESIGNING)
       in the crash report, naming the library that was refused.
 
-    The fix is to add the key back HERE and re-run the full sign, and to say in
-    the commit message which library forced it. Do not add it pre-emptively:
-    turning it on weakens every future load in the process to buy nothing.
+    That day came, and this file's prescription was wrong in one detail worth
+    recording. The library refused was libsignal_jni_aarch64.dylib, unpacked to
+    a temp directory and dlopened by the bundled signal-cli — a SEPARATE
+    process. Library validation governs a process's own address space, so
+    adding the key here would have weakened every future load in the GUI and
+    fixed nothing. It went on signal-cli instead; see
+    resources/SignalCLI.entitlements.
+
+    So the rule stands and gains a clause: add the key to the entitlements of
+    the process that is actually loading the library, and never pre-emptively.
+    Turning it on here still weakens every future load in this process to buy
+    nothing.
   -->
 </dict>
 </plist>
