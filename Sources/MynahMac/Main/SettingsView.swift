@@ -648,13 +648,20 @@ struct SettingsView: View {
             // The detail line explains the consequence, not the mechanism. The
             // owner is choosing how they want to be answered; that this rewrites
             // a section of the system prompt is not their problem.
+            // The detail line has to carry the restart caveat, not a footnote
+            // somewhere else. The daemon reads this file once at start-up
+            // (main.swift resolveReplyStyle), so on the appliance the switch is
+            // a statement of intent until it restarts — and a switch that moves,
+            // looks settled, and changes nothing is worse than one that is
+            // greyed out.
             SettingsRow(
                 "Answer with voice notes",
-                detail: voiceNotes
+                detail: (voiceNotes
                     ? "Mynah speaks its answers, so it keeps them short — a couple of sentences, "
                         + "no lists. Long answers are unlistenable."
                     : "Mynah writes its answers, so it gives you the whole thing — a line per "
-                        + "item, and links you can tap."
+                        + "item, and links you can tap.")
+                    + " Answers on your phone change the next time the bridge restarts."
             ) {
                 Toggle("", isOn: $voiceNotes)
                     .labelsHidden()

@@ -373,4 +373,122 @@ final class ToolLoopDeadlineTests: XCTestCase {
             "stopping early is only cheaper than waiting if the partial result comes back"
         )
     }
+
+    // MARK: Reporting what the turn actually did
+
+    /// `ModelCallRecord.truncated` was recorded from day one and read by
+    /// nothing, so an answer cut at the token ceiling looked exactly like an
+    /// answer that had finished. Survivable at 40 words; not once the written
+    /// style lists shops with full map URLs, where a list cut after item four is
+    /// indistinguishable from a list that had four items.
+    func testTruncationReachesTheLogLine() {
+        var trace = ToolLoopTrace(model: "m", iterations: 2)
+        trace.modelCalls = [
+            ModelCallRecord(iteration: 1, promptEvalCount: 10, evalCount: 5, durationSeconds: 1, requestedTools: []),
+            ModelCallRecord(
+                iteration: 2, promptEvalCount: 10, evalCount: 2048, durationSeconds: 9,
+                requestedTools: [], truncated: true
+            )
+        ]
+        XCTAssertTrue(trace.wasTruncated)
+        XCTAssertTrue(trace.summary.contains("[TRUNCATED]"))
+    }
+
+    /// Truncation is not exclusive with the brakes: a turn can run out of time
+    /// AND have had an answer cut short, and those need different fixes — one is
+    /// the budget, the other is the token ceiling.
+    func testTruncationIsReportedAlongsideABrake() {
+        var trace = ToolLoopTrace(model: "m", iterations: 10)
+        trace.hitDeadline = true
+        trace.modelCalls = [
+            ModelCallRecord(
+                iteration: 1, promptEvalCount: 1, evalCount: 1, durationSeconds: 1,
+                requestedTools: [], truncated: true
+            )
+        ]
+        XCTAssertTrue(trace.summary.contains("[TIMEOUT]"))
+        XCTAssertTrue(trace.summary.contains("[TRUNCATED]"))
+    }
+
+    func testACleanTurnSaysNothingExtra() {
+        let trace = ToolLoopTrace(
+            model: "m",
+            iterations: 2,
+            modelCalls: [ModelCallRecord(iteration: 1, promptEvalCount: 1, evalCount: 1, durationSeconds: 1, requestedTools: [])]
+        )
+        XCTAssertFalse(trace.summary.contains("["))
+    }
+
+    // MARK: Fan-out inside one iteration
+
+    /// The deadline is checked between iterations and never inside one, so
+    /// nothing bounded a model asking for twelve tools at once — and raising the
+    /// iteration cap from 5 to 10 doubled the ceiling on that. Against SAGE a
+    /// tool call can be an on-chain write.
+    func testAnIterationCannotFanOutWithoutBound() async throws {
+        let backend = FanOutBackend(callsPerIteration: 8)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: EchoToolSource(name: "sage_recall"),
+            configuration: ToolLoop.Configuration(maxIterations: 2, deadlineSeconds: nil, allowedToolNames: [])
+        )
+
+        let result = try await loop.run(transcript: "do everything at once")
+
+        XCTAssertLessThanOrEqual(
+            result.trace.toolCalls.count,
+            ToolLoop.maximumToolCallsPerIteration * 2,
+            "a single iteration executed every call the model asked for"
+        )
+        XCTAssertGreaterThan(result.trace.droppedToolCalls, 0)
+        XCTAssertTrue(result.trace.summary.contains("[DROPPED"), "a capped fan-out was swallowed silently")
+    }
+
+    /// An ordinary turn must not be clipped. The cap is a guard against a
+    /// confused model, not a limit on find-then-pipe.
+    func testANormalNumberOfCallsIsUntouched() async throws {
+        let backend = FanOutBackend(callsPerIteration: 2)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: EchoToolSource(name: "sage_recall"),
+            configuration: ToolLoop.Configuration(maxIterations: 1, deadlineSeconds: nil, allowedToolNames: [])
+        )
+
+        let result = try await loop.run(transcript: "find them and send it")
+        XCTAssertEqual(result.trace.toolCalls.count, 2)
+        XCTAssertEqual(result.trace.droppedToolCalls, 0)
+    }
+}
+
+/// Asks for a fixed number of tools every iteration, so the fan-out cap can be
+/// exercised without a real model deciding to behave.
+private final class FanOutBackend: BrainBackend, @unchecked Sendable {
+    let identifier = "fanout"
+    let modelName = "fanout-model"
+    let isLocal = true
+    private let callsPerIteration: Int
+
+    init(callsPerIteration: Int) { self.callsPerIteration = callsPerIteration }
+
+    func isAvailable() async -> Bool { true }
+
+    func complete(_ request: BrainRequest) async throws -> BrainReply {
+        guard !request.tools.isEmpty else {
+            return BrainReply(
+                model: modelName,
+                message: .assistant("done"),
+                stopReason: .endTurn,
+                usage: BrainUsage(inputTokens: 1, outputTokens: 1)
+            )
+        }
+        let calls = (0..<callsPerIteration).map {
+            BrainToolCall(id: "call_\($0)", name: "sage_recall", arguments: [:])
+        }
+        return BrainReply(
+            model: modelName,
+            message: BrainMessage(role: .assistant, content: "", toolCalls: calls),
+            stopReason: .toolUse,
+            usage: BrainUsage(inputTokens: 1, outputTokens: 1)
+        )
+    }
 }

@@ -149,6 +149,23 @@ public struct ToolLoopTrace: Sendable, Equatable {
     public var hitDeadline: Bool
     public var totalDurationSeconds: TimeInterval
 
+    /// The model stopped because it hit `maxGeneratedTokens`, not because it had
+    /// finished.
+    ///
+    /// `ModelCallRecord.truncated` was recorded from the first day and read by
+    /// nothing — no log line, no retry — so the only symptom was an answer that
+    /// stopped mid-sentence. That was survivable while replies were 40 words. It
+    /// is not now: the written style lists shops with full map URLs, one URL is
+    /// ~30 tokens before the place name, and a list cut after item four looks
+    /// exactly like a list that had four items.
+    public var wasTruncated: Bool { modelCalls.contains(where: \.truncated) }
+
+    /// Tool calls the model asked for and did not get, because one iteration
+    /// exceeded `ToolLoop.maximumToolCallsPerIteration`. Reported rather than
+    /// silently swallowed — a capped fan-out changes what the answer is built
+    /// from, and that belongs in the same line as the rest of the turn.
+    public var droppedToolCalls: Int = 0
+
     public init(
         model: String,
         iterations: Int = 0,
@@ -198,9 +215,15 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// last allowed iteration both flags are true, and the useful fact is that
     /// the clock is what ended it.
     private var stopNote: String {
-        if hitDeadline { return " [TIMEOUT]" }
-        if hitIterationCap { return " [CAPPED]" }
-        return ""
+        var notes: [String] = []
+        if hitDeadline { notes.append("[TIMEOUT]") }
+        else if hitIterationCap { notes.append("[CAPPED]") }
+        // Not exclusive with the others: a turn can run out of time AND have had
+        // an answer cut short, and they need different fixes — one is the
+        // budget, the other is the token ceiling.
+        if wasTruncated { notes.append("[TRUNCATED]") }
+        if droppedToolCalls > 0 { notes.append("[DROPPED \(droppedToolCalls)]") }
+        return notes.isEmpty ? "" : " " + notes.joined(separator: " ")
     }
 }
 
@@ -332,6 +355,20 @@ public final class ToolLoop: @unchecked Sendable {
     /// own timings and only falls back here on the first iteration, where there
     /// is nothing measured yet.
     public static let summaryReserveSeconds: TimeInterval = 12
+
+    /// Tool calls honoured per iteration.
+    ///
+    /// The deadline is checked between iterations, never inside one, so nothing
+    /// bounded a model that asked for twelve tools at once — and raising the
+    /// iteration cap from 5 to 10 doubled the ceiling on that. Against SAGE a
+    /// tool call can be an on-chain write, so "confused model" and "consensus
+    /// load" are the same sentence.
+    ///
+    /// Three, because the deepest chain this product actually needs is
+    /// find-then-pipe. The extras are dropped rather than the turn refused: the
+    /// model gets the results of what it asked for first and another iteration
+    /// to ask again, which is a worse plan executed than no plan at all.
+    public static let maximumToolCallsPerIteration = 3
 
     public struct Configuration: Sendable {
         public var systemPrompt: String
@@ -783,7 +820,16 @@ public final class ToolLoop: @unchecked Sendable {
                 }
             }
 
-            for call in response.toolCalls {
+            // The deadline is only checked between iterations, so a model that
+            // fans out inside one is unbounded by it: `defaultMaxIterations`
+            // went 5 -> 10 and nothing capped how many calls each iteration
+            // could make. Against SAGE those are on-chain writes.
+            //
+            // Three is generous for this tool surface — the deepest real chain
+            // is find-then-pipe — and dropping the tail beats refusing the turn.
+            let calls = Array(response.toolCalls.prefix(Self.maximumToolCallsPerIteration))
+            trace.droppedToolCalls += response.toolCalls.count - calls.count
+            for call in calls {
                 let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
                 trace.toolCalls.append(record)
                 lastToolResult = record.result
