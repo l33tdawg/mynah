@@ -67,6 +67,26 @@ let meter = null;
 
 function say(text) { stateText.textContent = text; }
 
+// Tell the Mac what this page sees.
+//
+// Every way a call fails is visible here and invisible there: a refused
+// microphone, an ICE state that stalls at 'checking', a connection that reports
+// itself healthy while sending nothing. Without this the owner is the only
+// instrument, and "it doesn't connect" has to cover all of them.
+//
+// Fire-and-forget by design — a diagnostic that can break the call it is
+// diagnosing is worse than no diagnostic.
+function report(event, detail) {
+  try {
+    fetch('REPORT_PATH', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event: event, detail: String(detail || '') }),
+      keepalive: true
+    }).catch(() => {});
+  } catch (ignored) {}
+}
+
 function explain(html) {
   trouble.innerHTML = html;
   trouble.style.display = 'block';
@@ -105,6 +125,7 @@ async function startCall() {
   } catch (error) {
     callButton.disabled = false;
     say('');
+    report('microphone-refused', error.name + ': ' + error.message);
     explain('<strong>No microphone.</strong><br>' +
             'Allow microphone access for this page and try again. (' + error.name + ')');
     return;
@@ -131,10 +152,39 @@ async function startCall() {
     audio.play().catch(() => say('Tap once more to let sound through.'));
   };
 
+  // Reported rather than only shown. 'checking' that never advances and
+  // 'connected' that carries nothing look identical to someone holding a phone.
+  peer.oniceconnectionstatechange = () => report('ice', peer.iceConnectionState);
+
+  // Which routes this phone offered as a way back to itself. On a browser that
+  // will not persist permission for this origin these come back as random
+  // '.local' names instead of addresses, which is the difference between being
+  // on the same Wi-Fi and being reachable on it.
+  peer.onicecandidate = event => {
+    if (event.candidate && event.candidate.candidate) {
+      const parts = event.candidate.candidate.split(' ');
+      report('candidate', parts[7] + ' ' + parts[4]);
+    }
+  };
+
   peer.onconnectionstatechange = () => {
+    report('state', peer.connectionState);
     switch (peer.connectionState) {
       case 'connected':
         say('Connected — go ahead.');
+        // Whether this phone is actually sending. A microphone can be granted,
+        // a track can be live, and the outbound packet count can still be zero.
+        setTimeout(async () => {
+          try {
+            let sent = 'no outbound audio stat';
+            (await peer.getStats()).forEach(stat => {
+              if (stat.type === 'outbound-rtp' && stat.kind === 'audio') {
+                sent = stat.packetsSent + ' packets, ' + stat.bytesSent + ' bytes';
+              }
+            });
+            report('sending', sent);
+          } catch (error) { report('sending', 'stats failed: ' + error.message); }
+        }, 3000);
         callButton.disabled = false;
         callButton.textContent = 'Hang up';
         callButton.classList.add('hangup');

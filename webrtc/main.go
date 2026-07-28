@@ -103,6 +103,7 @@ what stands between a private microphone and anyone who can reach this port.`)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/"+*token, server.handlePage)
 	mux.HandleFunc("/"+*token+"/offer", server.handleOffer)
+	mux.HandleFunc("/"+*token+"/report", server.handleReport)
 	// Anything else, including a bare "/", is not a call.
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -173,12 +174,54 @@ func iceServers(stunURL, turnURL, user, pass string) []webrtc.ICEServer {
 	return servers
 }
 
+// How long a call may sit half-open before it is abandoned.
+//
+// Long enough for a slow relay allocation on a bad network, short enough that
+// the owner has not already given up and tapped again — because a stalled call
+// that is never closed keeps its ICE agent and ports, and the second attempt
+// then competes with the corpse of the first.
+const connectDeadline = 30 * time.Second
+
+// selectedPair names the route the media actually took, or says it cannot.
+//
+// Written defensively because every step of it is optional: a peer with no data
+// channel may have no SCTP transport, and a call that failed has no pair. None
+// of that is worth a panic in a logging helper.
+func selectedPair(peer *webrtc.PeerConnection) string {
+	sctp := peer.SCTP()
+	if sctp == nil {
+		return "unknown"
+	}
+	transport := sctp.Transport()
+	if transport == nil {
+		return "unknown"
+	}
+	ice := transport.ICETransport()
+	if ice == nil {
+		return "unknown"
+	}
+	pair, err := ice.GetSelectedCandidatePair()
+	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%s <- %s", pair.Local.String(), pair.Remote.String())
+}
+
 type callServer struct {
 	ice   []webrtc.ICEServer
 	token string
 
 	mu    sync.Mutex
 	calls int
+}
+
+// iceOrigins lists the STUN and TURN URLs for the page's connect-src.
+func (s *callServer) iceOrigins() string {
+	var origins []string
+	for _, server := range s.ice {
+		origins = append(origins, server.URLs...)
+	}
+	return strings.Join(origins, " ")
 }
 
 func (s *callServer) activeCalls() int {
@@ -264,15 +307,56 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Closed by the first RTP packet. A call that connects and then carries
+	// nothing is a distinct failure from one that never connects, and the
+	// connection state cannot tell them apart: DTLS can complete while SRTP keys
+	// disagree, and a phone can hold a microphone track that produces no audio.
+	// Both arrive as a healthy "connected" followed by silence — which is
+	// exactly what the owner reports and exactly what the log did not say.
+	audioArrived := make(chan struct{})
+	var audioOnce sync.Once
+
+	// ICE state separately from connection state. "Connecting" covers gathering,
+	// checking and the DTLS handshake, so a call stuck there could be failing at
+	// any of three different layers; the ICE state names which one.
+	peer.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		log.Printf("ice %s", state)
+	})
+
 	peer.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Printf("call %s", state)
 		switch state {
+		case webrtc.PeerConnectionStateConnected:
+			// Which path won. A relayed pair means TURN carried it, a host pair
+			// means the two were on the same network — and when a call works on
+			// Wi-Fi and not on cellular, this line is the difference.
+			log.Printf("media path: %s", selectedPair(peer))
+			go func() {
+				select {
+				case <-audioArrived:
+				case <-time.After(3 * time.Second):
+					log.Println("connected but no audio from the caller after 3s: " +
+						"the path is up and the phone is not sending")
+				}
+			}()
 		case webrtc.PeerConnectionStateFailed,
 			webrtc.PeerConnectionStateClosed,
 			webrtc.PeerConnectionStateDisconnected:
 			finish()
 		}
 	})
+
+	// A peer that never finishes connecting otherwise sits here forever holding
+	// its ICE agent and ports. The owner has long since tapped again by then —
+	// which is how one stalled call becomes three.
+	go func() {
+		time.Sleep(connectDeadline)
+		if state := peer.ConnectionState(); state != webrtc.PeerConnectionStateConnected &&
+			state != webrtc.PeerConnectionStateClosed {
+			log.Printf("giving up on a call still %s after %s", state, connectDeadline)
+			finish()
+		}
+	}()
 
 	// Milestone one: loop the owner's audio straight back.
 	//
@@ -283,18 +367,40 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 	// the transport is done and the rest is ASR, the brain and TTS on a stream
 	// that already works.
 	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		audioOnce.Do(func() { close(audioArrived) })
 		log.Printf("receiving %s from the caller", remote.Codec().MimeType)
+
+		var packets uint64
+		defer func() {
+			log.Printf("caller's audio ended after %d packets", packets)
+		}()
+
 		buffer := make([]byte, 1500)
 		for {
 			n, _, readErr := remote.Read(buffer)
 			if readErr != nil {
 				return
 			}
+			packets++
 			if _, writeErr := audio.Write(buffer[:n]); writeErr != nil {
 				return
 			}
 		}
 	})
+
+	// What the phone actually offered as a route to itself.
+	//
+	// Chrome replaces local IP addresses with random `.local` mDNS names unless
+	// the page holds *persistent* media permission — and it refuses to persist
+	// permission on an origin with a certificate error, which is every call this
+	// appliance makes. So the candidates arrive obfuscated and this Mac has to
+	// resolve them over multicast to find the phone sitting on the same Wi-Fi.
+	//
+	// When that resolution fails there is nothing in the connection state to say
+	// so: ICE simply never completes, or completes over a route that carries no
+	// media. Printing the candidates makes the difference between "on the same
+	// network" and "able to name each other" visible in one line.
+	logCandidates("phone", request.SDP)
 
 	if err := peer.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -330,6 +436,8 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 		log.Println("ICE gathering timed out; answering with what we have")
 	}
 
+	logCandidates("this Mac", peer.LocalDescription().SDP)
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(answerResponse{
 		SDP: peer.LocalDescription().SDP,
@@ -337,6 +445,82 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 		log.Printf("write answer: %v", err)
 		finish()
 	}
+}
+
+// logCandidates prints the ICE candidates in an SDP, one line, deduplicated.
+//
+// Type and address are the whole story: `host` with a real address means a
+// direct route exists, `host` with a `.local` name means it exists only if
+// multicast resolution works, `srflx` means the route runs out through the
+// router and back, and `relay` means TURN is carrying it.
+func logCandidates(who, sdp string) {
+	var found []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		// a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> ...
+		fields := strings.Fields(line)
+		if len(fields) < 8 {
+			continue
+		}
+		summary := fmt.Sprintf("%s %s:%s/%s", fields[7], fields[4], fields[5], strings.ToLower(fields[2]))
+		if seen[summary] {
+			continue
+		}
+		seen[summary] = true
+		found = append(found, summary)
+	}
+	if len(found) == 0 {
+		log.Printf("%s offered no ICE candidates at all", who)
+		return
+	}
+	log.Printf("%s can be reached at: %s", who, strings.Join(found, ", "))
+}
+
+// handleReport records what the phone saw.
+//
+// Everything that makes a call fail is visible in the browser and invisible
+// here: a microphone that was refused, an ICE state that stalled at `checking`,
+// a connection that reported itself healthy while sending zero packets. Without
+// this the owner is the only instrument, and "it doesn't connect" has to cover
+// every one of those.
+//
+// Bounded and append-only: it writes to the same log as everything else and
+// accepts nothing that influences the call itself.
+func (s *callServer) handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var report struct {
+		Event  string `json:"event"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&report); err != nil {
+		http.Error(w, "bad report", http.StatusBadRequest)
+		return
+	}
+	log.Printf("phone: %s %s", clean(report.Event), clean(report.Detail))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clean keeps a log line a log line. The phone is the owner's own, but this
+// writes to a file someone will later read, and a newline in a value would let
+// a report forge one.
+func clean(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, value)
+	if len(value) > 300 {
+		return value[:300] + "…"
+	}
+	return value
 }
 
 func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -357,6 +541,7 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	// The page posts back to its own token path, so the offer endpoint is as
 	// unguessable as the page.
 	page = strings.Replace(page, "OFFER_PATH", "/"+s.token+"/offer", 1)
+	page = strings.Replace(page, "REPORT_PATH", "/"+s.token+"/report", 1)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// No external anything: no CDN, no font, no analytics. The page is served by
@@ -365,9 +550,15 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	//
 	// A strict CSP on top, because this page holds a live microphone: nothing
 	// may be fetched, and nothing may be sent anywhere except back here.
+	//
+	// connect-src has to name the STUN and TURN servers explicitly. Chrome
+	// applies it to ICE server URLs as well as to fetch, so a bare 'self' here
+	// silently strips the page's only means of discovering a route off the local
+	// network — and does it without an error the page can catch.
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
-			"connect-src 'self'; media-src blob: mediastream:; base-uri 'none'; form-action 'none'")
+			"connect-src 'self' "+s.iceOrigins()+"; media-src blob: mediastream:; "+
+			"base-uri 'none'; form-action 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = w.Write([]byte(page))
 }
