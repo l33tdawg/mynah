@@ -611,7 +611,20 @@ func runDaemon(_ arguments: [String]) -> Never {
     )
 
     let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
-    let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
+    // Pinned. Without this the node derives the appliance's identity from the
+    // launch working directory, so the `cd` in the launch script decides which
+    // memories the owner has.
+    //
+    // This was written into runBrain first by mistake, and the mistake verified
+    // as a success because the check was `sage-voiced brain` — a different
+    // process, and the one that had the pin. Meanwhile the daemon started from
+    // /tmp and minted `tmp-agent-*`, answering the owner from an identity with
+    // none of their memories. Testing the wrong process proves the wrong thing.
+    let mcp = MCPClient(
+        executableURL: URL(fileURLWithPath: sagePath),
+        arguments: ["mcp"],
+        environment: MynahIdentity.applianceEnvironment()
+    )
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
     let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))

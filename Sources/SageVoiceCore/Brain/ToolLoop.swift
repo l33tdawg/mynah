@@ -975,8 +975,44 @@ public final class ToolLoop: @unchecked Sendable {
         return result
     }
 
+    /// Removes a tool call the model wrote as *text* instead of requesting
+    /// properly.
+    ///
+    /// Seen in the owner's thread, in full, as the reply:
+    ///
+    ///     <|DSML|>tool_calls>
+    ///     <|DSML|>invoke name="read_note">
+    ///     <|DSML|>parameter name="title" string="true">llm on raspberry pi…
+    ///
+    /// The model wanted `read_note` and emitted the call as prose, so the
+    /// backend saw no structured tool call and the loop treated the markup as
+    /// the answer. Nothing downstream could tell the difference — it is a
+    /// non-empty assistant message.
+    ///
+    /// Stripping it to nothing is deliberately the whole fix. An empty reply
+    /// already routes into the forced-summary turn, where tools are withheld and
+    /// the model has to produce speech — so a mangled tool call degrades into
+    /// one more attempt rather than into markup on the owner's phone.
+    static func strippingToolCallMarkup(_ text: String) -> String {
+        var cleaned = text
+        for pattern in [
+            // Whole block first, so a well-formed call vanishes entirely.
+            "<\\|?[A-Za-z_]*\\|?>?\\s*tool_calls>[\\s\\S]*?</\\s*\\|?[A-Za-z_]*\\|?>?\\s*tool_calls>",
+            "<\\s*/?\\s*\\|?[A-Za-z_]*\\|?>?\\s*(tool_calls|invoke|parameter)[^>]*>",
+            // Leftover special-token delimiters on their own.
+            "<\\|[A-Za-z_]+\\|>"
+        ] {
+            cleaned = cleaned.replacingOccurrences(
+                of: pattern,
+                with: " ",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        return cleaned
+    }
+
     public static func speakable(_ content: String) -> String {
-        var text = stripThinkTags(content)
+        var text = strippingToolCallMarkup(stripThinkTags(content))
         text = text.replacingOccurrences(
             of: "```[\\s\\S]*?```",
             with: " ",

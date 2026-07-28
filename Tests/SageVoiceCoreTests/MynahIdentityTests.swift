@@ -201,4 +201,35 @@ final class MynahIdentityTests: XCTestCase {
         )
         XCTAssertEqual(SageRitual.appAgentName, "Mynah", "the name a person says when addressing the Mac app")
     }
+
+    /// Both entry points must pin, and this is asserted because the first
+    /// attempt patched only one of them.
+    ///
+    /// `runBrain` got the pin, `runDaemon` did not, and the mistake verified as
+    /// a success: the check was `sage-voiced brain`, a different process, and
+    /// the one that had it. The production daemon meanwhile started from /tmp
+    /// and minted `tmp-agent-*`, answering the owner from an identity holding
+    /// none of their memories.
+    ///
+    /// A source assertion rather than a behavioural one, deliberately — the two
+    /// spawn sites live in an executable target the test bundle cannot import,
+    /// and "someone added a third spawn site" is exactly the regression worth
+    /// catching.
+    func testEveryEntryPointPinsTheApplianceIdentity() throws {
+        let main = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // SageVoiceCoreTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // package root
+            .appendingPathComponent("Sources/sage-voiced/main.swift")
+        let source = try String(contentsOf: main, encoding: .utf8)
+
+        let spawns = source.components(separatedBy: "MCPClient(").count - 1
+        let pinned = source.components(separatedBy: "MynahIdentity.applianceEnvironment()").count - 1
+        XCTAssertGreaterThan(spawns, 0, "could not find any MCP spawn site to check")
+        XCTAssertEqual(
+            pinned,
+            spawns,
+            "\(spawns) MCP spawn site(s) but only \(pinned) pinned — an unpinned one derives its identity from the launch directory"
+        )
+    }
 }
