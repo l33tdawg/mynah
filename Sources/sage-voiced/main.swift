@@ -673,6 +673,20 @@ func runDaemon(_ arguments: [String]) -> Never {
         daemonConfiguration.sendsThinkingAcknowledgement = true
     }
     daemonConfiguration.speaksReplies = style.usesVoiceNotes
+
+    // What this process actually resolved, published for the app to read.
+    // Settings answered "where your words go" from the app's own record of what
+    // the owner picked, which nothing outside MynahMac ever reads — so an
+    // appliance switched to DeepSeek by hand still reported "Fully on this Mac"
+    // while every voice note went to a third party.
+    ApplianceStatus.publish(
+        ApplianceStatus(
+            provider: backend.identifier,
+            model: backend.modelName,
+            keepsWordsOnDevice: backend.isLocal,
+            speaksReplies: style.usesVoiceNotes
+        )
+    )
     // Driven against the raw MCP client, not the composed catalogue: these are
     // SAGE's own boot tools, deliberately outside the model's allowlist.
     runAndExit {

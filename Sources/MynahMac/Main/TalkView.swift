@@ -208,16 +208,29 @@ struct TalkView: View {
                 Spacer(minLength: s5)
                 MynahButton("Start answering", kind: .secondary) { app.isPaused = false }
             }
-        } else if let trouble = model.trouble {
-            InlineBanner(
-                tone: trouble.isSevere ? .critical : .caution,
-                headline: trouble.headline,
-                explanation: trouble.explanation,
-                actionTitle: onOpenSettings == nil ? nil : trouble.settingsActionTitle,
-                action: onOpenSettings
-            )
         } else {
             VStack(alignment: .leading, spacing: s3) {
+                // Above the composer, never instead of it.
+                //
+                // This branch used to REPLACE the field, so a blocked brain left
+                // the owner with no field, no Send and no retry — only "Quit
+                // Mynah and open it again". And `memoryUnreachable` carries no
+                // action title, so `InlineBanner` drew no button either: a dead
+                // end with instructions to restart the app.
+                //
+                // It also became far more reachable when `prepare()` started
+                // running a multi-gigabyte local install, which throws
+                // `unreachable` on any failure. Taking the composer away is the
+                // one response that guarantees the owner cannot try again.
+                if let trouble = model.trouble {
+                    InlineBanner(
+                        tone: trouble.isSevere ? .critical : .caution,
+                        headline: trouble.headline,
+                        explanation: trouble.explanation,
+                        actionTitle: troubleActionTitle(trouble),
+                        action: troubleAction(trouble)
+                    )
+                }
                 HStack(alignment: .bottom, spacing: s4) {
                     field
                     if model.canHoldToTalk {
@@ -237,6 +250,26 @@ struct TalkView: View {
                 }
             }
         }
+    }
+
+    /// What the banner's button says, honouring `canRetry`.
+    ///
+    /// `Trouble` has carried `canRetry` since it was written and no view ever
+    /// read it, so a recoverable failure offered the same "open Settings" as an
+    /// unrecoverable one — or, when there was no settings action either, no
+    /// button at all.
+    private func troubleActionTitle(_ trouble: Exchange.Failure) -> String? {
+        if trouble.canRetry { return "Try again" }
+        return onOpenSettings == nil ? nil : trouble.settingsActionTitle
+    }
+
+    private func troubleAction(_ trouble: Exchange.Failure) -> (() -> Void)? {
+        if trouble.canRetry {
+            // `reconnect()` already exists and already does the right thing; it
+            // simply had no caller from here.
+            return { Task { await model.reconnect() } }
+        }
+        return onOpenSettings
     }
 
     private var field: some View {

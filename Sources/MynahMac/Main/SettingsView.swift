@@ -224,6 +224,14 @@ final class SettingsModel {
     private(set) var probe: EnvironmentProbeResult?
     private(set) var isProbing = false
     private(set) var brain: BrainChoice?
+
+    /// What the appliance last reported it was running.
+    ///
+    /// Read fresh rather than cached: the owner may have restarted the daemon
+    /// onto a different provider since this screen opened, and a stale answer to
+    /// "where do my words go" is the failure this exists to fix.
+    var appliance: ApplianceStatus? { ApplianceStatus.current() }
+
     private(set) var speech: SpeechFacts
     private(set) var phone: PhoneStatus
     private(set) var checkState: CheckState = .idle
@@ -507,6 +515,14 @@ struct SettingsView: View {
         }
     }
 
+    /// Times only — the date is noise for something that restarts most days.
+    private static let time: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
+
     // MARK: Brain
 
     private var brainSection: some View {
@@ -514,8 +530,40 @@ struct SettingsView: View {
             SectionHeader("Where your words go")
 
             if let brain = model.brain {
-                SettingsRow("Mynah thinks with", detail: brain.label) {
+                // Scoped to the window, because that is all this record covers.
+                // `BrainSelectionStore` is what the owner picked in the app and
+                // nothing outside MynahMac reads it — the appliance builds its
+                // own backend from its launch flags. Reporting it as "Mynah"
+                // made the one question this product exists to answer wrong.
+                SettingsRow("When you ask from this window", detail: brain.label) {
                     StatusPill(destinationTitle(brain), tone: destinationTone(brain))
+                }
+                MynahDivider()
+
+                // The appliance's own report, or an honest absence.
+                if let appliance = model.appliance {
+                    SettingsRow(
+                        "When you ask from your phone",
+                        detail: "\(appliance.model), as of \(Self.time.string(from: appliance.startedAt))."
+                            + (appliance.keepsWordsOnDevice
+                               ? " Nothing you say leaves this Mac."
+                               : " What you say goes to \(appliance.destination).")
+                    ) {
+                        StatusPill(
+                            appliance.destination,
+                            tone: appliance.keepsWordsOnDevice ? .good : .caution
+                        )
+                    }
+                } else {
+                    // Not the same sentence as any provider name: nobody has
+                    // answered a phone on this Mac yet.
+                    SettingsRow(
+                        "When you ask from your phone",
+                        detail: "Mynah hasn't answered your phone on this Mac yet, so there is "
+                            + "nothing to report."
+                    ) {
+                        StatusPill("Not yet", tone: .neutral)
+                    }
                 }
                 // One source of truth for "can Mynah think right now": the same
                 // authored sentence Home is showing, on the screen the owner
