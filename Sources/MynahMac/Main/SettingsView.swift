@@ -220,6 +220,8 @@ final class SettingsModel {
     private let log = Logger(subsystem: "com.sage.mynah", category: "settings")
     private let defaults: UserDefaults
     private let phoneLink: any PhoneLinking
+    private let calls: CallSettingsStore
+    private let callPreview = CallVoicePreview()
 
     private(set) var probe: EnvironmentProbeResult?
     private(set) var isProbing = false
@@ -236,15 +238,33 @@ final class SettingsModel {
     private(set) var phone: PhoneStatus
     private(set) var checkState: CheckState = .idle
 
+    // MARK: Calls
+    //
+    // Mirrored out of `CallSettingsStore` rather than read through it on every
+    // draw, because `@Observable` cannot see into `UserDefaults` and a row bound
+    // straight to the store would not redraw when the owner changed it.
+
+    private(set) var callVoices: CallVoiceCatalogue = .checking
+    private(set) var callVoice: String
+    private(set) var sendsCallTranscript: Bool
+    private(set) var isPlayingCallVoice = false
+    /// One sentence for the owner when a preview will not play. The reason goes
+    /// to the log; the synthesizer's own wording names ports and Python scripts.
+    private(set) var callVoiceProblem: String?
+
     init(
         defaults: UserDefaults = .standard,
         phoneLink: any PhoneLinking = SignalPhoneLink()
     ) {
+        let calls = CallSettingsStore(defaults: defaults)
         self.defaults = defaults
         self.phoneLink = phoneLink
+        self.calls = calls
         self.brain = BrainChoiceStore.current(defaults: defaults)
         self.speech = SpeechFacts.detect()
         self.phone = phoneLink.status
+        self.callVoice = calls.voice
+        self.sendsCallTranscript = calls.sendsTranscript
     }
 
     var canUnlinkPhone: Bool { phoneLink.canUnlink }
@@ -276,6 +296,55 @@ final class SettingsModel {
         isProbing = true
         defer { isProbing = false }
         probe = await EnvironmentProbe().run()
+    }
+
+    // MARK: Calls
+
+    /// Asks the speech bridge again every time the screen appears.
+    ///
+    /// Not cached like the environment probe: an owner told "the natural voice
+    /// isn't installed" will go and start it, and the first thing they do next is
+    /// come back here. The previous answer stays on screen while this runs, so
+    /// re-asking never flickers the row back to "looking".
+    func loadCallVoices() async {
+        let found = await KokoroVoices.load()
+        callVoices = found
+        guard case .installed(let names) = found, !names.contains(callVoice) else { return }
+        // The stored voice is no longer served — a changed voice pack, or a
+        // different bridge. Left alone it would leave the picker showing nothing
+        // selected, which reports no preference at all. Falling back to the name
+        // the daemon itself falls back to keeps the row and the call agreeing.
+        setCallVoice(names.contains(KokoroHTTPSynthesizer.defaultKokoroVoice)
+            ? KokoroHTTPSynthesizer.defaultKokoroVoice
+            : names[0])
+    }
+
+    func setCallVoice(_ name: String) {
+        callVoice = name
+        calls.voice = name
+        callVoiceProblem = nil
+    }
+
+    func setSendsCallTranscript(_ isOn: Bool) {
+        sendsCallTranscript = isOn
+        calls.sendsTranscript = isOn
+    }
+
+    func playCallVoice() async {
+        guard !isPlayingCallVoice else { return }
+        isPlayingCallVoice = true
+        callVoiceProblem = nil
+        defer { isPlayingCallVoice = false }
+        do {
+            try await callPreview.play(voice: callVoice)
+        } catch {
+            log.error("voice preview failed: \(String(describing: error), privacy: .public)")
+            // Deliberately claims nothing about whether the voice would work on
+            // a real call. A failed preview usually means the bridge went away,
+            // in which case the call would fall back to the built-in voice too —
+            // and reassuring the owner otherwise would be a guess.
+            callVoiceProblem = "Mynah couldn't play that voice just now."
+        }
     }
 
     // MARK: Re-checking the key
@@ -349,6 +418,17 @@ final class SettingsModel {
         lines.append("Speech model \(speech.modelPath ?? "not found")")
         lines.append("Messaging socket \(phone.socketPath) \(phone.isReachable ? "(present)" : "(absent)")")
 
+        // "It used the wrong voice" and "no transcript arrived" are both things
+        // the owner will report, and both are answered by these two lines.
+        let natural: String
+        switch callVoices {
+        case .checking: natural = "not checked"
+        case .installed(let names): natural = "\(names.count) available"
+        case .missing: natural = "not reachable"
+        }
+        lines.append("Call voice \(callVoice) (natural voice \(natural))")
+        lines.append("Call transcripts \(sendsCallTranscript ? "sent to chat" : "not sent")")
+
         if let probe {
             lines.append("Memory node \(probe.sage.executablePath ?? "not found")")
             lines.append("Memory folder \(probe.sage.stateDirectory ?? "not found")")
@@ -397,6 +477,8 @@ struct SettingsView: View {
     @State private var model: SettingsModel
     @State private var isAdvancedOpen = false
     @State private var didCopyDiagnostics = false
+    @State private var isBuiltOnOpen = false
+    @State private var didCopyEmail = false
     /// Which deferred step is being finished right now, if any. The sheets are
     /// the whole point of the "Unfinished" list: a row that names a task and
     /// then restarts the wizard is a five-screen detour to reach the one screen
@@ -434,11 +516,13 @@ struct SettingsView: View {
                 unfinished(app: app)
                 brainSection
                 voiceSection
+                callSection
                 phoneSection
                 privacySection
                 answeringSection(app: app)
                 appearanceSection(app: app)
                 advancedSection
+                aboutSection
             }
             .frame(maxWidth: MynahWidth.settings, alignment: .leading)
             .frame(maxWidth: .infinity)
@@ -449,6 +533,7 @@ struct SettingsView: View {
         .background(Palette.surface.canvas)
         .onAppear { model.refresh() }
         .task { await model.probeIfNeeded() }
+        .task { await model.loadCallVoices() }
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
@@ -743,6 +828,143 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: Calls
+
+    /// Talking to Mynah out loud: whether it can happen, how it sounds, and
+    /// whether anything survives it.
+    private var callSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader("Calls")
+
+            callReadinessRow
+            MynahDivider()
+
+            callVoiceRow
+            MynahDivider()
+
+            SettingsRow(
+                "Send the transcript to my chat",
+                detail: "When a call ends, what was said is posted back into your Signal thread, "
+                    + "so there is a record of it."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { model.sendsCallTranscript },
+                    set: { model.setSendsCallTranscript($0) }
+                ))
+                .labelsHidden()
+                .mynahToggle()
+            }
+        }
+    }
+
+    /// Whether `//call` will work, taken from the fact the refusal is built on.
+    ///
+    /// Not a new probe and not a guess: the daemon publishes
+    /// `keepsWordsOnDevice` straight from `backend.isLocal`, and
+    /// `CallInvitation.refusal(forBackend:)` refuses on exactly that property.
+    /// So this row reports the live rule rather than an app-side reimplementation
+    /// of it, and the two cannot drift into disagreeing.
+    ///
+    /// `model.brain` is deliberately not consulted. It records what the owner
+    /// picked in this window; the appliance answering the phone builds its own
+    /// backend from its launch flags, and it is the appliance that takes the call.
+    @ViewBuilder
+    private var callReadinessRow: some View {
+        if let appliance = model.appliance {
+            SettingsRow(
+                "Calling needs a fast model",
+                detail: appliance.keepsWordsOnDevice
+                    ? "Mynah is answering with \(appliance.model), which runs on this Mac and "
+                        + "takes the best part of a minute to reply. That is fine in a message "
+                        + "and a dead line in a call, so calls are turned down. Change where "
+                        + "your words go to one of the API models and calling works."
+                    : "Mynah is answering with \(appliance.model), which replies fast enough to "
+                        + "hold a conversation. Text \(CallInvitation.command) to yourself and "
+                        + "tap the link."
+            ) {
+                StatusPill(
+                    appliance.keepsWordsOnDevice ? "Not on this model" : "Calling works",
+                    tone: appliance.keepsWordsOnDevice ? .caution : .good
+                )
+            }
+        } else {
+            // Nothing has answered a phone here, so there is no configured
+            // backend to name. The requirement is still true and still worth
+            // saying — it is why calling refuses — but no pill claims to know
+            // how this Mac is set up.
+            SettingsRow(
+                "Calling needs a fast model",
+                detail: "Mynah hasn't answered your phone on this Mac yet, so there is nothing "
+                    + "to report. A brain that runs on this Mac takes the best part of a minute "
+                    + "to reply, which is fine in a message and a dead line in a call, so "
+                    + "calling needs one of the API models."
+            ) {
+                StatusPill("Not yet", tone: .neutral)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var callVoiceRow: some View {
+        switch model.callVoices {
+        case .checking:
+            SettingsRow(
+                "The voice on a call",
+                detail: "Mynah is looking for the natural voice on this Mac."
+            ) {
+                ProgressView().controlSize(.small).tint(Palette.accent.fill)
+            }
+
+        case .missing:
+            // No picker at all in this state, on purpose. A menu of voices that
+            // cannot be spoken is a control the owner sets and never hears.
+            SettingsRow(
+                "The voice on a call",
+                detail: "The natural voice isn't installed on this Mac, so calls use the voice "
+                    + "built into macOS. It works, and it sounds robotic."
+            ) {
+                StatusPill("Built-in voice", tone: .caution)
+            }
+
+        case .installed(let names):
+            VStack(alignment: .leading, spacing: s3) {
+                SettingsRow(
+                    "The voice on a call",
+                    detail: "Generated on this Mac, like the voice notes. A name tells you "
+                        + "nothing about how a voice sounds, so listen to one before you keep it."
+                ) {
+                    HStack(spacing: s4) {
+                        if model.isPlayingCallVoice {
+                            ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                        } else {
+                            MynahButton("Listen", kind: .quiet) {
+                                Task { await model.playCallVoice() }
+                            }
+                        }
+                        Picker("", selection: Binding(
+                            get: { model.callVoice },
+                            set: { model.setCallVoice($0) }
+                        )) {
+                            ForEach(names, id: \.self) { name in
+                                Text(KokoroVoices.displayName(name)).tag(name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 220)
+                    }
+                }
+                if let problem = model.callVoiceProblem {
+                    Text(problem)
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.state.critical)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, s4)
+                }
+            }
+            .mynahAnimation(Motion.fade, value: model.callVoiceProblem)
+        }
+    }
+
     // MARK: Phone
 
     private var phoneSection: some View {
@@ -978,6 +1200,140 @@ struct SettingsView: View {
             .mynahAnimation(Motion.fade, value: didCopyDiagnostics)
         }
         .transition(.push(from: .top).combined(with: .opacity))
+    }
+
+    // MARK: About
+
+    /// Last on the page, because it is read once.
+    ///
+    /// Both version numbers are read rather than written down: Mynah's from its
+    /// own bundle, SAGE's from the copy vendored inside it. A number typed into
+    /// source is a number that survives the release that invalidated it, and an
+    /// About panel reporting a version the owner is not running is worse than
+    /// one reporting none.
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader("About")
+
+            SettingsRow("Mynah", detail: "A private voice appliance. It answers only your phone.") {
+                Text(SettingsModel.appVersion)
+                    .mynahFont(.mono)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .textSelection(.enabled)
+            }
+            MynahDivider()
+
+            SettingsRow(
+                "SAGE",
+                detail: "What Mynah remembers, and the agent layer it thinks with. "
+                    + "Open source, Apache 2.0."
+            ) {
+                HStack(spacing: s4) {
+                    MynahButton("View", kind: .quiet) { open(MynahAbout.sageURL) }
+                    Text(model.nodeVersion ?? placeholder)
+                        .mynahFont(.mono)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            MynahDivider()
+
+            SettingsRow(
+                "Support",
+                detail: "One person maintains this. Write to them and say what happened — "
+                    + "the diagnostics above are the thing to paste."
+            ) {
+                HStack(spacing: s4) {
+                    MynahButton(didCopyEmail ? "Copied" : "Copy", kind: .quiet) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(MynahAbout.supportEmail, forType: .string)
+                        didCopyEmail = true
+                    }
+                    // `mailto:` rather than a second copy button: on a Mac this
+                    // opens the owner's mail app with the address already in it,
+                    // which is the whole errand.
+                    MynahButton("Email", kind: .secondary) {
+                        guard let url = URL(string: "mailto:\(MynahAbout.supportEmail)") else { return }
+                        open(url)
+                    }
+                }
+            }
+            .mynahAnimation(Motion.fade, value: didCopyEmail)
+
+            builtOnDisclosure
+        }
+        .padding(.top, s7)
+    }
+
+    /// Folded, for the same reason Advanced is: eleven rows of licence names is
+    /// a wall in front of the three facts above it. Folded is not hidden — the
+    /// list is in the app, one press away, which is what attribution requires.
+    private var builtOnDisclosure: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isBuiltOnOpen.toggle()
+            } label: {
+                HStack(spacing: s3) {
+                    Text("What Mynah is built on")
+                        .mynahFont(.title3)
+                        .foregroundStyle(Palette.ink.primary)
+                    Image(systemName: "chevron.right")
+                        .mynahIcon(.inline)
+                        .foregroundStyle(Palette.ink.tertiary)
+                        .rotationEffect(.degrees(isBuiltOnOpen ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+                .padding(.vertical, s4)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .accessibilityLabel("What Mynah is built on")
+            .accessibilityValue(isBuiltOnOpen ? "Open" : "Closed")
+
+            if isBuiltOnOpen {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Other people's work, and what each is licensed under.")
+                        .mynahFont(.callout)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .mynahProse()
+                        .padding(.bottom, s4)
+
+                    ForEach(Array(MynahAbout.components.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { MynahDivider() }
+                        attributionRow(item)
+                    }
+                }
+                .transition(.push(from: .top).combined(with: .opacity))
+            }
+        }
+        .mynahAnimation(Motion.snap, value: isBuiltOnOpen)
+    }
+
+    private func attributionRow(_ item: Attribution) -> some View {
+        // A copyleft component is not discharged by being credited: whoever
+        // holds this build is entitled to its source, and the offer has to be
+        // where they would look for it rather than in a file nobody opens.
+        let detail = [item.role, item.sourceOffer].compactMap { $0 }.joined(separator: " ")
+
+        return SettingsRow(item.name, detail: detail) {
+            HStack(spacing: s4) {
+                // The licence, not a pill. A pill is for state that changes, and
+                // eleven coloured chips down one column would read as eleven
+                // things needing attention.
+                Text(item.licence)
+                    .mynahFont(.mono)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .textSelection(.enabled)
+                MynahButton("View", kind: .quiet) { open(item.url) }
+            }
+        }
+    }
+
+    /// Every link in this section goes through here, so none of them can quietly
+    /// become an in-app browser later.
+    private func open(_ url: URL) {
+        NSWorkspace.shared.open(url)
     }
 
     private var placeholder: String { model.isProbing ? "Looking…" : "Not found" }
