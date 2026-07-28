@@ -151,6 +151,16 @@ func TestARealCallOverTheRelay(t *testing.T) {
 		}
 	}()
 
+	// Hearing yourself back is the loopback endpoint's behaviour, and proof the
+	// return path works. Against an appliance it is the wrong expectation: the
+	// audio goes to recognition, and this test sends packets that are not real
+	// speech, so there is correctly nothing to answer. Asserted only when the
+	// endpoint under test is looping back.
+	if os.Getenv("SAGE_CALL_EXPECT_ECHO") == "" {
+		t.Log("connected and sending; set SAGE_CALL_EXPECT_ECHO=1 against a " +
+			"loopback endpoint to assert the return path")
+		return
+	}
 	select {
 	case <-heardBack:
 	case <-time.After(20 * time.Second):
