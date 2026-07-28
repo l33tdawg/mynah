@@ -213,11 +213,15 @@ public actor CallTurnServer {
             log("[call] could not recognise: \(error)")
             return
         }
-        guard !heard.isEmpty else {
-            // A cough, a door, a car, or the appliance's own voice returning.
-            // Nothing was said, so nothing changes — in particular, whatever
+        // 32 bytes per millisecond: 16 kHz, mono, sixteen bits.
+        let milliseconds = Int(wav.count / 32)
+        guard !HeardSpeech.isNothing(heard, milliseconds: milliseconds) else {
+            // A cough, a door, a car, the appliance's own voice returning — or
+            // Whisper filling silence with a phrase from its training data.
+            // Nothing was said, so nothing changes, and in particular whatever
             // the appliance is already doing carries on.
-            log("[call] heard nothing in \(Int(wav.count / 32))ms of audio")
+            let what = heard.isEmpty ? "nothing" : "\"\(heard)\" (no one spoke)"
+            log("[call] heard \(what) in \(milliseconds)ms of audio")
             return
         }
 
