@@ -847,6 +847,37 @@ public final class ToolLoop: @unchecked Sendable {
         return ToolLoopResult(reply: reply, trace: trace, messages: messages)
     }
 
+    /// Strips SAGE's server-side turn-discipline nudge out of a tool result.
+    ///
+    /// The node appends `[SAGE] ⚠️ You have not called sage_turn in N tool calls
+    /// (Mmin)…` to any tool result once five calls or five minutes have passed
+    /// without one (`internal/mcp/server.go:427`, `:440-442`). It is aimed at a
+    /// coding agent that drives its own turn discipline.
+    ///
+    /// This appliance does not. `SageRitual.recordTurn` calls `sage_turn` from
+    /// the daemon after every turn, precisely so the model never has to — a 4B
+    /// forgets the discipline three turns in, which is why `sage_turn` is
+    /// deliberately absent from `voiceToolAllowlist` and a test says so.
+    ///
+    /// So the nudge reaches a model that cannot act on it. The five-minute
+    /// clause makes that near-certain rather than occasional: an appliance whose
+    /// whole job is to sit idle and then be wanted is always more than five
+    /// minutes past its last turn. Left in, the model either burns a 40-60s
+    /// iteration attempting a call that returns "no tool named 'sage_turn'
+    /// exists", or relays it and tells the owner their appliance has stopped
+    /// remembering — which is false, because the daemon is recording every turn.
+    ///
+    /// Removed here rather than by adding the tool: giving the model `sage_turn`
+    /// would undo the deliberate split between what the daemon guarantees and
+    /// what the model is trusted with.
+    static func withoutServerNudge(_ result: String) -> String {
+        guard let marker = result.range(of: "\n\n[SAGE] ") ?? result.range(of: "[SAGE] ") else {
+            return result
+        }
+        return String(result[result.startIndex..<marker.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: Tool execution
 
     private func execute(
@@ -871,7 +902,11 @@ public final class ToolLoop: @unchecked Sendable {
         }
 
         do {
-            let output = try await mcp.call(name: call.name, arguments: call.arguments)
+            let raw = try await mcp.call(name: call.name, arguments: call.arguments)
+            // SAGE appends a turn-discipline nudge aimed at an agent that drives
+            // its own `sage_turn`. This appliance's daemon does that instead, so
+            // the nudge only ever reaches a model that cannot act on it.
+            let output = Self.withoutServerNudge(raw)
             return ToolCallRecord(
                 iteration: iteration,
                 name: call.name,
