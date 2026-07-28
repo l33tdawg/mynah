@@ -66,3 +66,25 @@ public struct NoopAudioFileTranscriber: AudioFileTranscribing {
         throw AudioTranscriberError.emptyTranscript
     }
 }
+
+/// Stands in when no speech recognition could be prepared.
+///
+/// The daemon used to `exit(1)` in that case, which took the appliance down on a
+/// machine whose bundle has never carried an ASR helper: it crash-looped under
+/// launchd and every *text* message went unanswered because it could not
+/// transcribe audio nobody had sent.
+///
+/// Text and voice are separate capabilities, and losing one must not cost the
+/// other. This fails only when a voice note actually arrives, where the daemon
+/// already has an honest answer for the owner.
+public struct UnavailableTranscriber: AudioFileTranscribing {
+    private let reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+
+    public func transcribe(audioFile: URL, options: AudioTranscriptionOptions) async throws -> String {
+        throw AudioTranscriberError.allBackendsFailed([reason])
+    }
+}

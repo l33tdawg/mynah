@@ -587,6 +587,22 @@ func loopConfiguration(for style: ReplyStyle) -> ToolLoop.Configuration {
     )
 }
 
+/// Keeps text messaging alive when a release is missing its speech assets.
+///
+/// VoiceBridgeDaemon already turns a per-message transcription failure into an
+/// honest reply. This placeholder lets that path run without making ASR a
+/// prerequisite for starting the entire Signal appliance.
+private struct UnavailableTranscriber: AudioFileTranscribing {
+    let reason: String
+
+    func transcribe(
+        audioFile: URL,
+        options: AudioTranscriptionOptions
+    ) async throws -> String {
+        throw AudioTranscriberError.allBackendsFailed([reason])
+    }
+}
+
 func runDaemon(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
 
@@ -669,6 +685,17 @@ func runDaemon(_ arguments: [String]) -> Never {
             }
         }
 
+        // Not fatal, and this took the appliance down to learn it.
+        //
+        // Preparing speech recognition eagerly is right — better to know now
+        // than when the first voice note arrives. Refusing to *start* over it is
+        // not: the deployed bundle has never carried an ASR helper, so the
+        // daemon crash-looped under launchd and every text message went
+        // unanswered because it could not transcribe audio nobody had sent.
+        //
+        // Text and voice are separate capabilities. Losing one must not cost the
+        // other, and `handle` already replies "I couldn't read that voice note"
+        // per message, which is the honest place for this failure to surface.
         let transcriber: AudioFileTranscribing
         do {
             if let endpoint = flags["endpoint"].flatMap({ URL(string: $0) }) {
@@ -682,7 +709,12 @@ func runDaemon(_ arguments: [String]) -> Never {
                 transcriber = try await LocalASRRuntime.shared.prepare()
             }
         } catch {
-            return fail("local speech recognition is not ready: \(error)")
+            FileHandle.standardError.write(Data("""
+            [daemon] speech recognition is unavailable, so voice notes cannot be transcribed: \(error)
+            [daemon] text messages will still be answered
+
+            """.utf8))
+            transcriber = UnavailableTranscriber(reason: "\(error)")
         }
 
         let synthesizer: SpeechSynthesizing?
