@@ -229,8 +229,20 @@ extension RoundedRectangle {
 /// running the full width of a 1180pt window is ~150 characters per line, which
 /// no one reads twice.
 enum MynahWidth {
-    /// The onboarding stage column.
-    static let stageColumn: CGFloat = 520
+    /// The onboarding stage, across both of its columns.
+    ///
+    /// 520 was one column of prose centred in a window twice that wide, which
+    /// left the setup flow reading as a narrow strip with a great deal of empty
+    /// canvas either side of it. The window is wide; the stage may as well use
+    /// it.
+    static let stageColumn: CGFloat = 860
+
+    /// The mark's column — roughly a third, with the content taking the rest.
+    ///
+    /// Fixed rather than a fraction so the content column starts in the same
+    /// place on every stage. A mark that shifts left and right between screens
+    /// reads as the layout being unsure of itself.
+    static let stageMarkColumn: CGFloat = 240
     /// Prose inside that column — ~62 characters at 13pt.
     static let prose: CGFloat = 460
     /// A settings pane.

@@ -86,7 +86,18 @@ final class LocalBrainInstallerTests: XCTestCase {
             totalBytes: 2
         ).sentence
         XCTAssertFalse(sentence.contains("61aa"))
-        XCTAssertTrue(sentence.localizedCaseInsensitiveContains("gigabyte"), "no sense of how long this takes")
+        // A size, in whatever unit. The point is that the owner can tell how
+        // long this will take, not which noun was used to tell them.
+        XCTAssertTrue(
+            sentence.localizedCaseInsensitiveContains("gigabyte") || sentence.contains("GB"),
+            "no sense of how long this takes: \(sentence)"
+        )
+        // And what it is. A multi-gigabyte progress bar with no name on it reads
+        // as the app re-downloading something the owner already has.
+        XCTAssertTrue(
+            sentence.contains(LocalBrainModelCatalog.preferredModel),
+            "does not say what is being downloaded: \(sentence)"
+        )
     }
 
     /// The finish line is the product's actual promise, so it says it.

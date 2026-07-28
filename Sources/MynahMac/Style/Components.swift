@@ -717,7 +717,13 @@ struct StageShell<Content: View, Actions: View>: View {
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, s9)
 
-            // Centred when the stage fits, scrolled when it doesn't.
+            // Top-aligned, scrolled when it doesn't fit.
+            //
+            // It used to centre, and that put an arbitrary gap under the rail:
+            // the slack is whatever the viewport has left over, so a short stage
+            // floated a long way down while a tall one sat tight, and neither
+            // looked deliberate. With the action row pinned at the bottom, all
+            // of that space collects in one place with nothing in it.
             //
             // Not `ViewThatFits(in: .vertical)`: inside a `VStack` between two
             // `Spacer`s it is proposed more height than it is finally given, so
@@ -728,7 +734,7 @@ struct StageShell<Content: View, Actions: View>: View {
                 ScrollView {
                     column
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: proxy.size.height, alignment: .center)
+                        .frame(minHeight: proxy.size.height, alignment: .top)
                 }
                 .scrollIndicators(.automatic)
                 .scrollBounceBehavior(.basedOnSize)
@@ -758,25 +764,40 @@ struct StageShell<Content: View, Actions: View>: View {
         .background(Palette.surface.canvas)
     }
 
+    /// The mark on the left, everything that reads on the right.
+    ///
+    /// One narrow column centred in a window twice its width left the whole
+    /// setup flow as a strip of prose with empty canvas either side, and the
+    /// glyph stacked above the title pushed the first sentence a long way down
+    /// the page. Putting the mark beside the words instead uses the width the
+    /// window already has, and lets the title start at the top where it is read.
+    ///
+    /// The mark column is a fixed width rather than a fraction so the content
+    /// begins at the same place on every stage — one that slides between screens
+    /// reads as a layout unsure of itself.
     private var column: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .top, spacing: s8) {
             if let glyph {
                 HeroGlyph(glyph)
-                Spacer().frame(height: s7)
+                    .frame(width: MynahWidth.stageMarkColumn, alignment: .leading)
             }
-            Text(title)
-                .mynahFont(.display)
-                .foregroundStyle(Palette.ink.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            if let subtitle {
-                Spacer().frame(height: s4)
-                Text(subtitle)
-                    .mynahFont(.body)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .mynahProse()
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .mynahFont(.display)
+                    .foregroundStyle(Palette.ink.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let subtitle {
+                    Spacer().frame(height: s4)
+                    Text(subtitle)
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .mynahProse()
+                }
+                Spacer().frame(height: s8)
+                content
             }
-            Spacer().frame(height: s8)
-            content
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: MynahWidth.stageColumn, alignment: .leading)
         .frame(maxWidth: .infinity)
