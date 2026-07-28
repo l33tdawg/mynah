@@ -170,35 +170,81 @@ public actor CallTurnServer {
 
             switch frame {
             case .utterance(let wav):
-                turn?.cancel()
-                turn = Task { [weak self] in
-                    await self?.speak(answerTo: wav, over: writer)
+                // Recognised first, cancelled second.
+                //
+                // Whether the caller spoke is decided by whether there are
+                // words in it, not by how loud it was — loudness is the one
+                // thing noise reliably has. Cancelling on arrival meant a door,
+                // a cough or the tail of the appliance's own voice destroyed
+                // whatever was in flight, and the log showed exactly that: a
+                // finished answer, "Just the A100 benchmarks before Friday",
+                // thrown away between being generated and being spoken.
+                //
+                // So an utterance with no words in it now changes nothing at
+                // all. Noise cannot cancel what it cannot be mistaken for.
+                Task { [weak self] in
+                    await self?.answerIfSpoken(wav, over: writer)
                 }
             case .interrupted:
-                // The caller cut in. Cancelling stops the model and the
-                // synthesiser; the endpoint has already silenced the audio.
+                // Deliberately does not cancel the turn.
+                //
+                // This arrives on energy alone, milliseconds after a sound
+                // starts and long before anyone knows whether it was speech.
+                // The endpoint has already dropped the queued audio locally,
+                // which is what makes cutting in feel instant — but stopping
+                // the model on the same evidence is what let background noise
+                // kill answers. The turn is cancelled when words arrive, if
+                // they do.
                 log("[call] interrupted")
-                turn?.cancel()
-                turn = nil
             case .replyAudio, .replyEnd, .turnFailed:
                 break // Ours to send, not to receive.
             }
         }
     }
 
-    private func speak(answerTo wav: Data, over writer: CallFrameWriter) async {
+    /// Recognises an utterance and, only if it contains words, makes it the
+    /// current turn.
+    private func answerIfSpoken(_ wav: Data, over writer: CallFrameWriter) async {
         let started = Date()
+        let heard: String
         do {
-            let heard = try await transcribe(wav)
+            heard = try await transcribe(wav)
+        } catch {
+            log("[call] could not recognise: \(error)")
+            return
+        }
+        guard !heard.isEmpty else {
+            // A cough, a door, a car, or the appliance's own voice returning.
+            // Nothing was said, so nothing changes — in particular, whatever
+            // the appliance is already doing carries on.
+            log("[call] heard nothing in \(Int(wav.count / 32))ms of audio")
+            return
+        }
+
+        // Words. Now the previous turn is genuinely superseded.
+        await replaceTurn(with: heard, recognisedIn: Date().timeIntervalSince(started), over: writer)
+    }
+
+    private func replaceTurn(
+        with heard: String,
+        recognisedIn recognition: TimeInterval,
+        over writer: CallFrameWriter
+    ) {
+        turn?.cancel()
+        turn = Task { [weak self] in
+            await self?.speak(heard, recognisedIn: recognition, over: writer)
+        }
+    }
+
+    private func speak(
+        _ heard: String,
+        recognisedIn recognition: TimeInterval,
+        over writer: CallFrameWriter
+    ) async {
+        let started = Date().addingTimeInterval(-recognition)
+        do {
             let recognised = Date()
             guard !Task.isCancelled else { return }
-            guard !heard.isEmpty else {
-                // Recognition found nothing — a cough, a door, a car. Saying
-                // "I didn't catch that" to a noise the caller never made is
-                // worse than saying nothing.
-                log("[call] heard nothing in \(Int(wav.count / 32))ms of audio")
-                return
-            }
             log("[call] heard: \(heard)")
 
             // Say something before thinking, not after.

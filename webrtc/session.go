@@ -63,11 +63,15 @@ const playbackHangover = time.Second
 // interruption that cancels whatever the appliance was doing.
 const minimumUtterance = 400 * time.Millisecond
 
-func newConversation(appliance net.Conn, track *webrtc.TrackLocalStaticSample) *conversation {
+func newConversation(
+	appliance net.Conn,
+	track *webrtc.TrackLocalStaticSample,
+	listening speech.Settings,
+) *conversation {
 	return &conversation{
 		appliance: appliance,
 		track:     track,
-		segmenter: speech.NewSegmenter(speech.DefaultSettings()),
+		segmenter: speech.NewSegmenter(listening),
 		wake:      make(chan struct{}, 1),
 	}
 }
@@ -92,6 +96,16 @@ func (c *conversation) listen(remote *webrtc.TrackRemote) {
 			return
 		}
 		packets++
+
+		// Every five seconds, what the detector is actually seeing. Tuning a
+		// voice detector for a room on the other side of a phone is guesswork
+		// without it — and "it hears background noise as me speaking" is not a
+		// report anyone can act on until the floor and the threshold are two
+		// numbers rather than an impression.
+		if packets%250 == 0 {
+			floor, threshold := c.segmenter.Levels()
+			log.Printf("listening: noise floor %.0f, speech above %.0f", floor, threshold)
+		}
 
 		// The RTP header is fixed at 12 bytes plus any CSRCs; pion's own reader
 		// gives the whole packet, so the payload has to be found rather than

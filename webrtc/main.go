@@ -63,6 +63,7 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callpage"
+	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/speech"
 )
 
 func main() {
@@ -76,6 +77,8 @@ func main() {
 		token    = flag.String("token", "", "required path token; the call link is /<token>")
 
 		appliance       = flag.String("appliance", "", "unix socket where the appliance answers; without it, audio is looped back")
+		vadFactor       = flag.Float64("vad-factor", 0, "how far above the noise floor counts as speech (0 uses the default)")
+		vadFloor        = flag.Float64("vad-floor", 0, "absolute level below which nothing is speech (0 uses the default)")
 		relayURL        = flag.String("relay", "", "call relay to wait at, e.g. https://call.sage.delivery")
 		relaySecretFile = flag.String("relay-secret-file", "", "file holding the secret this appliance authenticates with")
 	)
@@ -111,7 +114,12 @@ what stands between a private microphone and anyone who can reach it.`)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		calls := &callServer{ice: iceServers(*stunURL, *turnURL), token: *token, appliance: *appliance}
+		calls := &callServer{
+			ice:       iceServers(*stunURL, *turnURL),
+			token:     *token,
+			appliance: *appliance,
+			listening: listeningSettings(*vadFactor, *vadFloor),
+		}
 		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, secret, calls); err != nil {
 			log.Fatal(err)
 		}
@@ -131,6 +139,7 @@ HTTP to a phone gets a microphone that never starts. Pass a certificate, or
 		ice:       iceServers(*stunURL, *turnURL),
 		token:     *token,
 		appliance: *appliance,
+		listening: listeningSettings(*vadFactor, *vadFloor),
 	}
 	if *turnURL == "" {
 		log.Println("no TURN server configured: calls will fail behind symmetric NAT")
@@ -248,6 +257,11 @@ type callServer struct {
 	// Where the brain listens. Empty means loop the caller's audio back, which
 	// is how the transport gets tested without the appliance in the way.
 	appliance string
+
+	// How hard it listens. Tunable because the right values depend on the
+	// caller's room, their phone's gain control and how they hold it — none of
+	// which is knowable from here.
+	listening speech.Settings
 
 	mu    sync.Mutex
 	calls int
@@ -448,7 +462,7 @@ func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, 
 		}
 		defer brain.Close()
 
-		talk := newConversation(brain, audio)
+		talk := newConversation(brain, audio, s.listening)
 		go talk.play()
 		talk.listen(remote)
 		talk.stop()
@@ -641,4 +655,21 @@ func loopBack(remote *webrtc.TrackRemote, audio *webrtc.TrackLocalStaticSample) 
 			return
 		}
 	}
+}
+
+// listeningSettings applies any overrides to the defaults.
+//
+// Exposed as flags because the right threshold depends on the caller's room,
+// their phone's gain control and how they hold it — none of which is knowable
+// here, and all of which the owner can discover in one call. A flag makes that a
+// restart rather than a rebuild, a resign and a redeploy.
+func listeningSettings(factor, floor float64) speech.Settings {
+	settings := speech.DefaultSettings()
+	if factor > 0 {
+		settings.SpeechFactor = factor
+	}
+	if floor > 0 {
+		settings.MinimumLevel = floor
+	}
+	return settings
 }

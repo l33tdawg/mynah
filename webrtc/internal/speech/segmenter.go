@@ -208,6 +208,15 @@ func (s *Segmenter) Utterance() []int16 {
 	return s.lastUtterance
 }
 
+// Levels reports what the detector is currently working with.
+//
+// Tuning this by ear across a phone, a room and a network is guesswork; these
+// two numbers turn it into arithmetic. If the floor sits near the threshold the
+// room is loud enough to trip it, and the factor is what needs raising.
+func (s *Segmenter) Levels() (floor float64, threshold float64) {
+	return s.noiseFloor, math.Max(s.noiseFloor*s.settings.SpeechFactor, s.settings.MinimumLevel)
+}
+
 // Speaking reports whether the caller is mid-utterance.
 //
 // Used for interruption: if this is true while the appliance is talking, the
