@@ -153,6 +153,17 @@ public actor CallTurnServer {
         let writer = CallFrameWriter(descriptor: connection)
         log("[call] a call connected")
 
+        // Speak first.
+        //
+        // A call that opens in silence gives the caller nothing to react to:
+        // they cannot tell a connected line from a broken one, so they say
+        // "hello?" into it and wait. Answering the phone is the other party's
+        // job, and here the appliance is the one being called.
+        //
+        // Safe to send immediately — this connection is only made once media is
+        // already flowing from the caller, so the path back is up.
+        await greet(over: writer)
+
         while !Task.isCancelled {
             let frame: CallFrame
             do {
@@ -322,6 +333,30 @@ public actor CallTurnServer {
             try? writer.send(.turnFailed("\(error)"))
         }
     }
+
+    /// Answers the phone.
+    ///
+    /// Varied, because the same words every single time is the tell that turns
+    /// a greeting into a recording — and this is the first thing anyone hears.
+    private func greet(over writer: CallFrameWriter) async {
+        let greeting = CallTurnServer.greetings.randomElement() ?? "Hey, I'm here."
+        guard let audio = try? await synthesizer.synthesize(
+            SpeechRequest(text: greeting, voice: configuration.voice)
+        ) else {
+            log("[call] could not greet")
+            return
+        }
+        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        log("[call] greeted: \(greeting)")
+    }
+
+    static let greetings = [
+        "Hey, I'm here.",
+        "Hey — what's up?",
+        "I'm listening.",
+        "Hey. Go ahead.",
+        "Yep, I'm here."
+    ]
 
     /// Fills a long think with something human.
     private func sayStillWorking(over writer: CallFrameWriter) async {

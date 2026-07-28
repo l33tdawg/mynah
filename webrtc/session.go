@@ -26,6 +26,7 @@ import (
 // delay is a delay in answering rather than a stutter.
 type conversation struct {
 	appliance net.Conn
+	socket    string
 	track     *webrtc.TrackLocalStaticSample
 	segmenter *speech.Segmenter
 
@@ -65,11 +66,13 @@ const minimumUtterance = 400 * time.Millisecond
 
 func newConversation(
 	appliance net.Conn,
+	socket string,
 	track *webrtc.TrackLocalStaticSample,
 	listening speech.Settings,
 ) *conversation {
 	return &conversation{
 		appliance: appliance,
+		socket:    socket,
 		track:     track,
 		segmenter: speech.NewSegmenter(listening),
 		wake:      make(chan struct{}, 1),
@@ -168,14 +171,24 @@ func (c *conversation) interrupt() {
 // play accepts the answer and speaks it.
 func (c *conversation) play() {
 	go c.pace()
+	c.receive()
+}
+
+// receive reads frames until this connection to the appliance ends.
+//
+// Ending is not the same as the call ending: a redial replaces the connection
+// and starts another of these. Only the call being stopped stops the audio.
+func (c *conversation) receive() {
+	c.mu.Lock()
+	conn := c.appliance
+	c.mu.Unlock()
 
 	for {
-		kind, payload, err := callaudio.ReadFrame(c.appliance)
+		kind, payload, err := callaudio.ReadFrame(conn)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				log.Printf("the appliance stopped talking: %v", err)
 			}
-			c.stop()
 			return
 		}
 		switch kind {
@@ -284,9 +297,66 @@ func (c *conversation) pace() {
 }
 
 func (c *conversation) send(kind callaudio.Kind, payload []byte) {
-	if err := callaudio.WriteFrame(c.appliance, kind, payload); err != nil {
+	c.mu.Lock()
+	conn := c.appliance
+	c.mu.Unlock()
+
+	if err := callaudio.WriteFrame(conn, kind, payload); err == nil {
+		return
+	} else {
 		log.Printf("could not reach the appliance: %v", err)
 	}
+
+	// One redial before giving up on the frame.
+	//
+	// The appliance restarts — for an update, or because it fell over — and the
+	// socket dies under a call that is otherwise perfectly healthy. Observed
+	// live: 4,503 packets still arriving from the caller, ICE fine, and nothing
+	// answering, which is indistinguishable from a crash to whoever is holding
+	// the phone. A call should survive its brain being restarted.
+	if conn, ok := c.redial(); ok {
+		if err := callaudio.WriteFrame(conn, kind, payload); err != nil {
+			log.Printf("the appliance is still unreachable: %v", err)
+		}
+	}
+}
+
+// redial reconnects to the appliance, briefly.
+//
+// Bounded because the caller is on the line: a few seconds covers a daemon
+// restart, and beyond that the honest thing is to stop pretending. Nothing here
+// tells the caller — that would need a voice, which is exactly what has gone
+// missing.
+func (c *conversation) redial() (net.Conn, bool) {
+	if c.socket == "" {
+		return nil, false
+	}
+	for attempt := 0; attempt < 10; attempt++ {
+		if c.isStopped() {
+			return nil, false
+		}
+		time.Sleep(500 * time.Millisecond)
+		conn, err := net.Dial("unix", c.socket)
+		if err != nil {
+			continue
+		}
+		log.Println("reconnected to the appliance")
+
+		c.mu.Lock()
+		previous := c.appliance
+		c.appliance = conn
+		c.mu.Unlock()
+		if previous != nil {
+			_ = previous.Close()
+		}
+
+		// The reader was reading the old connection and has stopped; start
+		// another, or the answer to the next question is never collected.
+		go c.receive()
+		return conn, true
+	}
+	log.Println("the appliance did not come back")
+	return nil, false
 }
 
 func (c *conversation) stop() {
