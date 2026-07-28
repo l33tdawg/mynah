@@ -31,6 +31,13 @@ public enum CallFrame: Sendable, Equatable {
     /// Nothing to say, and why.
     case turnFailed(String)
 
+    /// Hang up.
+    ///
+    /// Has to be said rather than signalled by going away: the endpoint redials
+    /// a closed socket on purpose, so that a call survives the appliance being
+    /// restarted, which means closing it no longer means anything.
+    case endCall
+
     var kind: UInt8 {
         switch self {
         case .utterance: return 1
@@ -38,6 +45,7 @@ public enum CallFrame: Sendable, Equatable {
         case .interrupted: return 3
         case .replyEnd: return 4
         case .turnFailed: return 5
+        case .endCall: return 6
         }
     }
 
@@ -45,7 +53,7 @@ public enum CallFrame: Sendable, Equatable {
         switch self {
         case .utterance(let data), .replyAudio(let data):
             return data
-        case .interrupted, .replyEnd:
+        case .interrupted, .replyEnd, .endCall:
             return Data()
         case .turnFailed(let reason):
             return Data(reason.utf8)
@@ -73,6 +81,7 @@ public enum CallFrame: Sendable, Equatable {
         case 3: return .interrupted
         case 4: return .replyEnd
         case 5: return .turnFailed(String(decoding: payload, as: UTF8.self))
+        case 6: return .endCall
         default: return nil
         }
     }

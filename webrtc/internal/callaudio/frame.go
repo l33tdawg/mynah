@@ -51,6 +51,14 @@ const (
 	// KindReplyEnd travels down: that is the whole answer.
 	KindReplyEnd Kind = 4
 
+	// KindEndCall travels down: hang up.
+	//
+	// Needed because closing the socket no longer means anything — the endpoint
+	// redials it, on purpose, so that a call survives the appliance being
+	// restarted. Ending a call is therefore something that has to be said rather
+	// than something that can be signalled by going away.
+	KindEndCall Kind = 6
+
 	// KindTurnFailed travels down: nothing to say, and why. The endpoint has
 	// nothing useful to play, but the log should not have to infer silence.
 	KindTurnFailed Kind = 5

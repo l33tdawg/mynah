@@ -27,6 +27,7 @@ import (
 type conversation struct {
 	appliance net.Conn
 	socket    string
+	hangUp    func()
 	track     *webrtc.TrackLocalStaticSample
 	segmenter *speech.Segmenter
 
@@ -69,10 +70,12 @@ func newConversation(
 	socket string,
 	track *webrtc.TrackLocalStaticSample,
 	listening speech.Settings,
+	hangUp func(),
 ) *conversation {
 	return &conversation{
 		appliance: appliance,
 		socket:    socket,
+		hangUp:    hangUp,
 		track:     track,
 		segmenter: speech.NewSegmenter(listening),
 		wake:      make(chan struct{}, 1),
@@ -195,6 +198,18 @@ func (c *conversation) receive() {
 		case callaudio.KindReplyAudio:
 			c.enqueue(callaudio.Samples(payload))
 		case callaudio.KindReplyEnd:
+		case callaudio.KindEndCall:
+			// The appliance is saying goodbye. Give the last words time to
+			// reach the caller before the line goes — hanging up the instant
+			// the audio is queued cuts off the sentence that explains why.
+			log.Println("the appliance ended the call")
+			go func() {
+				time.Sleep(4 * time.Second)
+				c.stop()
+				if c.hangUp != nil {
+					c.hangUp()
+				}
+			}()
 		case callaudio.KindTurnFailed:
 			log.Printf("the appliance could not answer: %s", clean(string(payload)))
 		}

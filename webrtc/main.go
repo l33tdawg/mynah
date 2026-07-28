@@ -462,7 +462,7 @@ func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, 
 		}
 		defer brain.Close()
 
-		talk := newConversation(brain, s.appliance, audio, s.listening)
+		talk := newConversation(brain, s.appliance, audio, s.listening, finish)
 		go talk.play()
 		talk.listen(remote)
 		talk.stop()

@@ -192,6 +192,43 @@ final class CallTurnServerTests: XCTestCase {
                 + "connects to Signal"
         )
     }
+
+
+    // MARK: - Breathing
+
+    /// Sentences need a gap between them or they run together.
+    ///
+    /// Synthesised pieces are queued end to end, so without this the appliance
+    /// delivers a list as one breathless string and a listener cannot hear where
+    /// one item stops and the next begins.
+    func testEverySentenceIsFollowedByAPause() {
+        let pause = CallTurnServer.pause(after: "Menya Musashi is inside the mall.")
+        XCTAssertGreaterThan(pause.count, 0, "sentences would run together")
+
+        // 48 kHz mono, 16-bit: the rate the endpoint encodes at. Anything else
+        // is a pause of the wrong length, or a burst of noise.
+        XCTAssertEqual(pause.count % 2, 0, "not a whole number of samples")
+        let milliseconds = pause.count / 2 / 48
+        XCTAssertGreaterThan(milliseconds, 150)
+        XCTAssertLessThan(milliseconds, 600)
+    }
+
+    /// A colon announces a list, and the announcement only works if it lands.
+    func testAColonGetsALongerPauseThanAFullStop() {
+        let afterColon = CallTurnServer.pause(after: "Three places are close by:")
+        let afterStop = CallTurnServer.pause(after: "That is the closest one.")
+        XCTAssertGreaterThan(
+            afterColon.count, afterStop.count,
+            "a list announcement runs straight into the list"
+        )
+    }
+
+    /// It has to be silence, not noise.
+    func testThePauseIsSilent() {
+        let pause = CallTurnServer.pause(after: "Anything else?")
+        XCTAssertTrue(pause.allSatisfy { $0 == 0 }, "the pause contains audio")
+    }
+
 }
 
 private struct NeverTranscribes: AudioFileTranscribing {

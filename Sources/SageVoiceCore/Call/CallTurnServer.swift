@@ -73,6 +73,12 @@ public actor CallTurnServer {
     /// that makes a stock phrase sound like a stock phrase.
     private var lastOpener: String?
 
+    /// When the caller last said something. Drives the check-in below.
+    private var lastHeard = Date()
+
+    /// Watches for a call nobody is on any more.
+    private var idleWatch: Task<Void, Never>?
+
     public init(
         configuration: Configuration,
         transcriber: any AudioFileTranscribing,
@@ -360,6 +366,8 @@ public actor CallTurnServer {
         let writer = CallFrameWriter(descriptor: connection)
         log("[call] a call connected")
         transcript = CallTranscript()
+        lastHeard = Date()
+        startIdleWatch(over: writer)
 
         // Speak first.
         //
@@ -381,12 +389,14 @@ public actor CallTurnServer {
                 frame = try await withoutBlockingTheActor { try reader.next() }
             } catch CallFrameReader.Failure.closed {
                 log("[call] the call ended")
+                idleWatch?.cancel()
                 lastCallEnded = Date()
                 rememberThisCall()
                 await postTranscript()
                 return
             } catch {
                 log("[call] the endpoint stopped: \(error)")
+                idleWatch?.cancel()
                 lastCallEnded = Date()
                 rememberThisCall()
                 await postTranscript()
@@ -421,7 +431,7 @@ public actor CallTurnServer {
                 // kill answers. The turn is cancelled when words arrive, if
                 // they do.
                 log("[call] interrupted")
-            case .replyAudio, .replyEnd, .turnFailed:
+            case .replyAudio, .replyEnd, .turnFailed, .endCall:
                 break // Ours to send, not to receive.
             }
         }
@@ -475,6 +485,7 @@ public actor CallTurnServer {
             let recognised = Date()
             guard !Task.isCancelled else { return }
             log("[call] heard: \(heard)")
+        lastHeard = Date()
         transcript.heard(heard)
 
             // Say something before thinking, not after.
@@ -542,7 +553,9 @@ public actor CallTurnServer {
                     SpeechRequest(text: sentence, voice: configuration.voice, speed: configuration.speed)
                 )
                 guard !Task.isCancelled else { return }
-                try writer.send(.replyAudio(CallTurnServer.samples(fromWAV: speech.wav)))
+                var audio = CallTurnServer.samples(fromWAV: speech.wav)
+                audio.append(CallTurnServer.pause(after: sentence))
+                try writer.send(.replyAudio(audio))
                 if firstSpoken == nil { firstSpoken = Date() }
             }
             try writer.send(.replyEnd)
@@ -599,6 +612,104 @@ public actor CallTurnServer {
     ]
 
     /// Posts what was said, if the owner wants it and anything was.
+    /// Asks whether the caller is still there, and eventually hangs up.
+    ///
+    /// A call nobody is on stays open indefinitely otherwise: the owner has
+    /// wandered off, put the phone down, or forgotten the tab, and the line sits
+    /// there holding a microphone. Waiting for them to remember is not a design.
+    ///
+    /// Two stages, because one is rude. A minute of quiet gets a question — the
+    /// same thing a person would do, and often the owner is simply thinking. Only
+    /// after a second minute with no answer does it say goodbye and end the call,
+    /// which by then is describing what has already happened rather than deciding
+    /// it.
+    ///
+    /// The check-ins are not counted as the appliance having heard anything, so
+    /// a silent caller does not reset their own timer by being asked.
+    private func startIdleWatch(over writer: CallFrameWriter) {
+        idleWatch?.cancel()
+        idleWatch = Task { [weak self] in
+            var asked = false
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self else { return }
+                guard let quiet = await self.quietFor() else { return }
+
+                if !asked, quiet > CallTurnServer.checkInAfter {
+                    asked = true
+                    await self.say(CallTurnServer.checkIns.randomElement() ?? "Still there?",
+                                   over: writer)
+                } else if asked, quiet > CallTurnServer.hangUpAfter {
+                    await self.say("I'll let you go — call me back whenever.", over: writer)
+                    await self.endCall(over: writer)
+                    return
+                } else if quiet < CallTurnServer.checkInAfter {
+                    asked = false
+                }
+            }
+        }
+    }
+
+    /// How long since the caller said anything, or nil if a turn is running.
+    ///
+    /// A turn in flight means the appliance is working on something they asked
+    /// for, and asking "still there?" over the top of that is the appliance
+    /// interrupting itself.
+    private func quietFor() -> TimeInterval? {
+        if let turn, !turn.isCancelled { return nil }
+        return Date().timeIntervalSince(lastHeard)
+    }
+
+    static let checkInAfter: TimeInterval = 60
+    static let hangUpAfter: TimeInterval = 120
+
+    static let checkIns = [
+        "Still there? Anything else?",
+        "Anything else you need?",
+        "Still with me?",
+        "Anything else, or shall I let you go?"
+    ]
+
+    /// A breath between sentences.
+    ///
+    /// Synthesised sentences are queued end to end, so the appliance runs them
+    /// together with no gap at all — "there is Menya Musashi plus Marutama
+    /// Gantetsu and Ton Chan" arrives as one breathless string, and a listener
+    /// cannot hear where one item stops and the next starts. Nobody talks like
+    /// that, and it is most obvious in exactly the answers that need it least
+    /// obviously: lists.
+    ///
+    /// Longer after a colon, because a colon is a sentence announcing that a
+    /// list is coming and the pause is what makes the announcement work.
+    ///
+    /// Silence rather than anything clever: this is the pause a speaker takes,
+    /// not a sound.
+    static func pause(after sentence: String) -> Data {
+        let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        let milliseconds: Int
+        switch trimmed.last {
+        case ":": milliseconds = 420
+        case "?": milliseconds = 320
+        default: milliseconds = 240
+        }
+        // 48 kHz mono, sixteen bits: the rate the endpoint encodes at.
+        return Data(count: 48 * milliseconds * 2)
+    }
+
+    private func say(_ line: String, over writer: CallFrameWriter) async {
+        guard let audio = try? await synthesizer.synthesize(
+            SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
+        ) else { return }
+        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        transcript.said(line)
+        log("[call] said \"\(line)\"")
+    }
+
+    private func endCall(over writer: CallFrameWriter) async {
+        log("[call] no one has spoken for \(Int(CallTurnServer.hangUpAfter))s; ending the call")
+        try? writer.send(.endCall)
+    }
+
     /// Keeps what this call was about, for the next one to open with.
     private func rememberThisCall() {
         guard let record = LastCall.from(transcript) else { return }
