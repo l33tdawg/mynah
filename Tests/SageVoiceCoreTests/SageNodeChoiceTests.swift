@@ -189,4 +189,47 @@ final class SageNodeChoiceTests: XCTestCase {
             "the vendored node is being used directly again"
         )
     }
+
+    // MARK: Nothing of Mynah's is written inside SAGE
+
+    /// Mynah keeps its own key in its own directory.
+    ///
+    /// The third way an appliance can interfere with somebody's node is to write
+    /// into its state — and `~/.sage` holds their agents and their keys. Mynah
+    /// reads from there once, to adopt a key it created itself under an older
+    /// scheme, and writes only to its own Application Support directory.
+    ///
+    /// Asserted rather than assumed, because the natural place to put an agent
+    /// key looks like `~/.sage/agents/`, and a later change that "tidied" it
+    /// there would be putting Mynah's files inside somebody else's store.
+    func testMynahsOwnKeyIsNotStoredInsideSage() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let key = MynahIdentity.applianceKeyURL(homeDirectory: home).path
+        let sageHome = home.appendingPathComponent(".sage").path
+
+        XCTAssertFalse(
+            key.hasPrefix(sageHome),
+            "Mynah writes its key inside SAGE's own state directory: \(key)"
+        )
+        XCTAssertTrue(
+            key.contains("SAGE Voice Bridge"),
+            "Mynah's key is not in its own directory: \(key)"
+        )
+    }
+
+    /// And the operator's key is never what Mynah signs as.
+    ///
+    /// Adopting it would make the appliance indistinguishable from the owner on
+    /// their own node — able to write, forget and rename as them.
+    func testTheOperatorKeyIsNotMynahsIdentity() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let operatorKey = MynahIdentity.nodeOperatorKeyURL(
+            environment: [:],
+            homeDirectory: home
+        ).path
+        let mynahKey = MynahIdentity.applianceKeyURL(homeDirectory: home).path
+
+        XCTAssertNotEqual(operatorKey, mynahKey)
+        XCTAssertTrue(operatorKey.hasSuffix(".sage/agent.key"), operatorKey)
+    }
 }
