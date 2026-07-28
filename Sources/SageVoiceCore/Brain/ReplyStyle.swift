@@ -130,11 +130,8 @@ public struct ReplyPreferences: Sendable {
     }
 
     public func save(voiceNotes: Bool) throws {
-        let directory = fileURL.deletingLastPathComponent()
-        try OwnerOnlyFileSecurity.prepareDirectory(directory)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(Stored(voiceNotes: voiceNotes)).write(to: fileURL, options: .atomic)
-        try OwnerOnlyFileSecurity.protectFile(fileURL)
+        try OwnerOnlyFileSecurity.write(encoder.encode(Stored(voiceNotes: voiceNotes)), to: fileURL)
     }
 }

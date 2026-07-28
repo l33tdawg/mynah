@@ -369,20 +369,31 @@ public actor VoiceBridgeDaemon {
             return .failed("no reply recipient on \(message.logDescription)")
         }
 
-        let transcript: String
-        do {
-            var parts: [String] = []
-            for item in batch {
-                // One unreadable voice note in a batch must not discard the text
-                // that came with it — the owner said both things.
+        // One unreadable voice note in a batch must not discard the text that
+        // came with it — the owner said both things.
+        //
+        // The comment said that before the code did. The do/catch wrapped the
+        // whole loop, so a throw on the second item threw away the first item's
+        // transcript too, and the owner got "I couldn't read that voice note"
+        // for a message they had also typed out. Caught per item now, which is
+        // what the sentence always claimed.
+        var parts: [String] = []
+        var failures = 0
+        for item in batch {
+            do {
                 if let raw = try await resolveTranscript(item) { parts.append(raw) }
+            } catch {
+                failures += 1
+                log("[daemon] could not transcribe one of \(batch.count) message(s): \(error)")
             }
-            let merged = MessageCoalescer.merge(parts)
-            guard !merged.isEmpty else { return .ignoredEmpty }
-            transcript = merged
-        } catch {
-            await reply("I couldn't read that voice note.", to: recipient)
-            return .failed("transcription failed: \(error)")
+        }
+        let transcript = MessageCoalescer.merge(parts)
+        guard !transcript.isEmpty else {
+            guard failures == 0 else {
+                await reply("I couldn't read that voice note.", to: recipient)
+                return .failed("transcription failed for all \(failures) attachment(s)")
+            }
+            return .ignoredEmpty
         }
 
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

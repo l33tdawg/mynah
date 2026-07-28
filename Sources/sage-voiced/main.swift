@@ -297,19 +297,8 @@ func runBrain(_ arguments: [String]) -> Never {
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
     let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
-    // The owner's choice, made in Mynah, read here. `--voice-notes` overrides
-    // it for a one-off test without touching what they saved.
-    let style: ReplyStyle = arguments.contains("--voice-notes")
-        ? .spoken
-        : ReplyPreferences().style()
-    let loop = ToolLoop(
-        backend: backend,
-        mcp: tools,
-        configuration: ToolLoop.Configuration(
-            systemPrompt: BrainPrompts.voiceAgentManager(style: style),
-            maxGeneratedTokens: style.maximumGeneratedTokens
-        )
-    )
+    let style = resolveReplyStyle(arguments)
+    let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
 
     runAndExit {
@@ -564,6 +553,26 @@ func runGoogle(_ arguments: [String]) -> Never {
     }
 }
 
+/// The reply style both entry points run under.
+///
+/// Shared because they drifted: `runBrain` read the owner's preference and
+/// `runDaemon` — the thing that actually answers Signal — built its loop with a
+/// bare `ToolLoop(backend:mcp:)`, so the "Answer with voice notes" switch did
+/// nothing on the appliance and the token ceiling stayed at the spoken value.
+/// Same shape as the identity pin landing in the wrong subcommand. One function,
+/// called from both.
+func resolveReplyStyle(_ arguments: [String]) -> ReplyStyle {
+    arguments.contains("--voice-notes") ? .spoken : ReplyPreferences().style()
+}
+
+/// The loop configuration that follows from a style.
+func loopConfiguration(for style: ReplyStyle) -> ToolLoop.Configuration {
+    ToolLoop.Configuration(
+        systemPrompt: BrainPrompts.voiceAgentManager(style: style),
+        maxGeneratedTokens: style.maximumGeneratedTokens
+    )
+}
+
 func runDaemon(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
 
@@ -628,7 +637,9 @@ func runDaemon(_ arguments: [String]) -> Never {
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
     let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
-    let loop = ToolLoop(backend: backend, mcp: tools)
+    let style = resolveReplyStyle(arguments)
+    let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
+    FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
     // restart rather than a rebuild, a repackage, a resign and a redeploy.
@@ -654,7 +665,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                 log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
             ),
         notes: notes,
-        conversations: ConversationStore(),
+        conversations: ConversationStore()
     )
 
     runAndExit {

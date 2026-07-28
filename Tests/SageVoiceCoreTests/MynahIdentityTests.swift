@@ -110,23 +110,75 @@ final class MynahIdentityTests: XCTestCase {
         )
     }
 
-    /// A legitimate override still works. Refusing one specific path must not
-    /// become refusing all of them.
-    func testAnOrdinaryOverrideIsStillHonoured() {
+    /// An override may point Mynah at a *Mynah* key, and nothing else.
+    ///
+    /// This used to honour any path that was not the operator's, which a review
+    /// showed was too generous: `~/.sage/agents/<project>/agent.key` is where the
+    /// node mints per-project identities — this repo's own session hooks export
+    /// one — so an arbitrary override let Mynah silently become an existing agent
+    /// and write, forget and rename as it.
+    func testAnOverrideMayOnlyNameAMynahKey() {
+        let ours = MynahIdentity.keyURL(homeDirectory: home)
+            .deletingLastPathComponent()
+            .appendingPathComponent("test-agent.key").path
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(
-                environment: ["SAGE_IDENTITY_PATH": "/tmp/test-agent.key"],
-                homeDirectory: home
-            ),
-            "/tmp/test-agent.key"
+            MynahIdentity.resolvedKeyPath(environment: ["SAGE_IDENTITY_PATH": ours], homeDirectory: home),
+            ours,
+            "a key in Mynah's own directory was refused"
         )
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(
-                environment: ["SAGE_AGENT_KEY": "/tmp/legacy-agent.key"],
-                homeDirectory: home
-            ),
-            "/tmp/legacy-agent.key",
+            MynahIdentity.resolvedKeyPath(environment: ["SAGE_AGENT_KEY": ours], homeDirectory: home),
+            ours,
             "the backward-compatible variable stopped working"
+        )
+
+        for foreign in [
+            "/Users/tester/.sage/agents/sage-4e219acf/agent.key",
+            "/tmp/somebody-elses.key"
+        ] {
+            XCTAssertNotEqual(
+                MynahIdentity.resolvedKeyPath(
+                    environment: ["SAGE_IDENTITY_PATH": foreign],
+                    homeDirectory: home
+                ),
+                foreign,
+                "Mynah adopted another agent's identity from the environment"
+            )
+        }
+    }
+
+    /// macOS is case-insensitive by default and `standardizedFileURL` resolves
+    /// `..` and nothing else — not case, not symlinks. A string compare against
+    /// the operator path was therefore bypassable by changing its spelling.
+    func testTheOperatorRefusalIsNotACaseSensitiveStringCompare() {
+        for spelling in [
+            "/Users/tester/.SAGE/agent.key",
+            "/Users/tester/.Sage/Agent.key"
+        ] {
+            XCTAssertNotEqual(
+                MynahIdentity.resolvedKeyPath(
+                    environment: ["SAGE_IDENTITY_PATH": spelling],
+                    homeDirectory: home
+                ),
+                spelling,
+                "\"\(spelling)\" reached the operator key by changing its case"
+            )
+        }
+    }
+
+    /// A refusal that says nothing means the app signs as a different agent than
+    /// the environment asked for and nobody finds out until the memories look
+    /// wrong.
+    func testARefusedOverrideIsReported() {
+        var lines: [String] = []
+        _ = MynahIdentity.resolvedKeyPath(
+            environment: ["SAGE_IDENTITY_PATH": operatorKey],
+            homeDirectory: home,
+            log: { lines.append($0) }
+        )
+        XCTAssertTrue(
+            lines.contains { $0.contains("SAGE_IDENTITY_PATH") },
+            "the refusal was silent"
         )
     }
 
@@ -134,15 +186,18 @@ final class MynahIdentityTests: XCTestCase {
     /// (`cmd/sage-gui/mcp.go:145-148`). If these two disagree about precedence,
     /// the app signs as one identity while believing it signs as another.
     func testPrecedenceMatchesTheNode() {
+        let directory = MynahIdentity.keyURL(homeDirectory: home).deletingLastPathComponent()
+        let preferred = directory.appendingPathComponent("preferred.key").path
+        let legacy = directory.appendingPathComponent("legacy.key").path
         XCTAssertEqual(
             MynahIdentity.resolvedKeyPath(
                 environment: [
-                    "SAGE_IDENTITY_PATH": "/tmp/preferred.key",
-                    "SAGE_AGENT_KEY": "/tmp/legacy.key"
+                    "SAGE_IDENTITY_PATH": preferred,
+                    "SAGE_AGENT_KEY": legacy
                 ],
                 homeDirectory: home
             ),
-            "/tmp/preferred.key"
+            preferred
         )
     }
 
@@ -230,6 +285,28 @@ final class MynahIdentityTests: XCTestCase {
             pinned,
             spawns,
             "\(spawns) MCP spawn site(s) but only \(pinned) pinned — an unpinned one derives its identity from the launch directory"
+        )
+    }
+
+    /// The same class of bug, one feature over: the reply style was read in
+    /// `runBrain` and not in `runDaemon`, so the owner's "Answer with voice
+    /// notes" switch did nothing on the appliance and the token ceiling stayed at
+    /// the spoken value. Both entry points now go through one resolver.
+    func testEveryEntryPointResolvesTheReplyStyle() throws {
+        let main = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/sage-voiced/main.swift")
+        let source = try String(contentsOf: main, encoding: .utf8)
+
+        // `= ToolLoop(backend:` rather than a bare mention, so a doc comment
+        // that names the type is not counted as a construction site.
+        let loops = source.components(separatedBy: "= ToolLoop(backend:").count - 1
+        let configured = source.components(separatedBy: "loopConfiguration(for:").count - 1
+        XCTAssertGreaterThan(loops, 0, "could not find any ToolLoop construction to check")
+        XCTAssertEqual(
+            configured,
+            loops,
+            "\(loops) ToolLoop(s) but only \(configured) configured — an unconfigured one ignores the owner's reply-style setting"
         )
     }
 }

@@ -79,24 +79,68 @@ public enum MynahIdentity {
     /// nobody writes it again.
     public static func resolvedKeyPath(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        log: (String) -> Void = { _ in }
     ) -> String {
         let ours = keyURL(homeDirectory: homeDirectory).path
-        let operatorKey = nodeOperatorKeyURL(environment: environment, homeDirectory: homeDirectory)
-            .standardizedFileURL.path
 
         for name in [environmentVariable, "SAGE_AGENT_KEY"] {
             guard let raw = environment[name], !raw.isEmpty else { continue }
             let expanded = NSString(string: raw).expandingTildeInPath
-            guard URL(fileURLWithPath: expanded).standardizedFileURL.path != operatorKey else {
-                // Refused rather than obeyed. Nothing in this app has a reason
-                // to act as the operator, and an environment that says otherwise
-                // is the bug being fixed, not an instruction.
+            guard isSafeToAdopt(expanded, environment: environment, homeDirectory: homeDirectory) else {
+                // Refused rather than obeyed, and said out loud. A silent refusal
+                // means the app signs as a different agent than the environment
+                // asked for and nobody finds out until the memories look wrong.
+                log("[identity] ignoring \(name)=\(expanded): Mynah signs only as itself")
                 continue
             }
             return expanded
         }
         return ours
+    }
+
+    /// Whether an override may be adopted.
+    ///
+    /// Two refusals, and the second is the one that took a review to see.
+    ///
+    /// The operator key, compared by *inode* rather than by path string.
+    /// `standardizedFileURL` resolves `..` and nothing else — not symlinks, and
+    /// not case, and macOS is case-insensitive by default, so `~/.SAGE/agent.key`
+    /// or a symlink walked straight past a string comparison into full operator
+    /// privilege.
+    ///
+    /// And any key belonging to *another* agent. `~/.sage/agents/<project>/` is
+    /// where the node mints per-project identities — this repo's own session
+    /// hooks export one — so honouring an arbitrary override lets Mynah silently
+    /// become an existing agent and write, forget and rename as it. An override
+    /// is for pointing Mynah at a *Mynah* key, so that is all it may point at.
+    static func isSafeToAdopt(
+        _ path: String,
+        environment: [String: String],
+        homeDirectory: URL
+    ) -> Bool {
+        let candidate = URL(fileURLWithPath: path).standardizedFileURL
+        let operatorKey = nodeOperatorKeyURL(environment: environment, homeDirectory: homeDirectory)
+        if sameFile(candidate, operatorKey) { return false }
+        if candidate.path.compare(operatorKey.path, options: .caseInsensitive) == .orderedSame {
+            return false
+        }
+
+        let ourDirectory = keyURL(homeDirectory: homeDirectory)
+            .deletingLastPathComponent().standardizedFileURL.path
+        return candidate.deletingLastPathComponent().path
+            .compare(ourDirectory, options: .caseInsensitive) == .orderedSame
+    }
+
+    /// Same file on disk, whatever the two paths look like. Resolves symlinks
+    /// and hard links, which a string comparison cannot.
+    private static func sameFile(_ a: URL, _ b: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        guard let idA = try? a.resourceValues(forKeys: keys).fileResourceIdentifier,
+              let idB = try? b.resourceValues(forKeys: keys).fileResourceIdentifier else {
+            return false
+        }
+        return idA.isEqual(idB)
     }
 
     /// Environment for a spawned `sage-gui mcp`.

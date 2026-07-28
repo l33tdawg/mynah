@@ -236,9 +236,6 @@ public struct ConversationStore: @unchecked Sendable {
             return
         }
 
-        let directory = fileURL.deletingLastPathComponent()
-        try OwnerOnlyFileSecurity.prepareDirectory(directory, fileManager: fileManager)
-
         let encoder = JSONEncoder()
         // Stable on disk so a diff between two saves shows what the owner said,
         // not a reshuffled dictionary.
@@ -249,7 +246,9 @@ public struct ConversationStore: @unchecked Sendable {
         let data = try encoder.encode(
             StoredFile(savedAt: now, threads: nil, conversations: conversations)
         )
-        try data.write(to: fileURL, options: .atomic)
-        try OwnerOnlyFileSecurity.protectFile(fileURL, fileManager: fileManager)
+        // Not `Data.write(.atomic)`: that creates the file at 0644 and can only
+        // chmod afterwards, so every first write publishes the owner's
+        // conversations world-readable for the moment in between.
+        try OwnerOnlyFileSecurity.write(data, to: fileURL, fileManager: fileManager)
     }
 }
