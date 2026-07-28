@@ -100,18 +100,29 @@ public actor LocalBrainInstaller {
             switch self {
             case .idle:
                 return "Ready to set up."
+            // Every one of these names what it is fetching.
+            //
+            // "Downloading the brain — this is the big one, a few gigabytes" was
+            // true and alarming: a progress bar with several gigabytes behind it
+            // and no name invites the owner to assume the worst, and the first
+            // guess is that something they already have is being downloaded
+            // again. Nothing here fetches SAGE — it ships inside the app — and
+            // saying so costs one word per line.
             case .downloadingRuntime:
-                return "Getting the software that runs the brain…"
+                return "Downloading Ollama, which runs the model on this Mac (about 129 MB)…"
             case .startingRuntime:
-                return "Starting it up…"
+                return "Starting Ollama…"
             case .downloadingModel:
-                // Never the digest. Ollama's status line for the bulk of the
-                // pull is "pulling 61aa3858e9d3", which means nothing to anyone.
-                return "Downloading the brain — this is the big one, a few gigabytes."
+                // The name, never the digest. Ollama's own status line for the
+                // bulk of the pull is "pulling 61aa3858e9d3", which means
+                // nothing to anyone.
+                return "Downloading \(LocalBrainModelCatalog.preferredModel), "
+                    + "the model that does the thinking (about 3.4 GB)…"
             case .downloadingEmbeddingModel:
-                return "Getting the memory model…"
+                return "Downloading \(LocalBrainModelCatalog.embeddingModel), "
+                    + "which lets it search its memory by meaning (about 274 MB)…"
             case .verifyingModels:
-                return "Checking that the brain and memory can answer…"
+                return "Checking that both models answer…"
             case .ready:
                 return "Ready. Nothing you say will leave this Mac."
             case .failed(let reason):

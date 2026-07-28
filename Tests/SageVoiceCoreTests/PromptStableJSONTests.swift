@@ -51,3 +51,53 @@ final class PromptStableJSONTests: XCTestCase {
         )
     }
 }
+
+final class LocalBrainInstallerCopyTests: XCTestCase {
+
+    /// A multi-gigabyte progress bar has to say what it is fetching.
+    ///
+    /// "Downloading the brain — this is the big one, a few gigabytes" was true
+    /// and alarming: with no name on it, the owner's first guess is that
+    /// something they already have is being downloaded again. Nothing in this
+    /// installer fetches SAGE — it ships inside the app.
+    func testEveryDownloadPhaseNamesWhatItIsFetching() {
+        let model = LocalBrainInstaller.Phase.downloadingModel(
+            status: "pulling 61aa3858e9d3", completedBytes: 1, totalBytes: 2
+        )
+        XCTAssertTrue(
+            model.sentence.contains(LocalBrainModelCatalog.preferredModel),
+            "the model download does not say what it is: \(model.sentence)"
+        )
+
+        let embedding = LocalBrainInstaller.Phase.downloadingEmbeddingModel(
+            status: "", completedBytes: nil, totalBytes: nil
+        )
+        XCTAssertTrue(
+            embedding.sentence.contains(LocalBrainModelCatalog.embeddingModel),
+            "the memory model download does not say what it is: \(embedding.sentence)"
+        )
+
+        let runtime = LocalBrainInstaller.Phase.downloadingRuntime(
+            completedBytes: 0, totalBytes: nil
+        )
+        XCTAssertTrue(
+            runtime.sentence.lowercased().contains("ollama"),
+            "the runtime download does not say what it is: \(runtime.sentence)"
+        )
+    }
+
+    /// None of it is SAGE, and the copy must not imply otherwise.
+    func testNoDownloadClaimsToBeFetchingSage() {
+        let phases: [LocalBrainInstaller.Phase] = [
+            .downloadingRuntime(completedBytes: 0, totalBytes: nil),
+            .downloadingModel(status: "", completedBytes: nil, totalBytes: nil),
+            .downloadingEmbeddingModel(status: "", completedBytes: nil, totalBytes: nil)
+        ]
+        for phase in phases {
+            XCTAssertFalse(
+                phase.sentence.lowercased().contains("sage"),
+                "\(phase.sentence) implies SAGE is being downloaded; it ships in the app"
+            )
+        }
+    }
+}
