@@ -130,9 +130,19 @@ public struct SystemSpeechSynthesizer: SpeechSynthesizing, @unchecked Sendable {
         if request.speed != 1.0 {
             arguments += ["-r", String(Int((175 * request.speed).rounded()))]
         }
-        // Last, and never interpolated into a shell string — the text is a model
-        // reply and may contain anything.
-        arguments.append(text)
+        // Through a file, not an argument.
+        //
+        // A model reply beginning with a dash — a markdown bullet, most often —
+        // is read by `say` as a command-line option, and it exits with
+        // "invalid option". Observed live: an answer stopped after its first
+        // sentence because the second started with "- Fleet:", and the call went
+        // silent mid-thought with no indication anything had gone wrong.
+        //
+        // Passing it as an argument was never safe for a value this side does
+        // not control. A file has no such syntax.
+        let script = scratch.appendingPathComponent("speech.txt")
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        arguments += ["-f", script.path]
 
         // Generous, and bounded. A long reply legitimately takes a few seconds,
         // and a wedged `say` must not hold a Signal turn open forever.

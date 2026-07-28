@@ -85,7 +85,7 @@ func (c *conversation) listen(remote *webrtc.TrackRemote) {
 		frame := make([]int16, len(samples))
 		copy(frame, samples)
 
-		switch c.segmenter.Push(frame) {
+		switch c.segmenter.Push(frame, c.isPlaying()) {
 		case speech.EventSpeechStarted:
 			c.interrupt()
 		case speech.EventUtteranceComplete:
@@ -241,6 +241,13 @@ func (c *conversation) stop() {
 	c.stopped = true
 	c.playlist = nil
 	c.mu.Unlock()
+}
+
+// isPlaying reports whether the appliance's voice is on the line right now.
+func (c *conversation) isPlaying() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.playing || len(c.playlist) > 0
 }
 
 func (c *conversation) isStopped() bool {

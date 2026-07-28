@@ -63,6 +63,28 @@ type Settings struct {
 	// call that stops working.
 	MaximumFrames int
 
+	// How much louder speech must be to interrupt the appliance.
+	//
+	// Echo cancellation in the browser is good and not perfect. Enough of the
+	// appliance's own voice returns through the phone — especially on
+	// speakerphone, where the microphone hears the speaker directly — to clear
+	// the ordinary speech threshold. Observed live: every single reply was
+	// followed by an interruption the caller never made, and the appliance cut
+	// itself off mid-answer.
+	//
+	// So interrupting costs more than starting. The residue is a fraction of the
+	// original; a person talking into their phone is not.
+	EchoFactor float64
+
+	// How long speech must persist to interrupt, rather than merely to start.
+	//
+	// The other half of the same problem. Residual echo arrives in bursts that
+	// track the appliance's own speech rhythm, so a threshold alone still trips
+	// on the loud syllables. Requiring a quarter second of sustained sound
+	// rejects that while staying well inside what a person notices — it is about
+	// how long it takes to say "no, wait".
+	InterruptFrames int
+
 	// Audio kept from before speech was detected.
 	//
 	// Detection is retrospective: by the time two frames have exceeded the
@@ -74,12 +96,14 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{
-		SpeechFactor:  2.5,
-		MinimumLevel:  180,
-		StartFrames:   2,       // 40 ms
-		SilenceFrames: 35,      // 700 ms
-		MaximumFrames: 50 * 30, // 30 s
-		PrerollFrames: 15,      // 300 ms
+		SpeechFactor:    2.5,
+		MinimumLevel:    180,
+		StartFrames:     2,  // 40 ms
+		SilenceFrames:   35, // 700 ms
+		EchoFactor:      3.0,
+		InterruptFrames: 12,      // 240 ms
+		MaximumFrames:   50 * 30, // 30 s
+		PrerollFrames:   15,      // 300 ms
 	}
 }
 
@@ -106,13 +130,14 @@ type Segmenter struct {
 
 	noiseFloor float64
 
-	speaking      bool
-	loudFrames    int
-	quietFrames   int
-	utterance     []int16
-	preroll       [][]int16
-	prerollAt     int
-	lastUtterance []int16
+	speaking          bool
+	applianceSpeaking bool
+	loudFrames        int
+	quietFrames       int
+	utterance         []int16
+	preroll           [][]int16
+	prerollAt         int
+	lastUtterance     []int16
 }
 
 func NewSegmenter(settings Settings) *Segmenter {
@@ -123,11 +148,22 @@ func NewSegmenter(settings Settings) *Segmenter {
 }
 
 // Push feeds one frame and reports what changed.
-func (s *Segmenter) Push(frame []int16) Event {
+//
+// applianceSpeaking raises the bar. While the appliance is talking, anything
+// arriving on this line is its own voice until proven otherwise, and proving
+// otherwise takes both more level and more time — see EchoFactor and
+// InterruptFrames.
+func (s *Segmenter) Push(frame []int16, applianceSpeaking bool) Event {
 	level := rootMeanSquare(frame)
+	s.applianceSpeaking = applianceSpeaking
 	s.trackNoiseFloor(level)
 
 	threshold := math.Max(s.noiseFloor*s.settings.SpeechFactor, s.settings.MinimumLevel)
+	required := s.settings.StartFrames
+	if applianceSpeaking && !s.speaking {
+		threshold *= s.settings.EchoFactor
+		required = s.settings.InterruptFrames
+	}
 	loud := level > threshold
 
 	if !s.speaking {
@@ -137,7 +173,7 @@ func (s *Segmenter) Push(frame []int16) Event {
 			return EventNone
 		}
 		s.loudFrames++
-		if s.loudFrames < s.settings.StartFrames {
+		if s.loudFrames < required {
 			return EventNone
 		}
 		s.speaking = true
@@ -230,6 +266,12 @@ func (s *Segmenter) finish() {
 func (s *Segmenter) trackNoiseFloor(level float64) {
 	if s.speaking {
 		return // Speech is not evidence about the noise floor.
+	}
+	if s.applianceSpeaking {
+		// Nor is the appliance's own voice coming back. Letting it raise the
+		// floor would leave the line desensitised for seconds after every
+		// reply — exactly when the caller is most likely to answer.
+		return
 	}
 	if level > s.noiseFloor {
 		s.noiseFloor += (level - s.noiseFloor) * 0.02

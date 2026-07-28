@@ -187,7 +187,7 @@ public actor CallTurnServer {
         do {
             let heard = try await transcribe(wav)
             guard !Task.isCancelled else { return }
-            guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard !heard.isEmpty else {
                 // Recognition found nothing — a cough, a door, a car. Saying
                 // "I didn't catch that" to a noise the caller never made is
                 // worse than saying nothing.
@@ -223,7 +223,18 @@ public actor CallTurnServer {
             .appendingPathComponent("mynah-call-\(UUID().uuidString).wav")
         try wav.write(to: scratch)
         defer { try? FileManager.default.removeItem(at: scratch) }
-        return try await transcriber.transcribe(audioFile: scratch)
+        do {
+            return try await transcriber.transcribe(audioFile: scratch)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            // Finding no words is the ordinary outcome for a door, a cough, or
+            // the appliance's own voice arriving back through the phone. The
+            // backends raise it as an error, but there is nothing wrong and
+            // nothing to say — treating it as a failure fills the log with
+            // alarms and answers noise the caller never made.
+            if "\(error)".contains("emptyTranscript") { return "" }
+            throw error
+        }
     }
 
     /// Splits a reply into pieces worth synthesising separately.

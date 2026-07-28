@@ -298,10 +298,17 @@ final class MynahIdentityTests: XCTestCase {
             .appendingPathComponent("Sources/sage-voiced/main.swift")
         let source = try String(contentsOf: main, encoding: .utf8)
 
-        // `= ToolLoop(backend:` rather than a bare mention, so a doc comment
-        // that names the type is not counted as a construction site.
-        let loops = source.components(separatedBy: "= ToolLoop(backend:").count - 1
-        let configured = source.components(separatedBy: "loopConfiguration(for:").count - 1
+        // Whitespace removed before counting, because the guard was checking
+        // formatting as much as intent: a construction wrapped across lines did
+        // not match `= ToolLoop(backend:` and silently stopped being counted.
+        // A guard that a line break can switch off is worse than none, because
+        // it still reports success.
+        let dense = source.filter { !$0.isWhitespace }
+
+        // `=ToolLoop(backend:` rather than a bare mention, so a doc comment that
+        // names the type is not counted as a construction site.
+        let loops = dense.components(separatedBy: "=ToolLoop(backend:").count - 1
+        let configured = dense.components(separatedBy: "loopConfiguration(for:").count - 1
         XCTAssertGreaterThan(loops, 0, "could not find any ToolLoop construction to check")
         XCTAssertEqual(
             configured,

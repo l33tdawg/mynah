@@ -32,7 +32,7 @@ func feed(t *testing.T, segmenter *Segmenter, frames [][]int16) []Event {
 	t.Helper()
 	var events []Event
 	for _, frame := range frames {
-		if event := segmenter.Push(frame); event != EventNone {
+		if event := segmenter.Push(frame, false); event != EventNone {
 			events = append(events, event)
 		}
 	}
@@ -154,7 +154,7 @@ func TestSpeechIsReportedImmediatelyForInterruption(t *testing.T) {
 
 	settings := DefaultSettings()
 	for i := 0; i < settings.StartFrames; i++ {
-		event := segmenter.Push(speech(int64(100+i), 6000))
+		event := segmenter.Push(speech(int64(100+i), 6000), false)
 		if event == EventSpeechStarted {
 			if !segmenter.Speaking() {
 				t.Fatal("speech was reported as started but Speaking() is false")
@@ -185,4 +185,46 @@ func TestAnEndlessUtteranceIsCutOff(t *testing.T) {
 	if completions == 0 {
 		t.Fatal("six seconds of unbroken speech never produced an utterance")
 	}
+}
+
+// The appliance must not interrupt itself.
+//
+// Echo cancellation in the browser is good and not perfect — enough of the
+// appliance's own voice returns through the phone to clear the ordinary speech
+// threshold, especially on speakerphone. Observed live: every reply was followed
+// by an interruption the caller never made, and the answer was cut off
+// mid-sentence.
+func TestResidualEchoDoesNotInterruptTheAppliance(t *testing.T) {
+	segmenter := NewSegmenter(DefaultSettings())
+	feed(t, segmenter, repeat(room, 40, 1))
+
+	// What comes back through a phone: the appliance's own voice, attenuated by
+	// the echo canceller but not silenced.
+	echo := func(seed int64) []int16 { return speech(seed, 900) }
+
+	for i, frame := range repeat(echo, 150, 100) {
+		if event := segmenter.Push(frame, true); event != EventNone {
+			t.Fatalf("frame %d of residual echo was treated as the caller talking "+
+				"(%v); the appliance would cut itself off mid-answer", i, event)
+		}
+	}
+}
+
+// Interruption still has to work.
+//
+// The guard against echo is worthless if it also stops a person cutting in —
+// that is the whole point of full duplex, and an assistant that cannot be
+// interrupted is a slower voice note.
+func TestTheCallerCanStillInterrupt(t *testing.T) {
+	segmenter := NewSegmenter(DefaultSettings())
+	feed(t, segmenter, repeat(room, 40, 1))
+
+	// A person talking into the phone, while the appliance is speaking.
+	for _, frame := range repeat(func(s int64) []int16 { return speech(s, 9000) }, 40, 500) {
+		if segmenter.Push(frame, true) == EventSpeechStarted {
+			return
+		}
+	}
+	t.Fatal("a caller talking over the appliance was never detected; " +
+		"the echo guard has made interruption impossible")
 }

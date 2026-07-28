@@ -778,13 +778,25 @@ func runDaemon(_ arguments: [String]) -> Never {
         // inaudible in testing and awful on a real call.
         var callVoice = SystemSpeechSynthesizer()
         callVoice.sampleRate = 48_000
+        // A call is answered in the spoken style regardless of the owner's voice
+        // note setting, because the medium is not a choice here — it is being
+        // read aloud down a phone line. The written style is right for a screen
+        // and wrong for this: it produced "Here's a snapshot of Emirates
+        // Airlines as of 2025:" followed by markdown bullets, which is a list
+        // nobody can hear and, until the synthesiser was fixed, a leading dash
+        // that killed the answer outright.
+        let callLoop = ToolLoop(
+            backend: backend,
+            mcp: tools,
+            configuration: loopConfiguration(for: .spoken)
+        )
         let callHistory = CallHistory()
         let callServer = CallTurnServer(
             configuration: CallTurnServer.Configuration(),
             transcriber: transcriber,
             synthesizer: callVoice,
             answer: { heard in
-                let result = try await loop.run(
+                let result = try await callLoop.run(
                     transcript: heard,
                     history: await callHistory.recent()
                 )
