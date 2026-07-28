@@ -136,4 +136,73 @@ final class CallTurnServerTests: XCTestCase {
         XCTAssertEqual(CallFrame.replyEnd.kind, 4)
         XCTAssertEqual(CallFrame.turnFailed("").kind, 5)
     }
+
+    // MARK: - The actor must stay reachable while it is waiting
+
+    /// A running call server must still answer calls into it.
+    ///
+    /// `run()` spends nearly all its time blocked in accept(), waiting for a
+    /// call that may never come. Doing that on the actor makes every other entry
+    /// point unreachable — and the two that matter arrive precisely when nothing
+    /// is connected: setting the transcript sink at startup, and preparing an
+    /// opening when //call is typed.
+    ///
+    /// This deadlocked the daemon's own startup. It never reached Signal, so the
+    /// appliance answered nothing at all, and the log simply stopped after
+    /// "[call] ready".
+    func testTheServerStaysReachableWhileWaitingForACall() async throws {
+        let socket = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-test-\(UUID().uuidString).sock")
+        defer { try? FileManager.default.removeItem(at: socket) }
+
+        let server = CallTurnServer(
+            configuration: CallTurnServer.Configuration(socketURL: socket),
+            transcriber: NeverTranscribes(),
+            synthesizer: NeverSpeaks(),
+            answer: { _ in "" },
+            log: { _ in }
+        )
+
+        let running = Task { try? await server.run() }
+        defer { running.cancel() }
+
+        // Give it a moment to reach accept().
+        try await Task.sleep(for: .milliseconds(300))
+
+        // If the actor is parked in a blocking syscall this never returns.
+        let reached = Task {
+            await server.onTranscript { _ in }
+            return true
+        }
+        let answered = await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask { await reached.value }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(5))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+
+        XCTAssertTrue(
+            answered,
+            "the call server did not answer while waiting for a call; a blocking "
+                + "accept() on the actor deadlocks startup and the appliance never "
+                + "connects to Signal"
+        )
+    }
+}
+
+private struct NeverTranscribes: AudioFileTranscribing {
+    func transcribe(audioFile: URL, options: AudioTranscriptionOptions) async throws -> String { "" }
+}
+
+private struct NeverSpeaks: SpeechSynthesizing {
+    let identifier = "never"
+    let defaultVoice = "none"
+    func isAvailable() async -> Bool { false }
+    func synthesize(_ request: SpeechRequest) async throws -> SynthesizedSpeech {
+        throw SpeechSynthesisError.requestFailed("not in this test")
+    }
 }

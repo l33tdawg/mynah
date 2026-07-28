@@ -244,7 +244,17 @@ public actor CallTurnServer {
 
         log("[call] ready on \(configuration.socketURL.path)")
         while !Task.isCancelled {
-            let accepted = accept(descriptor, nil, nil)
+            // Off the actor, because accept() blocks until a call arrives —
+            // which is most of the time.
+            //
+            // Holding the actor in a blocking syscall makes every other entry
+            // point unreachable, and the ones that matter are exactly the ones
+            // that arrive while nothing is connected: setting the transcript
+            // sink at startup, and preparing an opening when //call is typed.
+            // The first of those deadlocked the daemon's own startup — it never
+            // reached Signal at all, so the appliance sat there answering
+            // nothing, with a log that stopped after "[call] ready".
+            let accepted = await withoutBlockingTheActor { accept(descriptor, nil, nil) }
             if accepted < 0 {
                 if errno == EINTR { continue }
                 break
@@ -632,6 +642,16 @@ public actor CallTurnServer {
 /// The socket read blocks for as long as the caller is silent. Doing that on the
 /// actor would mean an interruption cannot be processed while a turn is running,
 /// which is precisely when it matters.
+func withoutBlockingTheActor<T: Sendable>(
+    _ work: @escaping @Sendable () -> T
+) async -> T {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: work())
+        }
+    }
+}
+
 func withoutBlockingTheActor<T: Sendable>(
     _ work: @escaping @Sendable () throws -> T
 ) async throws -> T {
