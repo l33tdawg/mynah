@@ -870,6 +870,34 @@ public final class ToolLoop: @unchecked Sendable {
             // is find-then-pipe — and dropping the tail beats refusing the turn.
             let calls = Array(response.toolCalls.prefix(Self.maximumToolCallsPerIteration))
             trace.droppedToolCalls += response.toolCalls.count - calls.count
+
+            // Every dropped call still gets an answer, saying it was not run.
+            //
+            // The assistant message already in `messages` carries ALL the tool
+            // calls the model asked for. Executing three of five and appending
+            // three results leaves a conversation the API refuses outright —
+            // "an assistant message with tool_calls must be followed by tool
+            // messages responding to each tool_call_id" — and every subsequent
+            // turn in that thread fails with it. Observed live: a voice note
+            // answered with "Something went wrong talking to the model", from a
+            // cap that was meant to bound fan-out and instead corrupted the
+            // history.
+            //
+            // Saying so is also better than a silent stub. The model is told the
+            // call was refused for volume rather than that it returned nothing,
+            // which is the difference between asking again and concluding the
+            // tool is empty.
+            for dropped in response.toolCalls.dropFirst(calls.count) {
+                messages.append(
+                    .toolResult(
+                        name: dropped.name,
+                        content: "Not run: too many tool calls in one step. "
+                            + "Ask for this again on its own if you still need it.",
+                        id: dropped.id
+                    )
+                )
+            }
+
             for call in calls {
                 let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
                 trace.toolCalls.append(record)

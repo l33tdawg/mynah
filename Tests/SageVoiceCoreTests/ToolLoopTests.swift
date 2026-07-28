@@ -39,6 +39,23 @@ private final class ScriptedBackend: BrainBackend, @unchecked Sendable {
         )
     }
 
+    /// One reply asking for several tools at once, which is what the
+    /// per-iteration cap exists to bound.
+    static func callingMany(_ name: String, count: Int) -> BrainReply {
+        BrainReply(
+            model: "stub-model",
+            message: BrainMessage(
+                role: .assistant,
+                content: "",
+                toolCalls: (0..<count).map {
+                    BrainToolCall(id: "call_\($0)", name: name, arguments: [:])
+                }
+            ),
+            stopReason: .toolUse,
+            usage: BrainUsage(inputTokens: 10, outputTokens: 5)
+        )
+    }
+
     static func calling(_ name: String, id: String = "call_1", arguments: [String: JSONValue] = [:]) -> BrainReply {
         BrainReply(
             model: "stub-model",
@@ -93,6 +110,55 @@ final class ToolLoopTests: XCTestCase {
         configuration: ToolLoop.Configuration = ToolLoop.Configuration(allowedToolNames: [])
     ) -> ToolLoop {
         ToolLoop(backend: backend, mcp: tools, configuration: configuration)
+    }
+
+    // MARK: The per-iteration tool cap
+
+    /// Every tool call the model makes gets an answer, including the ones the
+    /// cap refuses to run.
+    ///
+    /// The assistant message carries all of them. Running three of five and
+    /// appending three results leaves a conversation the API rejects outright —
+    /// "an assistant message with tool_calls must be followed by tool messages
+    /// responding to each tool_call_id" — and because the failure is in the
+    /// history rather than the request, every later turn in that thread fails
+    /// the same way. Observed live as "Something went wrong talking to the
+    /// model" in reply to an ordinary voice note.
+    func testCappedToolCallsStillGetAResult() async throws {
+        let asked = ToolLoop.maximumToolCallsPerIteration + 2
+        let backend = ScriptedBackend([
+            ScriptedBackend.callingMany("remember", count: asked),
+            ScriptedBackend.answering("Done.")
+        ])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+
+        let result = try await makeLoop(backend: backend, tools: tools).run(transcript: "do it all")
+
+        let answered = result.messages.filter { $0.role == .tool }.count
+        XCTAssertEqual(
+            answered, asked,
+            "the model asked for \(asked) tools and \(answered) got results; an assistant "
+                + "message with unanswered tool_calls poisons every later turn in the thread"
+        )
+        XCTAssertEqual(result.trace.droppedToolCalls, asked - ToolLoop.maximumToolCallsPerIteration)
+    }
+
+    /// The dropped ones must say why, rather than looking like an empty result.
+    ///
+    /// A stub saying nothing tells the model the tool is empty; this tells it
+    /// the call was refused for volume, which is the difference between asking
+    /// again and concluding there is nothing there.
+    func testARefusedToolCallSaysItWasNotRun() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.callingMany("remember", count: ToolLoop.maximumToolCallsPerIteration + 1),
+            ScriptedBackend.answering("Done.")
+        ])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+
+        let result = try await makeLoop(backend: backend, tools: tools).run(transcript: "do it all")
+
+        let refused = result.messages.filter { $0.role == .tool && $0.content.contains("Not run") }
+        XCTAssertEqual(refused.count, 1, "the dropped call was answered with something else")
     }
 
     // MARK: Prompt-cache stability
