@@ -91,12 +91,6 @@ enum MynahAbout {
             url: URL(string: "https://huggingface.co/openai/whisper-large-v3")!
         ),
         Attribution(
-            name: "whisper.cpp",
-            role: "The fallback recogniser, and its small English model.",
-            licence: "MIT",
-            url: URL(string: "https://github.com/ggml-org/whisper.cpp")!
-        ),
-        Attribution(
             name: "Kokoro",
             role: "The natural voice on a call. Installed separately, and calls "
                 + "fall back to the macOS voice without it.",

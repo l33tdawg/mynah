@@ -49,12 +49,18 @@ final class AboutTests: XCTestCase {
     /// `Contents/MacOS` by `package-app.sh`, and it is the only copyleft
     /// component in the appliance. A change that softened this string would
     /// misstate the one licence with obligations attached.
+    /// whisper.cpp is deliberately absent.
+    ///
+    /// Its 480 MB model was half the disk image, insuring against a WhisperKit
+    /// startup failure that has never been observed. Packaging can ship it again
+    /// behind SAGE_VOICE_BUNDLE_WHISPER_CPP — and if it does, it belongs back in
+    /// this list, because an attribution panel that credits software the app does
+    /// not contain is as wrong as one that omits software it does.
     func testTheVerifiedLicencesAreTheOnesOnScreen() {
         let expected = [
             "signal-cli": "GPL 3.0",
             "WhisperKit": "MIT",
             "Whisper": "Apache 2.0",
-            "whisper.cpp": "MIT",
             "Kokoro": "Apache 2.0",
             "kokoro-onnx": "MIT",
             "Pion": "MIT",

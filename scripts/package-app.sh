@@ -56,6 +56,18 @@ WHISPER_CLI_SOURCE="${SAGE_VOICE_WHISPER_CLI:-$ASR_ROOT/bin/whisper-cli}"
 WHISPERKIT_MODEL_SOURCE="${SAGE_VOICE_WHISPERKIT_MODEL:-$ASR_ROOT/models/openai_whisper-large-v3-v20240930_626MB}"
 WHISPER_CPP_MODEL_SOURCE="${SAGE_VOICE_WHISPER_CPP_MODEL:-$ASR_ROOT/models/ggml-small.en.bin}"
 REQUIRE_ASR_ASSETS="${SAGE_VOICE_REQUIRE_ASR_ASSETS:-1}"
+
+# Whether the whisper.cpp fallback ships.
+#
+# Off, because it costs 480 MB — half the disk image — to insure against
+# WhisperKit failing to start. Two speech models is a strange thing to send
+# somebody over a domestic connection, and the failure it covers has never been
+# observed on the appliance.
+#
+# Provisioning still builds it, so turning this back on is a flag rather than a
+# rebuild. Without it a WhisperKit failure means no recognition at all rather
+# than degraded recognition, which is the trade being made.
+BUNDLE_WHISPER_CPP="${SAGE_VOICE_BUNDLE_WHISPER_CPP:-0}"
 SIGNAL_CLI_SOURCE="${SAGE_VOICE_SIGNAL_CLI:-$ROOT/vendor/signal/bin/signal-cli}"
 
 # The call endpoint. Built rather than vendored, because it links a static
@@ -258,12 +270,14 @@ elif [[ "$REQUIRE_WEBRTC_ENDPOINT" == "1" || "$REQUIRE_WEBRTC_ENDPOINT" == "true
 Build it with: webrtc/scripts/build-endpoint.sh"
 fi
 
-if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
-  cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
-  chmod +x "$APP/Contents/MacOS/whisper-cli"
-elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
-  die "Required whisper.cpp fallback is missing: $WHISPER_CLI_SOURCE
+if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
+  if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
+    cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
+    chmod +x "$APP/Contents/MacOS/whisper-cli"
+  elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
+    die "Required whisper.cpp fallback is missing: $WHISPER_CLI_SOURCE
 Run scripts/provision-asr-assets.sh before packaging."
+  fi
 fi
 
 if [[ -d "$WHISPERKIT_MODEL_SOURCE" ]]; then
@@ -280,7 +294,9 @@ elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
 Run scripts/provision-asr-assets.sh before packaging."
 fi
 
-if [[ -f "$WHISPER_CPP_MODEL_SOURCE" ]]; then
+if [[ "$BUNDLE_WHISPER_CPP" != "1" && "$BUNDLE_WHISPER_CPP" != "true" ]]; then
+  : # The 480 MB fallback model stays out. See BUNDLE_WHISPER_CPP above.
+elif [[ -f "$WHISPER_CPP_MODEL_SOURCE" ]]; then
   mkdir -p "$APP/Contents/Resources/Models"
   cp "$WHISPER_CPP_MODEL_SOURCE" "$APP/Contents/Resources/Models/ggml-small.en.bin"
 elif [[ "$REQUIRE_ASR_ASSETS" == "1" || "$REQUIRE_ASR_ASSETS" == "true" ]]; then
