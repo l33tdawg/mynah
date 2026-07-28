@@ -86,6 +86,10 @@ struct RootView: View {
             // this call that makes "keeps answering when this window is closed"
             // something the owner can watch rather than only read about.
             FloatingHUDController.shared.attach(app: app)
+            // Relaunch is reconciliation, not a special case. If the owner
+            // linked Signal on the previous run, the two LaunchAgents are
+            // restored here without another button or QR scan.
+            Task { await app.reconcileAnsweringService() }
         }
     }
 }

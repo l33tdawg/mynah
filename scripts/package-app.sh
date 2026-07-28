@@ -56,6 +56,8 @@ WHISPER_CLI_SOURCE="${SAGE_VOICE_WHISPER_CLI:-$ASR_ROOT/bin/whisper-cli}"
 WHISPERKIT_MODEL_SOURCE="${SAGE_VOICE_WHISPERKIT_MODEL:-$ASR_ROOT/models/openai_whisper-large-v3-v20240930_626MB}"
 WHISPER_CPP_MODEL_SOURCE="${SAGE_VOICE_WHISPER_CPP_MODEL:-$ASR_ROOT/models/ggml-small.en.bin}"
 REQUIRE_ASR_ASSETS="${SAGE_VOICE_REQUIRE_ASR_ASSETS:-1}"
+SIGNAL_CLI_SOURCE="${SAGE_VOICE_SIGNAL_CLI:-$ROOT/vendor/signal/bin/signal-cli}"
+REQUIRE_SIGNAL_CLI="${SAGE_VOICE_REQUIRE_SIGNAL_CLI:-1}"
 
 APP_VERSION="${SAGE_VOICE_VERSION:-}"
 APP_BUILD="${SAGE_VOICE_BUILD:-}"
@@ -207,6 +209,20 @@ cp "$APP_BIN" "$APP/Contents/MacOS/$APP_PRODUCT"
 cp "$CLI_BIN" "$APP/Contents/MacOS/$CLI_PRODUCT"
 chmod +x "$APP/Contents/MacOS/$APP_PRODUCT" "$APP/Contents/MacOS/$CLI_PRODUCT"
 
+if [[ -x "$SIGNAL_CLI_SOURCE" ]]; then
+  SIGNAL_DESCRIBED="$(capture file "$SIGNAL_CLI_SOURCE")"
+  [[ "$SIGNAL_DESCRIBED" == *"arm64"* ]] \
+    || die "Bundled signal-cli is not arm64: $SIGNAL_DESCRIBED"
+  SIGNAL_VERSION="$(capture "$SIGNAL_CLI_SOURCE" --version)"
+  [[ "$SIGNAL_VERSION" == *"0.14.6"* ]] \
+    || die "Bundled signal-cli is not the reviewed 0.14.6 build: $SIGNAL_VERSION"
+  cp "$SIGNAL_CLI_SOURCE" "$APP/Contents/MacOS/signal-cli"
+  chmod +x "$APP/Contents/MacOS/signal-cli"
+elif [[ "$REQUIRE_SIGNAL_CLI" == "1" || "$REQUIRE_SIGNAL_CLI" == "true" ]]; then
+  die "Required Signal helper is missing: $SIGNAL_CLI_SOURCE
+Run scripts/provision-signal-cli.sh before packaging."
+fi
+
 if [[ -x "$ARGMAX_CLI_SOURCE" ]]; then
   cp "$ARGMAX_CLI_SOURCE" "$APP/Contents/MacOS/argmax-cli"
   chmod +x "$APP/Contents/MacOS/argmax-cli"
@@ -281,6 +297,7 @@ fi
 # 2. Our CLI helper. Also no entitlements — it never opens an audio device.
 [[ ! -f "$APP/Contents/MacOS/argmax-cli" ]] || sign "$APP/Contents/MacOS/argmax-cli"
 [[ ! -f "$APP/Contents/MacOS/whisper-cli" ]] || sign "$APP/Contents/MacOS/whisper-cli"
+[[ ! -f "$APP/Contents/MacOS/signal-cli" ]] || sign "$APP/Contents/MacOS/signal-cli"
 sign "$APP/Contents/MacOS/$CLI_PRODUCT"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
@@ -308,6 +325,7 @@ for binary in \
   "$APP/Contents/MacOS/$CLI_PRODUCT" \
   "$APP/Contents/MacOS/argmax-cli" \
   "$APP/Contents/MacOS/whisper-cli" \
+  "$APP/Contents/MacOS/signal-cli" \
   "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-gui" \
   "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-tray"
 do

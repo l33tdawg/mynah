@@ -64,14 +64,20 @@ final class AppModel {
     var presence: Presence = .sleeping
 
     var isPaused: Bool {
-        didSet { defaults.set(isPaused, forKey: Key.paused) }
+        didSet {
+            defaults.set(isPaused, forKey: Key.paused)
+            Task { await reconcileAnsweringService() }
+        }
     }
 
     /// The daemon keeps running with the window closed. This is the owner's
-    /// switch for that, phrased in the settings pane as "Keep answering when
-    /// this window is closed".
+    /// switch for the phone bridge, phrased in Settings as "Keep answering
+    /// from my phone".
     var keepsAnsweringWhenClosed: Bool {
-        didSet { defaults.set(keepsAnsweringWhenClosed, forKey: Key.keepAnswering) }
+        didSet {
+            defaults.set(keepsAnsweringWhenClosed, forKey: Key.keepAnswering)
+            Task { await reconcileAnsweringService() }
+        }
     }
 
     var textSize: MynahTextSize {
@@ -119,9 +125,19 @@ final class AppModel {
     }
 
     private let defaults: UserDefaults
+    private let backgroundServices: any SignalBackgroundServicing
+    private let serviceConfiguration: () -> SignalServiceConfiguration?
+    private(set) var answeringServiceError: String?
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared,
+        serviceConfiguration: (() -> SignalServiceConfiguration?)? = nil
+    ) {
         self.defaults = defaults
+        self.backgroundServices = backgroundServices
+        self.serviceConfiguration = serviceConfiguration
+            ?? { SignalServiceConfiguration.current(defaults: defaults) }
         self.hasCompletedSetup = defaults.bool(forKey: Key.setupComplete)
         self.isPaused = defaults.bool(forKey: Key.paused)
         // Absent means "not yet asked", and the appliance is useless if it stops
@@ -150,6 +166,28 @@ final class AppModel {
     func completeSetup() {
         hasCompletedSetup = true
         defaults.set(true, forKey: Key.setupComplete)
+        Task { await reconcileAnsweringService() }
+    }
+
+    /// Makes the persisted owner choices and the two launchd jobs agree.
+    ///
+    /// Called after setup, after a QR link in Settings, on app launch, and by
+    /// both answering switches. It is safe to call repeatedly; the manager
+    /// replaces the jobs atomically from the same source-of-truth values.
+    func reconcileAnsweringService() async {
+        guard hasCompletedSetup, keepsAnsweringWhenClosed, !isPaused,
+              let configuration = serviceConfiguration() else {
+            await backgroundServices.disable()
+            answeringServiceError = nil
+            return
+        }
+        do {
+            try await backgroundServices.enable(configuration)
+            answeringServiceError = nil
+        } catch {
+            answeringServiceError = error.localizedDescription
+            presence = .needsOwner
+        }
     }
 
     /// Used by "Change where your words go" in Settings, and by the previews.

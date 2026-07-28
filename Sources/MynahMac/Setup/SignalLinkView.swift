@@ -49,6 +49,13 @@ enum SignalTooling {
         SignalAttachmentLocator.defaultAttachmentsDirectory().deletingLastPathComponent()
     }
 
+    static var socketPath: String {
+        switch SignalEndpoint.defaultUnixSocket() {
+        case .unixSocket(let path): return path
+        case .tcp(let host, let port): return "\(host):\(port)"
+        }
+    }
+
     /// Homebrew installs it to `/opt/homebrew/bin` on Apple silicon and
     /// `/usr/local/bin` on Intel. `PATH` is checked first, but a GUI-launched app
     /// inherits a minimal one, so the absolute locations are what usually hit.
@@ -56,7 +63,11 @@ enum SignalTooling {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
-        ExecutableLookup.find(
+        if let bundled = Bundle.main.url(forAuxiliaryExecutable: "signal-cli"),
+           fileManager.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+        return ExecutableLookup.find(
             names: ["signal-cli"],
             extraCandidates: [
                 URL(fileURLWithPath: "/opt/homebrew/bin/signal-cli"),
@@ -527,6 +538,23 @@ final class SignalLinkModel {
         phase = .ready
     }
 
+    /// Gets all plumbing out of the way before asking the owner for anything.
+    ///
+    /// With Homebrew already on the Mac, entering this screen either restores
+    /// the existing link or proceeds directly to a live QR code. The scan is
+    /// the one interaction Signal's cryptographic pairing genuinely requires.
+    func prepareForScan() {
+        refresh()
+        switch phase {
+        case .missingHelper(.mynahCanInstall):
+            installHelper()
+        case .ready:
+            requestCode()
+        default:
+            break
+        }
+    }
+
     /// Drops any child process and stops the clock. Called when the stage goes
     /// away — a helper left blocking on a socket would fight the next attempt for
     /// the account directory.
@@ -586,7 +614,12 @@ final class SignalLinkModel {
                 // already installed can exit non-zero with "already installed",
                 // and that is a success from where the owner is sitting.
                 self.session = nil
-                self.phase = SignalTooling.helper() == nil ? .failed(.installFailed) : .ready
+                if SignalTooling.helper() == nil {
+                    self.phase = .failed(.installFailed)
+                } else {
+                    self.phase = .ready
+                    self.requestCode()
+                }
             }
         }
 
@@ -1018,7 +1051,7 @@ struct SignalLinkView: View {
         }
         .frame(maxWidth: MynahWidth.stageColumn, alignment: .leading)
         .mynahAnimation(Motion.snap, value: model.phase)
-        .task { model.refresh() }
+        .task { model.prepareForScan() }
     }
 
     // MARK: The square and its clock

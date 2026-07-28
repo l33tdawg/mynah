@@ -48,6 +48,9 @@ swift build -c release --arch arm64
 step "provision signed speech assets"
 bash scripts/provision-asr-assets.sh
 
+step "provision signed Signal helper"
+bash scripts/provision-signal-cli.sh
+
 step "package + sign"
 bash scripts/package-app.sh
 

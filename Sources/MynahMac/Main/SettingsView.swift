@@ -135,6 +135,9 @@ struct SignalPhoneLink: PhoneLinking {
     }
 
     private var redactedNumber: String? {
+        if let linked = SignalTooling.linkedNumber() {
+            return SignalSenderAllowlist.redact(linked)
+        }
         guard let allowlist = try? SignalSenderAllowlist.fromEnvironment(environment: environment) else {
             return nil
         }
@@ -441,8 +444,11 @@ struct SettingsView: View {
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
-                model.refresh()
                 isLinkingPhone = false
+                Task {
+                    await app.reconcileAnsweringService()
+                    model.refresh()
+                }
             } onClose: {
                 model.refresh()
                 isLinkingPhone = false
@@ -657,12 +663,10 @@ struct SettingsView: View {
             // The detail line explains the consequence, not the mechanism. The
             // owner is choosing how they want to be answered; that this rewrites
             // a section of the system prompt is not their problem.
-            // The detail line has to carry the restart caveat, not a footnote
-            // somewhere else. The daemon reads this file once at start-up
-            // (main.swift resolveReplyStyle), so on the appliance the switch is
-            // a statement of intent until it restarts — and a switch that moves,
-            // looks settled, and changes nothing is worse than one that is
-            // greyed out.
+            // The daemon reads this file once at start-up (main.swift
+            // resolveReplyStyle), so saving also reconciles the supervised
+            // service. The switch and the running appliance then tell the same
+            // truth immediately.
             SettingsRow(
                 "Answer with voice notes",
                 detail: (voiceNotes
@@ -670,7 +674,7 @@ struct SettingsView: View {
                         + "no lists. Long answers are unlistenable."
                     : "Mynah writes its answers, so it gives you the whole thing — a line per "
                         + "item, and links you can tap.")
-                    + " Answers on your phone change the next time the bridge restarts."
+                    + " This applies to new answers immediately."
             ) {
                 Toggle("", isOn: $voiceNotes)
                     .labelsHidden()
@@ -680,10 +684,12 @@ struct SettingsView: View {
                             try ReplyPreferences().save(voiceNotes: isOn)
                         } catch {
                             // Revert rather than show a switch that lies about
-                            // what the daemon will do on its next start.
+                            // what the daemon will do.
                             Self.log.error("could not save reply preference: \(error)")
                             voiceNotes = !isOn
+                            return
                         }
+                        Task { await app.reconcileAnsweringService() }
                     }
             }
         }
@@ -713,7 +719,8 @@ struct SettingsView: View {
                 "Can Mynah reach it",
                 detail: model.phone.isReachable
                     ? "The link between this Mac and your phone is up."
-                    : "Open Signal on this Mac once and leave it running, then come back here."
+                    : "Mynah is starting the private Signal link. If this does not change, "
+                        + "turn answering off and on once."
             ) {
                 StatusPill(
                     model.phone.isReachable ? "Connected" : "Not connected",
@@ -816,9 +823,10 @@ struct SettingsView: View {
             // screen: the window closed, one menu-bar glyph appeared, and the
             // owner had no way to tell whether anything was still listening.
             SettingsRow(
-                "Keep answering when this window is closed",
-                detail: "Your phone can still reach Mynah with the window shut, and a small panel "
-                    + "stays on screen showing what it's doing."
+                "Keep answering from my phone",
+                detail: app.answeringServiceError
+                    ?? ("Mynah runs privately in the background, even with this window closed. "
+                        + "Turn this off to stop the phone bridge.")
             ) {
                 Toggle("", isOn: $app.keepsAnsweringWhenClosed).labelsHidden().mynahToggle()
             }
