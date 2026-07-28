@@ -84,9 +84,15 @@ private struct BrainPicker: View {
             currentIndex: SetupModel.Stage.brain.rawValue,
             glyph: StageIllustration.mark(.brain),
             title: "Where should your words go?",
-            subtitle: "Mynah needs somewhere to do its thinking, and this is the one "
-                + "choice that decides whether what you say ever leaves this Mac. You "
-                + "can change it later."
+            // The question is the screen and is deliberately untouched — it is
+            // the plainest sentence in the product and the whole argument for it.
+            //
+            // What went is "Mynah needs somewhere to do its thinking". The
+            // welcome screen's last card now says exactly that and points here,
+            // so repeating it spends the first line of the subtitle explaining
+            // why there is a question at all, ahead of what turns on the answer.
+            subtitle: "This is the one choice that decides whether what you say ever "
+                + "leaves this Mac. You can change it later."
         ) {
             content
         } actions: {
@@ -218,8 +224,16 @@ private struct BrainPicker: View {
         let away = PrivacyGroup(
             id: "leaves",
             title: "Leaves this Mac",
+            // The second clause is new and is the one thing this screen was not
+            // saying. "What you say is sent" is true and incomplete: a question
+            // that needs remembering carries the recalled memories with it, so
+            // an owner who has been told Mynah keeps track of their thinking is
+            // entitled to know that some of that thinking goes too. Stated here
+            // rather than nowhere, even though it makes this half look worse —
+            // the owner finding it out later is what would actually cost trust.
             note: "Faster to answer, and some are free to start — but what you say is "
-                + "sent to the company you pick.",
+                + "sent to the company you pick, and so is anything Mynah recalls in "
+                + "order to answer it.",
             options: choices.options.filter { !$0.keepsWordsOnDevice }
         )
 

@@ -197,8 +197,14 @@ struct ConnectKeyScreen: View {
             currentIndex: currentIndex,
             glyph: StageIllustration.mark(.connect),
             title: "Paste your \(provider) key.",
-            subtitle: "It takes two clicks on \(provider)'s own site. Mynah keeps the key on "
-                + "this Mac and never shows it again."
+            // "It takes two clicks" was contradicted by the four-step list
+            // directly beneath it, and a screen that undercuts itself in the
+            // space of one scroll is a screen the owner stops believing. What
+            // they actually need to know before starting is that the key is made
+            // somewhere else and comes back here — and that handing it over does
+            // not mean handing it around.
+            subtitle: "You make one on \(provider)'s own site, then paste it here. Mynah "
+                + "keeps it on this Mac and never shows it again."
         ) {
             VStack(alignment: .leading, spacing: s6) {
                 stepsCard

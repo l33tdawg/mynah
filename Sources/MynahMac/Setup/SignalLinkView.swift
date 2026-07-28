@@ -894,8 +894,13 @@ struct SignalLinkStage: View {
         case .missingHelper:
             return LinkCopy.helperExplanation
         default:
-            return "Mynah listens to the voice notes you send yourself in Signal. "
-                + "Linking your phone is what lets it — and you can skip this and do it later."
+            // Was "listens to the voice notes you send yourself", which is
+            // narrower than the truth and sets the wrong expectation on the one
+            // screen that teaches the owner how to use the thing: the thread
+            // takes typing too, and most owners will type first and speak later.
+            return "Mynah reads the Signal thread you send to yourself, and answers in it. "
+                + "Speak or type, either works. Linking your phone is what lets it — and "
+                + "you can skip this and do it later."
         }
     }
 

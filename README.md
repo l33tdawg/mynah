@@ -1,20 +1,37 @@
 # Mynah
 
-A private voice appliance. It runs on a Mac you already own — a Mac mini left
-switched on, typically — and you reach it from your phone two ways: by messaging
-yourself on Signal, and by calling it.
+Mynah keeps track of your thinking, and it can act on it.
 
-It is an agent, not a dictation tool. It has persistent memory, it can search the
-web, write notes and keep a backlog, and it runs the model either on the same Mac
-or through an API key you supply. Nothing about it is a service. There is no
-account, no server of ours, and nothing to sign into.
+You tell it things — half-formed ideas, what you decided and why, something to
+come back to on Thursday — and it keeps them. You ask it things, and it answers
+out of what you already told it, searching the web when the answer was never
+yours to begin with. And it puts your other agents to work: it finds agents on
+your SAGE node by name, hands them a job, and tells you what came back. It writes
+notes, keeps a backlog and a task list, and it remembers across conversations
+rather than within one.
+
+It runs on a Mac you already own — a Mac mini left switched on, typically — and
+you reach it from your phone two ways: by messaging yourself on Signal, and by
+calling it.
+
+Running on your own machine is the precondition and not a feature bolted on. It
+is what makes it reasonable to tell the thing what you actually think. Nothing
+about it is a service: no account, no server of ours, nothing to sign into. The
+one place your words can leave the Mac is the model that answers. That is a
+choice you make at setup and can change afterwards, and the setup screen says
+per option where they go.
 
 ## The two ways in
 
 **Signal Note-to-Self.** You message yourself; Mynah answers in the same thread.
-Text, voice notes and photos all work. The thread is end-to-end encrypted between
-your own devices, and Mynah is a linked device on your own Signal account — the
-same mechanism Signal Desktop uses. Nothing is exposed to the internet.
+The thread is end-to-end encrypted between your own devices, and Mynah is a
+linked device on your own Signal account — the same mechanism Signal Desktop
+uses. Nothing is exposed to the internet.
+
+Text and voice notes work on any model. Photos are sent with the turn and are
+ignored by a model without vision; nothing in the app checks first, and the
+system prompt separately forbids the model from saying it cannot look at
+pictures. Those two together are a hole, not a feature.
 
 **Calls.** You send `//call`, get a link back, tap it, and talk. It is a real
 conversation: full duplex, you can cut it off mid-sentence and it stops. The link

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mynah</title>
-<meta name="description" content="A private voice appliance that runs on a Mac you own. You reach it on Signal, and you can call it.">
+<meta name="description" content="Mynah keeps track of your thinking, answers questions about it, and puts your other agents to work. It runs on a Mac you own. You reach it on Signal, and you can call it.">
 <meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0c0e14" media="(prefers-color-scheme: dark)">
 <meta name="robots" content="noindex">
@@ -263,21 +263,38 @@
 
   <h1>Mynah</h1>
   <p class="standfirst">
-    A private voice appliance. It runs on a Mac you own. You reach it by
-    messaging yourself on Signal, and you can call it and talk.
+    Mynah keeps track of your thinking, and it can act on it. It runs on a Mac
+    you own. You reach it by messaging yourself on Signal, and you can call it
+    and talk.
   </p>
 
   <section>
     <h2>What it is</h2>
     <p>
-      Mynah is an agent that lives on one Mac. It remembers what you have told
-      it, it can search the web, write notes and keep a backlog, and it answers
-      in the same Signal thread you wrote to.
+      <strong>You tell it things.</strong> Half-formed ideas, what you decided
+      and why, something to come back to on Thursday. It keeps them, and it
+      keeps them across conversations rather than within one.
     </p>
     <p>
-      It is not a service. There is no account and nothing to sign into. The Mac
-      it runs on is yours, the Signal account is yours, and the model that
-      answers is either running on that same Mac or on an API key you supply.
+      <strong>You ask it things.</strong> It answers out of what you already
+      told it, and searches the web when the answer was never yours to begin
+      with. It writes notes, keeps a backlog and a task list, and reads all of
+      it back to you when you ask.
+    </p>
+    <p>
+      <strong>It puts your other agents to work.</strong> If you run agents on a
+      SAGE node, Mynah can find one by name, hand it a job, and tell you what
+      came back. Ask it to pass a question to your research agent and it does.
+    </p>
+    <p>
+      It runs on one Mac, and that is the precondition rather than a feature
+      bolted on: it is what makes it reasonable to tell the thing what you
+      actually think. It is not a service. There is no account and nothing to
+      sign into. The Mac it runs on is yours, the Signal account is yours, and
+      the model that answers is either running on that same Mac or on an API key
+      you supply — which is the one decision that determines whether anything
+      you say leaves the machine, and it is set out
+      <a href="#words">below</a>.
     </p>
   </section>
 
@@ -325,10 +342,12 @@
       keep things you write to yourself.
     </p>
     <p>
-      Text works. Voice notes work — they are transcribed on the Mac. Photos
-      work; send one with no caption and it will tell you what it sees. If you
-      send three messages in quick succession it waits a moment and answers the
-      thought rather than each fragment.
+      Text works. Voice notes work — they are transcribed on the Mac. Photos are
+      sent along with the message, and whether anything can be done with one
+      depends on the model you chose: a model that cannot see images will answer
+      the words and not the picture. If you send three messages in quick
+      succession it waits a moment and answers the thought rather than each
+      fragment.
     </p>
     <p>
       Slow answers say so. If it has gone to look something up, you get a line
@@ -341,6 +360,38 @@
       single column of your own messages, so without one there is no way to see
       at a glance which lines are yours.
     </p>
+
+    <h3>What that sounds like</h3>
+    <p>
+      There is no syntax and nothing to memorise. These are ordinary sentences,
+      and they are here because the third one is the thing nobody guesses is
+      possible.
+    </p>
+    <ul class="plain">
+      <li>
+        <span class="what">“Remind me the pricing page still needs rewriting.”</span>
+        <span class="why">It keeps it, and you don't have to say it again.</span>
+      </li>
+      <li>
+        <span class="what">“What did I say about the pricing page?”</span>
+        <span class="why">
+          It answers from what you told it, not from a search.
+        </span>
+      </li>
+      <li>
+        <span class="what">“Ask my research agent to look into that and tell me what it says.”</span>
+        <span class="why">
+          It finds that agent by name on your SAGE node, sends it the work, and
+          comes back with the answer.
+        </span>
+      </li>
+      <li>
+        <span class="what">“Write that up as a note.”</span>
+        <span class="why">
+          It writes a document and attaches it to the reply.
+        </span>
+      </li>
+    </ul>
 
     <h3>Two things you can type</h3>
     <p>
@@ -449,7 +500,7 @@
     </div>
   </section>
 
-  <section>
+  <section id="words">
     <h2>Where your words go</h2>
     <p>
       This is the product's whole argument, so it is worth being exact about it
@@ -490,9 +541,11 @@
         <dt>The model <span class="tag depends">depends</span></dt>
         <dd>
           If you chose a local model, your words stay on the Mac. If you chose an
-          API, your words go to that provider and are handled under their terms.
-          That is a real difference and the setup screen states it per option
-          rather than leaving you to infer it.
+          API, your words go to that provider and are handled under their terms —
+          and so does anything Mynah recalls in order to answer them, because a
+          remembered fact has to be in front of the model to be used. That is a
+          real difference and the setup screen states it per option rather than
+          leaving you to infer it.
         </dd>
       </div>
       <div>
