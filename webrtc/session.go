@@ -29,12 +29,39 @@ type conversation struct {
 	track     *webrtc.TrackLocalStaticSample
 	segmenter *speech.Segmenter
 
-	mu       sync.Mutex
-	playing  bool
-	playlist [][]int16
-	wake     chan struct{}
-	stopped  bool
+	mu          sync.Mutex
+	playing     bool
+	playlist    [][]int16
+	lastAudioAt time.Time
+	wake        chan struct{}
+	stopped     bool
 }
+
+// How long after the last frame the appliance is still considered to be
+// speaking.
+//
+// The playlist empties when the last frame is *sent*, not when the caller hears
+// it. Between those moments sit the network, the phone's jitter buffer and its
+// speaker — three to five hundred milliseconds during which the appliance's own
+// voice is still arriving back while the guard against it has already lifted.
+//
+// Observed live, and it destroyed whole answers: the opener played, its tail
+// echoed back unguarded, that read as the caller interrupting, and the model
+// call was cancelled mid-flight. One completed reply — "Just the A100
+// benchmarks before Friday" — was thrown away this way between being generated
+// and being spoken.
+//
+// A second covers the worst of that lag without being long enough to stop
+// someone answering a question they were just asked.
+const playbackHangover = time.Second
+
+// The shortest utterance worth sending for recognition.
+//
+// Below this it is a door, a keyboard, a breath, or a fragment of the
+// appliance's own voice — and the log filled with "heard nothing in 381ms of
+// audio". Each one costs a recognition round trip and, worse, arrives as an
+// interruption that cancels whatever the appliance was doing.
+const minimumUtterance = 400 * time.Millisecond
 
 func newConversation(appliance net.Conn, track *webrtc.TrackLocalStaticSample) *conversation {
 	return &conversation{
@@ -89,8 +116,16 @@ func (c *conversation) listen(remote *webrtc.TrackRemote) {
 		case speech.EventSpeechStarted:
 			c.interrupt()
 		case speech.EventUtteranceComplete:
+			utterance := c.segmenter.Utterance()
+			shortest := int(minimumUtterance.Seconds() * speech.SampleRate)
+			if len(utterance) < shortest {
+				// Too short to be words. Sending it costs a recognition round
+				// trip and, worse, lands as an interruption that cancels
+				// whatever the appliance was in the middle of.
+				continue
+			}
 			c.send(callaudio.KindUtterance,
-				callaudio.WAV(callaudio.Downsample(c.segmenter.Utterance()), callaudio.RecognitionRate))
+				callaudio.WAV(callaudio.Downsample(utterance), callaudio.RecognitionRate))
 		case speech.EventNone:
 		}
 	}
@@ -220,6 +255,10 @@ func (c *conversation) pace() {
 			log.Printf("opus encode: %v", err)
 			continue
 		}
+		c.mu.Lock()
+		c.lastAudioAt = time.Now()
+		c.mu.Unlock()
+
 		if err := c.track.WriteSample(media.Sample{
 			Data:     packet,
 			Duration: 20 * time.Millisecond,
@@ -243,11 +282,16 @@ func (c *conversation) stop() {
 	c.mu.Unlock()
 }
 
-// isPlaying reports whether the appliance's voice is on the line right now.
+// isPlaying reports whether the appliance's voice is on the line right now —
+// including the hangover after the last frame, while the caller is still
+// hearing audio that has already left here.
 func (c *conversation) isPlaying() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.playing || len(c.playlist) > 0
+	if c.playing || len(c.playlist) > 0 {
+		return true
+	}
+	return !c.lastAudioAt.IsZero() && time.Since(c.lastAudioAt) < playbackHangover
 }
 
 func (c *conversation) isStopped() bool {
