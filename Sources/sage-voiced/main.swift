@@ -286,7 +286,14 @@ func runBrain(_ arguments: [String]) -> Never {
     }
 
     let sagePath = flags["sage"] ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
-    let mcp = MCPClient(executableURL: URL(fileURLWithPath: sagePath), arguments: ["mcp"])
+    // Pinned. Without this the node derives the appliance's identity from the
+    // launch working directory, so the `cd` in the launch script decides which
+    // memories the owner has.
+    let mcp = MCPClient(
+        executableURL: URL(fileURLWithPath: sagePath),
+        arguments: ["mcp"],
+        environment: MynahIdentity.applianceEnvironment()
+    )
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
     let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
@@ -628,7 +635,11 @@ func runDaemon(_ arguments: [String]) -> Never {
         configuration: daemonConfiguration,
         ritual: arguments.contains("--no-sage-ritual")
             ? nil
-            : SageRitual(tools: mcp, log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }),
+            : SageRitual(
+                tools: mcp,
+                displayName: SageRitual.applianceDisplayName,
+                log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+            ),
         notes: notes,
         conversations: ConversationStore(),
     )

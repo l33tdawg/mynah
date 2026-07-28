@@ -176,4 +176,29 @@ final class MynahIdentityTests: XCTestCase {
     func testTheDefaultStaysTheApplianceSoExistingRegistrationsSurvive() {
         XCTAssertEqual(SageRitual.agentName, SageRitual.applianceAgentName)
     }
+
+    /// The registered name is what a person says out loud; the display name is
+    /// what an operator reads in a list. `sage_find_agent` matches both
+    /// (`internal/mcp/tools.go` matchesAgentName), so these are two views of one
+    /// agent rather than a trade-off between addressable and descriptive.
+    func testTheSpokenNameAndTheListedNameAreBothCovered() {
+        XCTAssertEqual(SageRitual.applianceDisplayName, "MYNAH (SAGE Voice Bridge Agent)")
+        XCTAssertEqual(SageRitual.appDisplayName, "MYNAH (Mac App)")
+        XCTAssertTrue(SageRitual.applianceDisplayName.contains("MYNAH"))
+        XCTAssertTrue(SageRitual.appDisplayName.contains("MYNAH"))
+        XCTAssertNotEqual(SageRitual.applianceDisplayName, SageRitual.appDisplayName)
+    }
+
+    /// The registered name becomes `RegisteredName`, which the node makes
+    /// immutable forever (internal/abci/app.go:6935). Changing this constant
+    /// would not rename any existing agent — it would only make the next fresh
+    /// install answer to a different name than every appliance already deployed.
+    func testTheImmutableRegisteredNameIsNotQuietlyChanged() {
+        XCTAssertEqual(
+            SageRitual.applianceAgentName,
+            "SAGE Voice Bridge",
+            "every appliance already on a node registered under this; it cannot be renamed by editing it here"
+        )
+        XCTAssertEqual(SageRitual.appAgentName, "Mynah", "the name a person says when addressing the Mac app")
+    }
 }

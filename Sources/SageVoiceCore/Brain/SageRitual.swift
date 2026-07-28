@@ -34,19 +34,37 @@ public actor SageRitual {
         public static let turn = "sage_turn"
         public static let reflect = "sage_reflect"
         public static let register = "sage_register"
+        public static let rename = "sage_rename"
     }
 
-    /// Name the phone appliance registers under.
+    /// What the phone appliance registers as.
+    ///
+    /// Unchanged, and it must stay unchanged: at registration the node copies
+    /// this into `RegisteredName`, which is immutable forever
+    /// (`internal/abci/app.go:6935`). Every appliance already on a node carries
+    /// it, and `sage_find_agent` matches against it — so renaming this constant
+    /// would not rename anything, it would make the next fresh install
+    /// unreachable by the name the existing ones answer to.
     public static let applianceAgentName = "SAGE Voice Bridge"
 
-    /// Name the Mac app registers under.
+    /// What the Mac app registers as.
     ///
-    /// Deliberately different from the appliance's. They are two agents with two
-    /// keys, and the whole point of the operator granting access per agent in
-    /// CEREBRUM is that the operator can tell them apart in the list. Two rows
-    /// both reading "SAGE Voice Bridge" makes "give this one read access" a
-    /// coin flip.
+    /// Also becomes an immutable `RegisteredName`, so it is chosen to be what a
+    /// person says out loud rather than what looks good in a list: "send this to
+    /// Mynah". The list gets `applianceDisplayName` / `appDisplayName` instead.
     public static let appAgentName = "Mynah"
+
+    /// What CEREBRUM shows for the appliance.
+    ///
+    /// The operator grants domain access per agent, so the row has to say which
+    /// agent it is. `Name` is mutable (`sage_rename` → AgentUpdate) while
+    /// `RegisteredName` is not, and `sage_find_agent` matches both — so the
+    /// descriptive name here and the spoken name above are two views of one
+    /// agent rather than a trade-off.
+    public static let applianceDisplayName = "MYNAH (SAGE Voice Bridge Agent)"
+
+    /// What CEREBRUM shows for the Mac app.
+    public static let appDisplayName = "MYNAH (Mac App)"
 
     /// Back-compatible alias. New code should name which one it means.
     public static let agentName = SageRitual.applianceAgentName
@@ -77,17 +95,40 @@ public actor SageRitual {
 
     /// - Parameter agentName: what this process registers as. Defaults to the
     ///   appliance so existing call sites keep their identity.
+    /// - Parameters:
+    ///   - agentName: the immutable name to register under.
+    ///   - displayName: the mutable name CEREBRUM shows, or `nil` to leave it
+    ///     alone. Applied after registration via `sage_rename`.
+    ///   - displayName: the mutable name CEREBRUM shows, or `nil` to leave it
+    ///     alone. Defaults to `nil`: renaming is a consensus write, so it
+    ///     happens only where a call site has asked for it by name.
+    ///   - displayNameMarker: where the applied name is recorded, so the rename
+    ///     happens once rather than on every boot.
     public init(
         tools: ToolProviding,
         agentName: String = SageRitual.applianceAgentName,
+        displayName: String? = nil,
+        displayNameMarker: URL? = SageRitual.defaultDisplayNameMarker(),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.tools = tools
         self.agentName = agentName
+        self.displayName = displayName
+        self.displayNameMarker = displayNameMarker
         self.log = log
     }
 
+    public static func defaultDisplayNameMarker(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("display-name", isDirectory: false)
+    }
+
     private let agentName: String
+    private let displayName: String?
+    private let displayNameMarker: URL?
 
     // MARK: - Boot
 
@@ -136,11 +177,48 @@ public actor SageRitual {
                 arguments: ["name": .string(agentName)]
             )
             log("[sage] registered as \(agentName)")
+            await adoptDisplayName()
         } catch {
             // Non-fatal: memory still works unregistered, and an appliance that
             // refuses to answer anything because it could not claim an identity
             // is strictly worse than one that cannot read its backlog.
             log("[sage] registration failed, task tools may return 401: \(error)")
+        }
+    }
+
+    /// Sets the name CEREBRUM shows, if it is not already set.
+    ///
+    /// Registration cannot do this. `processAgentRegister` is idempotent and
+    /// copies `Name` straight off the existing record
+    /// (`internal/abci/app.go:6876`), so re-registering under a new name renames
+    /// nothing and silently succeeds — which is why the appliance kept showing
+    /// its original name no matter what was passed. Renaming is a separate
+    /// self-only AgentUpdate transaction.
+    ///
+    /// Guarded on the current name because that transaction goes through
+    /// consensus. An unguarded rename on every boot would put a write on the
+    /// chain each time the owner restarts the appliance, to change nothing.
+    private func adoptDisplayName() async {
+        guard let desired = displayName, let marker = displayNameMarker else { return }
+        // Once, ever. Recorded locally rather than read back from the node
+        // because no MCP tool returns the agent's current display name —
+        // `sage_status` describes the node, not the caller — so a read-back
+        // guard would never match and this would put a consensus write on the
+        // chain every time the owner restarted the appliance, to change nothing.
+        //
+        // The happier consequence: if the operator renames this agent in
+        // CEREBRUM, their choice stands. The app names itself once and then
+        // stops having an opinion.
+        guard (try? String(contentsOf: marker, encoding: .utf8)) != desired else { return }
+        do {
+            _ = try await tools.call(name: Tool.rename, arguments: ["name": .string(desired)])
+            try? OwnerOnlyFileSecurity.prepareDirectory(marker.deletingLastPathComponent())
+            try? Data(desired.utf8).write(to: marker, options: .atomic)
+            log("[sage] display name set to \(desired)")
+        } catch {
+            // Cosmetic. The agent works under whatever name it has, and failing
+            // a boot because a label would not update would be absurd.
+            log("[sage] could not set display name: \(error)")
         }
     }
 

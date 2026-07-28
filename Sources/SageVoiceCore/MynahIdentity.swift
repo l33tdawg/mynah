@@ -109,4 +109,49 @@ public enum MynahIdentity {
     ) -> [String: String] {
         [environmentVariable: resolvedKeyPath(environment: environment, homeDirectory: homeDirectory)]
     }
+
+    /// The phone appliance's key.
+    ///
+    /// Separate from the app's because they are two agents with two grants —
+    /// see `SageRitual.appAgentName` — and separate from the node operator's
+    /// for the same reason everything else here is.
+    ///
+    /// This exists because the daemon had no pinned identity at all: it spawned
+    /// `sage-gui mcp` with no environment, so the node fell through to its
+    /// per-directory rule and minted a key from the launch working directory.
+    /// The appliance had accumulated three of them —
+    /// `~/.sage/agents/ableton-agent-*`, `sage-voice-bridge-agent-*`,
+    /// `svbtest-agent-*` — one per place it had ever been started from, each
+    /// with its own memories. The `cd` in the launch script was load-bearing and
+    /// nothing said so; starting the daemon from anywhere else silently gave the
+    /// owner an appliance that had forgotten everything.
+    public static func applianceKeyURL(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("appliance-agent.key", isDirectory: false)
+    }
+
+    /// Environment for the daemon's `sage-gui mcp`.
+    ///
+    /// Migration matters more than the pin here. Pointing an existing appliance
+    /// at a fresh path would orphan every memory it has ever stored, so the
+    /// installer copies the key it was already deriving into this path. Same
+    /// key bytes means the same agent ID means the same memories — the identity
+    /// stops moving without ever having changed.
+    public static func applianceEnvironment(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String: String] {
+        let operatorKey = nodeOperatorKeyURL(environment: environment, homeDirectory: homeDirectory)
+            .standardizedFileURL.path
+        for name in [environmentVariable, "SAGE_AGENT_KEY"] {
+            guard let raw = environment[name], !raw.isEmpty else { continue }
+            let expanded = NSString(string: raw).expandingTildeInPath
+            guard URL(fileURLWithPath: expanded).standardizedFileURL.path != operatorKey else { continue }
+            return [environmentVariable: expanded]
+        }
+        return [environmentVariable: applianceKeyURL(homeDirectory: homeDirectory).path]
+    }
 }
