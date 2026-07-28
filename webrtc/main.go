@@ -70,6 +70,7 @@ func main() {
 		turnURL  = flag.String("turn", "", "TURN server, e.g. turn:relay.example.com:3478")
 		turnUser = flag.String("turn-user", "", "TURN username")
 		turnPass = flag.String("turn-pass", "", "TURN credential")
+		token    = flag.String("token", "", "required path token; the call link is /<token>")
 	)
 	flag.Parse()
 
@@ -82,14 +83,30 @@ HTTP to a phone gets a microphone that never starts. Pass a certificate, or
 		os.Exit(2)
 	}
 
-	server := &callServer{ice: iceServers(*stunURL, *turnURL, *turnUser, *turnPass)}
+	if *token == "" {
+		fmt.Fprintln(os.Stderr, `error: -token is required.
+
+The link is the credential. It is delivered over Signal — an authenticated,
+end-to-end encrypted channel only the owner can read — so an unguessable path is
+what stands between a private microphone and anyone who can reach this port.`)
+		os.Exit(2)
+	}
+
+	server := &callServer{
+		ice:   iceServers(*stunURL, *turnURL, *turnUser, *turnPass),
+		token: *token,
+	}
 	if *turnURL == "" {
 		log.Println("no TURN server configured: calls will fail behind symmetric NAT")
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", server.handlePage)
-	mux.HandleFunc("/offer", server.handleOffer)
+	mux.HandleFunc("/"+*token, server.handlePage)
+	mux.HandleFunc("/"+*token+"/offer", server.handleOffer)
+	// Anything else, including a bare "/", is not a call.
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"ok":true,"calls":%d}`, server.activeCalls())
@@ -157,7 +174,8 @@ func iceServers(stunURL, turnURL, user, pass string) []webrtc.ICEServer {
 }
 
 type callServer struct {
-	ice []webrtc.ICEServer
+	ice   []webrtc.ICEServer
+	token string
 
 	mu    sync.Mutex
 	calls int
@@ -322,10 +340,7 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+
 	// ICE configuration is injected rather than baked in, so TURN credentials
 	// live in the process's arguments and not in a page anyone can view-source.
 	ice, err := json.Marshal(s.ice)
@@ -339,6 +354,9 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 		string(ice),
 		1,
 	)
+	// The page posts back to its own token path, so the offer endpoint is as
+	// unguessable as the page.
+	page = strings.Replace(page, "OFFER_PATH", "/"+s.token+"/offer", 1)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// No external anything: no CDN, no font, no analytics. The page is served by

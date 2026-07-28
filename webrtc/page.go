@@ -170,7 +170,7 @@ async function startCall() {
       setTimeout(resolve, 5000);
     });
 
-    const response = await fetch('/offer', {
+    const response = await fetch('OFFER_PATH', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sdp: peer.localDescription.sdp })

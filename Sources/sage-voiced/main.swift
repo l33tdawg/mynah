@@ -783,7 +783,17 @@ func runDaemon(_ arguments: [String]) -> Never {
                 ),
             notes: notes,
             conversations: ConversationStore(),
-            synthesizer: synthesizer
+            synthesizer: synthesizer,
+            // The endpoint ships beside sage-gui in the bundle. Absent on a
+            // build that did not vendor it, in which case //call says so rather
+            // than pretending.
+            calls: CallHost(
+                endpointURL: URL(fileURLWithPath: sagePath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("sage-voice-webrtc")
+            ),
+            // Decided once, from the backend that will actually answer.
+            callRefusal: CallInvitation.refusal(forBackend: backend)
         )
         await daemon.run()
         mcp.stop()

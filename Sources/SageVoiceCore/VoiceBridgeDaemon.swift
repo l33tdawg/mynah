@@ -179,6 +179,13 @@ public actor VoiceBridgeDaemon {
     /// Whether the owner has stopped the appliance answering.
     private let pause = PauseState()
 
+    /// Starts a call when the owner asks for one. `nil` disables `//call`.
+    private let calls: CallHost?
+
+    /// Why a call cannot happen on this appliance, decided once at start-up
+    /// from the backend rather than guessed per message.
+    private let callRefusal: CallInvitation.Refusal?
+
     /// Writes history after every turn.
     ///
     /// After, not on shutdown: the daemon is stopped with `pkill` on every
@@ -242,6 +249,8 @@ public actor VoiceBridgeDaemon {
         notes: NotesToolSource? = nil,
         conversations: ConversationStore? = nil,
         synthesizer: SpeechSynthesizing? = nil,
+        calls: CallHost? = nil,
+        callRefusal: CallInvitation.Refusal? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -252,6 +261,8 @@ public actor VoiceBridgeDaemon {
         self.notes = notes
         self.conversations = conversations
         self.synthesizer = synthesizer
+        self.calls = calls
+        self.callRefusal = callRefusal
         self.log = log
     }
 
@@ -463,6 +474,15 @@ public actor VoiceBridgeDaemon {
             }
             log("[daemon][SECURITY] another bridge is replying on this thread; ignoring its message")
             return .ignoredSecondBridge
+        }
+
+        // Before the model, and before the pause check: `//call` is an explicit
+        // instruction to this program, not a question for the assistant, and a
+        // paused appliance the owner is trying to call should say why rather
+        // than stay silent.
+        if CallInvitation.isRequest(transcript) {
+            await handleCallRequest(from: recipient)
+            return .replied(transcript: transcript, reply: "call", seconds: 0)
         }
 
         let thread = recipient.description
@@ -696,6 +716,35 @@ public actor VoiceBridgeDaemon {
         let tools = try await loop.availableTools()
         cachedTools = tools
         return tools
+    }
+
+    /// Sets up a call and sends the link.
+    ///
+    /// Every refusal is a sentence the owner can act on. "Calling is
+    /// unavailable" would be true and useless; which model is too slow, and
+    /// that voice notes still work, is the difference between a dead end and a
+    /// choice.
+    private func handleCallRequest(from recipient: SignalRecipient) async {
+        guard let calls else {
+            await reply("Calling isn't set up on this Mac yet.", to: recipient)
+            return
+        }
+        if let refusal = callRefusal {
+            await reply(refusal.sentence, to: recipient)
+            return
+        }
+        guard let address = await CallInvitation.localAddress() else {
+            await reply(CallInvitation.Refusal.noAddress.sentence, to: recipient)
+            return
+        }
+        do {
+            let url = try await calls.start(address: address)
+            log("[daemon] call ready at \(url)")
+            await reply(CallInvitation.invitation(url: url), to: recipient)
+        } catch {
+            log("[daemon] could not start a call: \(error)")
+            await reply(CallInvitation.Refusal.couldNotStart("\(error)").sentence, to: recipient)
+        }
     }
 
     /// The answer as an m4a, or nothing.
