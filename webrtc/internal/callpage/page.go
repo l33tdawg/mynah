@@ -1,13 +1,21 @@
-package main
+// Package callpage holds the page a caller opens.
+//
+// It lives apart from either binary because both need it and neither owns it:
+// the appliance serves it on a local call, the relay serves it on a remote one,
+// and a copy in each is a copy that drifts. The page is the product surface —
+// the only thing the owner ever sees of this system — so there is exactly one.
+package callpage
 
-// callPage is the whole client: one link, one button, no install.
+import "strings"
+
+// pageTemplate is the whole client: one link, one button, no install.
 //
 // The three getUserMedia constraints are the reason this is a browser page at
 // all. Echo cancellation is what makes full duplex possible — without it the
 // microphone hears the speaker and the assistant talks over itself the moment it
 // starts. Getting that from a constraint rather than writing it is most of the
 // argument for WebRTC over a hand-rolled audio socket.
-const callPage = `
+const pageTemplate = `
 <!doctype html>
 <html lang="en">
 <head>
@@ -269,3 +277,17 @@ callButton.addEventListener('click', () => (peer ? endCall() : startCall()));
 </body>
 </html>
 `
+
+// Render fills in the three values that differ per call.
+//
+// Substitution rather than html/template: the page is a constant this repository
+// controls, the values are a JSON array and two paths built from a hex token,
+// and a template engine here would add escaping semantics to reason about
+// without removing any.
+func Render(iceServersJSON, offerPath, reportPath string) string {
+	page := strings.TrimSpace(pageTemplate)
+	page = strings.Replace(page, "ICE_SERVERS", iceServersJSON, 1)
+	page = strings.Replace(page, "OFFER_PATH", offerPath, 1)
+	page = strings.Replace(page, "REPORT_PATH", reportPath, 1)
+	return page
+}

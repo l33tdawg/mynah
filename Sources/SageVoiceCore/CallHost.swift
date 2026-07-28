@@ -2,107 +2,119 @@ import Foundation
 
 /// Starts a call on demand and hands back a link.
 ///
-/// Everything a call needs is set up here rather than asked of the owner: a
-/// certificate is generated the first time, the endpoint is started with a
-/// fresh single-use path, and the URL comes back over Signal. The owner types
-/// `//call` and taps a link.
+/// The owner types `//call` and taps a link. Everything a call needs is arranged
+/// here rather than asked of them.
 ///
-/// ## Why there is a certificate at all
+/// ## Why this Mac does not serve the page
 ///
-/// `getUserMedia` is refused outside a secure context, and `http://192.168.1.10`
-/// is not one. Without HTTPS the page loads, the button works, and the
-/// microphone never opens — with an error only a console would show. Localhost
-/// is exempt, which is exactly why this would have looked fine on the Mac and
-/// failed on the phone.
+/// It did, and that is exactly what failed. A Mac on a home network has no name
+/// a certificate authority will sign, so serving the page from it meant a
+/// self-signed certificate — and browsers do not merely warn about those. They
+/// refuse to persist a permission for the origin, and without a persisted media
+/// permission Chrome replaces the phone's real ICE candidates with random
+/// `.local` names. Phone and Mac end up on the same Wi-Fi, unable to name each
+/// other: a page that says *Connected* and carries no audio.
 ///
-/// A self-signed certificate means the phone shows a warning. That is the honest
-/// cost of not routing the owner's voice through somebody else's tunnel, and the
-/// invitation says so before they tap rather than leaving them to meet it cold.
+/// So the page comes from the relay, which has a real certificate, and this Mac
+/// dials out and waits. No port to forward, no certificate to install, no
+/// address that has to stay reachable — the same reason natter exists for SAGE.
+///
+/// The relay is not in the call. It carries the offer and the answer; the
+/// candidates inside them describe routes between the phone and this Mac, and on
+/// a shared network the audio crosses the room without touching it.
 public actor CallHost {
 
     public enum Failure: Error, CustomStringConvertible {
         case noEndpointBinary(String)
-        case couldNotGenerateCertificate(String)
+        case noSharedSecret(String)
         case endpointExited(Int32)
+        case relayNeverAnswered(String)
 
         public var description: String {
             switch self {
             case .noEndpointBinary(let path):
                 return "the call endpoint is not installed at \(path)"
-            case .couldNotGenerateCertificate(let detail):
-                return "could not make a certificate for this Mac: \(detail)"
+            case .noSharedSecret(let path):
+                return "this Mac has no relay secret at \(path)"
             case .endpointExited(let status):
                 return "the call endpoint stopped immediately (status \(status))"
+            case .relayNeverAnswered(let url):
+                return "the relay never listed this call at \(url)"
             }
         }
     }
 
     private let endpointURL: URL
-    private let directory: URL
-    private let port: Int
+    private let relayURL: String
+    private let secretURL: URL
     private var running: Process?
 
     public init(
         endpointURL: URL,
-        directory: URL = CallHost.defaultDirectory(),
-        port: Int = 8090
+        relayURL: String = CallHost.defaultRelay,
+        secretURL: URL = CallHost.defaultSecret()
     ) {
         self.endpointURL = endpointURL
-        self.directory = directory
-        self.port = port
+        self.relayURL = relayURL
+        self.secretURL = secretURL
     }
 
-    public static func defaultDirectory(
+    public static let defaultRelay = "https://call.sage.delivery"
+
+    public static func defaultSecret(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("Calling", isDirectory: true)
+        homeDirectory.appendingPathComponent(".sage/call-relay.secret")
     }
 
     /// Starts an endpoint and returns the link to send.
     ///
-    /// Any previous call is stopped first. Two endpoints cannot share the port,
-    /// and more importantly a stale link should stop working the moment a new
-    /// one is issued — a call link is a live microphone, and the owner assumes
-    /// the last one they were sent is the only one that works.
-    public func start(
-        address: String,
-        runner: ProbeCommandRunning = ProbeCommandRunner()
-    ) async throws -> String {
+    /// Any previous call is stopped first — not merely because two endpoints
+    /// would both answer, but because a stale link should stop working the
+    /// moment a new one is issued. A call link is a live microphone, and the
+    /// owner assumes the last one they were sent is the only one that works.
+    public func start(probe: (String) async -> Bool = CallHost.linkIsLive) async throws -> String {
         stop()
 
         guard FileManager.default.isExecutableFile(atPath: endpointURL.path) else {
             throw Failure.noEndpointBinary(endpointURL.path)
         }
-        try OwnerOnlyFileSecurity.prepareDirectory(directory)
-        let (certificate, key) = try await certificate(for: address, runner: runner)
+        guard FileManager.default.isReadableFile(atPath: secretURL.path) else {
+            throw Failure.noSharedSecret(secretURL.path)
+        }
 
         let token = CallInvitation.token()
         let process = Process()
         process.executableURL = endpointURL
         process.arguments = [
-            "-addr", "0.0.0.0:\(port)",
-            "-cert", certificate.path,
-            "-key", key.path,
+            "-relay", relayURL,
+            "-relay-secret-file", secretURL.path,
             "-token", token
         ]
-        // Inherited, so the endpoint's log lands in the same place as the
-        // daemon's and a failed call is diagnosable from one file.
+        // Inherited, so a failed call is diagnosable from the same log as
+        // everything else the appliance did that minute.
         try process.run()
         running = process
 
-        // A moment to fail. Binding a port that is already taken, or a
-        // certificate it cannot read, both exit immediately — and handing the
-        // owner a link to a process that is already gone is worse than saying
-        // the call could not start.
-        try? await Task.sleep(for: .milliseconds(400))
-        if !process.isRunning {
-            running = nil
-            throw Failure.endpointExited(process.terminationStatus)
+        let url = "\(relayURL)/\(token)"
+
+        // The link is not sent until the relay will actually serve it.
+        //
+        // The endpoint has to reach the relay and register before that path
+        // exists, and a link sent a moment early is a 404 in the owner's hand —
+        // which reads as a broken appliance rather than as being half a second
+        // early. Cheap to wait for, and it turns a race into a guarantee.
+        for _ in 0..<20 {
+            if !process.isRunning {
+                running = nil
+                throw Failure.endpointExited(process.terminationStatus)
+            }
+            if await probe(url) { return url }
+            try? await Task.sleep(for: .milliseconds(250))
         }
 
-        return "https://\(address):\(port)/\(token)"
+        stop()
+        throw Failure.relayNeverAnswered(relayURL)
     }
 
     /// Ends the current call, if any.
@@ -119,66 +131,18 @@ public actor CallHost {
         running?.isRunning ?? false
     }
 
-    /// This Mac's certificate, generated once and reused.
+    /// Whether the relay is serving this call yet.
     ///
-    /// Regenerating per call would mean a fresh warning every time and no way
-    /// for the owner to ever trust it permanently. Reused, they can install it
-    /// on the phone once and never see the warning again.
-    ///
-    /// The address goes in a subjectAltName because a certificate without one is
-    /// rejected outright by modern browsers — the common name has not been
-    /// consulted for years, and getting this wrong produces a warning that
-    /// cannot be clicked through on iOS rather than one that can.
-    private func certificate(
-        for address: String,
-        runner: ProbeCommandRunning
-    ) async throws -> (certificate: URL, key: URL) {
-        let certificate = directory.appendingPathComponent("call-cert.pem")
-        let key = directory.appendingPathComponent("call-key.pem")
-
-        if FileManager.default.fileExists(atPath: certificate.path),
-           FileManager.default.fileExists(atPath: key.path),
-           await certificateCovers(address: address, certificate: certificate, runner: runner) {
-            return (certificate, key)
-        }
-
-        let result = await runner.run(
-            executable: URL(fileURLWithPath: "/usr/bin/openssl"),
-            arguments: [
-                "req", "-x509", "-newkey", "rsa:2048", "-sha256",
-                "-days", "825",
-                "-nodes",
-                "-keyout", key.path,
-                "-out", certificate.path,
-                "-subj", "/CN=Mynah on this Mac",
-                "-addext", "subjectAltName=IP:\(address)"
-            ],
-            timeout: 60
-        )
-        guard let result, result.exitCode == 0 else {
-            throw Failure.couldNotGenerateCertificate(result?.standardError ?? "openssl did not run")
-        }
-        try? OwnerOnlyFileSecurity.protectFile(key)
-        try? OwnerOnlyFileSecurity.protectFile(certificate)
-        return (certificate, key)
-    }
-
-    /// Whether the existing certificate still names this address.
-    ///
-    /// A Mac that moved networks has a new address, and a certificate for the
-    /// old one produces a warning the owner cannot get past. Cheaper to check
-    /// than to explain.
-    private func certificateCovers(
-        address: String,
-        certificate: URL,
-        runner: ProbeCommandRunning
-    ) async -> Bool {
-        let result = await runner.run(
-            executable: URL(fileURLWithPath: "/usr/bin/openssl"),
-            arguments: ["x509", "-in", certificate.path, "-noout", "-text"],
-            timeout: 15
-        )
-        guard let result, result.exitCode == 0 else { return false }
-        return result.standardOutput.contains("IP Address:\(address)")
+    /// A HEAD, so nothing is fetched and no report is filed against a page the
+    /// owner has not opened. The relay answers 404 for a token no appliance is
+    /// listening on, which is precisely the question being asked.
+    public static func linkIsLive(_ url: String) async -> Bool {
+        guard let target = URL(string: url) else { return false }
+        var request = URLRequest(url: target)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        return http.statusCode == 200
     }
 }

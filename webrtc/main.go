@@ -42,6 +42,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -58,6 +59,8 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+
+	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callpage"
 )
 
 func main() {
@@ -67,12 +70,50 @@ func main() {
 		keyFile  = flag.String("key", "", "TLS private key (required unless -insecure)")
 		insecure = flag.Bool("insecure", false, "serve plain HTTP — localhost only; a phone will refuse the microphone")
 		stunURL  = flag.String("stun", "stun:stun.l.google.com:19302", "STUN server")
-		turnURL  = flag.String("turn", "", "TURN server, e.g. turn:relay.example.com:3478")
-		turnUser = flag.String("turn-user", "", "TURN username")
-		turnPass = flag.String("turn-pass", "", "TURN credential")
+		turnURL  = flag.String("turn", "", "TURN server for the local developer loop, e.g. turn:turn.example.com:3478")
 		token    = flag.String("token", "", "required path token; the call link is /<token>")
+
+		relayURL        = flag.String("relay", "", "call relay to wait at, e.g. https://call.sage.delivery")
+		relaySecretFile = flag.String("relay-secret-file", "", "file holding the secret this appliance authenticates with")
 	)
 	flag.Parse()
+
+	if *token == "" {
+		fmt.Fprintln(os.Stderr, `error: -token is required.
+
+The link is the credential. It is delivered over Signal — an authenticated,
+end-to-end encrypted channel only the owner can read — so an unguessable path is
+what stands between a private microphone and anyone who can reach it.`)
+		os.Exit(2)
+	}
+
+	// Waiting at a relay is the way a call normally reaches this Mac: it dials
+	// out, so there is no port to forward, no address to keep reachable, and —
+	// the reason direct calls failed — no self-signed certificate on the origin
+	// the browser is judging. Serving locally remains available for a developer
+	// loop on localhost, where the secure-context exemption applies.
+	if *relayURL != "" {
+		if *relaySecretFile == "" {
+			fmt.Fprintln(os.Stderr, "error: -relay needs -relay-secret-file")
+			os.Exit(2)
+		}
+		secret, err := os.ReadFile(*relaySecretFile)
+		if err != nil {
+			log.Fatalf("relay secret: %v", err)
+		}
+		secret = bytes.TrimSpace(secret)
+		if len(secret) == 0 {
+			log.Fatalf("relay secret: %s is empty", *relaySecretFile)
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		calls := &callServer{ice: iceServers(*stunURL, *turnURL), token: *token}
+		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, secret, calls); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if !*insecure && (*certFile == "" || *keyFile == "") {
 		fmt.Fprintln(os.Stderr, `error: -cert and -key are required.
@@ -83,17 +124,8 @@ HTTP to a phone gets a microphone that never starts. Pass a certificate, or
 		os.Exit(2)
 	}
 
-	if *token == "" {
-		fmt.Fprintln(os.Stderr, `error: -token is required.
-
-The link is the credential. It is delivered over Signal — an authenticated,
-end-to-end encrypted channel only the owner can read — so an unguessable path is
-what stands between a private microphone and anyone who can reach this port.`)
-		os.Exit(2)
-	}
-
 	server := &callServer{
-		ice:   iceServers(*stunURL, *turnURL, *turnUser, *turnPass),
+		ice:   iceServers(*stunURL, *turnURL),
 		token: *token,
 	}
 	if *turnURL == "" {
@@ -158,18 +190,16 @@ what stands between a private microphone and anyone who can reach this port.`)
 // addresses. Self-hosting the TURN server keeps even that metadata in the
 // owner's hands, which is why this takes a URL rather than shipping someone
 // else's.
-func iceServers(stunURL, turnURL, user, pass string) []webrtc.ICEServer {
+func iceServers(stunURL, turnURL string) []webrtc.ICEServer {
 	servers := []webrtc.ICEServer{}
 	if stunURL != "" {
 		servers = append(servers, webrtc.ICEServer{URLs: []string{stunURL}})
 	}
 	if turnURL != "" {
-		servers = append(servers, webrtc.ICEServer{
-			URLs:           []string{turnURL},
-			Username:       user,
-			Credential:     pass,
-			CredentialType: webrtc.ICECredentialTypePassword,
-		})
+		// Only reachable in the local developer loop. On a relayed call the
+		// credentials come down with the offer, minted by the relay so that both
+		// ends hold ones that expire together.
+		servers = append(servers, webrtc.ICEServer{URLs: []string{turnURL}})
 	}
 	return servers
 }
@@ -271,11 +301,34 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: s.ice})
+	sdp, err := s.answerOffer(request.SDP, nil)
 	if err != nil {
-		log.Printf("peer connection: %v", err)
 		http.Error(w, "could not start the call", http.StatusInternalServerError)
 		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(answerResponse{SDP: sdp}); err != nil {
+		log.Printf("write answer: %v", err)
+	}
+}
+
+// answerOffer takes a caller's SDP and returns this Mac's, having set up the
+// call behind it.
+//
+// Deliberately knows nothing about how the offer arrived. It reaches this Mac
+// two ways — posted straight to a local listener, or handed down from the relay
+// that served the page — and a call is identical either way. Keeping the
+// difference at the edges means the media path, which is the part that matters,
+// has exactly one implementation.
+func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, error) {
+	if len(ice) == 0 {
+		ice = s.ice
+	}
+	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: ice})
+	if err != nil {
+		log.Printf("peer connection: %v", err)
+		return "", err
 	}
 
 	// Declared before the answer so the SDP advertises both directions. A
@@ -287,15 +340,13 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("track: %v", err)
-		http.Error(w, "could not start the call", http.StatusInternalServerError)
 		_ = peer.Close()
-		return
+		return "", err
 	}
 	if _, err := peer.AddTrack(audio); err != nil {
 		log.Printf("add track: %v", err)
-		http.Error(w, "could not start the call", http.StatusInternalServerError)
 		_ = peer.Close()
-		return
+		return "", err
 	}
 
 	s.callStarted()
@@ -400,31 +451,28 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 	// so: ICE simply never completes, or completes over a route that carries no
 	// media. Printing the candidates makes the difference between "on the same
 	// network" and "able to name each other" visible in one line.
-	logCandidates("phone", request.SDP)
+	logCandidates("phone", offer)
 
 	if err := peer.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
-		SDP:  request.SDP,
+		SDP:  offer,
 	}); err != nil {
 		log.Printf("remote description: %v", err)
-		http.Error(w, "bad offer", http.StatusBadRequest)
 		finish()
-		return
+		return "", err
 	}
 
 	answer, err := peer.CreateAnswer(nil)
 	if err != nil {
 		log.Printf("answer: %v", err)
-		http.Error(w, "could not answer", http.StatusInternalServerError)
 		finish()
-		return
+		return "", err
 	}
 	gathered := webrtc.GatheringCompletePromise(peer)
 	if err := peer.SetLocalDescription(answer); err != nil {
 		log.Printf("local description: %v", err)
-		http.Error(w, "could not answer", http.StatusInternalServerError)
 		finish()
-		return
+		return "", err
 	}
 
 	// Bounded: a peer behind a hostile NAT can gather for a long time, and the
@@ -437,14 +485,7 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logCandidates("this Mac", peer.LocalDescription().SDP)
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(answerResponse{
-		SDP: peer.LocalDescription().SDP,
-	}); err != nil {
-		log.Printf("write answer: %v", err)
-		finish()
-	}
+	return peer.LocalDescription().SDP, nil
 }
 
 // logCandidates prints the ICE candidates in an SDP, one line, deduplicated.
@@ -532,16 +573,9 @@ func (s *callServer) handlePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not build the page", http.StatusInternalServerError)
 		return
 	}
-	page := strings.Replace(
-		strings.TrimSpace(callPage),
-		"ICE_SERVERS",
-		string(ice),
-		1,
-	)
 	// The page posts back to its own token path, so the offer endpoint is as
 	// unguessable as the page.
-	page = strings.Replace(page, "OFFER_PATH", "/"+s.token+"/offer", 1)
-	page = strings.Replace(page, "REPORT_PATH", "/"+s.token+"/report", 1)
+	page := callpage.Render(string(ice), "/"+s.token+"/offer", "/"+s.token+"/report")
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// No external anything: no CDN, no font, no analytics. The page is served by

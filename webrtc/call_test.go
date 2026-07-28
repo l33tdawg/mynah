@@ -21,7 +21,7 @@ import (
 // Everything before it is a page nobody can talk into.
 func TestACallConnectsAndAudioFlowsBothWays(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
-		(&callServer{ice: iceServers("", "", "", "")}).handleOffer,
+		(&callServer{ice: iceServers("", "")}).handleOffer,
 	))
 	defer server.Close()
 
@@ -138,7 +138,7 @@ func TestACallConnectsAndAudioFlowsBothWays(t *testing.T) {
 // produces a call that connects, shows every green light, and is silent.
 func TestTheAnswerOffersToSendAudio(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
-		(&callServer{ice: iceServers("", "", "", "")}).handleOffer,
+		(&callServer{ice: iceServers("", "")}).handleOffer,
 	))
 	defer server.Close()
 
@@ -176,7 +176,7 @@ func TestTheAnswerOffersToSendAudio(t *testing.T) {
 
 func TestAMalformedOfferIsRefusedWithoutCrashing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
-		(&callServer{ice: iceServers("", "", "", "")}).handleOffer,
+		(&callServer{ice: iceServers("", "")}).handleOffer,
 	))
 	defer server.Close()
 

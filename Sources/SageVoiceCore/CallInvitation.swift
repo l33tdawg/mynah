@@ -21,7 +21,6 @@ public enum CallInvitation {
     /// Why a call cannot happen, in words the owner can act on.
     public enum Refusal: Sendable, Equatable {
         case backendTooSlow(model: String)
-        case noAddress
         case couldNotStart(String)
 
         public var sentence: String {
@@ -34,8 +33,6 @@ public enum CallInvitation {
                 return "Calling needs a fast model, and \(model) runs on this Mac — it takes "
                     + "the best part of a minute to answer, which works in messages and not in a "
                     + "call. Switch to an API model and try again. Voice notes still work either way."
-            case .noAddress:
-                return "I couldn't work out an address for this Mac on your network."
             case .couldNotStart(let reason):
                 return "I couldn't start the call: \(reason)"
             }
@@ -69,38 +66,18 @@ public enum CallInvitation {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// This Mac's address on the local network.
-    ///
-    /// A LAN address, deliberately, for the first version: the phone and the
-    /// appliance are on the same Wi-Fi, media never leaves the house, and no
-    /// relay sees that a call happened. Reaching it from outside needs a tunnel
-    /// and a TURN server, which are the next piece rather than this one.
-    public static func localAddress(
-        runner: ProbeCommandRunning = ProbeCommandRunner()
-    ) async -> String? {
-        for interface in ["en0", "en1"] {
-            let result = await runner.run(
-                executable: URL(fileURLWithPath: "/usr/sbin/ipconfig"),
-                arguments: ["getifaddr", interface],
-                timeout: 5
-            )
-            let address = result?.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !address.isEmpty { return address }
-        }
-        return nil
-    }
-
     /// The sentence sent to the owner with the link.
     ///
-    /// Says what will happen before they tap: a certificate warning is coming,
-    /// and a page that asks for a microphone after an unexplained security
-    /// warning is a page people close.
+    /// Two lines and no warnings to explain away. The page is served with a real
+    /// certificate now, so there is no security interstitial to talk the owner
+    /// through — which was never just an inconvenience: it was what stopped the
+    /// browser persisting a microphone permission, and so what stopped calls
+    /// connecting at all.
     public static func invitation(url: String) -> String {
         """
         Tap to talk to me: \(url)
 
-        Your phone will warn about the certificate — that's expected, it's this Mac's own. \
-        Continue, then allow the microphone.
+        Allow the microphone when it asks. You can interrupt me any time.
         """
     }
 }

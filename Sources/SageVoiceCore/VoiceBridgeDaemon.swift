@@ -733,12 +733,8 @@ public actor VoiceBridgeDaemon {
             await reply(refusal.sentence, to: recipient)
             return
         }
-        guard let address = await CallInvitation.localAddress() else {
-            await reply(CallInvitation.Refusal.noAddress.sentence, to: recipient)
-            return
-        }
         do {
-            let url = try await calls.start(address: address)
+            let url = try await calls.start()
             log("[daemon] call ready at \(url)")
             await reply(CallInvitation.invitation(url: url), to: recipient)
         } catch {

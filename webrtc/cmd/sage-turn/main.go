@@ -26,9 +26,6 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha1" //nolint:gosec // Mandated by RFC 5389/8489 for MESSAGE-INTEGRITY.
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -41,23 +38,40 @@ import (
 	"time"
 
 	"github.com/pion/turn/v4"
+
+	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
 )
 
 func main() {
 	var (
-		publicIP = flag.String("public-ip", "", "the address peers reach this host on (required)")
-		port     = flag.Int("port", 3478, "listen port for UDP and TCP")
-		realm    = flag.String("realm", "mynah", "TURN realm; must match the client")
-		secret   = flag.String("secret", "", "shared secret for time-limited credentials (required)")
-		minPort  = flag.Int("min-port", 49160, "lowest relay port")
-		maxPort  = flag.Int("max-port", 49200, "highest relay port")
+		publicIP   = flag.String("public-ip", "", "the address peers reach this host on (required)")
+		port       = flag.Int("port", 3478, "listen port for UDP and TCP")
+		realm      = flag.String("realm", "mynah", "TURN realm; must match the client")
+		secret     = flag.String("secret", "", "shared secret for time-limited credentials")
+		secretFile = flag.String("secret-file", "", "file holding the shared secret (preferred over -secret)")
+		minPort    = flag.Int("min-port", 49160, "lowest relay port")
+		maxPort    = flag.Int("max-port", 49200, "highest relay port")
 	)
 	flag.Parse()
+
+	// A secret in a flag is a secret in the process table, readable by every
+	// user on the host and preserved in whatever supervises this. A file at
+	// least has permissions.
+	if *secretFile != "" {
+		raw, err := os.ReadFile(*secretFile)
+		if err != nil {
+			log.Fatalf("secret file: %v", err)
+		}
+		*secret = strings.TrimSpace(string(raw))
+		if *secret == "" {
+			log.Fatalf("secret file: %s is empty", *secretFile)
+		}
+	}
 
 	if *publicIP == "" || *secret == "" {
 		fmt.Fprintln(os.Stderr, `error: -public-ip and -secret are required.
 
-  sage-turn -public-ip 203.0.113.10 -secret "$(openssl rand -hex 32)"
+  sage-turn -public-ip 203.0.113.10 -secret-file /etc/sage/turn.secret
 
 The public IP is what candidates are advertised as. Get it wrong — a private
 address, or the wrong interface — and every relayed call fails while the server
@@ -150,10 +164,26 @@ func authenticate(username, realm string, secret []byte) ([]byte, bool) {
 	return turn.GenerateAuthKey(username, realm, password), true
 }
 
-// credentialFor derives the password a client must present. Exported in spirit:
-// the page server calls the same function so the two cannot drift.
+// credentialFor derives the password a client must present.
+//
+// One line, because the arithmetic itself lives in the package the relay mints
+// credentials with. Two copies of it would be two things to keep identical, and
+// any difference between them is an authentication failure that presents as a
+// network fault.
 func credentialFor(username string, secret []byte) string {
-	mac := hmac.New(sha1.New, secret)
-	mac.Write([]byte(username))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	_, password := rendezvous.TURNCredential(secret, timeFromUsername(username))
+	return password
+}
+
+// timeFromUsername recovers the expiry a username encodes.
+//
+// The username *is* the expiry, so this round-trips rather than reformats: it
+// keeps TURNCredential the single definition of the scheme instead of having
+// this file re-derive half of it.
+func timeFromUsername(username string) time.Time {
+	seconds, err := strconv.ParseInt(username, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0)
 }
