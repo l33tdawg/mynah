@@ -661,10 +661,16 @@ private struct MynahTab: View {
 /// State is a 6pt dot, never a `checkmark.circle.fill`. The word beside it
 /// already says "Ready"; a glyph restating it is noise, and a red triangle
 /// makes a recoverable situation feel like a crash.
+///
+/// **There is no `.caution`.** It carried four meanings, the owner read it as
+/// the most alarming one and reported a crash that had not happened, and he
+/// ended it: *"amber accent kill it bro - its meaningless"*. What used to be
+/// amber is `.neutral` plus a word that says the thing — "Paused", "Not done",
+/// "Needs you" — and where a control is unusable it is now disabled instead.
+/// See `Palette.state`.
 enum MynahTone: Sendable, CaseIterable {
     case neutral
     case good
-    case caution
     case critical
     case accent
 
@@ -672,7 +678,6 @@ enum MynahTone: Sendable, CaseIterable {
         switch self {
         case .neutral: return Palette.ink.secondary
         case .good: return Palette.state.good
-        case .caution: return Palette.state.caution
         case .critical: return Palette.state.critical
         case .accent: return Palette.accent.ink
         }
@@ -682,7 +687,6 @@ enum MynahTone: Sendable, CaseIterable {
         switch self {
         case .neutral: return Palette.surface.well
         case .good: return Palette.state.goodWash
-        case .caution: return Palette.state.cautionWash
         case .critical: return Palette.state.criticalWash
         case .accent: return Palette.accent.wash
         }
@@ -1396,7 +1400,7 @@ struct KeyField: View {
         case .idle(let line):
             Text(line).mynahFont(.callout).foregroundStyle(Palette.ink.secondary).mynahProse()
         case .shapeProblem(let line):
-            Text(line).mynahFont(.callout).foregroundStyle(Palette.state.caution).mynahProse()
+            Text(line).mynahFont(.callout).foregroundStyle(Palette.ink.secondary).mynahProse()
         case .checking(let line):
             Text(line).mynahFont(.callout).foregroundStyle(Palette.ink.secondary).mynahProse()
         case .rejected(let line):
@@ -1414,7 +1418,7 @@ struct KeyField: View {
 
     private var borderColor: Color {
         switch state {
-        case .shapeProblem: return Palette.state.caution
+        case .shapeProblem: return Palette.line.strong
         case .rejected: return Palette.state.critical.opacity(0.55)
         case .accepted: return Palette.state.good.opacity(0.45)
         case .idle, .checking:
@@ -1490,15 +1494,21 @@ struct CopyField: View {
 /// phone once, then come back here." Never a code, never a status, never an
 /// exception string — those go to `os.Logger`.
 struct InlineBanner: View {
+    /// **Two tones, and the missing middle is deliberate.**
+    ///
+    /// There was a `.caution` between these and it is gone with the rest of the
+    /// amber. Everything that used it — a Signal device limit, an unreachable
+    /// provider, a Mac that cannot install the add-on — is now `.info`, which
+    /// is what those banners always were: a fact and a next step, drawn in
+    /// ordinary ink. None of them is a failure, and none was ever improved by
+    /// being yellow. `.critical` still means something actually failed.
     enum Tone: Sendable {
         case info
-        case caution
         case critical
 
         var ink: Color {
             switch self {
             case .info: return Palette.ink.primary
-            case .caution: return Palette.state.caution
             case .critical: return Palette.state.critical
             }
         }
@@ -1506,7 +1516,6 @@ struct InlineBanner: View {
         var wash: Color {
             switch self {
             case .info: return Palette.surface.well
-            case .caution: return Palette.state.cautionWash
             case .critical: return Palette.state.criticalWash
             }
         }
@@ -1514,7 +1523,6 @@ struct InlineBanner: View {
         var line: Color {
             switch self {
             case .info: return Palette.line.hairline
-            case .caution: return Palette.state.caution.opacity(0.32)
             case .critical: return Palette.state.critical.opacity(0.32)
             }
         }
@@ -2002,7 +2010,7 @@ private struct KeyFieldPreviewHost: View {
             ProgressRail(titles: ["Welcome", "Brain", "Connect", "Ready"], currentIndex: 1)
             HStack(spacing: s3) {
                 StatusPill("Linked", tone: .good)
-                StatusPill("Needs you", tone: .caution)
+                StatusPill("Needs you", tone: .neutral)
                 StatusPill("Sleeping")
                 StatusPill("Answering", tone: .accent)
             }
@@ -2018,7 +2026,6 @@ private struct KeyFieldPreviewHost: View {
                 explanation: "Close it whenever you like — your phone still reaches it."
             )
             InlineBanner(
-                tone: .caution,
                 headline: "This sends your words to Google.",
                 explanation: "You can move to a brain that runs on this Mac later, in Settings."
             )
@@ -2114,7 +2121,15 @@ enum OptionCardInk {
     /// It also survives the incident the rule came from: he read amber as
     /// "Mynah is not doing what you think", and on a card he has not chosen yet
     /// there is no "what you think" to contradict. `thread`'s distinction.
-    static let sendsWordsAway = Palette.state.caution
+    ///
+    /// **All of which was sound, and the premise underneath it was not.** The
+    /// cue is not the colour: it is a green dot and *"Stays on this Mac"*
+    /// against no dot and *"Sends your words to Anthropic"*. The comparison
+    /// survives in dot-versus-no-dot and in the company's own name, which was
+    /// always the more specific signal — "Anthropic" says where the words went,
+    /// amber only said to worry. So the exception went with the rule it was an
+    /// exception to, and this is ordinary ink.
+    static let sendsWordsAway = Palette.ink.secondary
 
     /// The other half of the same comparison.
     static let staysHere = Palette.state.good

@@ -1058,7 +1058,7 @@ struct SettingsView: View {
             // authored sentence Home is showing, on the screen the owner came to
             // in order to fix it.
             InlineBanner(
-                tone: trouble.isSevere ? .critical : .caution,
+                tone: trouble.isSevere ? .critical : .info,
                 headline: trouble.headline,
                 explanation: trouble.explanation
             )
@@ -1066,7 +1066,6 @@ struct SettingsView: View {
         }
         if model.brain == nil {
             InlineBanner(
-                tone: .caution,
                 headline: "Mynah hasn't recorded where your words go.",
                 explanation: "Set it up again and it will remember your answer this time.",
                 actionTitle: "Set Mynah up again",
@@ -1221,7 +1220,7 @@ struct SettingsView: View {
     }
 
     private func destinationTone(_ brain: BrainChoice) -> MynahTone {
-        guard conversation.trouble == nil else { return .caution }
+        guard conversation.trouble == nil else { return .neutral }
         return brain.keepsWordsOnDevice ? .good : .neutral
     }
 
@@ -1436,48 +1435,34 @@ struct SettingsView: View {
 
     /// Whether `//call` will work, taken from the fact the refusal is built on.
     ///
-    /// Not a new probe and not a guess: the daemon publishes
-    /// `keepsWordsOnDevice` straight from `backend.isLocal`, and
-    /// `CallInvitation.refusal(forBackend:)` refuses on exactly that property.
-    /// So this row reports the live rule rather than an app-side reimplementation
-    /// of it, and the two cannot drift into disagreeing.
+    /// **This row used to be about the model and it was the wrong barrier.** It
+    /// reported `keepsWordsOnDevice`, because that was what
+    /// `CallInvitation.refusal` refused on — a brain running on this Mac was
+    /// assumed too slow to hold a call. That assumption died on measurement (see
+    /// `CallInvitation.refusal(isSetUpForCalls:)`), and this row died with it.
     ///
-    /// `model.brain` is deliberately not consulted. It records what the owner
-    /// picked in this window; the appliance answering the phone builds its own
-    /// backend from its launch flags, and it is the appliance that takes the call.
+    /// The barrier that remains is the relay secret, and it is the one the owner
+    /// was never told about: on a Mac without it, an owner following this row's
+    /// old advice switched to an API model, tried again, and was refused for a
+    /// reason nothing had mentioned. So the row reports the *real* condition.
+    ///
+    /// Still reading the same fact the daemon refuses on — `CallHost` is the one
+    /// source — so the two cannot drift into disagreeing.
     @ViewBuilder
     private var callReadinessRow: some View {
-        if let appliance = model.appliance {
-            SettingsRow(
-                "Calling needs a fast model",
-                detail: appliance.keepsWordsOnDevice
-                    ? "Mynah is answering with \(appliance.model), which runs on this Mac and "
-                        + "takes the best part of a minute to reply. That is fine in a message "
-                        + "and a dead line in a call, so calls are turned down. Change where "
-                        + "your words go to one of the API models and calling works."
-                    : "Mynah is answering with \(appliance.model), which replies fast enough to "
-                        + "hold a conversation. Text \(CallInvitation.command) to yourself and "
-                        + "tap the link."
-            ) {
-                StatusPill(
-                    appliance.keepsWordsOnDevice ? "Not on this model" : "Calling works",
-                    tone: appliance.keepsWordsOnDevice ? .caution : .good
-                )
-            }
-        } else {
-            // Nothing has answered a phone here, so there is no configured
-            // backend to name. The requirement is still true and still worth
-            // saying — it is why calling refuses — but no pill claims to know
-            // how this Mac is set up.
-            SettingsRow(
-                "Calling needs a fast model",
-                detail: "Mynah hasn't answered your phone on this Mac yet, so there is nothing "
-                    + "to report. A brain that runs on this Mac takes the best part of a minute "
-                    + "to reply, which is fine in a message and a dead line in a call, so "
-                    + "calling needs one of the API models."
-            ) {
-                StatusPill("Not yet", tone: .neutral)
-            }
+        let isSetUp = CallHost.isSetUpForCalls()
+        SettingsRow(
+            "Talking to Mynah out loud",
+            detail: isSetUp
+                ? "Text \(CallInvitation.command) to yourself and tap the link it sends back. "
+                    + "You can interrupt it mid-sentence."
+                : "This Mac hasn't been set up for calls yet. Voice notes work either way — "
+                    + "send one and Mynah answers with one."
+        ) {
+            StatusPill(
+                isSetUp ? "Ready" : "Not set up",
+                tone: isSetUp ? .good : .neutral
+            )
         }
     }
 
@@ -1500,7 +1485,7 @@ struct SettingsView: View {
                 detail: "The natural voice isn't installed on this Mac, so calls use the voice "
                     + "built into macOS. It works, and it sounds robotic."
             ) {
-                StatusPill("Built-in voice", tone: .caution)
+                StatusPill("Built-in voice", tone: .neutral)
             }
 
         case .installed(let names):
@@ -1596,7 +1581,7 @@ struct SettingsView: View {
                 if model.phone.linkedNumber != nil {
                     StatusPill("Linked", tone: .good)
                 } else {
-                    StatusPill("Not set", tone: .caution)
+                    StatusPill("Not set", tone: .neutral)
                 }
             }
             MynahDivider()
@@ -1641,7 +1626,7 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     model.phone.isReachable ? "Connected" : "Not connected",
-                    tone: model.phone.isReachable ? .good : .caution
+                    tone: model.phone.isReachable ? .good : .neutral
                 )
             }
 
@@ -1711,7 +1696,7 @@ struct SettingsView: View {
                 detail: "When a question needs the internet, the words Mynah searches for go "
                     + "to a search engine. The rest of what you said does not."
             ) {
-                StatusPill("Only when needed", tone: .caution)
+                StatusPill("Only when needed", tone: .neutral)
             }
             MynahDivider()
 
@@ -1730,7 +1715,7 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     model.checksForUpdates ? "Once a day" : "Turned off",
-                    tone: model.checksForUpdates ? .caution : .good
+                    tone: model.checksForUpdates ? .neutral : .good
                 )
             }
         }
@@ -1794,7 +1779,7 @@ struct SettingsView: View {
             case .running:
                 StatusPill("Running", tone: .good)
             case .installedButNotRunning:
-                StatusPill("Switched off", tone: .caution)
+                StatusPill("Switched off", tone: .neutral)
             case .absent:
                 StatusPill("Not installed", tone: .neutral)
             case .unknown, .none:
@@ -2086,7 +2071,7 @@ struct SettingsView: View {
                     + "download it and swap this copy over whenever it suits you."
             ) {
                 HStack(spacing: s4) {
-                    StatusPill(version, tone: .caution, showsDot: false)
+                    StatusPill(version, tone: .neutral, showsDot: false)
                     MynahButton("Download", kind: .secondary) { open(page) }
                 }
             }

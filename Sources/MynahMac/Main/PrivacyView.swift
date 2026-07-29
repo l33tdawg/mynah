@@ -234,7 +234,7 @@ struct PrivacyView: View {
 
             SettingsGroup("Sometimes") {
                 PrivacyRow("Looking something up on the web", detail: PrivacyClaim.webSearch) {
-                    StatusPill("Only when needed", tone: .caution)
+                    StatusPill("Only when needed", tone: .neutral)
                 }
                 MynahDivider()
                 PrivacyRow("Talking to it out loud", detail: PrivacyClaim.calling) {
@@ -244,7 +244,7 @@ struct PrivacyView: View {
                 PrivacyRow("After a call", detail: PrivacyClaim.callTranscript) {
                     StatusPill(
                         sendsCallTranscript ? "Posted to Signal" : "Turned off",
-                        tone: sendsCallTranscript ? .caution : .good
+                        tone: sendsCallTranscript ? .neutral : .good
                     )
                 }
             }
@@ -256,7 +256,7 @@ struct PrivacyView: View {
                 PrivacyRow("Checking for a newer Mynah", detail: PrivacyClaim.aboutCaption) {
                     StatusPill(
                         checksForUpdates ? "Once a day" : "Turned off",
-                        tone: checksForUpdates ? .caution : .good
+                        tone: checksForUpdates ? .neutral : .good
                     )
                 }
             }

@@ -24,6 +24,37 @@ import SwiftUI
 // a mostly empty box. If this pairing is worth keeping, it belongs in the design
 // system as a variant that shrinks to its content.
 
+/// The time a message was said, under the message.
+///
+/// **The owner asked for these to measure the appliance**: *"would be useful to
+/// know the time it took to respond ... that would tell us how 'fast' the model
+/// is"*. Two stamps a few seconds apart answer that without anybody computing
+/// anything, which is why the time goes on *both* sides rather than only under
+/// the answers.
+///
+/// Absent rather than guessed when there is no stamp. Every message written
+/// before the store recorded times has none, and the whole value of these is
+/// that they are measurements — one invented time in the column and the number
+/// the owner reads off two of them is fiction.
+struct MessageStamp: View {
+    let at: Date?
+    var alignment: HorizontalAlignment = .leading
+
+    var body: some View {
+        if let at {
+            Text(at.formatted(date: .omitted, time: .shortened))
+                .mynahFont(.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.ink.tertiary)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: alignment == .trailing ? .trailing : .leading
+                )
+                .accessibilityLabel("at \(at.formatted(date: .omitted, time: .shortened))")
+        }
+    }
+}
+
 /// What the owner said, in the words that were recorded.
 ///
 /// Quiet by construction: no border, and a surface *below* the page rather than
@@ -31,6 +62,8 @@ import SwiftUI
 /// has something to be an answer to.
 struct AskedCard: View {
     let text: String
+    /// When it was said, when the record knows. See `MessageStamp`.
+    var at: Date?
     /// How much of the column the card may never occupy.
     ///
     /// A flexible spacer rather than `.frame(maxWidth:)`: a maximum width
@@ -39,6 +72,13 @@ struct AskedCard: View {
     let inset: CGFloat
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: s2) {
+            bubble
+            MessageStamp(at: at, alignment: .trailing)
+        }
+    }
+
+    private var bubble: some View {
         HStack(spacing: 0) {
             Spacer(minLength: inset)
             Text(text)
@@ -187,7 +227,7 @@ struct MirroredExchangeView: View {
             if !exchange.asked.isEmpty {
                 VStack(alignment: .leading, spacing: s3) {
                     ForEach(exchange.asked) { message in
-                        AskedCard(text: message.text, inset: inset)
+                        AskedCard(text: message.text, at: message.at, inset: inset)
                     }
                 }
             }
@@ -196,6 +236,12 @@ struct MirroredExchangeView: View {
                     ForEach(exchange.answered) { message in
                         AnsweredCard(inset: inset) {
                             AnsweredText(text: message.text)
+                            // No duration on this side: the daemon records when
+                            // a turn was written, never how long it took. A
+                            // number derived from two stamps here would be the
+                            // gap between messages, which is mostly how long the
+                            // owner took to read.
+                            MessageStamp(at: message.at)
                         }
                     }
                 }

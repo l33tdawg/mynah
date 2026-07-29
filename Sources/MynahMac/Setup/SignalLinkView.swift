@@ -42,15 +42,20 @@ private enum LinkCopy {
     /// nothing told them about. `//help` in the thread lists it, which is no
     /// use to somebody who does not know there is anything to list.
     ///
-    /// Two sentences, and the condition is in the second rather than left out.
-    /// Calling is refused on a brain that runs on this Mac — `CallInvitation`
-    /// turns it down because a model that takes the best part of a minute is a
-    /// dead line — and an owner who reads an unqualified promise here and is
-    /// refused later reports a bug against the thing that lied to them.
+    /// **The qualifying sentence is gone because the condition is gone.** This
+    /// used to warn that calling is turned down on a brain running on this Mac,
+    /// which was true until the model stopped being the slow part — see
+    /// `CallInvitation.refusal(isSetUpForCalls:)`. Calling now works on whatever
+    /// brain the owner chose, so promising it here is no longer a promise that
+    /// gets broken later.
+    ///
+    /// The remaining condition — a Mac set up for calls — is deliberately not
+    /// mentioned. It is one-time, invisible, and either already done or not
+    /// something the owner can act on from this screen; `//call` says so plainly
+    /// if it is missing.
     static let callingNote =
         "You can also talk to it out loud: send \(CallInvitation.command) to yourself and tap the "
-        + "link it sends back — you can interrupt it mid-sentence. That one needs a brain that "
-        + "answers fast, so it is turned down when Mynah is using a model that runs on this Mac."
+        + "link it sends back — you can interrupt it mid-sentence."
 }
 
 // MARK: - Finding and reading what is on this Mac
@@ -357,7 +362,7 @@ enum SignalLinkFailure: Equatable, Sendable {
     var tone: InlineBanner.Tone {
         switch self {
         case .alreadyLinked: return .info
-        case .tooManyDevices, .helperUnusable, .installFailed: return .caution
+        case .tooManyDevices, .helperUnusable, .installFailed: return .info
         case .offline, .helperWouldNotStart, .didNotFinish: return .critical
         }
     }
@@ -1275,7 +1280,6 @@ struct SignalLinkView: View {
                 )
             case .needsTheOwner:
                 InlineBanner(
-                    tone: .caution,
                     headline: "Mynah can't add it on this Mac by itself.",
                     explanation: "Nothing is broken — Mynah still works here on the Mac, and "
                         + "you can link your phone later from Settings."

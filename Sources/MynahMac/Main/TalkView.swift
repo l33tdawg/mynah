@@ -117,6 +117,27 @@ struct TalkView: View {
         .mynahAnimation(Motion.snap, value: app.homeSplit)
         .background(Palette.surface.canvas)
         .task {
+            // **Before `connect()`, so the very first question in the window
+            // already knows what the phone said.**
+            //
+            // This is the seam the two records were missing. The mirror draws
+            // the phone's conversation above the composer and the engine used to
+            // answer from an array that had never seen it — one screen, two
+            // memories, and the owner catching it by asking for the steps of a
+            // recipe printed directly above the question.
+            //
+            // Read through a closure rather than copied here: the phone keeps
+            // talking while this window is open, so a snapshot taken now would
+            // be stale by the second turn. Evaluated per turn, this is simply
+            // "whatever is on screen".
+            model.priorContext = { [mirror] in
+                mirror.messages.map {
+                    BrainMessage(
+                        role: $0.speaker == .owner ? .user : .assistant,
+                        content: $0.text
+                    )
+                }
+            }
             await model.connect()
             app.presence = presence
         }
@@ -574,7 +595,7 @@ struct TalkView: View {
                 // one response that guarantees the owner cannot try again.
                 if let trouble = model.trouble {
                     InlineBanner(
-                        tone: trouble.isSevere ? .critical : .caution,
+                        tone: trouble.isSevere ? .critical : .info,
                         headline: trouble.headline,
                         explanation: trouble.explanation,
                         actionTitle: troubleActionTitle(trouble),
@@ -759,7 +780,7 @@ private struct ExchangeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: s4) {
-            AskedCard(text: exchange.question, inset: inset)
+            AskedCard(text: exchange.question, at: exchange.askedAt, inset: inset)
             outcome
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -783,9 +804,14 @@ private struct ExchangeView: View {
         case .answered(let answer):
             AnsweredCard(inset: inset) {
                 AnsweredText(text: answer.text)
-                if !answer.activity.isEmpty || answer.seconds > 0 {
-                    ProvenanceRow(answer: answer)
-                }
+                // Unconditional now. It used to appear only when there was a
+                // duration or a tool to name, so a fast answer with no tool call
+                // — the ones the owner most wants to see the clock on — was the
+                // one that showed nothing.
+                ProvenanceRow(
+                    answer: answer,
+                    answeredAt: exchange.askedAt.addingTimeInterval(answer.seconds)
+                )
             }
         case .failed(let failure):
             // Not in the answer card: this is a notice *about* the exchange
@@ -820,12 +846,23 @@ private struct ExchangeView: View {
 /// gets no such line rather than a guessed one.
 private struct ProvenanceRow: View {
     let answer: Exchange.Answer
+    /// When the answer landed — `askedAt` plus the turn's own measured length,
+    /// so the two stamps around an exchange are exactly `seconds` apart and the
+    /// owner can read the appliance's speed off the column without arithmetic.
+    let answeredAt: Date
 
     var body: some View {
         // Baseline rather than centre: the duration is `.mono` at 12pt and the
         // phrases are `.label` at 11, so centring them would leave the row
         // visibly askew.
         HStack(alignment: .firstTextBaseline, spacing: s3) {
+            Text(answeredAt.formatted(date: .omitted, time: .shortened))
+                .mynahFont(.label)
+                .monospacedDigit()
+                .foregroundStyle(Palette.ink.tertiary)
+            Text("·")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.quaternary)
             Text(MynahCopy.duration(answer.seconds))
                 .mynahFont(.mono)
                 .monospacedDigit()

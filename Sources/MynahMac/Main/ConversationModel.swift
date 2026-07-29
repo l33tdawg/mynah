@@ -441,7 +441,20 @@ final class ConversationModel {
     /// is what previews and tests use — they have no stored choice to drift from.
     private var connectedOptionID: BrainSetupOptionID?
     private let voice: VoiceCapture?
-    private var history: [BrainMessage] = []
+
+    /// The conversation that reached this window from the phone.
+    ///
+    /// **Injected, because this used to not exist and that was the bug.** The
+    /// window kept its own `history` array that started empty and only ever grew
+    /// from turns typed here, while the mirror drew the phone's messages on the
+    /// same screen above them. So the owner read one conversation and Mynah
+    /// answered from another: he asked for a recipe's steps directly beneath the
+    /// recipe and was asked which recipe he meant.
+    ///
+    /// A closure rather than a reference, because `ConversationModel` must not
+    /// know what a `ConversationMirror` is — and because previews and tests need
+    /// a window with no phone behind it, which is what the default gives them.
+    var priorContext: @MainActor () -> [BrainMessage] = { [] }
     private var activeTurn: (id: UUID, task: Task<Void, Never>)?
     private var levelSampler: Task<Void, Never>?
     /// The connect that is already running, held so a second caller can *wait*
@@ -482,10 +495,25 @@ final class ConversationModel {
     /// without this the owner can queue a turn into a half-built engine.
     var isWakingUp: Bool { readiness == .connecting }
 
+    /// **`trouble == nil` is the owner's ruling on amber, made mechanical.**
+    ///
+    /// When the engine is blocked, Home used to draw an amber "Not ready yet"
+    /// beside a Send button that was still live — so the only thing stopping a
+    /// doomed turn was the owner reading a colour and inferring what it meant.
+    /// He read that colour wrong once and reported a crash that had not
+    /// happened, then ended the argument: *"if something is not working, we
+    /// should disable the send button or something instead; that makes more
+    /// visual sense"*.
+    ///
+    /// He is describing a better mechanism, not just a better look. A disabled
+    /// Send cannot be misread, it needs no legend, and it stops the thing it is
+    /// warning about instead of merely colouring it. The banner above the
+    /// composer already carries the sentence and the fix.
     var canSend: Bool {
         !isBusy
             && !isRecording
             && !isWakingUp
+            && trouble == nil
             && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -503,7 +531,7 @@ final class ConversationModel {
         case .connecting:
             return Health(tone: .neutral, title: "Waking up", detail: nil)
         case .blocked:
-            return Health(tone: .caution, title: "Not ready yet", detail: "Finish the step below.")
+            return Health(tone: .neutral, title: "Not ready yet", detail: "Finish the step below.")
         case .ready(let destination, let staysOnDevice):
             return Health(
                 tone: .good,
@@ -729,15 +757,27 @@ final class ConversationModel {
         finish(active.id, with: .failed(.stopped))
     }
 
-    /// Clears the screen and the model's context together.
+    /// Clears the screen. **Not the context, and that is the whole change.**
     ///
-    /// Clearing only the screen would leave Mynah still answering from turns the
-    /// owner believes they deleted, which is the worst possible reading of a
-    /// button called "Start again".
+    /// This used to do `history.removeAll()` as well, on the reasoning that a
+    /// button called "clear" must not leave Mynah answering from turns the owner
+    /// believes they deleted. Sound for a button that deletes a conversation,
+    /// and this is not one — the line beside it has always read *"Clearing here
+    /// changes nothing on your phone"*, so the conversation demonstrably
+    /// survives. All the extra wipe removed was the appliance's ability to
+    /// follow it.
+    ///
+    /// The owner named the model he wanted: *"think of the clear more to clear
+    /// the screen of chat clutter, but behind the scenes the agent still needs
+    /// the context window and what was last discussed — this way only a true
+    /// 'clear' from signal interface would REALLY clear the chat window"*.
+    ///
+    /// So the window is a *view* of the conversation, not the conversation.
+    /// Signal owns the record, this clears the view, and Mynah keeps the thread
+    /// either way — re-grounding from SAGE when it goes cold.
     func clear() {
         stop()
         exchanges.removeAll()
-        history.removeAll()
     }
 
     private func startTurn(id: UUID, transcript: String) {
@@ -762,17 +802,14 @@ final class ConversationModel {
         }
 
         do {
-            let result = try await engine.run(transcript: transcript, history: history)
+            let result = try await engine.run(
+                transcript: transcript,
+                history: groundingHistory(excluding: id)
+            )
             guard !Task.isCancelled else {
                 clearActiveTurn(id)
                 return
             }
-            // The daemon's rule, restated here because `conversationOnly` and
-            // `trimmed` are internal to the core module.
-            history = Self.trimmed(
-                Self.conversationOnly(result.messages),
-                keepingLastTurns: Self.historyTurnLimit
-            )
             hasEverAnswered = true
             finish(
                 id,
@@ -806,6 +843,41 @@ final class ConversationModel {
     private func clearActiveTurn(_ id: UUID) {
         guard activeTurn?.id == id else { return }
         activeTurn = nil
+    }
+
+    /// **What Mynah answers from: exactly what is on the screen.**
+    ///
+    /// Derived every turn rather than accumulated, and that is the fix. There
+    /// used to be a `history` array built from the previous turn's result, which
+    /// meant the window's context and the window's contents were two different
+    /// records kept in step by nothing. They drifted the moment a message
+    /// arrived from the phone — the mirror drew it, the array never saw it — and
+    /// the owner watched Mynah fail to see a recipe sitting directly above the
+    /// question about it.
+    ///
+    /// One record cannot drift from itself. The phone's turns come first because
+    /// they happened first, then this window's, then `trimmed` keeps the last
+    /// few of the whole thing.
+    ///
+    /// Three exclusions, each deliberate:
+    ///
+    /// - **The turn being answered.** It is already in `exchanges` by the time
+    ///   this runs — `send()` appends before starting — and it is passed to the
+    ///   engine as `transcript`. Including it here would ask the question twice.
+    /// - **Anything still thinking.** A question with no answer yet is half a
+    ///   turn, and half a turn in a history is a model being told it already
+    ///   replied when it did not.
+    /// - **Anything that failed.** This was the old array's rule too, in
+    ///   `retry`'s words: a failed attempt contributed nothing, so asking again
+    ///   is a clean second try rather than a continuation.
+    private func groundingHistory(excluding active: UUID) -> [BrainMessage] {
+        var messages = priorContext()
+        for exchange in exchanges where exchange.id != active {
+            guard case .answered(let answer) = exchange.outcome else { continue }
+            messages.append(BrainMessage(role: .user, content: exchange.question))
+            messages.append(BrainMessage(role: .assistant, content: answer.text))
+        }
+        return Self.trimmed(messages, keepingLastTurns: Self.historyTurnLimit)
     }
 
     // MARK: History hygiene

@@ -80,6 +80,31 @@ public struct ConversationStore: @unchecked Sendable {
     private struct StoredTurn: Codable, Equatable {
         var role: String
         var content: String
+
+        /// When this turn was first written here.
+        ///
+        /// **Optional, and it stays nil rather than becoming a guess.** This
+        /// file used to say there was no per-turn stamp and that nothing may
+        /// invent one, because a wrong time in a transcript is worse than none.
+        /// That rule survives the arrival of a real stamp: a turn already on
+        /// disk when this field shipped has no honest time available, so it
+        /// keeps nil and the window shows nothing beside it.
+        ///
+        /// Recorded rather than derived. The owner asked for times so he could
+        /// see how fast the appliance answers, and a stamp computed at render
+        /// time from when a file happened to be read would answer a different
+        /// question convincingly.
+        var at: Date?
+
+        /// Identity is **what was said, never when**.
+        ///
+        /// `save` receives the whole history on every turn, so it has to tell a
+        /// turn that is new from a turn that has merely shifted position. With
+        /// `at` in the synthesised `==`, every comparison would differ the
+        /// moment stamps existed and every thread would look freshly spoken in.
+        func isSameUtterance(as other: StoredTurn) -> Bool {
+            role == other.role && content == other.content
+        }
     }
 
     private struct StoredThread: Codable, Equatable {
@@ -199,10 +224,14 @@ public struct ConversationStore: @unchecked Sendable {
 
         public let speaker: Speaker
         public let content: String
+        /// When this was said, or nil for a turn written before the file
+        /// recorded times. Never inferred — see `StoredTurn.at`.
+        public let at: Date?
 
-        public init(speaker: Speaker, content: String) {
+        public init(speaker: Speaker, content: String, at: Date? = nil) {
             self.speaker = speaker
             self.content = content
+            self.at = at
         }
     }
 
@@ -246,9 +275,9 @@ public struct ConversationStore: @unchecked Sendable {
             for turn in thread.turns {
                 switch turn.role {
                 case "user":
-                    turns.append(DisplayTurn(speaker: .owner, content: turn.content))
+                    turns.append(DisplayTurn(speaker: .owner, content: turn.content, at: turn.at))
                 case "assistant":
-                    turns.append(DisplayTurn(speaker: .mynah, content: turn.content))
+                    turns.append(DisplayTurn(speaker: .mynah, content: turn.content, at: turn.at))
                 // `load`'s rule: anything else was never written by this type,
                 // and dropping it beats guessing who said it.
                 default:
@@ -283,6 +312,52 @@ public struct ConversationStore: @unchecked Sendable {
     /// Atomic because the daemon is killed by `pkill` on every deploy, and a
     /// half-written history file is worse than none — it would decode as a
     /// truncated conversation and be resumed as if complete.
+    /// Whether two versions of a thread say the same words in the same order.
+    private static func saidTheSameThing(_ old: [StoredTurn], _ new: [StoredTurn]) -> Bool {
+        old.count == new.count && zip(old, new).allSatisfy { $0.isSameUtterance(as: $1) }
+    }
+
+    /// Carries existing stamps forward and stamps only what is genuinely new.
+    ///
+    /// **Neither index nor content alone can do this.** Turns are appended at
+    /// the end and trimmed from the front, so on the save after a thread passes
+    /// `maximumTurnsPerThread` every turn shifts down one and index matching
+    /// declares the entire conversation new. Matching on content alone is worse
+    /// in a quieter way: an owner who says "ok" twice in one thread would have
+    /// the second one wearing the first one's time.
+    ///
+    /// Because turns only ever arrive at the end, the old and new arrays share
+    /// one contiguous run. Finding it — the longest suffix of `previous` that is
+    /// a prefix of `turns` — identifies exactly which turns are new, and
+    /// everything before that boundary keeps whatever stamp it already had.
+    ///
+    /// **Including no stamp at all.** Turns written before this field existed
+    /// stay nil rather than being handed `now`, which would put this evening's
+    /// time on a message from yesterday morning — the precise failure the "never
+    /// invent one" rule was written about.
+    private static func stamping(
+        _ turns: [StoredTurn],
+        against previous: [StoredTurn],
+        now: Date
+    ) -> [StoredTurn] {
+        var stamped = turns
+        var carried = 0
+
+        for offset in 0...previous.count {
+            let tail = previous[offset...]
+            guard tail.count <= turns.count else { continue }
+            guard zip(tail, turns).allSatisfy({ $0.isSameUtterance(as: $1) }) else { continue }
+            for (index, old) in tail.enumerated() { stamped[index].at = old.at }
+            carried = tail.count
+            break
+        }
+
+        for index in stamped.indices where index >= carried {
+            stamped[index].at = now
+        }
+        return stamped
+    }
+
     public func save(_ histories: [String: [BrainMessage]], now: Date = Date()) throws {
         // What is already on disk, so an untouched thread keeps its own age.
         // The daemon hands over *every* history on every turn, so stamping `now`
@@ -305,16 +380,20 @@ public struct ConversationStore: @unchecked Sendable {
             )
             guard !turns.isEmpty else { continue }
 
+            let old = previous[key]
+            let stamped = Self.stamping(turns, against: old?.turns ?? [], now: now)
+
             // Unchanged content means nothing was said in this thread, so its
-            // clock does not restart.
+            // clock does not restart. Compared by utterance rather than by `==`,
+            // which now includes the per-turn stamp.
             let stamp: Date
-            if let old = previous[key], old.turns == turns {
+            if let old, Self.saidTheSameThing(old.turns, turns) {
                 stamp = old.savedAt
             } else {
                 stamp = now
             }
             guard now.timeIntervalSince(stamp) <= Self.maximumAge else { continue }
-            conversations[key] = StoredThread(savedAt: stamp, turns: turns)
+            conversations[key] = StoredThread(savedAt: stamp, turns: stamped)
         }
 
         guard !conversations.isEmpty else {

@@ -81,7 +81,7 @@ final class AgentsRenderHarness: XCTestCase {
                                             .foregroundStyle(Palette.ink.primary)
                                             .lineLimit(1).truncationMode(.tail)
                                         if row.permissions.isRestricted {
-                                            Circle().fill(Palette.state.caution).frame(width: 6, height: 6)
+                                            Circle().fill(Palette.ink.tertiary).frame(width: 6, height: 6)
                                         }
                                         Spacer(minLength: 0)
                                     }
@@ -98,7 +98,7 @@ final class AgentsRenderHarness: XCTestCase {
                                         }
                                         Text(row.memoryLine).mynahFont(.label)
                                             .foregroundStyle(row.memoryCount == 0
-                                                ? Palette.state.caution : Palette.ink.secondary)
+                                                ? Palette.ink.secondary : Palette.ink.secondary)
                                         Spacer(minLength: 0)
                                     }
                                 }
@@ -142,7 +142,7 @@ final class AgentsRenderHarness: XCTestCase {
                     VStack(alignment: .leading, spacing: s2) {
                         Text(mynah.name).mynahFont(.title2).foregroundStyle(Palette.ink.primary)
                         Text("\(mynah.standingLine) · \(mynah.memoryLine)")
-                            .mynahFont(.label).foregroundStyle(Palette.state.caution)
+                            .mynahFont(.label).foregroundStyle(Palette.ink.secondary)
                     }
                     StandingFacts(agent: mynah)
                     ApplianceStanding(agent: mynah)

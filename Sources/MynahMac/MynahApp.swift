@@ -38,7 +38,7 @@ final class AppModel {
             switch self {
             case .answering, .listening: return .good
             case .sleeping: return .neutral
-            case .needsOwner: return .caution
+            case .needsOwner: return .neutral
             }
         }
 

@@ -153,7 +153,6 @@ struct BrainProviderSheet: View {
             // the old brain is still the one answering, because this saves
             // nothing until it passes.
             InlineBanner(
-                tone: .caution,
                 headline: "That one didn't answer.",
                 explanation: refusal
                     + " Nothing has changed — Mynah is still using what it was."

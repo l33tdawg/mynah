@@ -31,6 +31,8 @@ struct MirroredMessage: Identifiable, Equatable, Sendable {
     let id: Int
     let speaker: Speaker
     let text: String
+    /// When it was said, when that is known. Drawn beneath the message.
+    var at: Date?
 }
 
 // MARK: - The window's own copy
@@ -40,15 +42,26 @@ struct MirroredMessage: Identifiable, Equatable, Sendable {
 struct RecordedTurn: Codable, Equatable, Sendable {
     var role: String
     var content: String
+    /// When the daemon first wrote this turn down.
+    ///
+    /// Optional the whole way through, and it stays nil rather than becoming
+    /// `Date()` at any point on the journey. Every message already on this Mac
+    /// when stamps shipped has no honest time, and a transcript that guesses is
+    /// worse than one that says nothing — the owner asked for these so he could
+    /// see how fast the appliance answers, which a guess would misreport
+    /// convincingly.
+    var at: Date?
 
     init(_ turn: ConversationStore.DisplayTurn) {
         self.role = turn.speaker == .owner ? "user" : "assistant"
         self.content = turn.content
+        self.at = turn.at
     }
 
-    init(role: String, content: String) {
+    init(role: String, content: String, at: Date? = nil) {
         self.role = role
         self.content = content
+        self.at = at
     }
 
     var speaker: MirroredMessage.Speaker { role == "user" ? .owner : .mynah }
@@ -439,7 +452,7 @@ final class ConversationMirror {
             return
         }
         let drawn = current.conversation.turns.enumerated().map { index, turn in
-            MirroredMessage(id: index, speaker: turn.speaker, text: turn.content)
+            MirroredMessage(id: index, speaker: turn.speaker, text: turn.content, at: turn.at)
         }
         if drawn != messages { messages = drawn }
         if current.conversation.lastActivity != lastActivity {

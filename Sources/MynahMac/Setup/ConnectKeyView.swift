@@ -236,7 +236,6 @@ struct ConnectKeyScreen: View {
                 // is not marked and the note carries the fix instead.
                 if case .unreachable = phase {
                     InlineBanner(
-                        tone: .caution,
                         headline: "Mynah couldn't reach \(provider).",
                         explanation: "Nothing is wrong with your key. Check this Mac's internet "
                             + "connection, then check the key again.",

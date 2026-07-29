@@ -104,100 +104,89 @@ enum Palette {
         static let divider = Color.mynah(light: .mynahMono(0, 0.07), dark: .mynahMono(1, 0.09))
     }
 
-    /// A mynah is near-black with a saturated warm-yellow eye patch. That patch
-    /// is the entire accent, and it appears at most twice on any screen: the one
-    /// recommended choice, and the one live thing.
+    /// **The accent is ink, not amber. The owner ended a long argument in one
+    /// line: *"amber accent kill it bro - its meaningless"*.**
     ///
-    /// **Scope, decided once: these tokens are for MYNAH's own surfaces only.**
+    /// He was right, and the evidence was already in this file. The amber had
+    /// accumulated four jobs — the recommended choice, the one live thing, a
+    /// paused appliance, a destination that leaves the Mac — and a colour with
+    /// four jobs is read as its most alarming one. He proved it by reporting a
+    /// crash that had not happened, off a yellow mark on a task list. Every
+    /// attempt to fix that was a rule about *which* amber was allowed where,
+    /// which is a rule nobody can apply while choosing a colour.
+    ///
+    /// So the accent is now the same near-black as `button.primaryFill`, and
+    /// the meaning it used to carry is carried by shape, weight and words — a
+    /// filled chip is selected, a sparkle is recommended, a sentence names the
+    /// company. **See `state` for the other half of the ruling: a control that
+    /// cannot be used is disabled rather than coloured.**
+    ///
+    /// **Scope, unchanged: these tokens are for MYNAH's own surfaces only.**
     /// Platform chrome — the sidebar's selection capsule, pop-up buttons,
     /// confirmation dialogs' default button — keeps the *system* accent the
     /// owner set in System Settings, because that is what every other Mac app on
-    /// their machine does and overriding it is how a sidebar row ends up with a
-    /// white label on yellow. So the app deliberately sets no root `.tint`.
+    /// their machine does. So the app deliberately sets no root `.tint`.
     /// Anything MYNAH draws itself — a selected option card, the recommendation
-    /// sparkle, a focus ring, a switch, a spinner inside one of our own fields —
-    /// uses these. Having taken neither position is what could not ship; this is
-    /// the position.
+    /// sparkle, a switch, a spinner inside one of our own fields — uses these.
     enum accent {
         /// Selection fills, the recommendation marker, the listening ring.
-        static let fill = Color.mynah(light: .mynahHex(0xF0A020), dark: .mynahHex(0xFFB833))
-        /// Accent-coloured *text and glyphs*. Darkened in light mode so it keeps
-        /// 5.1:1 against `surface.raised` — `accent.fill` as text would not.
-        static let ink = Color.mynah(light: .mynahHex(0x8A5000), dark: .mynahHex(0xFFC451))
-        /// Selected-row background, chip background.
-        static let wash = Color.mynah(
-            light: .mynahHex(0xF0A020, alpha: 0.12),
-            dark: .mynahHex(0xFFB833, alpha: 0.16)
-        )
-        /// Anything sitting *on* `accent.fill`. Dark in both schemes, because
-        /// the fill is light in both.
-        static let onFill = Color.mynah(light: .mynahHex(0x1A1206), dark: .mynahHex(0x1A1206))
+        static let fill = Color.mynah(light: .mynahHex(0x1C1C1F), dark: .mynahHex(0xF2F2F4))
+        /// Accent-coloured *text and glyphs*. Full-strength ink in both schemes:
+        /// with the hue gone there is nothing left to darken for contrast.
+        static let ink = Color.mynah(light: .mynahHex(0x151517), dark: .mynahHex(0xF5F5F7))
+        /// Selected-row background, chip background. A wash of the ink rather
+        /// than of a hue, so a selected row reads as *raised* and not as *lit*.
+        static let wash = Color.mynah(light: .mynahMono(0, 0.07), dark: .mynahMono(1, 0.11))
+        /// Anything sitting *on* `accent.fill`, which is dark in light mode and
+        /// light in dark mode — so this inverts with it.
+        static let onFill = Color.mynah(light: .mynahHex(0xFFFFFF), dark: .mynahHex(0x151517))
     }
 
-    /// Deliberately disjoint from `accent`. Green means "your words stay here";
-    /// yellow means "MYNAH is doing something". Conflating them would make the
-    /// privacy signal indistinguishable from a spinner.
+    /// **Two colours, and there is no amber.**
     ///
-    /// **When `caution` is the right ink, and when it is not.**
+    /// Green means "your words stay on this Mac". Red means something failed.
+    /// That is the whole vocabulary, and the gap between them is deliberate.
     ///
-    /// The owner looked at an amber mark on his task area and reported *"signal
-    /// crashed again — see it's yellow now (paused mode colour)"*. Signal had
-    /// not crashed. Both processes were up. What he had learned all day, and
-    /// learned correctly, is that amber on this product means **Mynah is not
-    /// doing what you think** — the readiness banner, the restricted dot, the
-    /// paused switch. So amber anywhere near the appliance reads as a statement
-    /// about the appliance, whatever it was attached to.
+    /// ## Why the amber went
     ///
-    /// The test is not severity, it is **subject**:
+    /// It spent a long time meaning four things — paused, restricted, setup
+    /// unfinished, words leaving the Mac — and the owner proved what a colour
+    /// with four jobs does. He looked at a yellow mark on his task list and
+    /// reported *"signal crashed again"*. Signal had not crashed; both
+    /// processes were up. He was reading the colour correctly, because by then
+    /// amber on this product genuinely did mean *Mynah is not doing what you
+    /// think*, and a stale list had borrowed it.
     ///
-    /// - **A property of the product** — paused, restricted, needs the owner,
-    ///   setup unfinished, cannot remember anything. Caution. The owner has to
-    ///   do something or the appliance stays wrong.
-    /// - **A property of a view** — this list is stale, this scan found
-    ///   nothing, this deletion is still going through. **Not caution.**
-    ///   Secondary ink and a sentence. Nothing is wrong with Mynah, and saying
-    ///   otherwise in colour costs more than the fact is worth.
+    /// Two rules were written to contain that — one about subject rather than
+    /// severity, one about destinations not being faults — and both were rules
+    /// you had to already know in order to pick a colour correctly. He ended it
+    /// instead: *"amber accent kill it bro - its meaningless"*.
     ///
-    /// A colour that means four things is read as its most alarming meaning,
-    /// and the owner will sometimes be right, which is what makes the habit
-    /// expensive rather than merely untidy.
+    /// ## What replaces it, and it is not another colour
     ///
-    /// ## A destination is not a fault
+    /// **A control that cannot be used is disabled.** That was the owner's own
+    /// substitution — *"if something is not working, we should disable the send
+    /// button or something instead; that makes more visual sense"* — and it is
+    /// strictly better than the amber was, because a grey Send cannot be
+    /// misread as a crash, and it stops the thing it is warning about instead
+    /// of merely colouring it. `ConversationModel.canSend` is where that lives.
     ///
-    /// The second collision, and the narrower one. These tokens were designed
-    /// as a **privacy** axis — the comment above says it: green means your
-    /// words stay here, yellow means MYNAH is doing something — and `caution`
-    /// was simultaneously carrying the **fault** axis. So the owner saw the
-    /// same amber on *"goes to Anthropic"*, which is a true and permanent
-    /// consequence of a choice he made on purpose, and on *"Paused"*, which is
-    /// a temporary state he has to act on.
+    /// Everything else amber used to carry is now carried by words. "Paused"
+    /// says paused. "Not done" says not done. A destination pill names the
+    /// company, which is a far more specific signal than a hue: "Anthropic"
+    /// tells the owner where his words went, and amber only told him to worry.
     ///
-    /// **Only one side of the privacy axis was overloaded.** `good` is
-    /// single-purpose — it means "stays on this Mac", or an unambiguously
-    /// working state, and nothing uses it for a fault. So green stays and the
-    /// *leaving* side moves off `caution`.
-    ///
-    /// What replaces it is not a colour. A destination pill already **names the
-    /// company**, and a company's name is a far more specific signal than a
-    /// hue: "Anthropic" tells him where his words went, and amber only told him
-    /// to worry. This is `voice`'s reading and it is right — the brain picker
-    /// solved the same problem without ink, using grouped headings and
-    /// sentences, and it is the best thing in the product on this question.
-    ///
-    /// So: **the fault axis keeps caution. The privacy axis is words.**
+    /// `critical` survives because a failure is not a shade of a warning, and
+    /// `good` survives because nothing ever used it for a fault — it means
+    /// "stays on this Mac", and it means only that.
     enum state {
         static let good = Color.mynah(light: .mynahHex(0x1D8A4E), dark: .mynahHex(0x3FD07E))
-        static let caution = Color.mynah(light: .mynahHex(0x9C5F00), dark: .mynahHex(0xF0A73B))
         static let critical = Color.mynah(light: .mynahHex(0xC0392B), dark: .mynahHex(0xFF6B5E))
 
         /// Low-alpha backgrounds for inline notes.
         static let goodWash = Color.mynah(
             light: .mynahHex(0x1D8A4E, alpha: 0.10),
             dark: .mynahHex(0x3FD07E, alpha: 0.12)
-        )
-        static let cautionWash = Color.mynah(
-            light: .mynahHex(0x9C5F00, alpha: 0.10),
-            dark: .mynahHex(0xF0A73B, alpha: 0.12)
         )
         static let criticalWash = Color.mynah(
             light: .mynahHex(0xC0392B, alpha: 0.09),
@@ -1046,7 +1035,6 @@ struct MynahThemeGallery: View {
                     swatch("accent.fill", Palette.accent.fill)
                     swatch("accent.ink", Palette.accent.ink)
                     swatch("good", Palette.state.good)
-                    swatch("caution", Palette.state.caution)
                     swatch("critical", Palette.state.critical)
                 }
                 // The HUD chrome as it looks *inside a window* — glass drawing

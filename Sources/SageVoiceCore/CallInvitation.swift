@@ -64,44 +64,20 @@ public enum CallInvitation {
 
     /// Why a call cannot happen, in words the owner can act on.
     ///
-    /// **There are two barriers, and this used to name only the first.** The
-    /// model check ran alone, so an owner on a local brain was told *"switch to
-    /// an API model and try again"* — and on this Mac, where
-    /// `~/.sage/call-relay.secret` does not exist, doing exactly that lands him
-    /// on "this Mac hasn't been set up for calls yet". We sent him to change his
-    /// brain to fix a problem changing his brain does not fix.
+    /// **There used to be two barriers and now there is one.** A `backendTooSlow`
+    /// case refused every brain running on this Mac, on a measured floor of
+    /// 40–60 seconds to first token — real at the time, and dead by the time it
+    /// was deleted. See `refusal(isSetUpForCalls:)` for what changed.
     ///
-    /// A refusal that names one of two blockers is not a smaller truth, it is a
-    /// wrong instruction. So the model barrier now carries whether the other one
-    /// is also standing, and says so in the same breath.
+    /// What is left is the barrier that is actually a barrier: a Mac with no
+    /// relay secret cannot place a call however fast its brain is.
     public enum Refusal: Sendable, Equatable {
-        /// `alsoNeedsSetup` when the relay secret is missing too, so switching
-        /// brains alone would not get him a call.
-        case backendTooSlow(model: String, alsoNeedsSetup: Bool)
-        /// The brain is fast enough; this Mac has never been set up for calls.
+        /// This Mac has never been set up for calls.
         case notSetUpForCalls
         case couldNotStart(String)
 
         public var sentence: String {
             switch self {
-            case .backendTooSlow(let model, let alsoNeedsSetup):
-                // Not a limitation to hide. A local 4B takes 40-60 seconds to
-                // produce a first token on this hardware; in a message that is
-                // a wait, and in a call it is a dead line. Saying which model
-                // and what to do about it beats "calling is unavailable".
-                let head = "Calling needs a fast model, and \(model) runs on this Mac — it takes "
-                    + "the best part of a minute to answer, which works in messages and not in a "
-                    + "call."
-                guard alsoNeedsSetup else {
-                    return head + " Switch to an API model and try again. Voice notes still "
-                        + "work either way."
-                }
-                // Both, in one message. Told separately these become two trips:
-                // switch the brain, try again, get refused for a different
-                // reason he was never warned about.
-                return head + " This Mac also hasn't been set up for calls yet, so that needs "
-                    + "doing as well — switching to an API model on its own won't be enough. "
-                    + "Voice notes still work either way."
             case .notSetUpForCalls:
                 // No path, deliberately. `CallHost.Failure.noSharedSecret` says
                 // it the same way and for the same reason: a file he has never
@@ -113,30 +89,31 @@ public enum CallInvitation {
         }
     }
 
-    /// Whether the backend can hold a conversation.
+    /// Whether this Mac can place a call.
     ///
-    /// The test is `isLocal`, not a model allowlist. Anything running on this
-    /// Mac is competing with the appliance itself for the same GPU, and the
-    /// measured floor here is tens of seconds to first token. A cloud model
-    /// answers in single digits, which is the difference between a call and a
-    /// silence.
+    /// **The brain is no longer part of the test, and the old comment here
+    /// predicted its own deletion.** It read: *"A local model that got fast
+    /// enough would need this revisited — the property that matters is time to
+    /// first token, and `isLocal` is a proxy for it that happens to be exactly
+    /// right on this hardware today."*
     ///
-    /// A local model that got fast enough would need this revisited — the
-    /// property that matters is time to first token, and `isLocal` is a proxy
-    /// for it that happens to be exactly right on this hardware today.
+    /// That condition arrived. The proxy was calibrated when a local brain took
+    /// 40–60 seconds to first token; on 29 July 2026 the owner sent a screenshot
+    /// of `qwen3.5:4b` — running on this Mac, `keepsWordsOnDevice` — answering
+    /// three questions in **5, 6 and 9 seconds**, two of them with a SAGE tool
+    /// call inside. Nothing about the model changed. What changed is that tool
+    /// results stopped arriving 31KB at a time, and the model was never the
+    /// thing that was slow.
     ///
-    /// `isSetUpForCalls` is the second barrier and must be passed rather than
-    /// assumed. It defaults to nothing, because a default would be a guess about
-    /// the owner's filesystem made inside a pure function — and guessing `true`
-    /// is precisely the bug: it is what let the model check answer for both.
-    public static func refusal(
-        forBackend backend: BrainBackend,
-        isSetUpForCalls: Bool
-    ) -> Refusal? {
-        guard backend.isLocal else {
-            return isSetUpForCalls ? nil : .notSetUpForCalls
-        }
-        return .backendTooSlow(model: backend.modelName, alsoNeedsSetup: !isSetUpForCalls)
+    /// So the refusal was measuring the wrong property through a proxy that had
+    /// gone stale underneath it, which is the more useful lesson: `isLocal` was
+    /// never *time to first token*, it was a thing that correlated with it once.
+    ///
+    /// **If a call on a local brain does turn out to be a dead line, the fix is
+    /// to measure time to first token, not to reinstate the proxy.** A slow
+    /// cloud model would have sailed straight past the old check too.
+    public static func refusal(isSetUpForCalls: Bool) -> Refusal? {
+        isSetUpForCalls ? nil : .notSetUpForCalls
     }
 
     /// An unguessable path segment.

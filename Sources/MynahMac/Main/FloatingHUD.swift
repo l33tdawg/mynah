@@ -494,7 +494,7 @@ struct MynahHUDView: View {
         if let trouble = conversation.trouble {
             // `headline` is authored copy with a verb in it — never an error
             // object, a status code or a tool name. See `Exchange.Failure`.
-            return Line(tone: .caution, title: "Needs you", detail: trouble.headline)
+            return Line(tone: .neutral, title: "Needs you", detail: trouble.headline)
         }
         // Unreachable until something implements `VoiceCapture` — `canHoldToTalk`
         // is false today and the composer's own recording UI is gated the same
@@ -524,7 +524,7 @@ struct MynahHUDView: View {
             // Unreachable — `trouble` is exactly this case and is handled above.
             // Kept exhaustive so a new readiness state is a compile error here
             // rather than a panel that silently says nothing.
-            return Line(tone: .caution, title: "Needs you", detail: nil)
+            return Line(tone: .neutral, title: "Needs you", detail: nil)
         }
     }
 

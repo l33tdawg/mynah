@@ -1575,9 +1575,9 @@ struct AgentsView: View {
                 Text(agent.memoryLine)
                     .mynahFont(.label)
                     .foregroundStyle(
-                        agent.memoryCount == 0 ? Palette.state.caution : Palette.ink.secondary
+                        Palette.ink.secondary
                     )
-                if !agent.isActive { StatusPill("Inactive", tone: .caution) }
+                if !agent.isActive { StatusPill("Inactive", tone: .neutral) }
             }
         }
     }
@@ -1654,7 +1654,7 @@ struct AgentsView: View {
             VStack(alignment: .leading, spacing: s3) {
                 Text(trouble.headline)
                     .mynahFont(.label)
-                    .foregroundStyle(Palette.state.caution)
+                    .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if trouble.isWorthRetrying {
                     MynahButton("Try again", kind: .quiet) {
@@ -1823,7 +1823,7 @@ private struct AgentListRow: View {
                 // eye already scans. The word itself survives in the detail
                 // pane, where there is room for it.
                 if agent.permissions.isRestricted {
-                    StatusDot(.caution)
+                    StatusDot(.neutral)
                 }
                 Spacer(minLength: 0)
             }
@@ -1858,7 +1858,7 @@ private struct AgentListRow: View {
                 Text(agent.memoryLine)
                     .mynahFont(.label)
                     .foregroundStyle(
-                        agent.memoryCount == 0 ? Palette.state.caution : Palette.ink.secondary
+                        Palette.ink.secondary
                     )
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -1970,7 +1970,7 @@ struct ApplianceStanding: View {
     var body: some View {
         VStack(alignment: .leading, spacing: s5) {
             if let status {
-                InlineBanner(tone: .caution, headline: status.headline, explanation: status.remedy)
+                InlineBanner(headline: status.headline, explanation: status.remedy)
                 // SAGE's own sentence about the refusal, when there has been
                 // one. Never paraphrased, and visibly the node speaking rather
                 // than us.

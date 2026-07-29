@@ -270,11 +270,11 @@ struct ReadyStage: View {
                         // the card that summarises what is true.
                         if app.isPaused {
                             MynahDivider()
-                            StatusLine("Answering", value: "Paused", tone: .caution)
+                            StatusLine("Answering", value: "Paused", tone: .neutral)
                         }
                         ForEach(unfinished) { step in
                             MynahDivider()
-                            StatusLine(step.title, value: "Not done", tone: .caution)
+                            StatusLine(step.title, value: "Not done", tone: .neutral)
                         }
                     }
                 }
@@ -388,7 +388,7 @@ struct ReadyStage: View {
         if let readiness = writeReadiness,
            let headline = readiness.headline,
            let remedy = readiness.shortRemedy {
-            InlineBanner(tone: .caution, headline: headline, explanation: remedy)
+            InlineBanner(headline: headline, explanation: remedy)
                 .frame(maxWidth: MynahWidth.stageColumn)
         }
     }

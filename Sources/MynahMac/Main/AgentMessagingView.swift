@@ -226,7 +226,7 @@ struct AgentMessageSheet: View {
             // Caution rather than critical: nothing is broken and nothing was
             // lost — the message is still in the box above and the owner can
             // fix the reason and press Send again.
-            InlineBanner(tone: .caution, headline: "That didn't send.", explanation: sentence)
+            InlineBanner(headline: "That didn't send.", explanation: sentence)
         }
     }
 
