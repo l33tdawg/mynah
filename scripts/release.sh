@@ -49,6 +49,21 @@ swift test
 step "release build"
 swift build -c release --arch arm64
 
+# The call endpoint, which package-app.sh requires and this script never built.
+#
+# It went unnoticed because every release so far was cut from the working repo,
+# where `.build/sage-voice-webrtc` was left behind by an earlier manual run.
+# Building from a clean checkout is what surfaced it: package-app.sh stops with
+# "Required call endpoint is missing", naming the file and not the reason this
+# script did not produce it.
+#
+# Separate from `swift build` because the endpoint is Go with cgo and a static
+# libopus, so it is built one architecture at a time — see the trap documented
+# in the script itself, where a Rosetta Go toolchain silently emits an Intel
+# binary that cannot link an arm64 archive.
+step "call endpoint"
+bash webrtc/scripts/build-endpoint.sh
+
 step "provision signed speech assets"
 bash scripts/provision-asr-assets.sh
 
