@@ -294,6 +294,41 @@ final class CerebrumTaskSourceTests: XCTestCase {
     func testTheCardLimitIsTheBackendsOwnMaximum() {
         XCTAssertEqual(CerebrumTaskSource.maximumCards, 500)
     }
+
+    /// **The path the owner actually hits, proved end to end.**
+    ///
+    /// Everything else here is decoding against fixtures. This is the only
+    /// assertion that exercises the real request against the real node, and it
+    /// is the one that matters before a build goes out: his node is encrypted,
+    /// so the unsigned local read is answered `401 {"login_required":true}`, and
+    /// the whole design rests on that becoming `locked` rather than an empty
+    /// board. An owner with 34 open tasks being shown "Nothing planned" is the
+    /// failure this screen was rewritten to prevent.
+    ///
+    /// Passes on either kind of node: an unencrypted one answers 200 and the
+    /// board reads, an encrypted one throws `locked`. What must never happen is
+    /// a success carrying no tasks.
+    func testTheRealNodeEitherAnswersOrSaysItIsLocked() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MYNAH_LIVE_NODE_TESTS"] == "1",
+            "set MYNAH_LIVE_NODE_TESTS=1 to run against the SAGE on this machine"
+        )
+
+        do {
+            let board = try await CerebrumTaskSource().board()
+            // An unencrypted node. A readable board is a real answer, empty or
+            // not — but it must have come from a 200, not from a swallowed 401.
+            XCTAssertNotNil(board, "the source returned no board and did not throw")
+        } catch let failure as TaskSourceFailure {
+            XCTAssertEqual(
+                failure,
+                .locked,
+                "the node refused in a way the board does not recognise as locked, so it would "
+                    + "render \(failure) instead of offering the owner their passphrase"
+            )
+            XCTAssertEqual(failure.failure, TaskBoardTrouble.locked)
+        }
+    }
 }
 
 // MARK: - What the board says when it cannot see

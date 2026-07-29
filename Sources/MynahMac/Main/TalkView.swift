@@ -96,15 +96,25 @@ struct TalkView: View {
         VStack(spacing: 0) {
             healthLine
             MynahDivider()
-            TaskBoardView(model: board)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            MynahDivider()
-            // Below the board and given a fixed share of the window, because
-            // this is now where work is made rather than where it is watched.
-            conversation
-                .frame(height: Self.conversationHeight)
+            if app.homeSplit.showsBoard {
+                TaskBoardView(model: board)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            splitControl
+            if app.homeSplit.showsConversation {
+                // A fixed share of the window when the board is above it, and
+                // all of it when the board is folded away.
+                conversation
+                    .frame(maxHeight: app.homeSplit == .conversationOnly
+                           ? .infinity
+                           : Self.conversationHeight)
+            }
+            // Always. Collapsing the transcript folds away what was said, not
+            // the ability to say something — a board you can only read is not
+            // what "chat is too big" asked for.
             composer
         }
+        .mynahAnimation(Motion.snap, value: app.homeSplit)
         .background(Palette.surface.canvas)
         .task {
             await model.connect()
@@ -145,6 +155,115 @@ struct TalkView: View {
         .padding(.horizontal, s8)
         .padding(.vertical, s5)
         .mynahAnimation(Motion.fade, value: health)
+    }
+
+    // MARK: The seam between the two halves
+
+    /// The divider, and the only way to fold either half away.
+    ///
+    /// **One affordance, two directions.** The chevrons move the seam rather
+    /// than naming a half: up folds the board away, down folds the transcript
+    /// away, and whichever half is hidden shows the one chevron that brings it
+    /// back. That mapping is worth the two glyphs — a single button would have
+    /// to cycle through three states, and a control whose next effect you have
+    /// to remember is a control you stop using.
+    ///
+    /// No drag handle beside it. A draggable split is a second way to do the
+    /// same thing, with a position the owner then has to maintain.
+    private var splitControl: some View {
+        VStack(spacing: 0) {
+            // Only when something sits above it. With the board folded away the
+            // health line's own rule is already there, and two hairlines
+            // touching read as one thick badly-drawn one.
+            if app.homeSplit.showsBoard { MynahDivider() }
+            HStack(spacing: s3) {
+                collapsedSummary
+                Spacer(minLength: s4)
+                if app.homeSplit != .conversationOnly {
+                    seamButton(
+                        "chevron.up",
+                        label: app.homeSplit == .boardOnly ? "Show the conversation" : "Hide the board",
+                        to: app.homeSplit == .boardOnly ? .both : .conversationOnly
+                    )
+                }
+                if app.homeSplit != .boardOnly {
+                    seamButton(
+                        "chevron.down",
+                        label: app.homeSplit == .conversationOnly ? "Show the board" : "Hide the conversation",
+                        to: app.homeSplit == .conversationOnly ? .both : .boardOnly
+                    )
+                }
+            }
+            .padding(.horizontal, s8)
+            .padding(.vertical, s2)
+            MynahDivider()
+        }
+    }
+
+    private func seamButton(_ glyph: String, label: String, to split: AppModel.HomeSplit) -> some View {
+        Button {
+            app.homeSplit = split
+        } label: {
+            Image(systemName: glyph)
+                .mynahIcon(.inline)
+                .foregroundStyle(Palette.ink.secondary)
+                .frame(width: 22, height: 18)
+                .contentShape(RoundedRectangle.mynah(r.chip))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    /// What is behind the fold, so the owner knows what a click gets back.
+    ///
+    /// A bare rule with a chevron on it is a mystery. The counts are the same
+    /// three numbers the column headers carry, and the dot appears only when the
+    /// board has something wrong with it — folding a problem away and saying
+    /// nothing would be the screen keeping a secret.
+    @ViewBuilder
+    private var collapsedSummary: some View {
+        switch app.homeSplit {
+        case .both:
+            EmptyView()
+        case .conversationOnly:
+            HStack(spacing: s3) {
+                if board.trouble != nil { StatusDot(.caution) }
+                Text(boardSummary)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .lineLimit(1)
+            }
+        case .boardOnly:
+            Text(conversationSummary)
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var boardSummary: String {
+        guard let plate = board.board else {
+            // Never "no tasks". Nothing has been read, and the fold is not the
+            // place to invent an answer.
+            return board.trouble == nil ? "Tasks" : "Tasks — something needs a look"
+        }
+        let parts = [
+            "\(plate.planned.count) planned",
+            "\(plate.inProgress.count) in progress",
+            "\(plate.done.count) done"
+        ]
+        return parts.joined(separator: " · ")
+    }
+
+    private var conversationSummary: String {
+        let count = model.exchanges.count + mirror.messages.count
+        switch count {
+        case 0: return "Conversation"
+        case 1: return "Conversation — 1 message"
+        default: return "Conversation — \(count) messages"
+        }
     }
 
     private var canClear: Bool { !model.exchanges.isEmpty || !mirror.messages.isEmpty }

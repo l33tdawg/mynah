@@ -53,12 +53,34 @@ final class AppModel {
         }
     }
 
+    /// Which half of Home is on screen.
+    ///
+    /// Two modes rather than a draggable split, which is what the owner asked
+    /// for after talking himself out of dragging in the same sentence: "you
+    /// don't always want chat to be so big but at the same time you don't always
+    /// need to see all tasks list thing". A drag gives somebody a fiddly control
+    /// and a position they then have to maintain; this is reading, or talking,
+    /// and both is the default.
+    enum HomeSplit: String, CaseIterable, Sendable {
+        case both
+        /// The board, with the transcript folded away. The composer stays —
+        /// collapsing the conversation must not take away the ability to ask for
+        /// something, or the board becomes a thing you can only read.
+        case boardOnly
+        /// The conversation, with the board folded away.
+        case conversationOnly
+
+        var showsBoard: Bool { self != .conversationOnly }
+        var showsConversation: Bool { self != .boardOnly }
+    }
+
     private enum Key {
         static let setupComplete = "mynah.setupComplete"
         static let paused = "mynah.paused"
         static let keepAnswering = "mynah.keepAnsweringWhenClosed"
         static let textSize = "mynah.textSize"
         static let deferredSteps = "mynah.deferredSetupSteps"
+        static let homeSplit = "mynah.homeSplit"
     }
 
     /// Live state, owned by whatever is driving turns. Not persisted — a
@@ -99,6 +121,12 @@ final class AppModel {
 
     var textSize: MynahTextSize {
         didSet { defaults.set(textSize.rawValue, forKey: Key.textSize) }
+    }
+
+    /// Persisted, because a collapse that resets overnight is worse than none —
+    /// the owner would fold the same half away every morning.
+    var homeSplit: HomeSplit {
+        didSet { defaults.set(homeSplit.rawValue, forKey: Key.homeSplit) }
     }
 
     private(set) var hasCompletedSetup: Bool
@@ -161,6 +189,9 @@ final class AppModel {
         // when the window closes, so the default is on.
         self.keepsAnsweringWhenClosed = defaults.object(forKey: Key.keepAnswering) as? Bool ?? true
         self.textSize = (defaults.string(forKey: Key.textSize).flatMap(MynahTextSize.init(rawValue:))) ?? .standard
+        // Absent means "never collapsed anything", and seeing both halves is the
+        // right first impression of a window that holds two things.
+        self.homeSplit = (defaults.string(forKey: Key.homeSplit).flatMap(HomeSplit.init(rawValue:))) ?? .both
         // Decode failures leave the list empty rather than throwing: a step the
         // owner deferred is a reminder, and a reminder is never worth refusing
         // to launch over.
