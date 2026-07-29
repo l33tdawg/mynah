@@ -3,7 +3,7 @@ import OSLog
 import SageVoiceCore
 import SwiftUI
 
-private let rosterLog = Logger(subsystem: "local.sage.voicebridge", category: "roster")
+private let rosterLog = MynahLog(category: "roster")
 
 /// Who Mynah can reach, fetched once when the app starts.
 ///
@@ -102,7 +102,7 @@ final class ApplianceRoster {
         } catch let trouble as AgentTrouble {
             phase = .unavailable(trouble)
         } catch {
-            rosterLog.error("roster failed: \(String(describing: error), privacy: .public)")
+            rosterLog.error("roster failed: \(String(describing: error))")
             phase = .unavailable(.unreachable)
         }
     }

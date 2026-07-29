@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import OSLog
+import SageVoiceCore
 import SwiftUI
 
 // MARK: - Logging
@@ -8,7 +9,7 @@ import SwiftUI
 /// Where the panel's plumbing goes: a rejected saved position, a missing screen,
 /// a window that could not be found. None of it is owner-facing, and none of it
 /// reaches a `Text`.
-private let hudLog = Logger(subsystem: "com.sage.mynah", category: "hud")
+private let hudLog = MynahLog(category: "hud")
 
 // MARK: - The panel
 

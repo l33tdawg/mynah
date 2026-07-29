@@ -289,7 +289,7 @@ final class SetupModel {
             // "no backend for 'groq'" — or a POSIX errno — on the screen of
             // someone who pasted exactly what they were asked for. The detail
             // goes to the log; they get a sentence with a verb in it.
-            Self.log.error("key verification failed for \(provider, privacy: .public): \(error)")
+            Self.log.error("key verification failed for \(provider): \(error)")
             keyState = .rejected(
                 "Mynah couldn't set that up. Go back and pick a different brain, then try again."
             )
@@ -297,5 +297,5 @@ final class SetupModel {
     }
 
     /// Owner-facing text never carries an error; the error comes here instead.
-    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "setup")
+    private static let log = MynahLog(category: "setup")
 }

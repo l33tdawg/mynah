@@ -86,9 +86,16 @@ final class AgentsRenderHarness: XCTestCase {
                                         Spacer(minLength: 0)
                                     }
                                     HStack(spacing: s2) {
-                                        Text(row.recencyLine).mynahFont(.label)
-                                            .foregroundStyle(Palette.ink.secondary)
-                                        Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
+                                        // Omitted entirely when the node has no
+                                        // record, matching the real row: a card
+                                        // that says nothing about recency is a
+                                        // card making no claim.
+                                        if let recency = row.recencyLine {
+                                            Text(recency).mynahFont(.label)
+                                                .foregroundStyle(Palette.ink.secondary)
+                                            Text("·").mynahFont(.label)
+                                                .foregroundStyle(Palette.ink.quaternary)
+                                        }
                                         Text(row.memoryLine).mynahFont(.label)
                                             .foregroundStyle(row.memoryCount == 0
                                                 ? Palette.state.caution : Palette.ink.secondary)

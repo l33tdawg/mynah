@@ -6,7 +6,7 @@ import SwiftUI
 
 // MARK: - Who is on this node
 
-private let agentsLog = Logger(subsystem: "com.sage.mynah", category: "agents")
+private let agentsLog = MynahLog(category: "agents")
 
 /// One agent registered on the SAGE running on this Mac.
 ///
@@ -105,7 +105,7 @@ struct NodeAgent: Identifiable, Equatable, Sendable {
     /// interface that offers "Send a message" identically to both is promising
     /// a conversation with a gravestone.
     var activity: Activity {
-        guard let lastSeen else { return .neverSeen }
+        guard let lastSeen else { return .unknown }
         let days = Calendar.current.dateComponents([.day], from: lastSeen, to: .now).day ?? 0
         // **Seven days, and it is a judgement about his week rather than a
         // round number.** He works with several of these daily — three were
@@ -125,7 +125,10 @@ struct NodeAgent: Identifiable, Equatable, Sendable {
     ///
     /// "Never run" rather than "never seen" — he cares that it has not run, not
     /// that nobody observed it.
-    var recencyLine: String {
+    /// **Optional, and the `nil` is the point.** When the node has no
+    /// `last_seen` the card says nothing about recency rather than inventing
+    /// "never run" — which was false for both rows that get it here.
+    var recencyLine: String? {
         switch activity {
         case .active(let days), .dormant(let days):
             switch days {
@@ -133,21 +136,36 @@ struct NodeAgent: Identifiable, Equatable, Sendable {
             case 1: return "seen yesterday"
             default: return "seen \(days) days ago"
             }
-        case .neverSeen:
-            return "never run"
+        case .unknown:
+            return nil
         }
     }
 
     /// Deliberately three cases rather than a `Bool`.
     ///
-    /// "Never seen" is not a very old "dormant" — it is an agent that
-    /// registered and has not run once, which is a different thing to tell
-    /// somebody, and collapsing it into the oldest bucket would be an absence
-    /// rendered as a measurement.
+    /// **The third case used to be `neverSeen`, and calling it that was wrong.**
+    /// It rendered as "never run", and on the owner's node the two rows that
+    /// get it are:
+    ///
+    ///     macmini        role member  105 memories  last_seen absent
+    ///     genesis-admin  role admin    74 memories  last_seen absent
+    ///
+    /// **An agent with 105 memories has demonstrably run.** `last_seen` means
+    /// *last seen over MCP*, not *last active* — `genesis-admin` is the node
+    /// operator key, and the owner acts as it through CEREBRUM's web interface,
+    /// which never touches this field. So the roster was about to show the
+    /// administrator its own remedy points at as the deadest thing on the page.
+    ///
+    /// Sixth time today a field has meant something narrower than its name and
+    /// the interface read the name. So this one says **unknown** and the screen
+    /// claims nothing: an absence must not be rendered as a measurement, which
+    /// is the rule the old case name broke while quoting it.
     enum Activity: Equatable, Sendable {
         case active(daysAgo: Int)
         case dormant(daysAgo: Int)
-        case neverSeen
+        /// The node has no record of this agent connecting over MCP. It says
+        /// nothing about whether the agent is doing anything.
+        case unknown
 
         /// Whether a message sent now has somebody who will read it.
         var wouldBeRead: Bool {
@@ -482,7 +500,7 @@ struct NodeAgentDirectory: AgentDirectorySource {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            agentsLog.error("GET /v1/agents failed: \(String(describing: error), privacy: .public)")
+            agentsLog.error("GET /v1/agents failed: \(String(describing: error))")
             throw AgentTrouble.unreachable
         }
         try LoopbackSecurity.verifyResponseOrigin(response, expected: endpoint)
@@ -496,7 +514,7 @@ struct NodeAgentDirectory: AgentDirectorySource {
         case 404:
             throw AgentTrouble.notSetUp
         default:
-            agentsLog.error("GET /v1/agents returned \(http.statusCode, privacy: .public)")
+            agentsLog.error("GET /v1/agents returned \(http.statusCode)")
             throw AgentTrouble.refused
         }
 
@@ -662,7 +680,7 @@ actor SageFederationScan: FederationScanning {
         do {
             text = try await client.call(name: "sage_federation", arguments: [:])
         } catch let error as MCPClientError {
-            agentsLog.error("sage_federation failed: \(String(describing: error), privacy: .public)")
+            agentsLog.error("sage_federation failed: \(String(describing: error))")
             switch error {
             case .missingExecutable: throw AgentTrouble.notSetUp
             case .toolFailed, .rpcError: throw AgentTrouble.refused
@@ -672,7 +690,7 @@ actor SageFederationScan: FederationScanning {
                 throw AgentTrouble.unreachable
             }
         } catch {
-            agentsLog.error("sage_federation failed: \(String(describing: error), privacy: .public)")
+            agentsLog.error("sage_federation failed: \(String(describing: error))")
             reset()
             throw AgentTrouble.unreachable
         }
@@ -1115,7 +1133,7 @@ final class AgentsModel {
         } catch let trouble as AgentTrouble {
             scan = .failed(trouble)
         } catch {
-            agentsLog.error("federation scan failed: \(String(describing: error), privacy: .public)")
+            agentsLog.error("federation scan failed: \(String(describing: error))")
             scan = .failed(.unreachable)
         }
     }
@@ -1523,10 +1541,15 @@ struct AgentsView: View {
         case .active:
             return "It picks up messages when it next runs."
         case .dormant:
-            return "\(agent.recencyLine.prefix(1).uppercased())\(agent.recencyLine.dropFirst()). "
+            let seen = agent.recencyLine ?? "Not seen recently"
+            return "\(seen.prefix(1).uppercased())\(seen.dropFirst()). "
                 + "This waits in its inbox until it runs again."
-        case .neverSeen:
-            return "This one has never run. Your message waits in its inbox until it does."
+        case .unknown:
+            // Says what is true — the message queues — and nothing about the
+            // agent, because there is nothing true to say. "This one has never
+            // run" was here and it was false of both rows that reach it.
+            return "Your node has no record of this one connecting. The message waits in its "
+                + "inbox either way."
         }
     }
 
@@ -1750,7 +1773,8 @@ private struct AgentListRow: View {
         // The dot is invisible to VoiceOver, so the word goes in the label —
         // the one place where the pill's text still has to exist for a row.
         .accessibilityLabel(
-            "\(agent.name). \(agent.recencyLine). \(agent.standingLine). \(agent.memoryLine)."
+            "\(agent.name). \(agent.recencyLine.map { $0 + ". " } ?? "")"
+                + "\(agent.standingLine). \(agent.memoryLine)."
                 + (agent.permissions.isRestricted ? " Restricted." : "")
         )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -1818,13 +1842,19 @@ private struct AgentListRow: View {
             // A fourth fact was not an option — at 300pt the last addition to
             // this line hyphenated `Restricted` into "Restrict / ed".
             HStack(spacing: s2) {
-                Text(agent.recencyLine)
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .lineLimit(1)
-                Text("·")
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.quaternary)
+                // Absent rather than "never run" when the node has no record.
+                // A row that says nothing about recency is a row making no
+                // claim, which is the honest state for an agent whose work
+                // never goes through this channel.
+                if let recency = agent.recencyLine {
+                    Text(recency)
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .lineLimit(1)
+                    Text("·")
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.quaternary)
+                }
                 Text(agent.memoryLine)
                     .mynahFont(.label)
                     .foregroundStyle(

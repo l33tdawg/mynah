@@ -136,7 +136,7 @@ final class AppModel {
             } catch {
                 // Surfaced rather than swallowed: a Pause that silently failed
                 // to take is the exact bug being fixed.
-                Self.log.error("could not record pause state: \(String(describing: error), privacy: .public)")
+                Self.log.error("could not record pause state: \(String(describing: error))")
             }
             Task { await reconcileAnsweringService() }
         }
@@ -179,7 +179,7 @@ final class AppModel {
         isAdoptingPauseStateFromDisk = true
         isPaused = onDisk
         isAdoptingPauseStateFromDisk = false
-        Self.log.info("adopted pause state from disk: \(onDisk ? "paused" : "answering", privacy: .public)")
+        Self.log.info("adopted pause state from disk: \(onDisk ? "paused" : "answering")")
         return true
     }
 
@@ -208,7 +208,7 @@ final class AppModel {
         await reconcileAnsweringService()
     }
 
-    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "pause")
+    private static let log = MynahLog(category: "pause")
 
     /// The daemon keeps running with the window closed. This is the owner's
     /// switch for the phone bridge, phrased in Settings as "Keep answering
@@ -472,24 +472,27 @@ final class AppModel {
             await backgroundServices.disable(because: reason)
             answeringServiceError = nil
         case .cannotTell(let reason):
-            // At error level on purpose. `.info` and `.debug` are not persisted
-            // unless something opts the subsystem in, so the one line that
-            // explains a dead phone bridge would be gone by the time anybody
-            // went looking — which is exactly what happened on 29 July, and
-            // cost an afternoon of eliminating four possibilities by hand.
-            Self.appliance.error(
-                "leaving the phone bridge as it is: \(reason, privacy: .public)"
-            )
+            // **The comment that stood here was a booby trap and is deleted.**
+            //
+            // It said `.error` was chosen on purpose because `.info` and
+            // `.debug` are not persisted — carefully reasoned, correct about
+            // Apple's defaults, and wrong about this machine. Measured with a
+            // standalone binary: `log stream` sees these lines and `log show`
+            // cannot retrieve them **at any level**. So the fix written for the
+            // afternoon we lost would have failed the identical way, and the
+            // comment would have made the next person confident it could not.
+            //
+            // Third time today a carefully written sentence asserted a property
+            // nothing enforced, and the only one that was a trap rather than a
+            // bad number. `MynahLog` writes to a file we can actually read.
+            Self.appliance.error("leaving the phone bridge as it is: \(reason)")
             // `answeringServiceError` is deliberately untouched. This is
             // neither a success nor a failure of what the owner asked for, and
             // clearing a real error here would hide a fault behind a shrug.
         }
     }
 
-    private static let appliance = Logger(
-        subsystem: "local.sage.voicebridge",
-        category: "appliance"
-    )
+    private static let appliance = MynahLog(category: "appliance")
 
     /// Used by "Change where your words go" in Settings, and by the previews.
     func restartSetup() {

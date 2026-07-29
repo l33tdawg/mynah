@@ -155,6 +155,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         let logs = homeDirectory.appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
         try fileManager.createDirectory(at: launchAgents, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
+        protectLogs(in: logs)
 
         let signalURL = launchAgents.appendingPathComponent("\(Self.signalLabel).plist")
         let bridgeURL = launchAgents.appendingPathComponent("\(Self.bridgeLabel).plist")
@@ -193,7 +194,6 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         try bridgeData.write(to: bridgeURL, options: .atomic)
 
         Self.log.notice("restarting the phone bridge to apply a changed configuration")
-        record("restarting the phone bridge to apply a changed configuration")
 
         // bootout returns non-zero on a first install; that only means there
         // was nothing stale to stop.
@@ -204,6 +204,89 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         }
         try await bootstrap(signalURL, label: Self.signalLabel)
         try await bootstrap(bridgeURL, label: Self.bridgeLabel)
+    }
+
+    /// Makes the daemon's logs owner-only, every time this runs.
+    ///
+    /// **These are the files with his life in them.** `bridge.log` carried his
+    /// phone number twenty-six times and the text of what he sent — "replied in
+    /// 30.4s to what agents can you see ?" — and `signal.log` carries the number
+    /// sixteen times. Both were `0644`, in a product whose argument is a page
+    /// called "What leaves this Mac".
+    ///
+    /// **`MynahLog`'s fix could not reach them, and it is worth knowing why.**
+    /// Nothing in this codebase writes these files. launchd does, from
+    /// `StandardOutPath` and `StandardErrorPath`, creating them under the job's
+    /// umask — so every write path we own could be perfect and these two would
+    /// still arrive world-readable. A plist key is a claim; `stat` is a
+    /// measurement, and a test asserting we asked for the right thing would have
+    /// passed throughout.
+    ///
+    /// ## The reason, which is not local accounts
+    ///
+    /// The mode protects a file sitting still. What actually matters is that
+    /// **Settings tells him to send these logs for diagnostics** — `chrome`'s
+    /// point, and a better argument than the one this started with. A file we
+    /// ask him to attach to a message is not protected by any bit on his disk;
+    /// what protects him there is the redaction at the daemon's log seam, and
+    /// this mode is what keeps the copy at rest closed while it waits.
+    ///
+    /// ## Why a chmod here, and why `Umask` in the plist is not the better fix
+    ///
+    /// The first version of this comment called `Umask: 0o077` "the better fix,
+    /// deferred because it costs a reload", and told the next person to add it.
+    /// That was wrong on the substance, not just the timing: **`Umask` governs
+    /// the files launchd itself creates.** `bridge.log` and `signal.log` already
+    /// exist on this Mac, so the key would apply to nothing here — it would have
+    /// carried the full cost of a reconcile (both jobs booted, the socket
+    /// dropped, the path that took his phone away twice today) to change no byte
+    /// of any file he has. It is worth having for a *fresh install*, where
+    /// launchd does create them, and only there.
+    ///
+    /// So: a chmod, before the byte comparison, on every `enable`, repairing
+    /// whatever is on disk — the only thing that helps an existing install. If
+    /// somebody later edits these plists for a reason of their own, adding
+    /// `"Umask": 0o077` in the same edit is free. It is not worth an edit of its
+    /// own, and nobody should trigger a reload to land it.
+    ///
+    /// ## The honest limit
+    ///
+    /// This runs on `enable`, not on every write, because we never do the
+    /// writing. launchd *appends* to an existing file, so a mode set once
+    /// survives — but a file deleted between installs comes back at the umask
+    /// and stays that way until the next reconcile. On his machine that is fine.
+    /// It is not a guarantee, and it should not be described as one.
+    ///
+    /// ## The directory was the part that was actually open
+    ///
+    /// Worth recording, because it was nearly written off. The directory was
+    /// found at `drwx------` and the `0644` files read as never reachable —
+    /// "worth checking, not worth changing". That was a state this method had
+    /// already created: `prepareDirectory` had run hours earlier.
+    ///
+    /// Before that it came from `createDirectory` above, with no attributes.
+    /// Verified rather than assumed, by predicting first: if that call yields
+    /// `0755` on this Mac, then `~/Library/LaunchAgents`, made by the sibling
+    /// line and never touched by us, is `0755` too. It is — `drwxr-xr-x`, umask
+    /// `022`, and a control directory created the same way right now comes out
+    /// `0755`. So the files were world-readable for as long as they existed, and
+    /// this method closed it rather than doubling something already closed. It
+    /// has to keep running: a fresh install starts at `0755` again.
+    ///
+    /// `appliance.log` is in the list because it is the same class of file, not
+    /// because anybody reported it — it was written this afternoon and would
+    /// have been missed by a fix aimed only at the two files that were named.
+    ///
+    /// Best-effort throughout: a log we cannot chmod is not a reason to refuse
+    /// to install his appliance.
+    private func protectLogs(in logs: URL) {
+        try? OwnerOnlyFileSecurity.prepareDirectory(logs, fileManager: fileManager)
+        for name in ["bridge.log", "signal.log", "appliance.log"] {
+            try? OwnerOnlyFileSecurity.protectFile(
+                logs.appendingPathComponent(name),
+                fileManager: fileManager
+            )
+        }
     }
 
     /// Whether launchd is already running exactly what `enable` would install.
@@ -239,15 +322,19 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             return
         }
         // The one action in this file that takes the owner's phone away, and
-        // until 29 July it happened without a word anywhere. At error level so
-        // it survives in the unified log — `.info` and `.debug` are dropped
-        // unless something has opted the subsystem in, and the whole value of
-        // this line is being readable hours later, by somebody who does not yet
-        // know what they are looking for.
-        Self.log.error(
-            "removing both LaunchAgents, so the phone will stop being answered: \(reason, privacy: .public)"
-        )
-        record("removing both LaunchAgents, so the phone will stop being answered: \(reason)")
+        // until 29 July it happened without a word anywhere.
+        //
+        // `MynahLog` does both halves — `os_log` for anyone streaming, the file
+        // for anyone arriving afterwards with a question. This file used to
+        // carry its own `record(_:)`, written this afternoon when `os_log`
+        // turned out to be unreadable here; `thread`'s type superseded it and
+        // it is gone rather than left beside its replacement.
+        //
+        // The claim that used to sit here — that `.error` survives in the
+        // unified log where `.info` and `.debug` do not — is true of Apple's
+        // defaults and false on his Mac, where nothing is retrievable after the
+        // fact at any level. The level is still right; the reasoning was not.
+        Self.log.error("removing both LaunchAgents, so the phone will stop being answered: \(reason)")
         _ = await bootout(Self.bridgeLabel)
         _ = await bootout(Self.signalLabel)
 
@@ -288,7 +375,6 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         if loaded { return .running }
         return installed ? .installedButNotRunning : .absent
     }
-
     /// Whether launchd has this job, or `nil` when launchctl could not be asked.
     ///
     /// The optional is the point, and it is the same distinction
@@ -305,58 +391,21 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         return result.succeeded
     }
 
-    private static let log = Logger(
-        subsystem: "local.sage.voicebridge",
-        category: "appliance"
-    )
+    /// **These four lines are the record of the two worst things that can
+    /// happen to his appliance, and they were write-only.**
+    ///
+    /// Two of them are the guard that stops `swift test` uninstalling his phone
+    /// bridge — the thing that actually happened on 29 July. One narrates the
+    /// reconcile that deletes the signal socket, which is the cause of all 24
+    /// reconnects in `bridge.log`. The fourth says the LaunchAgents are being
+    /// removed and why.
+    ///
+    /// Every one is an error or a notice, deliberately, because they exist to
+    /// be read after something went wrong. On this Mac `os_log` cannot be read
+    /// after the fact at any level — measured — so they were the appliance's
+    /// black box with the recorder disconnected.
+    private static let log = MynahLog(category: "appliance")
 
-    /// The same line, in a file we own.
-    ///
-    /// **`os_log` is not readable after the fact on the owner's Mac, and this
-    /// was measured rather than assumed.** A standalone binary emitting at
-    /// `.error` on that machine:
-    ///
-    ///     log stream …  → E  [local.sage.voicebridge:appliance] <the line>
-    ///     log show   …  → nothing, even matching raw message text, even --info
-    ///
-    /// So emission is fine and **retrieval is not**. Something about that Mac's
-    /// logging configuration — not checkable without root, and not worth
-    /// guessing at — means the unified log answers live and forgets.
-    ///
-    /// That matters because the whole point of this line is being read *hours
-    /// later, by somebody who does not yet know what they are looking for*. A
-    /// diagnostic you can only see if you were already watching is not a
-    /// diagnostic.
-    ///
-    /// `~/Library/Logs/Mynah/` is where `bridge.log` and `signal.log` live, and
-    /// those have been readable all day — every appliance fault today was
-    /// diagnosed out of them. So the appliance's own lifecycle goes beside
-    /// them, in the folder somebody already knows to open.
-    ///
-    /// Append-only, best-effort, never throwing: a failure to record why the
-    /// appliance stopped must not become a second reason it stopped.
-    private func record(_ line: String) {
-        let logs = homeDirectory.appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
-        try? fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
-        let file = logs.appendingPathComponent("appliance.log")
-        let stamped = "\(Self.timestamp.string(from: Date())) \(line)\n"
-        guard let data = stamped.data(using: .utf8) else { return }
-        if let handle = try? FileHandle(forWritingTo: file) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-        } else {
-            try? data.write(to: file)
-        }
-    }
-
-    private static let timestamp: DateFormatter = {
-        let formatter = DateFormatter()
-        // Local time and seconds, because every diagnosis today started by
-        // matching a line against a file's modification date.
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter
-    }()
 
     private func bootout(_ label: String) async -> Bool {
         let result = await runner.run(

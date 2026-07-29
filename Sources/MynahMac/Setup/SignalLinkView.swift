@@ -525,6 +525,17 @@ final class SignalLinkModel {
         }
     }
 
+    /// **The one place still on `os_log`, and deliberately.**
+    ///
+    /// Everything else in the app moved to `MynahLog`, which mirrors to a file
+    /// so a diagnostic can be read back tomorrow rather than only while
+    /// somebody watches. This screen cannot: the two lines below carry
+    /// `signal-cli`'s own output, and a link transcript contains the
+    /// device-linking URI — the secret that pairs a phone. `os_log` redacts
+    /// `privacy: .private`; a plaintext file in `~/Library/Logs` does not.
+    ///
+    /// So this loses after-the-fact readability on purpose, in the one place
+    /// where the alternative is writing a pairing secret to disk.
     private static let log = Logger(subsystem: "com.sage.mynah", category: "phone-link")
 
     /// Homebrew's own downloads are the slow part; past this it is wedged, not

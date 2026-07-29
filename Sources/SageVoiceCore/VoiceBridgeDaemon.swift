@@ -279,7 +279,13 @@ public actor VoiceBridgeDaemon {
         self.calls = calls
         self.callRefusal = callRefusal
         self.onCallRequested = onCallRequested
-        self.log = log
+        // Every line this daemon writes goes through here, and `log`'s default
+        // destination is stderr — which launchd redirects into `bridge.log`.
+        // The scrub is applied once, at the seam, rather than trusted to each
+        // call site: two call sites forgot, and twenty-six copies of the owner's
+        // number were sitting in that file as a result. See
+        // `SignalSenderAllowlist.redactingNumbers(in:)`.
+        self.log = { log(SignalSenderAllowlist.redactingNumbers(in: $0)) }
     }
 
     /// Runs until the message stream finishes (i.e. until `signal.stop()`).
@@ -617,6 +623,8 @@ public actor VoiceBridgeDaemon {
             // carrying the file would read as a third indistinguishable blue
             // block — the same reason the thinking acknowledgement is off.
             await reply(result.reply, to: recipient, attaching: notes?.drainWrittenNotes() ?? [])
+            // **The owner's wait ends here, and nothing below is part of it.**
+            let delivered = Date()
             log("[daemon] \(result.trace.summary)")
             // Cleanup should tidy a reply, not amputate it. A large gap between
             // what the model produced and what the owner receives means
@@ -666,10 +674,39 @@ public actor VoiceBridgeDaemon {
                 )
             }
 
+            // **`replied in Xs` measures more than replying, and that is why 13
+            // seconds of the owner's average turn had no owner.**
+            //
+            // `started` is set when this method begins and the clock is read
+            // *here* — after `anchorPromptCache` and `recordTurn`, both of which
+            // the comments above place after the reply **precisely because the
+            // owner is no longer waiting.** The code does the right thing and
+            // then reports a number that hides it.
+            //
+            // So the stacked line below names every band and who is waiting on
+            // it. `waited` is the only figure that describes his experience:
+            // thumb to bubble is that plus Signal transit, which this process
+            // never sees.
+            //
+            // Sixth instance of a name wider than its meaning, and the first
+            // that cost a performance investigation rather than a sentence.
+            let finished = Date()
+            let waited = delivered.timeIntervalSince(started)
+            let housekeeping = finished.timeIntervalSince(delivered)
+            log(String(
+                format: "[daemon] turn %.1fs — owner waited %.1fs, housekeeping %.1fs "
+                    + "(model %.1fs, tools %.1fs, ours %.1fs)",
+                finished.timeIntervalSince(started),
+                waited,
+                housekeeping,
+                result.trace.modelSeconds,
+                result.trace.toolSeconds,
+                max(0, waited - result.trace.modelSeconds - result.trace.toolSeconds)
+            ))
             return .replied(
                 transcript: transcript,
                 reply: result.reply,
-                seconds: Date().timeIntervalSince(started)
+                seconds: finished.timeIntervalSince(started)
             )
         } catch let error as BrainBackendError {
             // These have sentences written for exactly this moment.
@@ -876,7 +913,8 @@ public actor VoiceBridgeDaemon {
             // without the files rather than leave the owner with silence.
             guard !attachments.isEmpty else {
                 // Nowhere left to report to — the reply channel is what failed.
-                log("[daemon] could not send reply to \(recipient): \(error)")
+                log("[daemon] could not send reply to "
+                    + "\(SignalSenderAllowlist.redact(recipient.description)): \(error)")
                 return
             }
             log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")
@@ -957,6 +995,32 @@ public actor VoiceBridgeDaemon {
 }
 
 private extension VoiceBridgeDaemon.Outcome {
+    /// **The sixty characters of what he said are kept on purpose.**
+    ///
+    /// Recorded because it looks like the same defect as the phone number two
+    /// files away and is not. That one was a leak: the number bought no
+    /// diagnostic power, the redacted form identified the sender just as well,
+    /// and a twin call site had been redacting correctly all along. This is a
+    /// trade, and the utterance is the load-bearing half of it — "replied in
+    /// 16.7s to are you there?" is what made a latency band investigable at all.
+    /// A line reading "replied in 16.7s" pairs with nothing; you cannot tell a
+    /// slow model from a slow question, and matching a duration back to a
+    /// message would mean going to his actual Signal thread to read it, which is
+    /// worse for him than the log line.
+    ///
+    /// What made it acceptable is a fact rather than an intention: this file is
+    /// `0600` in a `0700` directory, and — verified today, not assumed — it was
+    /// neither until `SignalBackgroundServiceManager.protectLogs` started
+    /// running. The directory was `0755`. So the mitigation this decision leans
+    /// on is real *and* it is young, which is why the reasoning is written down
+    /// here: **if that method ever stops running, this line becomes the reason
+    /// it mattered.**
+    ///
+    /// Two narrower things also hold. The prefix is capped, so a long dictation
+    /// contributes an opening clause rather than a paragraph. And the daemon's
+    /// log seam now scrubs E.164 runs from every line, so an utterance that
+    /// contains a phone number — reading one out is exactly the kind of thing
+    /// somebody dictates — loses it on the way to disk.
     var logDescription: String {
         switch self {
         case let .replied(transcript, _, seconds):

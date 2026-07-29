@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import Observation
 import OSLog
+import SageVoiceCore
 
 // MARK: - Microphone permission
 //
@@ -66,7 +67,7 @@ final class MicrophoneAccess {
     /// Previews and tests pin a state. Nothing in the app uses this.
     private let isPinned: Bool
 
-    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "microphone")
+    private static let log = MynahLog(category: "microphone")
 
     /// Straight to the Microphone list, not to the top of Privacy & Security.
     /// Every extra step is somewhere to get lost, and the owner is being sent

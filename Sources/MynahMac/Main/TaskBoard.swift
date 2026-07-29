@@ -5,7 +5,7 @@ import SageVoiceCore
 
 // MARK: - What is on the owner's plate
 
-private let boardLog = Logger(subsystem: "com.sage.mynah", category: "board")
+private let boardLog = MynahLog(category: "board")
 
 /// One task, as the board draws it.
 ///
@@ -337,7 +337,7 @@ actor CerebrumTaskSource: TaskSource {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            boardLog.error("task board fetch failed: \(String(describing: error), privacy: .public)")
+            boardLog.error("task board fetch failed: \(String(describing: error))")
             throw TaskSourceFailure.unreachable
         }
 
@@ -350,7 +350,7 @@ actor CerebrumTaskSource: TaskSource {
         case 403:
             throw TaskSourceFailure.refused
         default:
-            boardLog.error("task board returned \(http.statusCode, privacy: .public)")
+            boardLog.error("task board returned \(http.statusCode)")
             throw TaskSourceFailure.unreachable
         }
 
@@ -551,7 +551,7 @@ final class TaskBoardModel {
         } catch let failure as TaskSourceFailure {
             trouble = failure.failure
         } catch {
-            boardLog.error("could not read the board: \(String(describing: error), privacy: .public)")
+            boardLog.error("could not read the board: \(String(describing: error))")
             trouble = TaskBoardTrouble.cannotReach
         }
     }

@@ -268,6 +268,42 @@ public struct SignalSenderAllowlist: Equatable, Sendable, CustomStringConvertibl
 
     /// Keeps enough of an identifier to correlate log lines without printing the owner's
     /// full phone number into a log file.
+    /// Redacts every phone-number-shaped run inside an arbitrary log line.
+    ///
+    /// **This exists because `redact` is a convention and conventions lose.**
+    /// `redact` was already available, already used in eleven places, and the
+    /// two places that forgot it wrote the owner's number into `bridge.log`
+    /// twenty-six times — one of them under a doc comment promising the line was
+    /// "log-safe". Fixing those two call sites fixes today; it does nothing
+    /// about the next line somebody adds.
+    ///
+    /// So this is applied once, at the daemon's single log seam, to whatever a
+    /// caller hands it. A future call site that interpolates a raw recipient is
+    /// then wrong in a way that does not reach disk.
+    ///
+    /// The pattern is deliberately narrow — `+` then 7 to 15 digits, which is
+    /// E.164 and is not any other number this daemon logs. Signal timestamps are
+    /// thirteen bare digits with no `+`, durations carry a decimal point, and
+    /// attachment counts are small. Running it over an already-redacted string
+    /// is a no-op, because `+60******767` no longer matches.
+    ///
+    /// It is not a claim that nothing sensitive can reach a log. It is one
+    /// specific thing — the identifier that is also a way to contact him — made
+    /// structurally unable to arrive there by accident.
+    public static func redactingNumbers(in line: String) -> String {
+        guard let pattern = try? NSRegularExpression(pattern: #"\+\d{7,15}"#) else { return line }
+        let text = line as NSString
+        var result = line
+        let matches = pattern.matches(in: line, range: NSRange(location: 0, length: text.length))
+        // Backwards, so each replacement leaves the earlier ranges valid.
+        for match in matches.reversed() {
+            let found = text.substring(with: match.range)
+            guard let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: redact(found))
+        }
+        return result
+    }
+
     public static func redact(_ identifier: String) -> String {
         guard identifier.count > 6 else {
             return String(repeating: "*", count: identifier.count)

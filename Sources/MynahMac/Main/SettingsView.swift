@@ -282,7 +282,7 @@ final class SettingsModel {
         case bad(String)
     }
 
-    private let log = Logger(subsystem: "com.sage.mynah", category: "settings")
+    private let log = MynahLog(category: "settings")
     private let defaults: UserDefaults
     private let phoneLink: any PhoneLinking
     private let calls: CallSettingsStore
@@ -457,7 +457,7 @@ final class SettingsModel {
         do {
             try await callPreview.play(voice: callVoice, speed: callSpeed)
         } catch {
-            log.error("voice preview failed: \(String(describing: error), privacy: .public)")
+            log.error("voice preview failed: \(String(describing: error))")
             // Deliberately claims nothing about whether the voice would work on
             // a real call. A failed preview usually means the bridge went away,
             // in which case the call would fall back to the built-in voice too —
@@ -527,7 +527,7 @@ final class SettingsModel {
                 ? .good(verdict.spokenDescription)
                 : .bad(verdict.spokenDescription)
         } catch {
-            log.error("re-check failed: \(String(describing: error), privacy: .public)")
+            log.error("re-check failed: \(String(describing: error))")
             checkState = .bad("Mynah couldn't set that brain up. Set it up again.")
         }
     }
@@ -537,7 +537,7 @@ final class SettingsModel {
             try await phoneLink.unlink()
             phone = phoneLink.status
         } catch {
-            log.error("unlink failed: \(String(describing: error), privacy: .public)")
+            log.error("unlink failed: \(String(describing: error))")
         }
     }
 
@@ -756,7 +756,7 @@ struct SettingsView: View {
     /// daemon will actually do rather than what this app assumes.
     @State private var voiceNotes = ReplyPreferences().style().usesVoiceNotes
 
-    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "settings")
+    private static let log = MynahLog(category: "settings")
 
     /// The conversation's own view of whether Mynah can think.
     ///
@@ -2351,7 +2351,7 @@ private struct BrainKeySheet: View {
             } catch {
                 // The owner pasted exactly what they were asked for; whatever
                 // went wrong here is ours. The detail goes to the log.
-                settingsLog.error("key sheet failed: \(String(describing: error), privacy: .public)")
+                settingsLog.error("key sheet failed: \(String(describing: error))")
                 verdict = .unusable("Mynah couldn't save that key. Quit Mynah and open it again.")
             }
         }
@@ -2503,14 +2503,14 @@ private struct BrainModelSheet: View {
                 guard result.isUsable else { return }
                 onClose(candidate)
             } catch {
-                settingsLog.error("model change failed: \(String(describing: error), privacy: .public)")
+                settingsLog.error("model change failed: \(String(describing: error))")
                 verdict = .unusable("Mynah couldn't set that model up. Check the name and try again.")
             }
         }
     }
 }
 
-private let settingsLog = Logger(subsystem: "com.sage.mynah", category: "settings")
+private let settingsLog = MynahLog(category: "settings")
 
 // MARK: - Previews
 

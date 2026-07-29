@@ -864,12 +864,21 @@ final class AgentActivityTests: XCTestCase {
         XCTAssertTrue(agent(lastSeen: Date(timeIntervalSinceNow: -3_600)).activity.wouldBeRead)
     }
 
-    /// **Never seen is not a very old dormant.** It is an agent that registered
-    /// and has not run once — a different thing to tell somebody, and folding
-    /// it into the oldest bucket would be an absence rendered as a measurement.
-    func testNeverSeenIsItsOwnAnswer() {
-        XCTAssertEqual(agent(lastSeen: nil).activity, .neverSeen)
+    /// **An absent record is its own answer, and it is "we do not know".**
+    ///
+    /// This case was called `neverSeen` and the test asserted it was an agent
+    /// that had "registered and not run once". Both rows that reach it on the
+    /// owner's node have run: 105 memories and 74 memories respectively.
+    /// `last_seen` measures MCP connections, and the node operator acts through
+    /// CEREBRUM, which never touches it.
+    ///
+    /// So it must not fold into `dormant` — that is a measurement — and it must
+    /// not claim its own. Folding an absence into either is the substitution
+    /// this whole area exists to prevent.
+    func testAnAbsentRecordIsUnknownRatherThanAMeasurement() {
+        XCTAssertEqual(agent(lastSeen: nil).activity, .unknown)
         XCTAssertNotEqual(agent(lastSeen: nil).activity, .dormant(daysAgo: 0))
+        XCTAssertFalse(agent(lastSeen: nil).activity.wouldBeRead)
     }
 
     /// The boundary is deliberately generous — calling something dormant that
@@ -912,9 +921,26 @@ final class AgentRecencyCopyTests: XCTestCase {
         XCTAssertEqual(agent(daysAgo: 89).recencyLine, "seen 89 days ago")
     }
 
-    /// He cares that it has not run, not that nobody observed it.
-    func testAnAgentThatHasNeverRunSaysSo() {
-        XCTAssertEqual(agent(daysAgo: nil).recencyLine, "never run")
+    /// **This asserted "never run", and that was false on his own node.**
+    ///
+    /// Both rows that reach this case have done substantial work:
+    ///
+    ///     macmini        105 memories, last_seen absent
+    ///     genesis-admin   74 memories, last_seen absent
+    ///
+    /// An agent with 105 memories has demonstrably run. `last_seen` means *last
+    /// seen over MCP* — `genesis-admin` is the node operator key and the owner
+    /// acts as it through CEREBRUM's web interface, which never touches the
+    /// field. So the card said "never run" about the administrator its own
+    /// remedy points at.
+    ///
+    /// The screen now claims **nothing** when the node has no record, rather
+    /// than looking for gentler words for a claim it cannot support.
+    func testAnAgentWithNoRecordGetsNoRecencyClaim() {
+        XCTAssertNil(
+            agent(daysAgo: nil).recencyLine,
+            "the card is asserting a recency the node never reported"
+        )
     }
 
     /// **The word the owner must never see.** It is a code-side bucket, and a
@@ -923,10 +949,10 @@ final class AgentRecencyCopyTests: XCTestCase {
     func testTheOwnerIsNeverToldSomethingIsDormant() {
         for days in [0, 1, 8, 89] {
             XCTAssertFalse(
-                agent(daysAgo: days).recencyLine.lowercased().contains("dormant"),
+                agent(daysAgo: days).recencyLine?.lowercased().contains("dormant") ?? false,
                 "a code-side bucket reached the owner"
             )
         }
-        XCTAssertFalse(agent(daysAgo: nil).recencyLine.lowercased().contains("dormant"))
+        XCTAssertNil(agent(daysAgo: nil).recencyLine)
     }
 }

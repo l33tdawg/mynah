@@ -312,8 +312,25 @@ public struct SignalIncomingMessage: Equatable, Sendable {
     }
 
     /// Short, log-safe rendering. Deliberately does not include message text.
+    ///
+    /// **It said "log-safe" for months while printing his phone number in
+    /// full.** Twenty-six of them in one `bridge.log`, every one from this line
+    /// — against twenty-three redacted ones written by the twin twelve files
+    /// away in `SignalClient`, which remembered. The doc comment asserted a
+    /// property the code did not have, which is the reason it survived review:
+    /// anybody checking whether logging was safe read this sentence and moved
+    /// on.
+    ///
+    /// The lesson is not "remember to redact". `SignalSenderAllowlist.redact`
+    /// was already used everywhere else; it was applied by everybody
+    /// remembering, and the one place nobody remembered leaked every message.
+    /// **A convention is not a mechanism.** The mechanism here is
+    /// `SignalTransportRedactionTests`, which builds a message carrying a real
+    /// number and asserts it cannot be found in anything this type renders — so
+    /// a future field that forgets fails rather than ships.
     public var logDescription: String {
-        let sender = sourceNumber ?? source ?? sourceUUID ?? "<unknown>"
+        let sender = (sourceNumber ?? source ?? sourceUUID).map(SignalSenderAllowlist.redact)
+            ?? "<unknown>"
         let shape = attachments.isEmpty ? "text" : "text+\(attachments.count) attachment(s)"
         return "\(kind.rawValue) from \(sender) at \(timestamp) (\(shape))"
     }

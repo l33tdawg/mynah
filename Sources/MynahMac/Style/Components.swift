@@ -1144,9 +1144,30 @@ struct OptionCard: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
         } else if let company = MynahCopy.company(forBackend: option.backendIdentifier) {
+            // **The one place a destination keeps caution ink, and it is a
+            // deliberate exception to `Palette.state`'s rule.**
+            //
+            // Everywhere else "your words go to a company" was moved off amber:
+            // it is a true, permanent consequence of a choice the owner made on
+            // purpose, and drawing it in the colour that also means *paused*
+            // made a fault out of a decision.
+            //
+            // Here he is **deciding rather than reading a report**, and that is
+            // the difference. Green-versus-amber across a list of cards is the
+            // only visual cue separating "stays on this Mac" from "goes to a
+            // company" at the moment he is comparing them. Flattening it to
+            // neutral would remove the comparison at the one moment it exists
+            // to serve. On Settings and Privacy there is nothing to compare —
+            // the choice is made, the pill names the company, and neutral says
+            // more with less.
+            //
+            // `thread`'s distinction, and it survives the incident the rule
+            // came from in both directions: the owner read amber as "Mynah is
+            // not doing what you think", and on a card he has not chosen yet
+            // there is no "what you think" to contradict.
             Text("Sends your words to \(company)")
                 .mynahFont(.label)
-                .foregroundStyle(Palette.state.caution)
+                .foregroundStyle(OptionCardInk.sendsWordsAway)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -2059,4 +2080,42 @@ private struct KeyFieldPreviewHost: View {
         }
     }
     .frame(width: 1100, height: 940)
+}
+
+
+/// The setup card's privacy inks, as values so the exception can be tested.
+///
+/// A named constant rather than the literal at the call site, because the check
+/// that protects this **was** a source grep and it was watching the wrong line:
+/// "Sends your words to" appears twice in this file, `range(of:)` found the
+/// accessibility string first, and the assertion failed for a reason that had
+/// nothing to do with the colour.
+///
+/// Third time today a source grep has looked at the wrong thing — once matching
+/// nothing because a sentence wrapped across string segments, once watching a
+/// renamed function, now once finding a duplicate phrase. **A test that greps
+/// source is testing the wrong thing.** These are values.
+enum OptionCardInk {
+
+    /// **The one destination that keeps caution ink**, and a deliberate
+    /// exception to the rule in `Palette.state`.
+    ///
+    /// Everywhere else "your words go to a company" was moved off amber — it is
+    /// a true, permanent consequence of a choice made on purpose, and the fault
+    /// colour made a fault of a decision.
+    ///
+    /// On a setup card the owner is **deciding rather than reading a report**.
+    /// Green-versus-amber across a list of cards is the only cue separating
+    /// "stays on this Mac" from "goes to a company" at the moment he is
+    /// comparing them; flattening it would remove the comparison at the one
+    /// moment it exists to serve. On Settings and Privacy there is nothing to
+    /// compare and the pill names the company anyway.
+    ///
+    /// It also survives the incident the rule came from: he read amber as
+    /// "Mynah is not doing what you think", and on a card he has not chosen yet
+    /// there is no "what you think" to contradict. `thread`'s distinction.
+    static let sendsWordsAway = Palette.state.caution
+
+    /// The other half of the same comparison.
+    static let staysHere = Palette.state.good
 }

@@ -278,7 +278,7 @@ struct WindowTranscript: Codable, Equatable, Sendable {
 
 // MARK: - The conversation, mirrored from where it actually happens
 
-private let mirrorLog = Logger(subsystem: "com.sage.mynah", category: "mirror")
+private let mirrorLog = MynahLog(category: "mirror")
 
 /// What the owner and Mynah said to each other on the phone.
 ///
@@ -384,7 +384,7 @@ final class ConversationMirror {
         if let restored = read.record, !hasRestored { transcript = restored }
         hasRestored = true
         if read.snapshot.count > 1 {
-            mirrorLog.debug("showing 1 of \(read.snapshot.count, privacy: .public) saved conversations")
+            mirrorLog.debug("showing 1 of \(read.snapshot.count) saved conversations")
         }
 
         // Merged here rather than inside the read, and this is load-bearing: the
@@ -423,7 +423,7 @@ final class ConversationMirror {
             try transcript.save(to: recordURL)
         } catch {
             mirrorLog.error(
-                "could not write the window's transcript: \(String(describing: error), privacy: .public)"
+                "could not write the window's transcript: \(String(describing: error))"
             )
         }
     }

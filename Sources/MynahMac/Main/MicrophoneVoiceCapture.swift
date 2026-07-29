@@ -74,7 +74,7 @@ final class MicrophoneVoiceCapture: VoiceCapture {
 
     private(set) var level: Double = 0
 
-    private static let log = Logger(subsystem: "local.sage.voicebridge", category: "voice-capture")
+    private static let log = MynahLog(category: "voice-capture")
 
     /// - Parameters:
     ///   - access: nil builds the real one. Not a default argument, because a

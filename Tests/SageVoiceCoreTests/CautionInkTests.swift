@@ -94,7 +94,8 @@ final class CautionInkTests: XCTestCase {
     func testWhereWordsGoIsNotDrawnAsSomethingWrong() throws {
         for path in [
             "Sources/MynahMac/Main/SettingsView.swift",
-            "Sources/MynahMac/RootView.swift"
+            "Sources/MynahMac/RootView.swift",
+            "Sources/MynahMac/Main/PrivacyView.swift"
         ] {
             let source = try read(path)
             XCTAssertFalse(
@@ -102,6 +103,44 @@ final class CautionInkTests: XCTestCase {
                 "a destination is being drawn in the colour that means paused, in \(path)"
             )
         }
+    }
+
+    /// **The exception, written down so nobody deletes it in good faith.**
+    ///
+    /// `OptionCard`'s privacy badge still draws "Sends your words to Anthropic"
+    /// in caution ink, on the setup screen. That is deliberate and it is the
+    /// only surviving instance.
+    ///
+    /// `thread`'s distinction: on a setup card the owner is **deciding**, and
+    /// green-versus-amber across a list of cards is the only visual cue
+    /// separating "stays on this Mac" from "goes to a company" at the moment he
+    /// is comparing them. On Settings and Privacy he is **reading a report** of
+    /// a decision already made — nothing to compare, and the pill names the
+    /// company anyway.
+    ///
+    /// It survives the incident the rule came from, too. He read amber as
+    /// "Mynah is not doing what you think"; on a card he has not chosen yet
+    /// there is no "what you think" to contradict.
+    ///
+    /// **Without this test the next person sweeping the axis finds a stray
+    /// `state.caution` on a destination and fixes it**, correctly by the rule
+    /// and wrongly for the screen. An exception nobody wrote down is an
+    /// exception somebody deletes.
+    func testTheSetupCardKeepsCautionBecauseHeIsStillChoosing() {
+        // A value, not a source grep. The first version of this greped for
+        // "Sends your words to" and found the *accessibility* string, which
+        // appears earlier in the same file — so it failed for a reason that had
+        // nothing to do with the colour.
+        XCTAssertEqual(
+            OptionCardInk.sendsWordsAway.description,
+            Palette.state.caution.description,
+            "the setup card lost the only cue that separates the two kinds of choice"
+        )
+        XCTAssertNotEqual(
+            OptionCardInk.sendsWordsAway.description,
+            OptionCardInk.staysHere.description,
+            "the two halves of the comparison are now drawn the same"
+        )
     }
 
     private func read(_ path: String) throws -> String {

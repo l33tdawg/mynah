@@ -8,7 +8,7 @@ import SageVoiceCore
 /// Everything the owner must never read goes here: exception strings, tool
 /// names, HTTP status codes, MCP stderr. `Exchange.Failure` carries the
 /// authored sentence; this carries the truth.
-private let conversationLog = Logger(subsystem: "com.sage.mynah", category: "conversation")
+private let conversationLog = MynahLog(category: "conversation")
 
 // MARK: - One exchange
 
@@ -313,7 +313,7 @@ actor ToolLoopTurnEngine: TurnEngine {
             tools: mcp,
             agentName: SageRitual.applianceAgentName,
             displayName: SageRitual.applianceDisplayName,
-            log: { conversationLog.error("\($0, privacy: .public)") }
+            log: { conversationLog.error("\($0)") }
         )
     }
 
@@ -356,7 +356,7 @@ actor ToolLoopTurnEngine: TurnEngine {
         try await prepare()
         let started = Date()
         let result = try await loop.run(transcript: transcript, tools: catalogue, history: history)
-        conversationLog.info("turn: \(result.trace.summary, privacy: .public)")
+        conversationLog.info("turn: \(result.trace.summary)")
 
         // After the reply and never before. The node starts refusing outside
         // tool calls once enough turns pile up unrecorded, and web search is an
@@ -623,7 +623,7 @@ final class ConversationModel {
         do {
             backend = try BrainFactory.makeBackend(for: option, apiKey: key)
         } catch {
-            conversationLog.error("could not build backend: \(String(describing: error), privacy: .public)")
+            conversationLog.error("could not build backend: \(String(describing: error))")
             readiness = .blocked(
                 Exchange.Failure(
                     headline: "Mynah can't use that brain any more.",
@@ -659,7 +659,7 @@ final class ConversationModel {
         do {
             try await candidate.prepare()
         } catch {
-            conversationLog.error("could not prepare engine: \(String(describing: error), privacy: .public)")
+            conversationLog.error("could not prepare engine: \(String(describing: error))")
             readiness = .blocked(Self.explain(error, staysOnDevice: option.keepsWordsOnDevice))
             await candidate.shutDown()
             return
@@ -788,7 +788,7 @@ final class ConversationModel {
             if Task.isCancelled || error is CancellationError {
                 finish(id, with: .failed(.stopped))
             } else {
-                conversationLog.error("turn failed: \(String(describing: error), privacy: .public)")
+                conversationLog.error("turn failed: \(String(describing: error))")
                 finish(id, with: .failed(Self.explain(error, staysOnDevice: connectedStaysOnDevice)))
             }
         }
@@ -867,7 +867,7 @@ final class ConversationModel {
             do {
                 try await voice.begin()
             } catch {
-                conversationLog.error("could not start recording: \(String(describing: error), privacy: .public)")
+                conversationLog.error("could not start recording: \(String(describing: error))")
                 stopSampling()
                 isRecording = false
             }
@@ -899,7 +899,7 @@ final class ConversationModel {
                 guard !trimmed.isEmpty else { return }
                 draft = draft.isEmpty ? trimmed : draft + " " + trimmed
             } catch {
-                conversationLog.error("could not transcribe: \(String(describing: error), privacy: .public)")
+                conversationLog.error("could not transcribe: \(String(describing: error))")
             }
         }
     }

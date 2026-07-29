@@ -195,7 +195,12 @@ struct PrivacyView: View {
                     StatusPill(
                         appliance.map { $0.keepsWordsOnDevice ? "Stays here" : $0.model }
                             ?? "Not answering yet",
-                        tone: appliance.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
+                        // Neutral rather than caution when words leave. The pill
+                        // already names the company, and a name is a more
+                        // specific signal than a hue that also means paused.
+                        // Only the *leaving* side moved — `good` is
+                        // single-purpose and stays. See `Palette.state`.
+                        tone: appliance.map { $0.keepsWordsOnDevice ? .good : .neutral } ?? .neutral
                     )
                 }
                 MynahDivider()
@@ -208,7 +213,7 @@ struct PrivacyView: View {
                 ) {
                     StatusPill(
                         brain?.destination ?? "Not chosen",
-                        tone: brain.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
+                        tone: brain.map { $0.keepsWordsOnDevice ? .good : .neutral } ?? .neutral
                     )
                 }
                 MynahDivider()

@@ -194,7 +194,7 @@ actor SageMemoryStore: MemoryStoring {
     /// owner moves around the sidebar; the node connection must not be.
     static let shared = SageMemoryStore()
 
-    private let log = Logger(subsystem: "com.sage.mynah", category: "memories")
+    private let log = MynahLog(category: "memories")
 
     private var client: MCPClient?
 
@@ -327,7 +327,7 @@ actor SageMemoryStore: MemoryStoring {
     private func page(from tool: String, arguments: [String: JSONValue]) async throws -> MemoryPage {
         let payload = try await payload(from: tool, arguments: arguments)
         guard let entries = payload["memories"]?.arrayValue else {
-            log.error("\(tool, privacy: .public) returned no memories array")
+            log.error("\(tool) returned no memories array")
             throw MemoryTrouble.unreadable
         }
         let memories = entries.compactMap(Self.memory(from:))
@@ -343,7 +343,7 @@ actor SageMemoryStore: MemoryStoring {
         do {
             text = try await client.call(name: tool, arguments: arguments)
         } catch let error as MCPClientError {
-            log.error("\(tool, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            log.error("\(tool) failed: \(String(describing: error))")
             switch error {
             case .missingExecutable:
                 throw MemoryTrouble.notSetUp
@@ -364,13 +364,13 @@ actor SageMemoryStore: MemoryStoring {
                 throw MemoryTrouble.unreadable
             }
         } catch {
-            log.error("\(tool, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            log.error("\(tool) failed: \(String(describing: error))")
             reset()
             throw MemoryTrouble.unreachable
         }
 
         guard let payload = Self.embeddedObject(in: text) else {
-            log.error("\(tool, privacy: .public) returned unparseable text")
+            log.error("\(tool) returned unparseable text")
             throw MemoryTrouble.unreadable
         }
         return payload
@@ -493,7 +493,7 @@ final class MemoriesModel {
     private static let searchDelay = Duration.milliseconds(280)
 
     private let store: any MemoryStoring
-    private let log = Logger(subsystem: "com.sage.mynah", category: "memories")
+    private let log = MynahLog(category: "memories")
 
     private(set) var phase: Phase = .loading
     private(set) var memories: [Memory] = []
@@ -574,7 +574,7 @@ final class MemoriesModel {
             phase = .failed(trouble)
         } catch {
             guard !Task.isCancelled else { return }
-            log.error("memory load failed: \(String(describing: error), privacy: .public)")
+            log.error("memory load failed: \(String(describing: error))")
             phase = .failed(.unreachable)
         }
     }
@@ -606,7 +606,7 @@ final class MemoriesModel {
             mergeTopics(from: fresh)
             hasMore = !fresh.isEmpty && memories.count < page.total
         } catch {
-            log.error("show more failed: \(String(describing: error), privacy: .public)")
+            log.error("show more failed: \(String(describing: error))")
             hasMore = false
         }
     }
@@ -654,7 +654,7 @@ final class MemoriesModel {
         } catch let trouble as MemoryTrouble {
             forgetTrouble = trouble
         } catch {
-            log.error("forget failed: \(String(describing: error), privacy: .public)")
+            log.error("forget failed: \(String(describing: error))")
             forgetTrouble = .unreachable
         }
     }

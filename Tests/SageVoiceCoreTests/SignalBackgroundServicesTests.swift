@@ -56,6 +56,67 @@ final class SignalBackgroundServicesTests: XCTestCase {
         XCTAssertEqual(value(after: "--allow", in: arguments), "+60<&>\"")
     }
 
+    /// The daemon's own logs, which are the ones with his life in them.
+    ///
+    /// `bridge.log` carries his phone number twenty-six times and the text of
+    /// what he sent; `signal.log` carries the number sixteen times. Both were
+    /// `0644` on his Mac — readable by every account on it — because launchd
+    /// creates them from `StandardOutPath` under the job's umask, so no write
+    /// path this codebase owns ever touched them.
+    ///
+    /// The assertion is the mode on disk after `enable`, not the presence of a
+    /// key in a plist. A plist key is a claim; `stat` is a measurement, and the
+    /// difference is the whole reason this was missed.
+    func testEnableMakesTheDaemonLogsOwnerOnly() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-logmode-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+        func executable(_ name: String) throws -> URL {
+            let url = scratch.appendingPathComponent(name)
+            try Data().write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return url
+        }
+
+        // Logs that already exist, world-readable, exactly as launchd left them.
+        let logs = scratch.appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        for name in ["bridge.log", "signal.log"] {
+            let file = logs.appendingPathComponent(name)
+            try Data("[daemon] syncSent from +60123456789\n".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        }
+
+        let configuration = SignalServiceConfiguration(
+            account: "+60123456789",
+            signalCLI: try executable("signal-cli"),
+            bridge: try executable("sage-voiced"),
+            sage: try executable("sage-gui"),
+            provider: "ollama",
+            model: "qwen3.5:4b",
+            socketPath: scratch.appendingPathComponent("daemon.socket").path
+        )
+        let manager = SignalBackgroundServiceManager(
+            runner: RecordingLaunchctlRunner(),
+            homeDirectory: scratch,
+            userID: 501
+        )
+
+        try await manager.enable(configuration)
+
+        for name in ["bridge.log", "signal.log"] {
+            let perms = try FileManager.default.attributesOfItem(
+                atPath: logs.appendingPathComponent(name).path
+            )[.posixPermissions] as? NSNumber
+            XCTAssertEqual(perms, 0o600, "\(name) is still readable by every account on the Mac")
+        }
+        let directory = try FileManager.default
+            .attributesOfItem(atPath: logs.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(directory, 0o700)
+    }
+
     func testEnableWritesAndBootstrapsSignalBeforeTheBridge() async throws {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("mynah-services-\(UUID().uuidString)", isDirectory: true)
