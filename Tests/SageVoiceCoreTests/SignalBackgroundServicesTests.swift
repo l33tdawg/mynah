@@ -181,13 +181,24 @@ private actor RecordingBackgroundServices: SignalBackgroundServicing {
     private(set) var enabledConfigurations: [SignalServiceConfiguration] = []
     private(set) var disableCount = 0
 
+    /// What launchd would say if it were asked. Settable so a test can put the
+    /// helper in the state that matters — the owner having switched it off in
+    /// Login Items, which is the one nothing in the app could previously see.
+    var reportedState: BackgroundHelperState = .absent
+
     func enable(_ configuration: SignalServiceConfiguration) async throws {
         enabledConfigurations.append(configuration)
+        reportedState = .running
     }
 
     func disable() async {
         disableCount += 1
+        reportedState = .absent
     }
+
+    func state() async -> BackgroundHelperState { reportedState }
+
+    func setReportedState(_ state: BackgroundHelperState) { reportedState = state }
 }
 
 private actor RecordingLaunchctlRunner: ProbeCommandRunning {

@@ -47,9 +47,33 @@ struct SignalServiceConfiguration: Sendable, Equatable {
     }
 }
 
+/// Whether macOS is actually running the background helper.
+///
+/// Three states rather than a `Bool`, and the third is the point: **the owner
+/// can turn this off outside the app.** Writing a LaunchAgent produces a system
+/// notification — "Mynah added items that can run in the background" — and an
+/// entry in System Settings → General → Login Items, which they can switch off.
+/// When they do, the appliance stops answering their phone and nothing in Mynah
+/// says why. A screen that reported only what Mynah last *asked for* would keep
+/// showing "On" over a helper macOS had stopped.
+enum BackgroundHelperState: Equatable, Sendable {
+    /// launchd has it and is running it.
+    case running
+    /// Mynah installed it and launchd is not running it — which on this OS most
+    /// often means the owner switched it off in Login Items.
+    case installedButNotRunning
+    /// Nothing installed. The ordinary state when answering is turned off.
+    case absent
+    /// launchd could not be asked. Not the same as "off" — an appliance that
+    /// cannot see its own helper must not claim the helper is gone.
+    case unknown
+}
+
 protocol SignalBackgroundServicing: Sendable {
     func enable(_ configuration: SignalServiceConfiguration) async throws
     func disable() async
+    /// Asked rather than remembered. See `BackgroundHelperState`.
+    func state() async -> BackgroundHelperState
 }
 
 /// Installs the two per-user services that make the phone bridge an appliance.
@@ -128,6 +152,33 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
                 at: launchAgents.appendingPathComponent("\(label).plist")
             )
         }
+    }
+
+    /// Asks launchd about the bridge, which is the job that answers the phone.
+    ///
+    /// `launchctl print` rather than reading the plist back: a plist on disk
+    /// records what Mynah wrote, not what macOS is doing with it, and the whole
+    /// reason this exists is that those two can differ without the app being
+    /// involved. The bridge is the one asked about because the signal helper
+    /// exists to serve it — a running signal-cli with no bridge answers nothing.
+    func state() async -> BackgroundHelperState {
+        let plist = homeDirectory
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(Self.bridgeLabel).plist")
+        let installed = fileManager.fileExists(atPath: plist.path)
+
+        let result = await runner.run(
+            executable: URL(fileURLWithPath: "/bin/launchctl"),
+            arguments: ["print", "\(domain)/\(Self.bridgeLabel)"],
+            timeout: 10
+        )
+        guard let result else {
+            // launchctl did not answer at all. Reporting "off" here would be a
+            // guess, and the guess that costs the owner most.
+            return installed ? .unknown : .absent
+        }
+        if result.succeeded { return .running }
+        return installed ? .installedButNotRunning : .absent
     }
 
     private func bootout(_ label: String) async -> Bool {

@@ -269,6 +269,7 @@ struct ReadyStage: View {
                         }
                     }
                 }
+                backgroundHelperNote
                 resumeOffer
                 phoneOffer
             }
@@ -380,6 +381,33 @@ struct ReadyStage: View {
            let remedy = readiness.shortRemedy {
             InlineBanner(tone: .caution, headline: headline, explanation: remedy)
                 .frame(maxWidth: MynahWidth.stageColumn)
+        }
+    }
+
+    /// Said here because macOS is about to say it first, and less kindly.
+    ///
+    /// Turning answering on writes a LaunchAgent, and on this OS that produces a
+    /// system notification — *"Mynah added items that can run in the
+    /// background"* — plus an entry in System Settings under Login Items. An
+    /// owner who has just finished setting up a private voice appliance and is
+    /// then told by their Mac that it added background items, with no warning
+    /// from the app, has every reason to wonder what else it did quietly.
+    ///
+    /// So: what it is, why it exists, and what switching it off costs. The last
+    /// part is the one nothing anywhere said — the helper is how the phone gets
+    /// answered, and turning it off in Login Items stops that silently.
+    ///
+    /// Only when answering is actually on. A note about a helper that is not
+    /// being installed would be a warning about nothing.
+    @ViewBuilder
+    private var backgroundHelperNote: some View {
+        if app.keepsAnsweringWhenClosed {
+            InlineBanner(
+                headline: "Your Mac will say Mynah added a background item.",
+                explanation: "That is this: a small helper that answers your phone while the "
+                    + "window is closed. It appears in System Settings under General → Login "
+                    + "Items, and switching it off there stops Mynah answering."
+            )
         }
     }
 

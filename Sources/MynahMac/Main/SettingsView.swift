@@ -300,14 +300,26 @@ final class SettingsModel {
     /// which is the only state that means "asking".
     private(set) var update: UpdateAvailability?
     private(set) var checksForUpdates: Bool
+
+    /// What launchd says about the background helper, or `nil` before the first
+    /// answer. Read rather than mirrored from the switch — see
+    /// `backgroundHelperRow` for why those are not the same question.
+    private(set) var helperState: BackgroundHelperState?
+    private let backgroundServices: any SignalBackgroundServicing
+
+    func refreshHelperState() async {
+        helperState = await backgroundServices.state()
+    }
     private let updatePreferences: URL
 
     init(
         defaults: UserDefaults = .standard,
         callPreferences: URL = CallPreferences.defaultFileURL(),
         updatePreferences: URL = UpdatePreferences.defaultFileURL(),
-        phoneLink: any PhoneLinking = SignalPhoneLink()
+        phoneLink: any PhoneLinking = SignalPhoneLink(),
+        backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared
     ) {
+        self.backgroundServices = backgroundServices
         // Call settings are a file rather than defaults, because the daemon has
         // to read them and it does not share this process's defaults domain.
         let calls = CallSettingsStore(fileURL: callPreferences)
@@ -734,6 +746,10 @@ struct SettingsView: View {
         // Beside the screen, never in front of it. The row below carries its own
         // "asking" state, and no part of this page is waiting on GitHub.
         .task { await model.checkForUpdate() }
+        // Asked every time the screen appears, not cached: the owner may have
+        // just come back from switching Mynah off in Login Items, and that is
+        // the trip this row exists to report on.
+        .task { await model.refreshHelperState() }
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
@@ -1433,9 +1449,61 @@ struct SettingsView: View {
                 Toggle("", isOn: $app.keepsAnsweringWhenClosed).labelsHidden().mynahToggle()
             }
             MynahDivider()
+            backgroundHelperRow
+            MynahDivider()
             SettingsRow("Pause answering", detail: "Mynah stays open but stops replying.") {
                 Toggle("", isOn: $app.isPaused).labelsHidden().mynahToggle()
             }
+        }
+    }
+
+    /// What macOS is actually doing with the helper, as opposed to what Mynah
+    /// last asked it to do.
+    ///
+    /// **The switch above is a request; this row is the answer.** Writing a
+    /// LaunchAgent puts an entry in System Settings → General → Login Items, and
+    /// the owner can turn it off there. When they do, the phone stops being
+    /// answered and every screen in this app carried on saying answering was on
+    /// — because nothing asked. That is why `state()` exists and why this row
+    /// reads it rather than mirroring the toggle.
+    ///
+    /// Deliberately not a control. Mynah cannot switch a Login Item back on from
+    /// in here; only the owner can, in System Settings. A button that could not
+    /// do the thing it named would be worse than the sentence that says where
+    /// the thing is.
+    @ViewBuilder
+    private var backgroundHelperRow: some View {
+        SettingsRow("The helper that answers when Mynah is closed", detail: helperDetail) {
+            switch model.helperState {
+            case .running:
+                StatusPill("Running", tone: .good)
+            case .installedButNotRunning:
+                StatusPill("Switched off", tone: .caution)
+            case .absent:
+                StatusPill("Not installed", tone: .neutral)
+            case .unknown, .none:
+                // No pill at all while the first answer is in flight. A pill
+                // that says "Off" for half a second and then corrects itself is
+                // the screen guessing out loud.
+                EmptyView()
+            }
+        }
+    }
+
+    private var helperDetail: String {
+        switch model.helperState {
+        case .running:
+            return "macOS is running it, so your phone reaches Mynah with this window closed."
+        case .installedButNotRunning:
+            // The one that needed saying. macOS has stopped it, Mynah cannot
+            // start it, and until now nothing told the owner either fact.
+            return "macOS has it switched off, so nothing is answering your phone right now. "
+                + "Turn Mynah back on in System Settings, under General → Login Items."
+        case .absent:
+            return "Mynah installs a small background helper when the switch above is on. "
+                + "It appears in System Settings, under General → Login Items."
+        case .unknown, .none:
+            return "Mynah is checking whether macOS is running it."
         }
     }
 

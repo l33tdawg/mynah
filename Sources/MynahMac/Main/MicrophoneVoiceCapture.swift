@@ -44,12 +44,23 @@ final class MicrophoneVoiceCapture: VoiceCapture {
             switch self {
             case .microphoneRefused:
                 return "Mynah needs permission to use this Mac's microphone. "
-                    + "You can grant it in System Settings, under Privacy & Security."
+                    + "macOS only asks once, so this has to be turned on in System Settings."
             case .noRecogniser(let why):
                 return "Mynah can't turn speech into words on this Mac right now. \(why)"
             case .heardNothing:
                 return "Nothing was recorded — try holding the button a little longer."
             }
+        }
+
+        /// Whether this failure has somewhere for the owner to be sent.
+        ///
+        /// Only the refusal does, and it is the one that most needs it: macOS
+        /// never shows the prompt twice, so after a refusal a *sentence*
+        /// describing where the switch lives is the owner's entire route, and
+        /// it asks them to go navigating System Settings to find a pane they
+        /// have never opened.
+        public var opensPrivacySettings: Bool {
+            self == .microphoneRefused
         }
     }
 
@@ -183,7 +194,11 @@ final class MicrophoneVoiceCapture: VoiceCapture {
         let text = try await transcriber.transcribe(audioFile: file)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw Trouble.heardNothing }
-        return trimmed
+        // The owner's own words, repaired from what Mynah remembers — the same
+        // profile the daemon uses, so a coinage comes out the same whether it
+        // was spoken here or into a phone. With no memories this is the
+        // identity function, which is the state on this machine today.
+        return await DictationProfileStore.shared.repair(trimmed)
     }
 
     /// Abandons the recording. Safe to call when nothing is running.
