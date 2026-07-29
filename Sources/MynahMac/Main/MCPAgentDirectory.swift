@@ -22,96 +22,102 @@ import SageVoiceCore
 /// connections for this appliance. The page was not showing a fuller truth; it
 /// was showing somebody else's.
 ///
-/// ## Why this does not simply filter the old list
+/// ## How "contactable" is decided
 ///
-/// The obvious repair — keep the twenty-one and check each against
-/// `sage_find_agent` — is forbidden by the tool's own reference, which says it
-/// plainly: *"This is discovery metadata, not presence or a reachability probe.
-/// Zero matches does not mean that a previously known recipient is offline or
-/// undeliverable... Do not turn an absent directory match into a statement that
-/// the agent cannot be contacted."*
+/// The node's own list supplies the **candidate names and nothing else**. Every
+/// row is then put to `sage_find_agent`, which is caller-scoped and returns only
+/// registrations that are active and accepting work — the RBAC allow list the
+/// owner asked for. A candidate survives only if a match comes back **and its
+/// `agent_id` equals the candidate's**.
 ///
-/// It is also a substring search capped at twenty results against a node
-/// carrying twenty-one agents, so it cannot enumerate even if it were allowed
-/// to. Building on it would produce a list that is wrong in a new way and has to
-/// be torn out when the real tool lands — and the owner has said it is coming.
+/// The id comparison is the owner's instruction and it is the load-bearing part.
+/// `sage_find_agent` resolves a *name*, and a name is not an identity: matching
+/// on the string would let a renamed or colliding registration vouch for a row
+/// it has nothing to do with, which is how a page like this ends up quietly
+/// showing the wrong agent as reachable.
 ///
-/// ## What it reports instead
+/// So REST supplies text and MCP decides what is true. The page's claim — "you
+/// can talk to these" — is entirely MCP-backed even though the names are not,
+/// which is the part that was wrong before: the old page made that claim off an
+/// **unsigned** read, as nobody.
 ///
-/// Only what MCP will answer for this caller. `sage_federation` is documented as
-/// *"caller-filtered"*, which is the RBAC allow list the owner asked for. Local
-/// contactable agents have no enumeration yet, so this reports that it cannot
-/// know rather than substituting a public list for an authorised one — the
-/// distinction `ApplianceRoster.Phase` already draws between `unavailable` and
-/// `ready(.empty)`, and the one this codebase has spent a day restoring.
+/// **One caveat, stated because the tool's own reference states it.** Absence of
+/// a match is not proof of unreachability — *"Do not turn an absent directory
+/// match into a statement that the agent cannot be contacted"* — and a saved
+/// exact `agent_id` can still be piped to. So a hidden row means *unconfirmed*,
+/// not *impossible*, and nothing here tells the owner an agent is unreachable.
+/// It shows the ones it can vouch for.
 ///
-/// When SAGE ships the enumeration, it lands in `roster()` and nothing above
-/// this type changes.
 actor MCPAgentDirectory: AgentDirectorySource {
 
     private let log = MynahLog(category: "roster")
-    private let call: @Sendable (String, [String: JSONValue]) async throws -> JSONValue
+    private let candidates: any AgentDirectorySource
+    private let find: @Sendable (String) async throws -> JSONValue
 
-    /// Defaults to the connection `SageMemoryStore` already holds, so this costs
-    /// no second node process and signs as the same appliance identity the
-    /// Memories page does.
+    /// Defaults to the node's list for names and the MCP connection
+    /// `SageMemoryStore` already holds for the verdict — no second node process,
+    /// and the same appliance identity the Memories page signs as.
     init(
-        call: @escaping @Sendable (String, [String: JSONValue]) async throws -> JSONValue = {
-            try await SageMemoryStore.shared.callTool($0, arguments: $1)
+        candidates: any AgentDirectorySource = NodeAgentDirectory(),
+        find: @escaping @Sendable (String) async throws -> JSONValue = { name in
+            try await SageMemoryStore.shared.callTool(
+                "sage_find_agent",
+                arguments: ["name": .string(name), "limit": .int(20)]
+            )
         }
     ) {
-        self.call = call
+        self.candidates = candidates
+        self.find = find
     }
 
     func roster() async throws -> AgentRoster {
-        let payload: JSONValue
-        do {
-            payload = try await call("sage_federation", [:])
-        } catch {
-            log.error("sage_federation failed: \(String(describing: error))")
-            throw Self.trouble(for: error)
+        let all = try await candidates.roster()
+
+        // Concurrently, because this runs once at launch over ~20 names and
+        // sequential round trips would put the Agents page behind a visible
+        // wait for something the owner did not ask to happen.
+        let confirmed: [NodeAgent] = await withTaskGroup(of: NodeAgent?.self) { group in
+            for agent in all.agents {
+                group.addTask { [weak self] in
+                    // The appliance is the subject of this page, not a contact
+                    // on it. It is shown whatever the directory says, or Mynah
+                    // would be missing from its own screen the moment it could
+                    // not resolve itself.
+                    guard !agent.isThisAppliance else { return agent }
+                    guard let self else { return nil }
+                    return await self.contactable(agent) ? agent : nil
+                }
+            }
+            var kept: [NodeAgent] = []
+            for await agent in group where agent != nil { kept.append(agent!) }
+            return kept
         }
 
-        // Present and empty is a real answer: the node was asked *as Mynah* and
-        // said there is nobody federated. That is what Mynah tells the owner
-        // over Signal, and the two surfaces finally agree.
-        guard let connections = payload["connections"]?.arrayValue else {
-            log.error("sage_federation returned no connections array")
-            throw AgentTrouble.unreadable
-        }
-
-        let reachable = connections.compactMap(Self.agent(from:))
-        log.info("roster: \(reachable.count) contactable agent(s) via MCP")
-        return AgentRoster(agents: reachable)
+        log.info("roster: \(confirmed.count) of \(all.agents.count) confirmed contactable over MCP")
+        return AgentRoster(agents: confirmed)
     }
 
-    /// One federated contact, or nil for a shape this app should not guess at.
+    /// Whether MCP will vouch for this exact agent, right now.
     ///
-    /// Deliberately tolerant of missing fields and deliberately not inventive:
-    /// a contact with no name is dropped rather than drawn as "Unknown", because
-    /// a row the owner cannot act on is worse than a row that is not there.
-    private static func agent(from value: JSONValue) -> NodeAgent? {
-        guard let name = value["name"]?.stringValue ?? value["agent_name"]?.stringValue,
-              !name.isEmpty else { return nil }
-        let id = value["agent_id"]?.stringValue ?? value["to"]?.stringValue ?? name
-        return NodeAgent(
-            id: id,
-            name: name,
-            role: value["role"]?.stringValue ?? "member",
-            clearance: value["clearance"]?.intValue ?? 0,
-            memoryCount: value["memory_count"]?.intValue ?? 0,
-            isActive: value["status"]?.stringValue.map { $0 == "active" } ?? true,
-            lastSeen: nil,
-            // **Zero rather than a guess.** `sage_federation` is documented as
-            // exposing no endpoint, CA, agreement or other mutation material,
-            // and capabilities are not in it. Drawing a restriction dot off an
-            // absent field would put a warning on an agent nobody has claimed
-            // anything about — the same substitution of silence for an answer
-            // this file exists to remove.
-            capabilities: 0,
-            // A federated contact is by definition not this appliance.
-            isThisAppliance: false
-        )
+    /// Matched on `agent_id` rather than on the name that was searched for. The
+    /// tool resolves names, and two registrations can wear one name — an id
+    /// comparison is the only thing that makes a match evidence about *this*
+    /// row.
+    private func contactable(_ agent: NodeAgent) async -> Bool {
+        let payload: JSONValue
+        do {
+            payload = try await find(agent.name)
+        } catch {
+            // Unconfirmed, not unreachable. A failed lookup hides a row for
+            // this launch; it never claims anything about the agent.
+            log.info("could not confirm \(agent.name): \(String(describing: error))")
+            return false
+        }
+        guard let matches = payload["matches"]?.arrayValue else { return false }
+        return matches.contains { match in
+            match["agent_id"]?.stringValue == agent.id
+                && (match["status"]?.stringValue ?? "active") == "active"
+        }
     }
 
     /// MCP failures, mapped to what the owner can do about them.
@@ -120,17 +126,13 @@ actor MCPAgentDirectory: AgentDirectorySource {
     /// screen keeps them distinct: one means Mynah has no memory node on this
     /// Mac, the other that it has one and it did not answer. They send somebody
     /// to two different places.
-    private static func trouble(for error: Error) -> AgentTrouble {
+    static func trouble(for error: Error) -> AgentTrouble {
         guard let mcp = error as? MCPClientError else { return .unreachable }
         switch mcp {
-        case .missingExecutable:
-            return .notSetUp
-        case .toolFailed, .rpcError:
-            return .refused
-        case .malformedResponse:
-            return .unreadable
-        case .launchFailed, .notStarted, .serverExited, .timedOut:
-            return .unreachable
+        case .missingExecutable: return .notSetUp
+        case .toolFailed, .rpcError: return .refused
+        case .malformedResponse: return .unreadable
+        case .launchFailed, .notStarted, .serverExited, .timedOut: return .unreachable
         }
     }
 }
