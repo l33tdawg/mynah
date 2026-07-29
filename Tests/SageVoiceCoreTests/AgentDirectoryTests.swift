@@ -485,6 +485,28 @@ final class LiveNodeAgentsTests: XCTestCase {
         XCTAssertTrue(roster.agents.allSatisfy { !$0.role.isEmpty })
     }
 
+    /// **The assertion that would have caught two bugs.**
+    ///
+    /// The scan signs as whatever key its spawn environment names, and an
+    /// unregistered key is answered — emptily — rather than refused. So the
+    /// property worth testing is not "the scan worked" but "the agent it signed
+    /// as is one the node has actually heard of". Both previous versions of that
+    /// line would fail here, and both passed everything else.
+    func testTheScanSignsAsAnAgentTheNodeKnows() async throws {
+        try requireLiveNode()
+
+        let keyPath = try XCTUnwrap(SageFederationScan.spawnEnvironment()[MynahIdentity.environmentVariable])
+        let signingAs = try XCTUnwrap(SageAgentIdentity.agentID(ofKeyAt: URL(fileURLWithPath: keyPath)))
+        let roster = try await NodeAgentDirectory().roster()
+
+        XCTAssertEqual(signingAs, SageAgentIdentity.applianceAgentID())
+        XCTAssertTrue(
+            roster.agents.contains { $0.id == signingAs },
+            "the scan signs as \(signingAs.prefix(8))…, which is not registered on this node"
+        )
+        XCTAssertTrue(roster.agents.contains { $0.isThisAppliance }, "the appliance's own row was not found")
+    }
+
     /// The scan the owner's button runs. Read-only by the tool's own contract —
     /// "pairing, sharing, subscriptions, and other mutations remain
     /// operator-only" — so running it here changes nothing about their

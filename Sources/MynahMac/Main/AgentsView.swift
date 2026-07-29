@@ -493,10 +493,32 @@ actor SageFederationScan: FederationScanning {
 
     private var client: MCPClient?
 
+    /// Which binary should operate the store that already holds the owner's
+    /// memories — not "which binary can this app find first".
+    ///
+    /// `EnvironmentProbe.defaultSageBundleExecutables` is vendored-first, which
+    /// is the right answer to a different question. Used here it meant that on a
+    /// Mac with SAGE already installed, a network scan spawned the copy we
+    /// happened to vendor to drive the owner's existing `~/.sage`: one store,
+    /// two binaries, whatever versions they happened to be. `SageNodeChoice` is
+    /// the rule the owner asked for — if a node is already installed, Mynah uses
+    /// it and changes nothing about it — and it is what the daemon, Memories and
+    /// the board all resolve with, so every surface now agrees.
     private static var executableURL: URL? {
-        EnvironmentProbe.defaultSageBundleExecutables.first {
-            FileManager.default.isExecutableFile(atPath: $0.path)
-        }
+        SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable
+    }
+
+    /// The identity a spawned scan signs as, named so a test can pin it.
+    ///
+    /// Exposed rather than inlined because this exact line has been wrong twice
+    /// and neither mistake was visible from a passing test: an unregistered key
+    /// still gets an answer from `sage_federation`, just an empty one, so
+    /// "the scan succeeded" proves nothing about who asked.
+    static func spawnEnvironment(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String: String] {
+        MynahIdentity.applianceEnvironment(environment: environment, homeDirectory: homeDirectory)
     }
 
     private func connection() throws -> MCPClient {
@@ -505,14 +527,25 @@ actor SageFederationScan: FederationScanning {
         let made = MCPClient(
             executableURL: executable,
             arguments: ["mcp"],
-            // `childEnvironment()`, which is what every other spawn site in the
-            // app uses and what pins the *appliance* key. This used to call
-            // `resolvedKeyPath()`, which since "One appliance is one agent"
-            // returns the vestigial `agent.key` — an identity the node has never
-            // heard of. `sage_federation` is caller-filtered, so the scan would
-            // have been answering for a non-agent and reporting the result as
-            // the owner's.
-            environment: MynahIdentity.childEnvironment(),
+            // `applianceEnvironment()`, which is the one that pins the key the
+            // node has actually registered.
+            //
+            // This line has been wrong twice, and the second time is the
+            // instructive one. It started as `resolvedKeyPath()`, which returns
+            // the vestigial `agent.key` — an identity the node has never heard
+            // of. I "fixed" it to `childEnvironment()` and wrote a comment
+            // saying that was what every other spawn site used and that it
+            // pinned the appliance key. Both halves were false, and the fix
+            // changed nothing: `childEnvironment()` is `resolvedKeyPath()` in a
+            // dictionary, its own doc comment still claims every spawn site must
+            // use it, and after `chrome` moved Memories across, line 515 was its
+            // only caller left in the product. `chrome` caught it.
+            //
+            // It matters because `sage_federation` is caller-filtered: a scan
+            // signed as an unregistered key answers for nobody, and "no peers"
+            // is exactly what that looks like — a reassuring sentence produced
+            // by asking the wrong question.
+            environment: Self.spawnEnvironment(),
             requestTimeoutSeconds: 30
         )
         client = made
