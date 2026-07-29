@@ -31,6 +31,26 @@ private enum LinkCopy {
 
     static let noHistoryNote =
         "Mynah won't see anything you sent before now — only what you send from here on."
+
+    /// The other thing a linked phone can do, said on the one screen where
+    /// somebody has just linked one.
+    ///
+    /// It was missing entirely. Every string about the phone said "voice
+    /// notes", so an owner finished setup believing the product was a
+    /// message-and-reply appliance — while the more impressive half, a live
+    /// conversation they can interrupt mid-sentence, sat behind a command
+    /// nothing told them about. `//help` in the thread lists it, which is no
+    /// use to somebody who does not know there is anything to list.
+    ///
+    /// Two sentences, and the condition is in the second rather than left out.
+    /// Calling is refused on a brain that runs on this Mac — `CallInvitation`
+    /// turns it down because a model that takes the best part of a minute is a
+    /// dead line — and an owner who reads an unqualified promise here and is
+    /// refused later reports a bug against the thing that lied to them.
+    static let callingNote =
+        "You can also talk to it out loud: send \(CallInvitation.command) to yourself and tap the "
+        + "link it sends back — you can interrupt it mid-sentence. That one needs a brain that "
+        + "answers fast, so it is turned down when Mynah is using a model that runs on this Mac."
 }
 
 // MARK: - Finding and reading what is on this Mac
@@ -889,8 +909,11 @@ struct SignalLinkStage: View {
     private var subtitle: String? {
         switch model.phase {
         case .linked:
+            // Both things a linked phone can now do, in the order somebody will
+            // try them: a note first, because it needs nothing explained, then
+            // the call.
             return "Send yourself a voice note in Signal and Mynah will answer it. "
-                + LinkCopy.noHistoryNote
+                + LinkCopy.callingNote + " " + LinkCopy.noHistoryNote
         case .missingHelper:
             return LinkCopy.helperExplanation
         default:
@@ -991,7 +1014,12 @@ struct SignalLinkStage: View {
             AppModel.DeferredStep(
                 id: AppModel.DeferredStep.phoneLinkID,
                 title: "Link your phone",
-                detail: "Mynah answers voice notes you send yourself in Signal."
+                // The deferred-step card is a one-liner in a list, so this
+                // names the second capability without explaining it. Somebody
+                // who comes back to finish linking reads the full version on
+                // the screen itself.
+                detail: "Mynah answers voice notes you send yourself in Signal, and can take a "
+                    + "voice call."
             )
         )
         model.stop()

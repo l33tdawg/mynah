@@ -185,6 +185,34 @@ enum PrivacyClaim {
     static let microphone = "Your phone, or this Mac. Mynah opens the microphone only while "
         + "you hold the record button in the composer — never on its own, and there is no "
         + "wake word. Speech is turned into words on this Mac either way."
+
+    /// What the update check tells a third party.
+    static let updateCheckReach = "The update check asks GitHub once a day whether a newer "
+        + "version has been released. That request tells GitHub a Mac asked, which is a third "
+        + "party learning this machine exists — the one thing Mynah does that you did not ask "
+        + "for by speaking. Turn it off and Mynah never contacts GitHub at all."
+
+    /// **Restored after it was lost in a density pass, which is why it is here
+    /// rather than inline.**
+    ///
+    /// The old privacy row ended "Nothing is downloaded or installed on its
+    /// own." The rearrangement kept the outbound half — what GitHub learns —
+    /// and dropped the inbound one, so on a section headed "what leaves this
+    /// Mac" the question an owner actually has about an update check no longer
+    /// had an answer. Everything left was true; the reassurance was simply
+    /// gone, which is the most expensive shape a copy edit can take.
+    static let updateCheckNoAutoInstall = "Nothing is downloaded or installed on its own — a "
+        + "newer version is something you go and get."
+
+    /// The About caption, composed rather than written out.
+    ///
+    /// This is the enrolment half of the guarantee, and it is the half that was
+    /// missing. Asserting that every member of this type is rendered protects
+    /// only what somebody remembered to put in it, and the sentence most likely
+    /// to be dropped is the one nobody thought to enrol. Composing the caption
+    /// *from* the members inverts that: a claim cannot be quietly deleted from
+    /// the screen without deleting it from here, where a test can see it.
+    static var aboutCaption: String { "\(updateCheckReach) \(updateCheckNoAutoInstall)" }
 }
 
 /// There is deliberately no microphone picker here, and the reason changed
@@ -1318,6 +1346,25 @@ struct SettingsView: View {
             }
             MynahDivider()
 
+            MynahDivider()
+
+            // The phone group is where an owner looks for what their phone can
+            // do, and until now it said only that Mynah answers. Calling was
+            // documented once, under a heading about model speed, which is not
+            // where anybody goes to ask "what can I do with this thing".
+            //
+            // The condition is stated rather than left to the Calls group: an
+            // unqualified "you can call it" sends an owner on a local model to
+            // be refused, and the refusal is not a bug they can act on.
+            SettingsRow(
+                "You can also call it",
+                detail: "Send \(CallInvitation.command) to yourself in Signal and tap the link "
+                    + "it sends back — you talk out loud and can interrupt it mid-sentence. It "
+                    + "needs a brain that answers fast, so it is turned down on a model that "
+                    + "runs on this Mac."
+            ) { EmptyView() }
+            MynahDivider()
+
             SettingsRow(
                 "Can Mynah reach it",
                 detail: model.phone.isReachable
@@ -1623,10 +1670,7 @@ struct SettingsView: View {
             // No promise of a page to visit instead. This repository is private:
             // a link most people would get a 404 from is worse than no link,
             // which is why About carries none either.
-            caption: "The update check asks GitHub once a day whether a newer version has been "
-                + "released. That request tells GitHub a Mac asked, which is a third party "
-                + "learning this machine exists — the one thing Mynah does that you did not ask "
-                + "for by speaking. Turn it off and Mynah never contacts GitHub at all."
+            caption: PrivacyClaim.aboutCaption
         ) {
             // The full name here, and only here. In running copy it stays
             // "Mynah" — "Mynah (Sage Voice Bridge) keeps what you tell it" is a
