@@ -202,5 +202,9 @@ private actor InertBackgroundServices: SignalBackgroundServicing {
     private(set) var disableCount = 0
 
     func enable(_ configuration: SignalServiceConfiguration) async throws { enabledCount += 1 }
-    func disable() async { disableCount += 1 }
+    func disable(because reason: String) async { disableCount += 1 }
+    /// Never "running": these tests install nothing, so claiming otherwise
+    /// would be the same lie as reporting what was last requested rather than
+    /// what macOS is actually doing.
+    func state() async -> BackgroundHelperState { .absent }
 }

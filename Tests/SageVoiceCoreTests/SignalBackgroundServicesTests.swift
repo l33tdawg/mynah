@@ -99,7 +99,7 @@ final class SignalBackgroundServicesTests: XCTestCase {
             )
         )
 
-        await manager.disable()
+        await manager.disable(because: "the test is checking the plists are removed")
 
         XCTAssertFalse(
             FileManager.default.fileExists(
@@ -191,10 +191,15 @@ private actor RecordingBackgroundServices: SignalBackgroundServicing {
         reportedState = .running
     }
 
-    func disable() async {
+    func disable(because reason: String) async {
         disableCount += 1
+        reasons.append(reason)
         reportedState = .absent
     }
+
+    /// Kept because the reason is the point of the parameter: a removal that
+    /// cannot say why is the state this whole area was in on 29 July.
+    private(set) var reasons: [String] = []
 
     func state() async -> BackgroundHelperState { reportedState }
 

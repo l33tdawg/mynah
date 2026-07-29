@@ -112,9 +112,11 @@ final class PrivacyClaimTests: XCTestCase {
             PrivacyClaim.webSearch,
             PrivacyClaim.calling,
             PrivacyClaim.callTranscript,
-            PrivacyClaim.thinking(destination: "Anthropic", staysOnDevice: false),
-            PrivacyClaim.thinking(destination: "This Mac", staysOnDevice: true),
-            PrivacyClaim.thinking(destination: nil, staysOnDevice: false)
+            PrivacyClaim.thinkingOnThePhone(model: "claude-sonnet-4-5", staysOnDevice: false),
+            PrivacyClaim.thinkingOnThePhone(model: "qwen3.5:4b", staysOnDevice: true),
+            PrivacyClaim.thinkingOnThePhone(model: nil, staysOnDevice: false),
+            PrivacyClaim.thinkingInThisWindow(destination: "Anthropic", staysOnDevice: false),
+            PrivacyClaim.thinkingInThisWindow(destination: nil, staysOnDevice: false)
         ].joined(separator: " ")
 
         for claim in [
@@ -141,20 +143,53 @@ final class PrivacyClaimTests: XCTestCase {
     /// The state before setup has recorded a brain is not "nothing leaves" — it
     /// is "nobody has said yet", and the row must not read as reassurance.
     func testAnUnrecordedBrainIsAnAbsenceRatherThanAPromise() {
-        let unknown = PrivacyClaim.thinking(destination: nil, staysOnDevice: false)
-
-        XCTAssertTrue(unknown.lowercased().contains("hasn't recorded"))
-        XCTAssertFalse(unknown.lowercased().contains("never"))
-        XCTAssertFalse(unknown.lowercased().contains("stays"))
+        for unknown in [
+            PrivacyClaim.thinkingInThisWindow(destination: nil, staysOnDevice: false),
+            PrivacyClaim.thinkingOnThePhone(model: nil, staysOnDevice: false)
+        ] {
+            XCTAssertTrue(unknown.lowercased().contains("hasn't"))
+            XCTAssertFalse(unknown.lowercased().contains("never"))
+            XCTAssertFalse(unknown.lowercased().contains("stays"))
+        }
     }
 
     /// The cloud row names the company. A privacy page that says "a provider"
     /// where it could say "Anthropic" is softening the one fact it exists for.
     func testTheThinkingClaimNamesWhereTheWordsGo() {
         XCTAssertTrue(
-            PrivacyClaim.thinking(destination: "Anthropic", staysOnDevice: false)
+            PrivacyClaim.thinkingInThisWindow(destination: "Anthropic", staysOnDevice: false)
                 .contains("Anthropic")
         )
+        XCTAssertTrue(
+            PrivacyClaim.thinkingOnThePhone(model: "claude-sonnet-4-5", staysOnDevice: false)
+                .contains("claude-sonnet-4-5")
+        )
+    }
+
+    /// **The defect this pair of claims exists to prevent.**
+    ///
+    /// The page first read the window's recorded brain choice for both
+    /// surfaces. On the machine it was written on that was wrong: the appliance
+    /// was launched with `--provider ollama` while the window was set to an API
+    /// brain, so one row would have told the owner their phone's words stayed on
+    /// this Mac when they were going to a company, or the reverse. The daemon
+    /// publishes its own status precisely because it does not consult the
+    /// window's choice, and these two claims must never be sourced from one
+    /// value.
+    func testThePhoneAndTheWindowAreAllowedToDisagree() {
+        let phone = PrivacyClaim.thinkingOnThePhone(model: "qwen3.5:4b", staysOnDevice: true)
+        let window = PrivacyClaim.thinkingInThisWindow(
+            destination: "Anthropic",
+            staysOnDevice: false
+        )
+
+        XCTAssertTrue(phone.contains("runs on this Mac"))
+        XCTAssertTrue(window.contains("Anthropic"))
+        XCTAssertNotEqual(phone, window)
+        // Neither may speak for the other: the phone claim must not mention the
+        // window's destination, and vice versa.
+        XCTAssertFalse(phone.contains("Anthropic"))
+        XCTAssertFalse(window.contains("qwen3.5:4b"))
     }
 
     /// Calling claims only what this repository can show: recognition and

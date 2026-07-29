@@ -72,7 +72,12 @@ enum BackgroundHelperState: Equatable, Sendable {
 
 protocol SignalBackgroundServicing: Sendable {
     func enable(_ configuration: SignalServiceConfiguration) async throws
-    func disable() async
+    /// - Parameter reason: why the owner's phone is about to stop being
+    ///   answered, in words that would mean something in a log six hours later.
+    ///   Required rather than optional: this is the one call in the app that can
+    ///   take the appliance away, and a caller that cannot say why should not be
+    ///   making it.
+    func disable(because reason: String) async
     /// Asked rather than remembered. See `BackgroundHelperState`.
     func state() async -> BackgroundHelperState
 }
@@ -227,17 +232,20 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         return await isLoaded(Self.bridgeLabel) == true
     }
 
-    func disable() async {
+    func disable(because reason: String) async {
         guard !isTestReachingTheRealMachine else {
             Self.log.error("a test reached the real launchd; refusing to remove anything")
             return
         }
         // The one action in this file that takes the owner's phone away, and
-        // until 29 July it happened without a word anywhere. At notice level so
-        // it survives in the unified log: `.info` and `.debug` are dropped
+        // until 29 July it happened without a word anywhere. At error level so
+        // it survives in the unified log — `.info` and `.debug` are dropped
         // unless something has opted the subsystem in, and the whole value of
-        // this line is being readable hours later.
-        Self.log.notice("removing both LaunchAgents; the phone will stop being answered")
+        // this line is being readable hours later, by somebody who does not yet
+        // know what they are looking for.
+        Self.log.error(
+            "removing both LaunchAgents, so the phone will stop being answered: \(reason, privacy: .public)"
+        )
         _ = await bootout(Self.bridgeLabel)
         _ = await bootout(Self.signalLabel)
 

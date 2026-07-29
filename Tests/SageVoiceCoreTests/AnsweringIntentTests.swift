@@ -84,6 +84,81 @@ final class AnsweringIntentTests: XCTestCase {
         }
     }
 
+    /// Whatever removes the appliance has to say why, in the line that records
+    /// the removal. Four possibilities had to be eliminated by hand on 29 July
+    /// because nothing did.
+    func testTheRemovalCarriesItsReason() async {
+        let services = RecordingServices()
+        let app = makeApp(services: services, configuration: .fixture)
+        app.isPaused = true
+
+        await app.reconcileAnsweringService()
+
+        // Not a count: setting `isPaused` reconciles through its own `didSet`
+        // as well, so more than one removal is expected and correct here.
+        let reasons = await services.reasons
+        XCTAssertFalse(reasons.isEmpty, "the appliance was not removed at all")
+        XCTAssertTrue(
+            reasons.allSatisfy { $0.contains("paused") },
+            "the appliance was removed without recording why: \(reasons)"
+        )
+    }
+
+    // MARK: Reading reality back
+
+    /// The gap nothing else covers.
+    ///
+    /// Reconciliation used to happen only on launch and on change, so an
+    /// appliance that went away for a reason the app did not cause — the owner
+    /// switching it off in Login Items, a test run deleting the plists — stayed
+    /// away. The window went on saying it was answering his phone, and only
+    /// quitting and relaunching fixed it.
+    ///
+    /// Nothing here has changed: same marker, same settings, same
+    /// configuration. Coming forward still has to ask.
+    func testComingForwardAsksTheMachineEvenWhenNothingChanged() async {
+        let services = RecordingServices()
+        let app = makeApp(services: services, configuration: .fixture)
+
+        await app.catchUpWithTheMachine()
+
+        let enabled = await services.enabled
+        XCTAssertEqual(
+            enabled.count, 1,
+            "coming back to the window did not check whether the appliance still exists"
+        )
+    }
+
+    /// And it must still adopt a marker another process changed, which is the
+    /// job activation already had.
+    func testComingForwardStillAdoptsAPauseFromAnotherProcess() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("catchup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let marker = PauseState(fileURL: root.appendingPathComponent("paused"))
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: "mynah.setupComplete")
+        let services = RecordingServices()
+        let app = AppModel(
+            defaults: defaults,
+            backgroundServices: services,
+            serviceConfiguration: { .fixture },
+            pauseState: marker
+        )
+        XCTAssertFalse(app.isPaused)
+
+        // Something outside this app paused it — the daemon, a second window,
+        // the owner deleting the file by hand.
+        try marker.setPaused(true)
+        await app.catchUpWithTheMachine()
+
+        XCTAssertTrue(app.isPaused, "the window kept saying it was answering")
+        let disables = await services.disableCount
+        XCTAssertGreaterThanOrEqual(disables, 1, "it adopted the pause but left the jobs running")
+    }
+
     // MARK: Coming back
 
     /// Backing out of "Change where your words go" has to put the appliance
@@ -272,7 +347,10 @@ final class ApplianceIdempotenceTests: XCTestCase {
                 .appendingPathComponent("Sources/MynahMac/SignalBackgroundServices.swift"),
             encoding: .utf8
         )
-        let removal = try XCTUnwrap(source.range(of: "func disable() async {"))
+        let removal = try XCTUnwrap(
+            source.range(of: "func disable(because reason: String) async {"),
+            "the removal method was renamed; this check is now watching nothing"
+        )
         let body = source[removal.upperBound...].prefix(400)
         XCTAssertTrue(
             body.contains("isTestReachingTheRealMachine"),
@@ -318,7 +396,12 @@ private actor RecordingServices: SignalBackgroundServicing {
         enabled.append(configuration)
     }
 
-    func disable() async { disableCount += 1 }
+    func disable(because reason: String) async {
+        disableCount += 1
+        reasons.append(reason)
+    }
+
+    private(set) var reasons: [String] = []
 
     func state() async -> BackgroundHelperState {
         enabled.isEmpty ? .absent : .running

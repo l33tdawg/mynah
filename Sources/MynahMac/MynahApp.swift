@@ -167,13 +167,45 @@ final class AppModel {
     /// Called on launch and whenever the app becomes active, which covers every
     /// way the owner can see the window again after something else moved it.
     func refreshPauseState() {
+        guard adoptPauseStateFromDisk() else { return }
+        Task { await reconcileAnsweringService() }
+    }
+
+    /// - Returns: whether the window's copy actually changed.
+    @discardableResult
+    private func adoptPauseStateFromDisk() -> Bool {
         let onDisk = pauseState.isPaused()
-        guard onDisk != isPaused else { return }
+        guard onDisk != isPaused else { return false }
         isAdoptingPauseStateFromDisk = true
         isPaused = onDisk
         isAdoptingPauseStateFromDisk = false
         Self.log.info("adopted pause state from disk: \(onDisk ? "paused" : "answering", privacy: .public)")
-        Task { await reconcileAnsweringService() }
+        return true
+    }
+
+    /// Everything worth re-checking when the owner comes back to the window.
+    ///
+    /// Two questions, and the second one had nobody asking it. The first is
+    /// what the pause marker says, which another process may have changed. The
+    /// second is whether launchd is actually running what this app believes it
+    /// installed — and until now the app only ever *wrote* its intentions and
+    /// never read back what happened to them.
+    ///
+    /// That gap is not theoretical. On 29 July both LaunchAgents were deleted
+    /// out from under a running app, and it then spent half an hour with setup
+    /// complete, answering switched on and no pause marker — believing it was
+    /// answering the owner's phone while nothing at all was installed. Nothing
+    /// noticed, because reconciliation only ever happened on launch and on
+    /// change, and neither had happened since. Only quitting and relaunching
+    /// brought it back.
+    ///
+    /// Asking on every activation is only affordable because `enable` now
+    /// leaves an already-correct system alone; before that this would have been
+    /// a teardown every time the owner looked at their window. The two changes
+    /// are a pair and it would be a mistake to keep this one without the other.
+    func catchUpWithTheMachine() async {
+        adoptPauseStateFromDisk()
+        await reconcileAnsweringService()
     }
 
     private static let log = Logger(subsystem: "local.sage.voicebridge", category: "pause")
@@ -378,16 +410,18 @@ final class AppModel {
                 presence = .needsOwner
             }
         case .stop(let reason):
-            // At error level on purpose. `.info` and `.debug` are not persisted
-            // by default, so the one line that explains a dead phone bridge
-            // would be gone by the time anybody went looking for it — which is
-            // exactly what happened on 29 July.
-            Self.appliance.error(
-                "removing the phone bridge: \(reason, privacy: .public)"
-            )
-            await backgroundServices.disable()
+            // The reason travels *into* the removal rather than being logged
+            // beside it, so the destructive line says what it did and why in
+            // one sentence. Two adjacent lines is what we had, and correlating
+            // them by timestamp is work somebody does at the wrong moment.
+            await backgroundServices.disable(because: reason)
             answeringServiceError = nil
         case .cannotTell(let reason):
+            // At error level on purpose. `.info` and `.debug` are not persisted
+            // unless something opts the subsystem in, so the one line that
+            // explains a dead phone bridge would be gone by the time anybody
+            // went looking — which is exactly what happened on 29 July, and
+            // cost an afternoon of eliminating four possibilities by hand.
             Self.appliance.error(
                 "leaving the phone bridge as it is: \(reason, privacy: .public)"
             )
@@ -570,21 +604,23 @@ public struct MynahApp: App {
                 // Set once at the root, like the text size, so no row has to be
                 // handed the preference to know whether to offer an explanation.
                 .environment(\.mynahShowsTooltips, app.showsTooltips)
-                // The pause marker is shared with the daemon and survives a
-                // reinstall, so the window's copy of it can be stale by the time
-                // anyone looks at the window. Re-reading whenever the app comes
-                // forward is the cheapest place to catch that: it is one
-                // `fileExists`, and coming forward is exactly when the owner is
-                // about to trust what the dot says.
+                // Coming forward is when the owner is about to trust what this
+                // window says, so it is when the window should stop trusting
+                // its own memory. Two things get re-read: the pause marker,
+                // which is shared with the daemon and survives a reinstall, and
+                // launchd itself, which can have lost the appliance for reasons
+                // this app never saw.
                 //
-                // Not a timer. The only reader that must be live per message is
-                // the daemon, and it already reads the file on every message.
+                // Not a timer. Nothing here has to be live between glances —
+                // the daemon reads the marker on every message, and the only
+                // moment a stale window costs anything is the moment somebody
+                // is reading it.
                 .onReceive(
                     NotificationCenter.default.publisher(
                         for: NSApplication.didBecomeActiveNotification
                     )
                 ) { _ in
-                    app.refreshPauseState()
+                    Task { await app.catchUpWithTheMachine() }
                 }
         }
         .defaultSize(width: 1180, height: 820)

@@ -18,18 +18,39 @@ import SwiftUI
 /// separate decision made on purpose rather than a side effect of moving them.
 extension PrivacyClaim {
 
-    /// The one fact that changes with what the owner picked, so it is a function
-    /// rather than a constant. `nil` covers the state before setup has recorded
-    /// anything, which is not "nothing leaves" — it is "nobody has said yet".
-    static func thinking(destination: String?, staysOnDevice: Bool) -> String {
-        guard let destination else {
-            return "Mynah hasn't recorded where it sends your words to think."
+    /// **Two surfaces, two answers, and they can genuinely differ.**
+    ///
+    /// This started as one row reading the app's recorded brain choice, which
+    /// was wrong on the machine it was written on. `launchctl` on this Mac shows
+    /// the appliance running `--provider ollama --model qwen3.5:4b` while the
+    /// window is set to an API brain: the daemon builds its backend from its
+    /// own launch flags and never consults what the window recorded.
+    /// `SettingsView` already knew this — "the appliance answering the phone
+    /// builds its own backend from its launch flags" — and a privacy page
+    /// naming the wrong destination is the worst error available on it.
+    ///
+    /// So the phone is asked about the appliance's published status, the window
+    /// is asked about the window's own choice, and neither speaks for the other.
+    static func thinkingOnThePhone(model: String?, staysOnDevice: Bool) -> String {
+        guard let model else {
+            return "Mynah hasn't answered your phone yet, so it hasn't said which brain it uses."
         }
         return staysOnDevice
-            ? "Everything you say is answered by \(destination), which runs on this Mac. "
-                + "Nothing you say goes anywhere else to be thought about."
-            : "Each time you ask something, what you said goes to \(destination) so it can work "
-                + "out an answer. That is the one thing this product cannot do without."
+            ? "Answered by \(model), which runs on this Mac. Nothing you say from your phone "
+                + "goes anywhere else to be thought about."
+            : "What you say goes to \(model) so it can work out an answer. That is the one "
+                + "thing this product cannot do without."
+    }
+
+    /// The window's own turns, which is a different backend from the one
+    /// answering the phone and may go somewhere else entirely.
+    static func thinkingInThisWindow(destination: String?, staysOnDevice: Bool) -> String {
+        guard let destination else {
+            return "Mynah hasn't recorded where this window sends your words to think."
+        }
+        return staysOnDevice
+            ? "Answered by \(destination), which runs on this Mac."
+            : "What you type or say here goes to \(destination) so it can work out an answer."
     }
 
     static let recordings = "They are turned into words on this Mac and never sent anywhere."
@@ -97,6 +118,9 @@ struct PrivacyView: View {
     /// changes while somebody is reading it, and a live-updating privacy page
     /// would redraw under the owner for no reason they could see.
     @State private var brain: BrainChoice?
+    /// What the *appliance* publishes about itself, which is the only honest
+    /// source for what leaves when the owner speaks to their phone.
+    @State private var appliance: ApplianceStatus?
     @State private var checksForUpdates = UpdatePreferences.load().checksForUpdates
     @State private var sendsCallTranscript = CallPreferences.load().transcript
 
@@ -117,6 +141,7 @@ struct PrivacyView: View {
         .background(Palette.surface.canvas)
         .task {
             brain = BrainChoiceStore.current()
+            appliance = ApplianceStatus.current()
             checksForUpdates = UpdatePreferences.load().checksForUpdates
             sendsCallTranscript = CallPreferences.load().transcript
         }
@@ -144,9 +169,27 @@ struct PrivacyView: View {
     private var claims: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup("Every time you ask something") {
+                // The phone first, because that is the appliance: it answers
+                // when nobody is at the Mac, and it is the surface the owner
+                // uses most. Its brain is whatever the daemon was launched
+                // with, which is not necessarily what this window is set to.
                 PrivacyRow(
-                    "What you say, while Mynah thinks",
-                    detail: PrivacyClaim.thinking(
+                    "When you ask from your phone",
+                    detail: PrivacyClaim.thinkingOnThePhone(
+                        model: appliance?.model,
+                        staysOnDevice: appliance?.keepsWordsOnDevice ?? false
+                    )
+                ) {
+                    StatusPill(
+                        appliance.map { $0.keepsWordsOnDevice ? "Stays here" : $0.model }
+                            ?? "Not answering yet",
+                        tone: appliance.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
+                    )
+                }
+                MynahDivider()
+                PrivacyRow(
+                    "When you ask in this window",
+                    detail: PrivacyClaim.thinkingInThisWindow(
                         destination: brain?.destination,
                         staysOnDevice: brain?.keepsWordsOnDevice ?? false
                     )

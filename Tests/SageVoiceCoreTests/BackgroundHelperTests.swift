@@ -116,6 +116,6 @@ private actor StubBackgroundServices: SignalBackgroundServicing {
     init(state: BackgroundHelperState) { self.reported = state }
 
     func enable(_ configuration: SignalServiceConfiguration) async throws {}
-    func disable() async {}
+    func disable(because reason: String) async {}
     func state() async -> BackgroundHelperState { reported }
 }
