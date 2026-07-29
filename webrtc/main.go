@@ -81,6 +81,7 @@ func main() {
 		vadFloor        = flag.Float64("vad-floor", 0, "absolute level below which nothing is speech (0 uses the default)")
 		relayURL        = flag.String("relay", "", "call relay to wait at, e.g. https://call.sage.delivery")
 		relaySecretFile = flag.String("relay-secret-file", "", "file holding the secret this appliance authenticates with")
+		applianceID     = flag.String("appliance-id", "", "identity this appliance was minted with; empty means a hand-provisioned secret the relay finds by scanning")
 	)
 	flag.Parse()
 
@@ -120,7 +121,7 @@ what stands between a private microphone and anyone who can reach it.`)
 			appliance: *appliance,
 			listening: listeningSettings(*vadFactor, *vadFloor),
 		}
-		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, secret, calls); err != nil {
+		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, *applianceID, secret, calls); err != nil {
 			log.Fatal(err)
 		}
 		return

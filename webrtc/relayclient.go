@@ -31,7 +31,7 @@ import (
 // The media path is unaffected by any of this. The relay carries the offer and
 // the answer; the candidates inside them describe routes between the phone and
 // this Mac, and on a shared network ICE picks the host pair.
-func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, calls *callServer) error {
+func serveViaRelay(ctx context.Context, endpoint, token, applianceID string, secret []byte, calls *callServer) error {
 	client := &http.Client{
 		// Comfortably longer than the relay holds a poll. A timeout shorter than
 		// the poll window would sever every idle wait and read as an outage.
@@ -68,7 +68,7 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 			return nil
 		}
 
-		incoming, err := poll(ctx, client, endpoint, token, secret)
+		incoming, err := poll(ctx, client, endpoint, token, applianceID, secret)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -93,7 +93,7 @@ func serveViaRelay(ctx context.Context, endpoint, token string, secret []byte, c
 			log.Printf("could not answer: %v", err)
 			continue
 		}
-		if err := sendAnswer(ctx, client, endpoint, secret, incoming.Call, answer); err != nil {
+		if err := sendAnswer(ctx, client, endpoint, applianceID, secret, incoming.Call, answer); err != nil {
 			log.Printf("could not deliver the answer: %v", err)
 		}
 	}
@@ -135,7 +135,7 @@ func (c *incomingCall) iceServers() []webrtc.ICEServer {
 	return c.ICE
 }
 
-func poll(ctx context.Context, client *http.Client, endpoint, token string, secret []byte) (*incomingCall, error) {
+func poll(ctx context.Context, client *http.Client, endpoint, token, applianceID string, secret []byte) (*incomingCall, error) {
 	body, err := json.Marshal(map[string]string{"token": token})
 	if err != nil {
 		return nil, err
@@ -146,6 +146,12 @@ func poll(ctx context.Context, client *http.Client, endpoint, token string, secr
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+rendezvous.ApplianceCredential(secret, time.Now()))
+	// Present when this appliance minted its own identity, absent when it
+	// carries a secret added to the relay's file by hand. The relay reads it as
+	// "derive exactly this one secret" instead of scanning every secret it holds.
+	if applianceID != "" {
+		request.Header.Set("X-Sage-Appliance", applianceID)
+	}
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -173,7 +179,7 @@ func poll(ctx context.Context, client *http.Client, endpoint, token string, secr
 	}
 }
 
-func sendAnswer(ctx context.Context, client *http.Client, endpoint string, secret []byte, callID, answer string) error {
+func sendAnswer(ctx context.Context, client *http.Client, endpoint, applianceID string, secret []byte, callID, answer string) error {
 	body, err := json.Marshal(map[string]string{"call": callID, "answer": answer})
 	if err != nil {
 		return err
@@ -184,6 +190,12 @@ func sendAnswer(ctx context.Context, client *http.Client, endpoint string, secre
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+rendezvous.ApplianceCredential(secret, time.Now()))
+	// Present when this appliance minted its own identity, absent when it
+	// carries a secret added to the relay's file by hand. The relay reads it as
+	// "derive exactly this one secret" instead of scanning every secret it holds.
+	if applianceID != "" {
+		request.Header.Set("X-Sage-Appliance", applianceID)
+	}
 
 	response, err := client.Do(request)
 	if err != nil {

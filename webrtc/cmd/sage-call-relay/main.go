@@ -40,11 +40,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -89,6 +92,7 @@ func main() {
 		email          = flag.String("email", "", "contact address for the certificate authority")
 		cacheDir       = flag.String("cert-cache", "/var/lib/sage-call-relay", "where to keep issued certificates")
 		secretFile     = flag.String("secret-file", "", "file of appliance secrets, one per line (required)")
+		rootKeyFile    = flag.String("root-key-file", "", "file holding the root key appliances are minted from; without it /appliance/enrol refuses")
 		stunURL        = flag.String("stun", "stun:stun.l.google.com:19302", "STUN server offered to callers")
 		turnHost       = flag.String("turn", "", "TURN server as host:port, e.g. turn.sage.delivery:3478")
 		turnSecretFile = flag.String("turn-secret-file", "", "file holding the TURN shared secret")
@@ -109,6 +113,15 @@ func main() {
 		log.Fatalf("appliance secrets: %v", err)
 	}
 	log.Printf("%d appliance secret(s) loaded", len(secrets))
+	var rootKey []byte
+	if *rootKeyFile != "" {
+		if rootKey, err = readSecret(*rootKeyFile); err != nil {
+			log.Fatalf("root key: %v", err)
+		}
+		log.Println("minting is on: appliances can enrol themselves")
+	} else {
+		log.Println("no root key: appliances cannot enrol and must be added to the secret file by hand")
+	}
 	var turnSecret []byte
 	if *turnSecretFile != "" {
 		if turnSecret, err = readSecret(*turnSecretFile); err != nil {
@@ -122,7 +135,12 @@ func main() {
 	}
 
 	relay := &relay{
-		secrets:    secrets,
+		secrets: secrets,
+		rootKey: rootKey,
+		// Once an hour per address. An appliance enrols once and keeps the
+		// result; a household behind one address that reinstalls a few times in
+		// an afternoon still fits, and a loop does not.
+		enrolments: newEnrolmentLimiter(8, time.Hour),
 		stunURL:    *stunURL,
 		turnHost:   *turnHost,
 		turnSecret: turnSecret,
@@ -229,6 +247,55 @@ type appliance struct {
 	owner string
 }
 
+// enrolmentLimiter caps how often one address may mint an identity.
+//
+// Enrolment asks for nothing identifying, which is deliberate and which makes it
+// open by construction — so the only thing standing between the relay and a
+// script minting identities in a loop is this. A fixed window rather than a
+// token bucket: the thing being limited happens once in an appliance's life, so
+// precision at the boundary buys nothing and a map of counters is something an
+// operator can reason about at 3am.
+//
+// Addresses are forgotten as they age out, so this cannot grow without bound on
+// a relay somebody points a scanner at.
+type enrolmentLimiter struct {
+	mu     sync.Mutex
+	window time.Duration
+	limit  int
+	seen   map[string][]time.Time
+}
+
+func newEnrolmentLimiter(limit int, window time.Duration) *enrolmentLimiter {
+	return &enrolmentLimiter{window: window, limit: limit, seen: map[string][]time.Time{}}
+}
+
+func (l *enrolmentLimiter) allow(address string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	cutoff := time.Now().Add(-l.window)
+	for who, stamps := range l.seen {
+		kept := stamps[:0]
+		for _, stamp := range stamps {
+			if stamp.After(cutoff) {
+				kept = append(kept, stamp)
+			}
+		}
+		if len(kept) == 0 {
+			delete(l.seen, who)
+			continue
+		}
+		l.seen[who] = kept
+	}
+
+	if len(l.seen[address]) >= l.limit {
+		log.Printf("enrolment refused: %s is over the limit", address)
+		return false
+	}
+	l.seen[address] = append(l.seen[address], time.Now())
+	return true
+}
+
 // call is one offer travelling out and one answer travelling back.
 type call struct {
 	id     string
@@ -237,7 +304,12 @@ type call struct {
 }
 
 type relay struct {
-	secrets    [][]byte
+	secrets [][]byte
+	// rootKey mints and re-derives per-appliance secrets. Nil on a relay
+	// started without one, which keeps serving the hand-provisioned list and
+	// refuses to enrol rather than pretending to.
+	rootKey    []byte
+	enrolments *enrolmentLimiter
 	stunURL    string
 	turnHost   string
 	turnSecret []byte
@@ -252,6 +324,7 @@ type relay struct {
 // standing up a certificate authority.
 func (r *relay) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /appliance/enrol", r.handleEnrol)
 	mux.HandleFunc("POST /appliance/listen", r.handleListen)
 	mux.HandleFunc("POST /appliance/answer", r.handleAnswer)
 	mux.HandleFunc("GET /{token}", r.handlePage)
@@ -291,8 +364,97 @@ func (r *relay) forgetStaleAppliances() {
 	}
 }
 
+// handleEnrol mints an appliance its own secret.
+//
+// **Why this exists.** Calling used to require a line hand-added to a file on
+// this server, which is a workaround wearing the clothes of a feature: it does
+// not scale past the people who can ssh here, and it means an owner who links
+// their phone gets half a product with no way to ask for the other half. The
+// owner's instruction was plain — "call relay secret is something we should be
+// minting for the user".
+//
+// **Nothing is stored.** The secret is `HMAC(rootKey, id)`, so this hands back
+// something it can recompute on every later request and immediately forgets. No
+// user table: nothing to store, back up, replicate, or leak.
+//
+// **Nothing identifying is asked for.** No phone number, no hash of one, no
+// account. An enrolment is anonymous by construction, because the alternative is
+// a central server holding a list of who owns an appliance — and this product's
+// promise is that the owner's words stay on their Mac. A phone number recovers
+// from a hash in seconds, so hashing it would have been the appearance of
+// privacy rather than privacy.
+//
+// **What that costs, stated rather than hidden.** Anonymous enrolment is open
+// enrolment, so this is rate limited per address. The exposure is registration
+// spam and nothing more: the relay carries signalling, never audio. Media is
+// DTLS-SRTP between the endpoints and is not available here even to an operator
+// with root on this box.
+func (r *relay) handleEnrol(w http.ResponseWriter, req *http.Request) {
+	if len(r.rootKey) == 0 {
+		// Said plainly rather than 500ing: a relay running without a root key
+		// is a deployment that has not been given one, and the operator reading
+		// this log line is the person who can fix it.
+		log.Printf("enrolment refused: this relay was started without -root-key-file")
+		http.Error(w, "enrolment is not available on this relay", http.StatusNotImplemented)
+		return
+	}
+	if !r.enrolments.allow(clientAddress(req)) {
+		http.Error(w, "too many enrolments; try again later", http.StatusTooManyRequests)
+		return
+	}
+
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		http.Error(w, "could not mint an identity", http.StatusInternalServerError)
+		return
+	}
+	id := hex.EncodeToString(raw)
+	secret := rendezvous.DeriveApplianceSecret(r.rootKey, id)
+
+	log.Printf("enrolled appliance %s", id)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"id":     id,
+		"secret": hex.EncodeToString(secret),
+	})
+}
+
+// clientAddress is the address to rate limit, honouring one proxy hop.
+//
+// `X-Forwarded-For` is attacker-controlled where nothing strips it, so only the
+// last hop is trusted — the value this relay's own front door appended. Behind
+// no proxy the header is absent and RemoteAddr is the truth.
+func clientAddress(req *http.Request) string {
+	if forwarded := req.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
+	}
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		return req.RemoteAddr
+	}
+	return host
+}
+
 func (r *relay) authenticate(w http.ResponseWriter, req *http.Request) (string, bool) {
 	credential := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+
+	// The minted path: one derivation and one comparison, whoever the caller
+	// is. `Identify` below checks the credential against every secret the relay
+	// holds, which is linear in the number of owners on every request — fine for
+	// the handful of hand-provisioned testers it was written for, and not a way
+	// to run a product.
+	if id := req.Header.Get("X-Sage-Appliance"); id != "" && len(r.rootKey) > 0 {
+		secret := rendezvous.DeriveApplianceSecret(r.rootKey, id)
+		if rendezvous.VerifyAppliance(secret, credential, time.Now(), 5*time.Minute) {
+			return id, true
+		}
+		http.Error(w, "not authorised", http.StatusUnauthorized)
+		return "", false
+	}
+
+	// The hand-provisioned path, kept so the Macs already carrying a secret from
+	// the file on this server keep working across this deploy.
 	who, ok := rendezvous.Identify(r.secrets, credential, time.Now(), 5*time.Minute)
 	if !ok {
 		http.Error(w, "not authorised", http.StatusUnauthorized)

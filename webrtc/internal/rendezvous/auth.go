@@ -35,6 +35,31 @@ func ApplianceCredential(secret []byte, now time.Time) string {
 	return stamp + "." + hex.EncodeToString(mac.Sum(nil))
 }
 
+// DeriveApplianceSecret produces an appliance's secret from the relay's root
+// key and the appliance's own id.
+//
+// This is what makes minting a secret per owner possible without the relay
+// keeping a list of them. Every secret is recomputable from the root key and an
+// id the appliance sends with each request, so the relay holds one key and no
+// database: nothing to store, nothing to back up, nothing to replicate, and no
+// user table to leak. An appliance that loses its copy enrols again and gets a
+// new id; there is no recovery path to build because there is no state to
+// recover.
+//
+// It also fixes the shape `Identify` is stuck with. Scanning every issued secret
+// is linear in the number of owners on every single request, which is fine for
+// the handful of hand-provisioned testers it was written for and is not a way to
+// run a product. With an id in hand the relay derives exactly one secret and
+// checks it.
+//
+// Domain-separated with a fixed prefix so this root key cannot be made to
+// produce a value some other use of the same key would also accept.
+func DeriveApplianceSecret(rootKey []byte, id string) []byte {
+	mac := hmac.New(sha256.New, rootKey)
+	mac.Write([]byte("sage-call-appliance:" + id))
+	return mac.Sum(nil)
+}
+
 // Identify checks a credential against every issued secret and reports which
 // one it was.
 //

@@ -134,7 +134,7 @@ public actor CallHost {
         let token = CallInvitation.token()
         let process = Process()
         process.executableURL = endpointURL
-        process.arguments = [
+        var arguments = [
             "-relay", relayURL,
             "-relay-secret-file", secretURL.path,
             "-token", token,
@@ -144,6 +144,14 @@ public actor CallHost {
             // an appliance problem, in one call.
             "-appliance", CallTurnServer.defaultSocket().path
         ]
+        // Only when this Mac minted its own credential. A hand-provisioned
+        // appliance has no id, sends no header, and the relay finds its secret
+        // by scanning — which is what every Mac did before minting existed and
+        // has to keep working across the deploy that adds it.
+        if let id = CallEnrolment.identity() {
+            arguments.append(contentsOf: ["-appliance-id", id])
+        }
+        process.arguments = arguments
         // Inherited, so a failed call is diagnosable from the same log as
         // everything else the appliance did that minute.
         try process.run()

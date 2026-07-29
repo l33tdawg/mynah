@@ -42,20 +42,30 @@ private enum LinkCopy {
     /// nothing told them about. `//help` in the thread lists it, which is no
     /// use to somebody who does not know there is anything to list.
     ///
-    /// **The qualifying sentence is gone because the condition is gone.** This
-    /// used to warn that calling is turned down on a brain running on this Mac,
-    /// which was true until the model stopped being the slow part — see
-    /// `CallInvitation.refusal(isSetUpForCalls:)`. Calling now works on whatever
-    /// brain the owner chose, so promising it here is no longer a promise that
-    /// gets broken later.
+    /// **What linking a phone actually buys, which is the owner's framing.**
     ///
-    /// The remaining condition — a Mac set up for calls — is deliberately not
-    /// mentioned. It is one-time, invisible, and either already done or not
-    /// something the owner can act on from this screen; `//call` says so plainly
-    /// if it is missing.
+    /// *"this just needs to be disclosed to the user of why link your signal —
+    /// send voice notes, or call it directly and talk to it"*. So this is the
+    /// two things, said plainly, on the screen where somebody is deciding
+    /// whether to link at all.
+    ///
+    /// Both conditions that used to qualify this are gone. The model gate went
+    /// when a brain on this Mac stopped being slow, and the credential gate went
+    /// when `CallEnrolment` started minting one — which happens on this very
+    /// screen, the moment the phone links.
+    ///
+    /// **The third sentence is the disclosure and it is not padding.** The call
+    /// does not go through Signal, and an owner who linked a private messenger
+    /// is owed that. What a relay is for, and what it does not get, in the two
+    /// facts that decide whether somebody minds: it introduces the two ends
+    /// because a Mac at home has no address the phone can dial, and the audio
+    /// never passes through it — that is sealed between the phone and this Mac
+    /// and is not available to the relay even in principle.
     static let callingNote =
         "You can also talk to it out loud: send \(CallInvitation.command) to yourself and tap the "
-        + "link it sends back — you can interrupt it mid-sentence."
+        + "link it sends back — you can interrupt it mid-sentence. A call is introduced by "
+        + "call.sage.delivery, because this Mac has no address your phone can dial; what you "
+        + "say goes straight between the two and never through it."
 }
 
 // MARK: - Finding and reading what is on this Mac
@@ -542,12 +552,54 @@ final class SignalLinkModel {
     /// So this loses after-the-fact readability on purpose, in the one place
     /// where the alternative is writing a pairing secret to disk.
     private static let log = Logger(subsystem: "com.sage.mynah", category: "phone-link")
+    /// Enrolment happens once and silently. Whether it worked has to be legible
+    /// afterwards, which on this Mac means a file — see the note in `phase`.
+    private static let calls = MynahLog(category: "calls")
 
     /// Homebrew's own downloads are the slow part; past this it is wedged, not
     /// working.
     private static let installDeadline: TimeInterval = 15 * 60
 
-    private(set) var phase: Phase = .checking
+    private(set) var phase: Phase = .checking {
+        didSet {
+            // **Calling turns itself on when a phone is linked.**
+            //
+            // The owner's decision, and it follows from the measurement: a brain
+            // running on this Mac now answers in single-digit seconds, so the
+            // reason calling was ever held back is gone. What was left standing
+            // in the way was a credential a person had to add by hand to the
+            // relay host — invisible to the owner and impossible for them to
+            // fix. `CallEnrolment` mints one.
+            //
+            // Here rather than at the scan, because both paths that produce a
+            // linked phone run through this property: a fresh pairing and a
+            // restored link found on a Mac that was already set up. Somebody who
+            // linked before this shipped enrols the next time they open the
+            // screen rather than being left behind by the version they upgraded
+            // from.
+            //
+            // Detached and unawaited on purpose. Enrolment is an extra reached
+            // by having linked a phone; linking must never wait on it, and must
+            // never fail because a relay did not answer. `enrolIfNeeded` returns
+            // an outcome rather than throwing for the same reason, and is
+            // idempotent, so the repeat calls this invites cost one file check.
+            //
+            // `MynahLog` rather than `Logger`, and that distinction was earned
+            // this morning: `os_log` on this Mac emits and forgets — `log
+            // stream` sees a line and `log show` cannot retrieve it at any
+            // level. A one-shot outcome nobody can read afterwards is the same
+            // as no outcome, and this is precisely the kind of thing somebody
+            // will need to check after the fact.
+            guard phase.isLinked, !oldValue.isLinked else { return }
+            // Awaited into a value first: `MynahLog`'s message is an autoclosure
+            // that is evaluated synchronously at the log site, so an `await`
+            // inside the argument does not compile.
+            Task {
+                let outcome = await CallEnrolment.enrolIfNeeded()
+                Self.calls.info(outcome.logLine)
+            }
+        }
+    }
     /// Whole seconds left on the code on screen. Zero in every other phase.
     private(set) var secondsRemaining: Int = 0
 
