@@ -112,18 +112,46 @@ final class RosterFramingTests: XCTestCase {
     /// capability before restriction so the line reads as a description rather
     /// than an apology, and the restriction is about *writing*. `thread` owns
     /// the words and can change all of them without touching this.
-    func testTheLineCarriesBothHalvesOfTheAsymmetry() throws {
-        let line = FederationHelp.whatMynahMayDoWithTheseAgents
+    func testTheLineSeparatesSeeingFromReading() throws {
+        let line = FederationHelp.whatMynahMayDoWithTheseAgents.lowercased()
 
-        // The restriction is found by "can't" rather than by a verb. `thread`
-        // writes "save", not "write", because that is the owner's word for it —
-        // and pinning a verb they chose is how the last version of this test
-        // ended up defending a sentence instead of a fact.
-        let reads = try XCTUnwrap(line.range(of: "can read"), "the half Mynah can do went missing")
-        let cannot = try XCTUnwrap(line.range(of: "can't"), "the half it cannot do went missing")
+        // The distinction that took four attempts to get right, and the one
+        // that will be lost first if anybody shortens this.
+        //
+        // Mynah *sees* every subject — `sage_status` returns ~700 names and
+        // their sizes to any signed caller and reads no content at all. It
+        // *reads* only the ones nobody owns. Collapsing the two is exactly what
+        // happened when it recited a directory to the owner and three of us
+        // concluded it had read the contents.
+        let sees = try XCTUnwrap(line.range(of: "see"), "the line no longer says what it can see")
+        let reads = try XCTUnwrap(line.range(of: "read"), "the line no longer says what it can read")
         XCTAssertTrue(
-            reads.lowerBound < cannot.lowerBound,
-            "the line leads with what Mynah cannot do, which reads as an apology"
+            sees.lowerBound < reads.lowerBound,
+            "seeing has to come first, or reading is what the sentence appears to widen"
+        )
+
+        // The closed half, in whatever words. Without it the line reads as
+        // "Mynah reads this Mac", which is the version we shipped and had to
+        // take back.
+        XCTAssertTrue(
+            line.contains("closed") || line.contains("can't") || line.contains("cannot"),
+            "the line no longer says anything is closed to it"
+        )
+    }
+
+    /// The ageing clause, which is the property every failed version lacked.
+    ///
+    /// A grant landing must make this sentence **stale, not false**: it should
+    /// understate what Mynah can do rather than misdescribe it. "Unless that
+    /// agent shares it" does that — the day something is shared, the sentence
+    /// already covered it. Three versions today were true on a Tuesday and
+    /// false on a Wednesday, which is the failure mode this pins.
+    func testTheLineStaysTrueAfterAGrantIsMade() {
+        let line = FederationHelp.whatMynahMayDoWithTheseAgents.lowercased()
+
+        XCTAssertTrue(
+            line.contains("unless"),
+            "the line describes today's grants as permanent, so a new one makes it false"
         )
     }
 

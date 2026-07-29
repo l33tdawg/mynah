@@ -195,19 +195,18 @@ enum TaskBoardTrouble {
     /// **The node is not locked, and this used to say it was.** `login_required`
     /// is the same token SAGE returns over MCP when a vault really is sealed,
     /// which is how it came to be read as one here — but over REST, unsigned,
-    /// it only means *you are not an operator*. Checked by reading the node at
-    /// the moment this state was on screen: 13,372 memories across some 700
-    /// subjects, answered without complaint. One token, two doors, opposite
-    /// meanings, and the copy took the alarming one.
+    /// it only means *you are not an operator*. The node answered signed MCP
+    /// calls throughout the period this state was on screen, so nothing was
+    /// sealed. One token, two doors, opposite meanings, and the copy took the
+    /// alarming one.
     ///
-    /// **This said "Mynah just can't read them", and that is false.**
-    ///
-    /// Mynah reads this node freely — the owner has a screenshot of it listing
-    /// his subjects back to him, in a window whose top half was showing this
-    /// sentence. Two different doors were being conflated: Mynah reads memories
-    /// over MCP as a signed agent, and this board was asking a CEREBRUM
-    /// *operator* endpoint that the app has no session for. The 401 is about
-    /// the app's lack of a key, not about what the appliance may see.
+    /// **This also said "Mynah just can't read them", which named the wrong
+    /// subject.** Whether Mynah can read a given subject is a per-domain
+    /// question and mostly the answer is no — but it has nothing to do with
+    /// *this* failure. This board asks a CEREBRUM operator endpoint the app has
+    /// no session for. The 401 is about the app's lack of a key, and naming
+    /// Mynah in a sentence about the app's own limitation is what made it read
+    /// as a claim about the appliance.
     ///
     /// Naming Mynah in a sentence about the app's own limitation is what made
     /// it read as a claim about the appliance.

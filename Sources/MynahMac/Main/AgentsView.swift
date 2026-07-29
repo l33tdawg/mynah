@@ -206,8 +206,8 @@ struct AgentPermissions: Equatable, Sendable {
     /// instance of the false claim and the last one found.
     var readingLine: String {
         mask & Capability.readAcrossSubjects != 0
-            ? "Every subject on this node it can reach, up to its clearance."
-            : "The subjects it has been given access to."
+            ? "Every subject on this node, up to its clearance."
+            : "Shared subjects, and anything it has been given access to."
     }
 
     /// **What is deliberately not here: the sentences.**
@@ -710,37 +710,63 @@ enum FederationHelp {
     /// *write* and *pipe* denials with nothing about reading in it. So the
     /// asymmetry is real and runs the other way: it reads freely and cannot
     /// write a word.
-    /// **This has now been wrong in both directions, and the second time was
-    /// worse than the first.**
+    /// **The fourth version, and the first anybody measured as the right
+    /// identity.** Every earlier one was reasoned from something adjacent.
     ///
-    /// It first said Mynah could not read what these agents remember. The owner
-    /// asked Mynah over Signal, it answered with a list of his subjects, and we
-    /// concluded the line was false and inverted it — to "can read what these
-    /// agents remember, right across this Mac".
+    /// `ApplianceReadReachProbe` signs with `MynahIdentity.applianceEnvironment()`
+    /// — the appliance's own key — and answers the question directly:
     ///
-    /// That inversion was false, and `thread` caught it by asking the node for
-    /// *content* rather than for totals:
+    ///     READ general          ok — 2 of 897      (unowned)
+    ///     READ sage-release     ok — 2 of 656      (unowned)
+    ///     READ self             ok — 2 of  72      (unowned)
+    ///     READ native-shell-ci  ok — 0 of   0      (owned by codex-sage)
+    ///     READ voice-interface  ok — 0 of   0      (owned by genesis-admin)
+    ///     READ <no filter>      ok — 0 of   0
     ///
-    ///     sage_list domain=<its own>          → 60 memories
-    ///     sage_list domain=exploit-patterns   → Access denied
-    ///     sage_list domain=general            → Access denied
+    /// So it reads the parts of the node **no agent has claimed**, and gets
+    /// nothing from a subject somebody owns. The last line is bit 1 doing what
+    /// its source comment says — `ReadAllDomains` lifts *discovery* filters,
+    /// mask 30 lacks it, so browsing without naming a subject returns nothing
+    /// at all. That, and not a lock, is why the Memories page is empty.
     ///
-    /// Reads are gated per domain, exactly as writes are. Confirmed here
-    /// independently, both directions, before this string was changed back.
+    /// **The three wrong versions, because the pattern matters more than the
+    /// sentence.** It first said Mynah could not read at all — reasoned from a
+    /// capability mask. Then that it read everything — reasoned from
+    /// `sage_status`, which returns ~700 subject names and their sizes to any
+    /// signed caller and reads no content whatever; that table of contents is
+    /// what Mynah recited to the owner and what we all took as proof it had
+    /// read the book. Then that it read almost nothing — reasoned from
+    /// `Access denied` replies that two of us collected **signed as our own
+    /// keys rather than the appliance's**, which is the identity confusion this
+    /// codebase has been chasing all day, arriving in the measuring instrument.
     ///
-    /// **What misled us is worth keeping.** `sage_status` returns 13,372
-    /// memories, ~700 subject *names* and every agent's count — and needs no
-    /// read access at all, because none of it is content. That aggregate is
-    /// what Mynah recited to the owner. His screenshot was real and its answer
-    /// was real; it had read a directory, not the files. We took a table of
-    /// contents as proof it had read the book.
+    /// **Ownership is the discriminator, and that was tested predictively
+    /// rather than fitted.** `thread` flagged that five points fitting an
+    /// explanation is not the explanation being true — which is precisely how
+    /// the three wrong versions were written. So the hypothesis was taken from
+    /// SAGE's own source, where `DenySharedDomainWrite` is documented as
+    /// blocking writes to *"ownerless shared domains (general, self, meta,
+    /// sage-*, and dynamic shared domains)"*, four predictions were written
+    /// down, and then the probe was run:
     ///
-    /// The RBAC line about a `member` reading other members' domains is real
-    /// but conditional — "of any shared Access Group" — and there is no shared
-    /// group here, so the permission never applies.
+    ///     meta             predicted open   → ok, 2 of 50
+    ///     sage-federation  predicted open   → ok, 2 of 62
+    ///     levelup-bugs     predicted closed → 0 of 0
+    ///     quiettype-release predicted closed → 0 of 0
+    ///
+    /// Nine subjects, no exceptions. That is the first claim on this page all
+    /// day that survived being told in advance what would falsify it.
+    ///
+    /// Written to age: "unless that agent shares it" is already true of a
+    /// grant, so one landing makes this stale rather than false — it will
+    /// understate Mynah, and understating is recoverable. Every version shipped
+    /// today failed exactly that test. It claims nothing about *which* subjects
+    /// have been shared, because the grant list is an operator view and no
+    /// sentence here should imply this app can enumerate it.
     static let whatMynahMayDoWithTheseAgents =
-        "Mynah can read the subjects it has been given access to, and no others. "
-            + "What it can't do is save anything of its own — that limit is on its own key."
+        "Mynah can see every subject on this Mac — their names and how much is in each — "
+            + "and can read the ones nobody owns. What another agent owns stays closed to "
+            + "it unless that agent shares it."
 
     /// The domain the appliance writes everything to.
     ///

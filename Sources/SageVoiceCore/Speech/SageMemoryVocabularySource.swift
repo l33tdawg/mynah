@@ -25,11 +25,21 @@ import Foundation
 ///
 /// The original version of this comment justified the silence by saying the
 /// owner "already knows his agent cannot read its memories, it is on the Agents
-/// page". **Both halves were wrong.** The appliance reads this node freely —
-/// its capability mask denies writes and pipes, not reads — and the Agents page
-/// was carrying that false claim rather than establishing it. Left here as a
-/// marker: a comment that leans on another screen's wording inherits that
-/// screen's mistakes, and this one outlived the sentence it cited.
+/// page". **That justification was wrong twice, in opposite directions, within
+/// an hour**, and the second correction is the one worth recording.
+///
+/// It was first rewritten to say the appliance "reads this node freely". It
+/// does not. Reads are gated per domain exactly as writes are — `sage_list`
+/// against a subject an agent owns returns content; against one it does not,
+/// "Access denied". What made the mask look read-permissive is that all four of
+/// its bits are write or pipe denials, and what made that look *confirmed* is
+/// `sage_status`, which returns subject names and counts to any signed caller
+/// and reads no content at all.
+///
+/// The silence this comment defends is still right, for the original reason:
+/// the owner cannot act on it, and it would arrive attached to a voice note.
+/// But a comment that leans on another screen's wording inherits that screen's
+/// mistakes, and this one has now inherited two.
 public struct SageMemoryVocabularySource: Sendable {
 
     /// How many memories to mine. Recall returns most-relevant first, and the

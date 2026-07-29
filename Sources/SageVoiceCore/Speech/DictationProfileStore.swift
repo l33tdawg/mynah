@@ -35,11 +35,15 @@ public actor DictationProfileStore {
     /// Supplies remembered text. Returns empty when there is nothing to mine.
     ///
     /// This said "when Mynah cannot read its own memories, which is the state
-    /// on the owner's machine today", and both halves were wrong. Mynah reads
-    /// this node freely — its capability mask denies writes and pipes, not
-    /// reads. What is true on his machine is that it cannot *write*, so it has
-    /// no memories of its own to mine yet. Reading and having are different
-    /// facts, and conflating them is what put a false claim on three screens.
+    /// on the owner's machine today". It was then rewritten to say the opposite
+    /// — that Mynah "reads this node freely" — and **that was the wrong
+    /// correction**. Reads are gated per domain just as writes are.
+    ///
+    /// The original sentence was near enough. What was genuinely wrong with it
+    /// is smaller and still worth naming: it conflated *reading* with *having*.
+    /// Mynah has stored nothing, so there is nothing of its own to mine — which
+    /// is true regardless of what it may read elsewhere, and is the only fact
+    /// this source needs.
     public typealias MemorySource = @Sendable () async -> [String]
 
     private var cached: DictationProfile?

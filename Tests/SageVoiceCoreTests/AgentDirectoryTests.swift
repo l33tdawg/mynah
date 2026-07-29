@@ -565,18 +565,19 @@ final class StandingFactTests: XCTestCase {
     /// **This test encoded the mistake, and the name is the evidence.**
     ///
     /// It was called `testAnUnreviewedKeyDoesNotClaimToReadWidely` and pinned
-    /// the exact sentence "Only the subjects it's been given access to." An
-    /// unreviewed key **does** read widely: mask 30 is four write and pipe
-    /// denials, bit 1 is a *lift* of discovery filters rather than a permission
-    /// to read, and an agent with an empty `DomainAccess` has no per-domain
-    /// restriction at all. Verified by reading the node as an ordinary signed
-    /// agent — 13,372 memories, some 700 subjects, nothing refused.
+    /// one exact sentence, so it would have failed anybody who reworded that
+    /// line for any reason at all.
     ///
-    /// So a test written to defend a sentence held a false claim in place and
-    /// would have failed whoever corrected it. It now asserts the honest
-    /// property: without bit 1 the app **cannot tell** how wide the reach is,
-    /// so the line must not claim a limit it has not established — while still
-    /// differing from the companion line, which can.
+    /// **The sentence it pinned turned out to be substantially correct**, which
+    /// is the part worth remembering. We spent an hour deciding it was false,
+    /// rewrote it to claim wide reads, and had to put it back — reads are gated
+    /// per domain, and `sage_list` proves it in one call against a subject the
+    /// caller does not own.
+    ///
+    /// So the test was wrong about *how* it defended a true claim, not about
+    /// the claim. It now asserts the property rather than the wording: the line
+    /// must not overstate reach, and must stay distinguishable from the
+    /// companion line, which describes a genuinely wider one.
     func testAnUnreviewedKeyDoesNotOverstateWhatTheAppCanSee() {
         let pending = AgentPermissions(mask: ApplianceWriteReadiness.Capability.pendingReview)
         let companion = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion)
