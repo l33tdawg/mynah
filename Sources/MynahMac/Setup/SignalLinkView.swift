@@ -555,6 +555,10 @@ final class SignalLinkModel {
     /// Enrolment happens once and silently. Whether it worked has to be legible
     /// afterwards, which on this Mac means a file — see the note in `phase`.
     private static let calls = MynahLog(category: "calls")
+    /// The model download is minutes long and nobody is watching it, so it
+    /// reports at deciles: enough to tell a stalled transfer from a slow one,
+    /// without writing a line per packet into a file somebody has to read.
+    private static let voice = DownloadMilestones(category: "voice")
 
     /// Homebrew's own downloads are the slow part; past this it is wedged, not
     /// working.
@@ -597,6 +601,35 @@ final class SignalLinkModel {
             Task {
                 let outcome = await CallEnrolment.enrolIfNeeded()
                 Self.calls.info(outcome.logLine)
+            }
+
+            // **The voice arrives the same way the credential does.**
+            //
+            // 353 MB of model weights are not in the DMG, and the reason is
+            // signing rather than size: code downloaded after installation is
+            // unsigned and quarantined, where model weights are opaque data that
+            // Gatekeeper has no opinion about. So the runtime ships inside the
+            // signed bundle and the weights are fetched here.
+            //
+            // The owner chose this trigger: *"the signal part //call only comes
+            // in once you link signal - download it then"*. Someone who links a
+            // phone is someone who is about to be spoken to.
+            //
+            // A separate task from enrolment rather than a step after it. They
+            // are independent, and enrolment is one round trip where this is
+            // several minutes — chaining them would hold a credential the owner
+            // could already be using behind a download they cannot hear yet.
+            Task {
+                // Read out of main-actor isolation once, here, rather than from
+                // inside the progress callback — that closure is `@Sendable` and
+                // escapes to a URLSession delegate on another thread, where a
+                // main-actor property is not reachable. `DownloadMilestones`
+                // carries its own lock precisely so it can be handed over.
+                let voice = Self.voice
+                let outcome = await KokoroAssets.installIfNeeded(
+                    progress: { voice.milestone($0) }
+                )
+                voice.info(outcome.logLine)
             }
         }
     }
