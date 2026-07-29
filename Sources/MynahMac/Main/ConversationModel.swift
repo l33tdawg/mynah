@@ -329,6 +329,12 @@ actor ToolLoopTurnEngine: TurnEngine {
         _ = try await mcp.start()
         let tools = try await loop.availableTools()
         catalogue = tools
+        // The dictation vocabulary reads the owner's own memories through the
+        // same MCP connection. Registered here rather than built here: the
+        // store compiles it in the background and never on the path of a voice
+        // note, and a refusal — which is what mask 30 returns today — is
+        // indistinguishable from an empty corpus by design.
+        await DictationProfileStore.shared.use(source: SageMemoryVocabularySource(tools: mcp).callAsFunction)
         // Before any warm-up, never after: the boot reply becomes part of the
         // system prompt, and warming a prompt no turn ever sends buys nothing.
         if await ritual.boot() != nil {

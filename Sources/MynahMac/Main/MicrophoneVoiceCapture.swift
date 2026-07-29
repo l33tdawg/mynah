@@ -201,9 +201,36 @@ final class MicrophoneVoiceCapture: VoiceCapture {
         return await DictationProfileStore.shared.repair(trimmed)
     }
 
+    /// Starts building the dictation profile, off the critical path.
+    ///
+    /// Called when the owner focuses the composer rather than when they press
+    /// record: by the time a sentence has been spoken the profile is usually
+    /// there, and if it is not, `repair` returns the transcript unchanged and
+    /// uses it next time.
+    func warmUpProfile() {
+        Task { await DictationProfileStore.shared.warmUp() }
+    }
+
     /// Abandons the recording. Safe to call when nothing is running.
     func cancel() {
         _ = stopEngine()
+    }
+
+    /// Opens the exact System Settings pane the owner needs.
+    ///
+    /// A button beats the sentence it replaces, and by more than convenience:
+    /// macOS never re-prompts after a refusal, so this is the only route left,
+    /// and the deep link lands on Privacy & Security → Microphone rather than
+    /// on the front page of a Settings app with thirty panes in it.
+    ///
+    /// The URL survived a near-miss. It lived only in a setup screen that was
+    /// deleted as unused, and it would have gone with it — `chrome` rescued the
+    /// type and flagged the link, which is the only reason it is here.
+    ///
+    /// Whatever renders `Trouble.microphoneRefused` should offer this; the
+    /// error says so via `opensPrivacySettings`.
+    func openPrivacySettings() {
+        access.openPrivacySettings()
     }
 
     // MARK: Machinery

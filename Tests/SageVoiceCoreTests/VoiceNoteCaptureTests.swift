@@ -110,12 +110,23 @@ final class VoiceNoteCaptureTests: XCTestCase {
     func testEveryFailureSaysWhatToDoAboutIt() {
         let refused = MicrophoneVoiceCapture.Trouble.microphoneRefused.errorDescription ?? ""
         XCTAssertTrue(refused.contains("System Settings"), "no route out of a refusal")
+        XCTAssertTrue(refused.contains("only asks once"), "does not say why re-pressing cannot work")
 
         let missing = MicrophoneVoiceCapture.Trouble.noRecogniser("x").errorDescription ?? ""
         XCTAssertFalse(missing.isEmpty)
 
         let nothing = MicrophoneVoiceCapture.Trouble.heardNothing.errorDescription ?? ""
         XCTAssertTrue(nothing.lowercased().contains("longer"), "does not say what to try instead")
+    }
+
+
+    /// A refusal is the one failure with somewhere to send the owner, and it is
+    /// the one that most needs it: macOS never shows the prompt twice, so a
+    /// sentence describing where the switch lives is their entire route.
+    func testOnlyTheRefusalOffersAWayIntoSystemSettings() {
+        XCTAssertTrue(MicrophoneVoiceCapture.Trouble.microphoneRefused.opensPrivacySettings)
+        XCTAssertFalse(MicrophoneVoiceCapture.Trouble.heardNothing.opensPrivacySettings)
+        XCTAssertFalse(MicrophoneVoiceCapture.Trouble.noRecogniser("x").opensPrivacySettings)
     }
 
     // MARK: - The claim this feature falsified
@@ -126,6 +137,7 @@ final class VoiceNoteCaptureTests: XCTestCase {
     /// product whose whole argument is where your words go, shipping the
     /// feature without the sentence would have been the most expensive thing
     /// this app could do.
+    ///
     /// Asserts on the **value**, not on the file.
     ///
     /// The first two versions of this test read `SettingsView.swift` off disk

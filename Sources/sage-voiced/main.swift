@@ -874,6 +874,16 @@ func runDaemon(_ arguments: [String]) -> Never {
             transcriber: transcriber,
             loop: loop,
             configuration: daemonConfiguration,
+            // Same dictation vocabulary as the window, from the same memories
+            // through the same MCP connection. One stack for both ways in —
+            // two profiles that drift would mean a coinage transcribed one way
+            // from a phone and another from the Mac.
+            //
+            // Registered, not built: the store compiles in the background and
+            // `repair` never waits, so a voice note is never held up by a
+            // memory query. On a node that refuses reads this stays empty and
+            // the transcript passes through untouched.
+            dictationVocabulary: SageMemoryVocabularySource(tools: mcp).callAsFunction,
             ritual: arguments.contains("--no-sage-ritual")
                 ? nil
                 : SageRitual(

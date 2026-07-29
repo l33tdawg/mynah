@@ -251,6 +251,9 @@ public actor VoiceBridgeDaemon {
         transcriber: AudioFileTranscribing,
         loop: ToolLoop,
         configuration: Configuration = Configuration(),
+        /// Where the dictation profile's remembered text comes from. Nil leaves
+        /// the profile empty, which is exactly today's transcription.
+        dictationVocabulary: DictationProfileStore.MemorySource? = nil,
         ritual: SageRitual? = nil,
         notes: NotesToolSource? = nil,
         conversations: ConversationStore? = nil,
@@ -264,6 +267,11 @@ public actor VoiceBridgeDaemon {
         self.transcriber = transcriber
         self.loop = loop
         self.configuration = configuration
+        if let dictationVocabulary {
+            // Registered, never awaited here — start-up must not wait on a
+            // memory query either.
+            Task { await DictationProfileStore.shared.use(source: dictationVocabulary) }
+        }
         self.ritual = ritual
         self.notes = notes
         self.conversations = conversations
@@ -683,10 +691,21 @@ public actor VoiceBridgeDaemon {
     /// with a caption, and the spoken part is the instruction.
     private func resolveTranscript(_ message: SignalIncomingMessage) async throws -> String? {
         if let audio = message.voiceNoteURL {
-            return try await transcriber.transcribe(
+            let heard = try await transcriber.transcribe(
                 audioFile: audio,
                 options: AudioTranscriptionOptions()
             )
+            // The same profile the window uses. One stack for both ways in:
+            // two vocabularies that drift would mean a coinage coming out
+            // differently depending on whether the owner spoke it into his
+            // phone or into the Mac, which is a worse bug than either being
+            // wrong consistently.
+            //
+            // Never waits — `repair` returns the transcript unchanged if no
+            // profile is built yet and compiles one for next time. Signal is
+            // where the owner talks to Mynah most, so this is the half of the
+            // feature that matters more.
+            return await DictationProfileStore.shared.repair(heard)
         }
         if message.hasText {
             return message.text
