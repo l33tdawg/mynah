@@ -1814,6 +1814,11 @@ struct SettingsRow<Control: View>: View {
             control
         }
         .padding(.vertical, s3)
+        // The same sentence, on hover, for the owner who has turned the inline
+        // captions into noise by learning them. It is elaboration rather than
+        // the only statement — the caption above is still on screen — which is
+        // the rule `MynahTooltip` exists to keep.
+        .mynahTooltip(detail)
     }
 }
 

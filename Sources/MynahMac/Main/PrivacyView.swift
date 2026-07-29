@@ -1,0 +1,257 @@
+import SageVoiceCore
+import SwiftUI
+
+// MARK: - The claims this destination is made of
+
+/// The rest of the registry, added from the file that renders them.
+///
+/// An extension rather than more members in `SettingsView.swift`, because that
+/// file belongs to somebody else today and a claim registry that can only be
+/// added to by editing one busy file is a registry people will route around.
+/// Same type, same guarantee: `PrivacyClaimTests` asserts every member reaches a
+/// screen, and this page is composed from these rather than repeating them, so a
+/// sentence cannot quietly leave the product without leaving here first.
+///
+/// **The wording is deliberately unchanged from the rows these came from.** This
+/// destination is a rearrangement, not a rewrite: an owner who has read these
+/// sentences in Settings should recognise them, and any improvement to them is a
+/// separate decision made on purpose rather than a side effect of moving them.
+extension PrivacyClaim {
+
+    /// The one fact that changes with what the owner picked, so it is a function
+    /// rather than a constant. `nil` covers the state before setup has recorded
+    /// anything, which is not "nothing leaves" — it is "nobody has said yet".
+    static func thinking(destination: String?, staysOnDevice: Bool) -> String {
+        guard let destination else {
+            return "Mynah hasn't recorded where it sends your words to think."
+        }
+        return staysOnDevice
+            ? "Everything you say is answered by \(destination), which runs on this Mac. "
+                + "Nothing you say goes anywhere else to be thought about."
+            : "Each time you ask something, what you said goes to \(destination) so it can work "
+                + "out an answer. That is the one thing this product cannot do without."
+    }
+
+    static let recordings = "They are turned into words on this Mac and never sent anywhere."
+
+    static let memories = "Kept on this Mac, in a folder only you can read."
+
+    static let webSearch = "When a question needs the internet, the words Mynah searches for go "
+        + "to a search engine. The rest of what you said does not."
+
+    /// Calling, stated as what leaves rather than as a feature.
+    ///
+    /// Every clause is checked against the code rather than the description of
+    /// it. Recognition and synthesis happen here (`CallTurnServer`: "recognition,
+    /// the model, synthesis — happens here"). The relay serves the page and
+    /// carries the offer and the answer, and `CallHost` is explicit that it "is
+    /// not in the call" — on a shared network "the audio crosses the room
+    /// without touching it".
+    ///
+    /// **What is deliberately absent: any claim about what happens when the
+    /// phone and this Mac cannot reach each other directly.** The ICE
+    /// configuration is not in this repository — it is served with the page from
+    /// the relay — so this app cannot see whether media ever falls back through
+    /// one, and a reassurance nobody here can verify is exactly the kind this
+    /// page must not make.
+    static let calling = "Your side of a call is turned into words on this Mac, and Mynah's "
+        + "answer is spoken here too. The link you tap is served by a relay, which passes the "
+        + "two ends' details along and is not in the call itself."
+
+    /// The transcript is a second copy of a conversation, in a place the owner
+    /// may not be thinking about, and it is switchable — so it is named here and
+    /// the switch is named with it.
+    static let callTranscript = "If you have transcripts turned on, what was said in a call is "
+        + "posted back into your Signal thread when it ends."
+
+    /// The page's opening, and the reason it is a destination rather than a
+    /// section. Composed from nothing — it is the frame the claims sit in.
+    static let openingStatement = "Almost everything Mynah does happens on this Mac. These are "
+        + "the exceptions, and what each one tells somebody else."
+}
+
+// MARK: - Screen
+
+/// What leaves this Mac.
+///
+/// Its own destination rather than a group inside Settings, because these are
+/// not settings: there is nothing here to change, and the one thing that can be
+/// changed — the update check — is named with its switch rather than duplicated
+/// as a control. Settings answers "how is this set up"; this answers "what does
+/// it tell anyone", which is the question the product exists to have a good
+/// answer to.
+///
+/// **It is deliberately not styled as documentation.** The facts on this page
+/// are the product's argument, and a page of grey paragraphs behind a
+/// disclosure would be the same demotion that moving them out of Settings was
+/// meant to undo. So: a real heading, one statement, and then the same rows the
+/// owner already recognises, each with the badge that says where that thing
+/// goes.
+struct PrivacyView: View {
+
+    /// Lets the memories row go where it points. Optional so the pane can be
+    /// previewed and tested without a shell around it.
+    var onOpenSection: ((MainSection) -> Void)?
+
+    /// Read once when the pane appears rather than observed: none of this
+    /// changes while somebody is reading it, and a live-updating privacy page
+    /// would redraw under the owner for no reason they could see.
+    @State private var brain: BrainChoice?
+    @State private var checksForUpdates = UpdatePreferences.load().checksForUpdates
+    @State private var sendsCallTranscript = CallPreferences.load().transcript
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                heading
+                claims.padding(.top, s7)
+                closing.padding(.top, s6)
+            }
+            .frame(maxWidth: MynahWidth.settings, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, s8)
+            .padding(.top, s7)
+            .padding(.bottom, s9)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .background(Palette.surface.canvas)
+        .task {
+            brain = BrainChoiceStore.current()
+            checksForUpdates = UpdatePreferences.load().checksForUpdates
+            sendsCallTranscript = CallPreferences.load().transcript
+        }
+    }
+
+    private var heading: some View {
+        VStack(alignment: .leading, spacing: s4) {
+            Text("What leaves this Mac")
+                .mynahFont(.title1)
+                .foregroundStyle(Palette.ink.primary)
+                .accessibilityAddTraits(.isHeader)
+            Text(PrivacyClaim.openingStatement)
+                .mynahFont(.body)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: The list
+
+    /// One row per thing that can leave, each with the badge that says where it
+    /// goes. Ordered by how often it happens rather than by severity: the first
+    /// two are every single time the owner speaks, and the last is once a day
+    /// whether they speak or not.
+    private var claims: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsGroup("Every time you ask something") {
+                PrivacyRow(
+                    "What you say, while Mynah thinks",
+                    detail: PrivacyClaim.thinking(
+                        destination: brain?.destination,
+                        staysOnDevice: brain?.keepsWordsOnDevice ?? false
+                    )
+                ) {
+                    StatusPill(
+                        brain?.destination ?? "Not chosen",
+                        tone: brain.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
+                    )
+                }
+                MynahDivider()
+                PrivacyRow("Your recordings", detail: PrivacyClaim.recordings) {
+                    StatusPill("Stays here", tone: .good)
+                }
+                MynahDivider()
+                PrivacyRow("What Mynah remembers", detail: PrivacyClaim.memories) {
+                    // A link rather than a control: it changes nothing, it goes
+                    // somewhere. The row is still a statement of fact.
+                    if let onOpenSection {
+                        MynahButton("See it", kind: .secondary) { onOpenSection(.memories) }
+                    } else {
+                        StatusPill("Stays here", tone: .good)
+                    }
+                }
+            }
+
+            SettingsGroup("Sometimes") {
+                PrivacyRow("Looking something up on the web", detail: PrivacyClaim.webSearch) {
+                    StatusPill("Only when needed", tone: .caution)
+                }
+                MynahDivider()
+                PrivacyRow("Talking to it out loud", detail: PrivacyClaim.calling) {
+                    StatusPill("Stays here", tone: .good)
+                }
+                MynahDivider()
+                PrivacyRow("After a call", detail: PrivacyClaim.callTranscript) {
+                    StatusPill(
+                        sendsCallTranscript ? "Posted to Signal" : "Turned off",
+                        tone: sendsCallTranscript ? .caution : .good
+                    )
+                }
+            }
+
+            SettingsGroup("Without you asking") {
+                // The only thing on this page the owner did not cause by
+                // speaking, which is exactly why leaving it off would be the
+                // worst omission available.
+                PrivacyRow("Checking for a newer Mynah", detail: PrivacyClaim.aboutCaption) {
+                    StatusPill(
+                        checksForUpdates ? "Once a day" : "Turned off",
+                        tone: checksForUpdates ? .caution : .good
+                    )
+                }
+            }
+        }
+    }
+
+    /// Where to go to change the one changeable thing, said once at the end
+    /// rather than repeated on the row.
+    private var closing: some View {
+        Text("Nothing on this page is a setting. The update check is the only one of these you "
+            + "can turn off, and its switch is in Settings, under About.")
+            .mynahFont(.callout)
+            .foregroundStyle(Palette.ink.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A row on this page: a fact, its explanation, and a badge saying where it
+/// goes.
+///
+/// A thin wrapper over `SettingsRow` rather than a new component — the rows are
+/// the ones the owner already recognises from Settings, and reproducing their
+/// look by hand is how two screens that should be identical drift apart. The
+/// wrapper exists so this page can be read as a list of claims rather than a
+/// list of settings rows.
+private struct PrivacyRow<Badge: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder var badge: Badge
+
+    init(_ title: String, detail: String, @ViewBuilder badge: () -> Badge) {
+        self.title = title
+        self.detail = detail
+        self.badge = badge()
+    }
+
+    var body: some View {
+        SettingsRow(title, detail: detail) { badge }
+    }
+}
+
+// MARK: - Previews
+
+#Preview("Privacy — an API brain") {
+    PrivacyPreviewPair(brain: nil)
+        .frame(width: 1180, height: 900)
+}
+
+private struct PrivacyPreviewPair: View {
+    let brain: BrainChoice?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            PrivacyView().environment(\.colorScheme, .light)
+            PrivacyView().environment(\.colorScheme, .dark)
+        }
+    }
+}

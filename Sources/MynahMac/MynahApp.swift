@@ -88,6 +88,7 @@ final class AppModel {
         static let textSize = "mynah.textSize"
         static let deferredSteps = "mynah.deferredSetupSteps"
         static let homeSplit = "mynah.homeSplit"
+        static let tooltips = "mynah.showsTooltips"
     }
 
     /// Live state, owned by whatever is driving turns. Not persisted — a
@@ -197,6 +198,15 @@ final class AppModel {
         didSet { defaults.set(homeSplit.rawValue, forKey: Key.homeSplit) }
     }
 
+    /// Whether hover explanations appear.
+    ///
+    /// On until turned off: somebody meeting this app needs the explanations,
+    /// and the owner switching them off is a choice they make once they do not.
+    /// Nothing load-bearing is behind them — see `MynahTooltip`.
+    var showsTooltips: Bool {
+        didSet { defaults.set(showsTooltips, forKey: Key.tooltips) }
+    }
+
     private(set) var hasCompletedSetup: Bool
 
     /// Changes every time setup is started over.
@@ -267,6 +277,8 @@ final class AppModel {
         // Absent means "never collapsed anything", and seeing both halves is the
         // right first impression of a window that holds two things.
         self.homeSplit = (defaults.string(forKey: Key.homeSplit).flatMap(HomeSplit.init(rawValue:))) ?? .both
+        // Absent means never asked, and the answer for a first run is yes.
+        self.showsTooltips = defaults.object(forKey: Key.tooltips) as? Bool ?? true
         // Decode failures leave the list empty rather than throwing: a step the
         // owner deferred is a reminder, and a reminder is never worth refusing
         // to launch over.
@@ -475,6 +487,9 @@ public struct MynahApp: App {
             RootView(appDelegate: appDelegate)
                 .environment(app)
                 .mynahTextSize(app.textSize)
+                // Set once at the root, like the text size, so no row has to be
+                // handed the preference to know whether to offer an explanation.
+                .environment(\.mynahShowsTooltips, app.showsTooltips)
                 // The pause marker is shared with the daemon and survives a
                 // reinstall, so the window's copy of it can be stale by the time
                 // anyone looks at the window. Re-reading whenever the app comes

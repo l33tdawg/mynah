@@ -922,8 +922,29 @@ struct SettingsView: View {
             case .about:
                 aboutSection
                 advancedSection
+                colophon
             }
         }
+    }
+
+    /// Who made this, at the foot of the pane.
+    ///
+    /// It was a row inside the About card, which put a name and a copyright
+    /// year in the same treatment as a version number and an update switch —
+    /// things you read once beside things you act on. At the foot it is what a
+    /// Mac app's colophon is: quiet, last, and unmistakably not a control.
+    private var colophon: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(MynahAbout.author)
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+            Text(MynahAbout.copyright)
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.tertiary)
+        }
+        .padding(.top, s7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Unfinished
@@ -1630,6 +1651,17 @@ struct SettingsView: View {
     private func appearanceSection(app: AppModel) -> some View {
         @Bindable var app = app
         return SettingsGroup(SettingsGroupTitle.appearance) {
+            // Named for what it does rather than for the mechanism. "Tooltips"
+            // is the word the owner used and the word every other Mac app uses,
+            // so it is what he will look for.
+            SettingsRow(
+                "Explanations on hover",
+                detail: "Hold the pointer over a row and Mynah explains it. Turn this off once "
+                    + "you know your way around — nothing is only in a tooltip."
+            ) {
+                Toggle("", isOn: $app.showsTooltips).labelsHidden().mynahToggle()
+            }
+            MynahDivider()
             SettingsRow("Text size") {
                 Picker("", selection: $app.textSize) {
                     ForEach(MynahTextSize.allCases) { Text($0.label).tag($0) }
@@ -1760,12 +1792,10 @@ struct SettingsView: View {
 
             // Directly under the product, which is where a Mac About panel puts
             // a byline and where somebody looking for "who made this" looks
-            // first. It was not anywhere in the app before; the only trace of
-            // the author was a support address further down this same group.
-            SettingsRow(MynahAbout.author, detail: MynahAbout.copyright) {
-                EmptyView()
-            }
-            MynahDivider()
+            // The author's byline used to sit here, as a row. It has moved to
+            // the foot of the pane — see `colophon` — which is where a Mac app
+            // puts a copyright line and where it stops competing with the rows
+            // that do something.
 
             updateRow
             MynahDivider()
@@ -1790,7 +1820,23 @@ struct SettingsView: View {
                     + "Open source, Apache 2.0."
             ) {
                 HStack(spacing: s4) {
-                    MynahButton("View", kind: .quiet) { open(MynahAbout.sageURL) }
+                    // The address, underlined, rather than a button reading
+                    // "View". It was already a link and did not look like one —
+                    // an owner scanning for somewhere to click found a verb
+                    // rather than a destination. No new colour: underlined
+                    // `ink.primary` is the affordance, and this app has no link
+                    // token because `accent` means "the one live thing" and a
+                    // link is not that.
+                    Button { open(MynahAbout.sageURL) } label: {
+                        Text(MynahAbout.sageURL.host ?? "github.com")
+                            .mynahFont(.mono)
+                            .foregroundStyle(Palette.ink.primary)
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help(MynahAbout.sageURL.absoluteString)
+                    .accessibilityLabel("Open the SAGE project page")
                     Text(model.nodeVersion ?? placeholder)
                         .mynahFont(.mono)
                         .foregroundStyle(Palette.ink.secondary)

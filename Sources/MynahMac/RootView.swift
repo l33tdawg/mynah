@@ -573,6 +573,12 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     case home
     case agents
     case memories
+    /// Not a section of Settings, and the distinction is the point: there is
+    /// nothing here to change. Settings answers "how is this set up"; this
+    /// answers "what does it tell anyone", which is the question this product
+    /// exists to have a good answer to. Placed before Settings for the same
+    /// reason — it is an argument, not an appendix.
+    case privacy
     case settings
 
     var id: String { rawValue }
@@ -582,6 +588,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         case .home: return "Home"
         case .agents: return "Agents"
         case .memories: return "Memories"
+        case .privacy: return "Privacy"
         case .settings: return "Settings"
         }
     }
@@ -594,6 +601,12 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         case .home: return "waveform"
         case .agents: return "person.2"
         case .memories: return "text.append"
+        // The glyph this app already uses for "sends your words off this Mac",
+        // on the brain-choice cards. Not a lock and not a shield: `OptionCard`
+        // settled that — a padlock for "private" is security theatre, and this
+        // page's whole claim is that it states facts rather than performing
+        // safety.
+        case .privacy: return "arrow.up.forward.app"
         case .settings: return "gearshape"
         }
     }
@@ -610,6 +623,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         case .home: return "What's on your plate"
         case .agents: return "Who Mynah can ask"
         case .memories: return "What Mynah remembers"
+        case .privacy: return "What leaves this Mac"
         case .settings: return "How Mynah is set up"
         }
     }
@@ -683,6 +697,7 @@ struct MainShell: View {
         case .home: HomePane(onOpenSettings: { selection = .settings })
         case .agents: AgentsView()
         case .memories: MemoriesView()
+        case .privacy: PrivacyView(onOpenSection: { selection = $0 })
         case .settings: SettingsView(onOpenSection: { selection = $0 })
         }
     }

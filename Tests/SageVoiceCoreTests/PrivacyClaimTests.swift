@@ -86,18 +86,47 @@ final class PrivacyClaimTests: XCTestCase {
     /// at wherever it is rendered. A test that discovered its own membership
     /// would pass for a claim nobody displays, which is the bug this whole file
     /// exists about.
-    func testEveryClaimIsCarriedBySomethingTheScreenShows() {
+    ///
+    /// **What "reaches a screen" has to mean, now that two things are in
+    /// flight.** The Privacy destination moves these rows out of Settings, and a
+    /// tooltip system may soon put explanations behind a hover. A claim that
+    /// reaches only a tooltip has not reached a screen: it is invisible on a
+    /// trackpad without hovering, invisible on a screenshot, invisible to
+    /// somebody reading rather than pointing, and gone entirely if the tooltips
+    /// are ever switched off. So the rule this asserts is *carried by a view
+    /// that renders unconditionally* — and a claim moved into a tooltip has to
+    /// be deleted from this list and re-sited, which will fail loudly rather
+    /// than quietly.
+    func testEveryClaimIsCarriedBySomethingTheScreenShowsWithoutBeingAskedTo() {
+        // Each entry is a string the owner sees without hovering, clicking a
+        // disclosure, or turning anything on.
         let rendered = [
+            // Settings → About, as a group caption.
             PrivacyClaim.aboutCaption,
-            // The microphone claim is handed to the privacy row directly; it is
-            // its own carrier.
-            PrivacyClaim.microphone
+            // Settings → Privacy row, handed to the row directly.
+            PrivacyClaim.microphone,
+            // The Privacy destination, which composes the rest.
+            PrivacyClaim.openingStatement,
+            PrivacyClaim.recordings,
+            PrivacyClaim.memories,
+            PrivacyClaim.webSearch,
+            PrivacyClaim.calling,
+            PrivacyClaim.callTranscript,
+            PrivacyClaim.thinking(destination: "Anthropic", staysOnDevice: false),
+            PrivacyClaim.thinking(destination: "This Mac", staysOnDevice: true),
+            PrivacyClaim.thinking(destination: nil, staysOnDevice: false)
         ].joined(separator: " ")
 
         for claim in [
             PrivacyClaim.microphone,
             PrivacyClaim.updateCheckReach,
-            PrivacyClaim.updateCheckNoAutoInstall
+            PrivacyClaim.updateCheckNoAutoInstall,
+            PrivacyClaim.openingStatement,
+            PrivacyClaim.recordings,
+            PrivacyClaim.memories,
+            PrivacyClaim.webSearch,
+            PrivacyClaim.calling,
+            PrivacyClaim.callTranscript
         ] {
             XCTAssertFalse(claim.isEmpty)
             XCTAssertTrue(
@@ -105,6 +134,51 @@ final class PrivacyClaimTests: XCTestCase {
                 "a privacy claim exists that nothing on screen carries: \(claim.prefix(60))…"
             )
         }
+    }
+
+    // MARK: The destination's own claims
+
+    /// The state before setup has recorded a brain is not "nothing leaves" — it
+    /// is "nobody has said yet", and the row must not read as reassurance.
+    func testAnUnrecordedBrainIsAnAbsenceRatherThanAPromise() {
+        let unknown = PrivacyClaim.thinking(destination: nil, staysOnDevice: false)
+
+        XCTAssertTrue(unknown.lowercased().contains("hasn't recorded"))
+        XCTAssertFalse(unknown.lowercased().contains("never"))
+        XCTAssertFalse(unknown.lowercased().contains("stays"))
+    }
+
+    /// The cloud row names the company. A privacy page that says "a provider"
+    /// where it could say "Anthropic" is softening the one fact it exists for.
+    func testTheThinkingClaimNamesWhereTheWordsGo() {
+        XCTAssertTrue(
+            PrivacyClaim.thinking(destination: "Anthropic", staysOnDevice: false)
+                .contains("Anthropic")
+        )
+    }
+
+    /// Calling claims only what this repository can show: recognition and
+    /// synthesis here, and a relay that carries the two ends' details rather
+    /// than the call. It must not claim anything about a media path that is
+    /// configured outside this app — the ICE servers are served with the page.
+    func testTheCallingClaimStopsWhereTheEvidenceStops() {
+        let claim = PrivacyClaim.calling
+
+        XCTAssertTrue(claim.contains("on this Mac"))
+        XCTAssertTrue(claim.lowercased().contains("not in the call"))
+        XCTAssertFalse(
+            claim.lowercased().contains("never leaves"),
+            "the claim promised something about the media path this app cannot see"
+        )
+        XCTAssertFalse(claim.lowercased().contains("end-to-end"))
+    }
+
+    /// The transcript is a second copy of a conversation in a place the owner
+    /// may not be thinking about, so the claim has to say it is conditional and
+    /// name the condition.
+    func testTheTranscriptClaimSaysItIsSwitchable() {
+        XCTAssertTrue(PrivacyClaim.callTranscript.lowercased().contains("if you have"))
+        XCTAssertTrue(PrivacyClaim.callTranscript.lowercased().contains("signal"))
     }
 
     // MARK: The vocabulary these share with everything else
