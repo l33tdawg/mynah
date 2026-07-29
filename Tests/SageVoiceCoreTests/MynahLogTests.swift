@@ -170,6 +170,48 @@ final class MynahLogTests: XCTestCase {
         XCTAssertEqual(perms, 0o600)
     }
 
+    // MARK: Not writing into the owner's real log
+
+    /// **The rule that stops a test fabricating evidence.**
+    ///
+    /// `mynah.log` showed forty reconcile lines in an hour and it looked exactly
+    /// like the chronic-restart bug the team was hunting. It was this suite:
+    /// `SignalBackgroundServiceManager` is injectable everywhere except its
+    /// logger, which was a `static let` on the default path. The noise landed in
+    /// the file Settings tells the owner to attach to a support message, and in
+    /// the file anybody diagnosing reads first.
+    func testATestNeverWritesToTheOwnersRealLog() {
+        XCTAssertFalse(
+            MynahLog.mayWriteToFile(MynahLog.defaultFileURL(), isTesting: true),
+            "a test would append to the owner's diagnostic log"
+        )
+    }
+
+    /// The narrowness matters as much as the rule: every test that asserts on
+    /// file contents passes its own URL, and must keep working.
+    func testATestWritingToItsOwnFileIsUnaffected() {
+        XCTAssertTrue(MynahLog.mayWriteToFile(file, isTesting: true))
+    }
+
+    /// And the product itself must be unaffected — this is a test-only muzzle,
+    /// not a reason the owner's log is empty when he needs it.
+    func testTheRunningProductStillWritesToTheDefaultPath() {
+        XCTAssertTrue(MynahLog.mayWriteToFile(MynahLog.defaultFileURL(), isTesting: false))
+    }
+
+    /// End to end, since the point is bytes on disk rather than a predicate:
+    /// logging to the default path from inside a test must not grow the file.
+    func testTheRealLogDoesNotGrowWhileTheSuiteRuns() throws {
+        let real = MynahLog.defaultFileURL()
+        let manager = FileManager.default
+        let before = (try? manager.attributesOfItem(atPath: real.path)[.size] as? Int) ?? 0
+
+        MynahLog(category: "probe").error("this line must not reach his disk")
+
+        let after = (try? manager.attributesOfItem(atPath: real.path)[.size] as? Int) ?? 0
+        XCTAssertEqual(before ?? 0, after ?? 0, "the suite appended to the owner's real log")
+    }
+
     // MARK: Where it goes
 
     /// Beside `bridge.log`, `signal.log` and `appliance.log`, in the folder

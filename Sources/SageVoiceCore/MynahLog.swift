@@ -84,6 +84,44 @@ public struct MynahLog: Sendable {
             .appendingPathComponent("mynah.log", isDirectory: false)
     }
 
+    /// Whether a line may be written to `url`, which is `false` for exactly one
+    /// case: a test writing to the owner's real log.
+    ///
+    /// **Found by nearly reporting a bug that did not exist.** `mynah.log`
+    /// showed forty "restarting the phone bridge to apply a changed
+    /// configuration" lines inside one hour — chronic reconciling, the thing the
+    /// team had been hunting all day, apparently caught red-handed. It was the
+    /// test suite. `SignalBackgroundServiceManager` takes an injected
+    /// `homeDirectory` and `fileManager` so tests touch nothing real, and its
+    /// logger sat outside that seam: a `static let` on the default path, writing
+    /// to the actual file no matter which fake world the test had built.
+    ///
+    /// Two costs, and the second is the serious one. It appends test noise to
+    /// the file Settings tells the owner to send for diagnostics. And it
+    /// *fabricates evidence in the exact file people diagnose from* — the real
+    /// bridge process had been up for seventy-four minutes and had never
+    /// restarted, which is what actually settled it (`bridge.log` untouched
+    /// since `14:46`, the process older still).
+    ///
+    /// So the rule is narrow on purpose: under XCTest, a log aimed at the
+    /// default path writes to `os_log` only. A test that passes its own URL —
+    /// which is every test that asserts on file contents — is unaffected.
+    static func mayWriteToFile(
+        _ url: URL,
+        isTesting: Bool = MynahLog.isRunningUnderXCTest
+    ) -> Bool {
+        guard isTesting else { return true }
+        return url.standardizedFileURL != defaultFileURL().standardizedFileURL
+    }
+
+    /// The same detection `SignalBackgroundServiceManager` already uses to
+    /// refuse to touch real launchd from a test. Borrowed rather than invented,
+    /// because two different answers to "am I a test" is how one of them ends up
+    /// wrong.
+    static var isRunningUnderXCTest: Bool {
+        NSClassFromString("XCTestCase") != nil
+    }
+
     /// Past this, the file is rolled once to `mynah.log.1`.
     ///
     /// A diagnostic log that grows without limit becomes a thing people delete,
@@ -148,6 +186,7 @@ public struct MynahLog: Sendable {
     /// that broke. Every failure here is silent on purpose: there is nowhere
     /// left to report it to.
     private func append(_ level: String, _ message: String) {
+        guard Self.mayWriteToFile(fileURL) else { return }
         let line = "\(Self.timestamp.string(from: Date())) \(level) [\(category)] \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
 
