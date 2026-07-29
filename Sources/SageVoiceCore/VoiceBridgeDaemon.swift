@@ -868,9 +868,67 @@ public actor VoiceBridgeDaemon {
     /// Speaking is suppressed: this is a written record, and having the
     /// appliance read a transcript of itself aloud as a voice note would be
     /// absurd.
+    ///
+    /// **Recorded as well as sent, and that was the bug.** This used to call
+    /// `reply` and nothing else, so a call reached Signal and never reached the
+    /// conversation history. Two things followed, and the owner hit both:
+    ///
+    /// 1. The Mac window mirrors `conversations.json`, so a call that was never
+    ///    written there could not appear — *"chat is not syncing - like we dont
+    ///    get the summary after a voice call in the app"*. His phone showed two
+    ///    calls at 20:23 that the window skipped straight past.
+    /// 2. Worse and quieter: the model never saw the call either. Asking a
+    ///    written follow-up to something discussed aloud met an appliance with
+    ///    no memory of the conversation it had just had.
+    ///
+    /// A text turn has always done both — `histories[key]` then
+    /// `persistConversations()` — and a spoken one now does the same, so the
+    /// two ways of talking to it end up in one record rather than two.
     public func postCallTranscript(_ text: String) async {
         guard let recipient = lastCallRecipient else { return }
+        recordFromCall(text, for: recipient.description)
         await reply(text, to: recipient, allowSpeaking: false)
+    }
+
+    /// Files a call's written record in the thread it belongs to.
+    private func recordFromCall(_ text: String, for key: String) {
+        histories[key] = Self.history(
+            includingCall: text,
+            appendedTo: histories[key] ?? [],
+            keepingLastTurns: configuration.historyTurnLimit
+        )
+        persistConversations()
+    }
+
+    /// A thread's history with a finished call added to it.
+    ///
+    /// Recorded as one assistant turn rather than as reconstructed
+    /// user/assistant pairs. The transcript is already prose the owner can read
+    /// — "You: …" and "Mynah: …" — and splitting it back into roles would put
+    /// words in the owner's mouth that the *recogniser* chose, not the owner.
+    /// The model reads it as what it is: a record of a conversation that
+    /// happened out loud.
+    ///
+    /// Trimmed on the way in like every other turn, so a long call cannot push
+    /// the thread past the limit the rest of the daemon maintains.
+    ///
+    /// A `static` so it can be tested. `VoiceBridgeDaemon` needs a real
+    /// `SignalClient` — a concrete actor that shells out to `signal-cli` — so
+    /// the daemon itself cannot be built in a test without a refactor that is
+    /// not worth doing for this.
+    static func history(
+        includingCall text: String,
+        appendedTo history: [BrainMessage],
+        keepingLastTurns turns: Int
+    ) -> [BrainMessage] {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A call that produced no message leaves no trace, matching
+        // `CallTranscript.message` returning nil for a call nobody spoke on.
+        guard !trimmedText.isEmpty else { return history }
+        return trimmed(
+            history + [BrainMessage(role: .assistant, content: trimmedText)],
+            keepingLastTurns: turns
+        )
     }
 
     private func reply(
