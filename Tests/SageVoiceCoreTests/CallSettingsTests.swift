@@ -321,3 +321,109 @@ final class CallRefusalTests: XCTestCase {
         XCTAssertFalse(help.contains("Not yet"), help)
     }
 }
+
+// MARK: - Tool result budget
+
+/// `sage_status` returns 31,321 bytes on the owner's node — 851 `"name": count`
+/// pairs. His log shows those turns taking 32.9 s and 41.7 s while the tool
+/// itself returns in 0.37 s: the reading is the cost, not the call.
+///
+/// The first version of this trimmer **shipped a false number** and these tests
+/// exist mostly to stop that returning.
+final class VoiceToolBudgetTests: XCTestCase {
+
+    /// The exact shape of the owner's payload: a subject map, an agent map whose
+    /// keys are unspeakable hashes, and sibling scalars including a byte count
+    /// four orders of magnitude larger than any real total.
+    private func statusPayload(subjects: Int) -> String {
+        let domains = (0..<subjects).map { "\"subject-\($0)\": \($0 + 1)" }.joined(separator: ", ")
+        return """
+            {"total_memories": 13383, "committed": 13383, "deprecated": 3830, \
+            "db_size_bytes": 244154368, \
+            "by_agent": {"\(String(repeating: "a", count: 64))": 4628}, \
+            "by_domain": {\(domains)}}
+            """
+    }
+
+    func testASmallResultIsUntouched() {
+        let small = "{\"ok\": true}"
+        XCTAssertEqual(VoiceToolBudget.fit(small), small)
+    }
+
+    /// **The regression that matters.** Summing every `"name": count` swept up
+    /// `db_size_bytes` and announced 244 million memories; the model repeated it
+    /// faithfully, and the *un-trimmed* model had got the figure right. Never
+    /// compute a total the payload already states.
+    func testTheStatedTotalIsUsedAndNeverASumOfTheEntries() {
+        let fitted = VoiceToolBudget.fit(statusPayload(subjects: 400))
+
+        XCTAssertTrue(fitted.contains("13383"), "must carry the total the payload stated: \(fitted)")
+        XCTAssertFalse(fitted.contains("244154368"), "a byte count is not a memory count")
+        XCTAssertFalse(fitted.contains("244"), "no derived total may appear: \(fitted)")
+    }
+
+    /// `by_agent` keys are 64-character hashes. A voice appliance cannot say one,
+    /// and reading them is pure latency.
+    func testOpaqueAgentIdentifiersNeverSurvive() {
+        let fitted = VoiceToolBudget.fit(statusPayload(subjects: 400))
+        XCTAssertFalse(fitted.contains(String(repeating: "a", count: 64)))
+    }
+
+    func testTheResultIsBroughtUnderBudgetAndSaysItWasTrimmed() {
+        let fitted = VoiceToolBudget.fit(statusPayload(subjects: 851))
+        XCTAssertLessThanOrEqual(fitted.utf8.count, VoiceToolBudget.resultByteBudget)
+        XCTAssertTrue(fitted.contains("851"), "must say how many there really were: \(fitted)")
+        XCTAssertTrue(fitted.contains("truncated"))
+    }
+
+    /// Largest, not alphabetical — "which subjects hold the most" is what a
+    /// person asking "what do you remember?" is actually asking.
+    func testTheLargestSubjectsAreTheOnesKept() {
+        let fitted = VoiceToolBudget.fit(statusPayload(subjects: 400))
+        XCTAssertTrue(fitted.contains("subject-399"), "the biggest must survive: \(fitted)")
+        XCTAssertFalse(fitted.contains("\"subject-0\""), "the smallest must not")
+    }
+
+    /// Measured: the same facts as prose made the model stop using the result
+    /// entirely (79–103 s, generic deflection); as JSON it answered correctly in
+    /// 9 s. A result that looks like commentary is treated as commentary.
+    func testTheTrimmedResultKeepsTheShapeOfAToolResult() {
+        let fitted = VoiceToolBudget.fit(statusPayload(subjects: 400))
+        XCTAssertTrue(fitted.hasPrefix("{"), "must stay JSON, not become prose: \(fitted)")
+        XCTAssertTrue(fitted.hasSuffix("}"))
+    }
+
+    /// A payload with no stated total must not acquire one.
+    func testATotalIsOmittedRatherThanInventedWhenTheSourceGivesNone() {
+        let domains = (0..<400).map { "\"s\($0)\": \($0 + 1)" }.joined(separator: ", ")
+        let fitted = VoiceToolBudget.fit("{\"by_domain\": {\(domains)}}")
+        XCTAssertFalse(fitted.contains("total_memories"), "no total was stated: \(fitted)")
+    }
+
+    // MARK: Clamping what Mynah asks for
+
+    /// The owner: *"don't return k10 bro — return a smaller k."* A schema default
+    /// is not a mechanism; the model can pass whatever it likes, so the ceiling
+    /// runs after it has chosen.
+    func testAnOversizedRequestIsCappedOnTheWayOut() {
+        let clamped = VoiceToolBudget.clamp(arguments: ["top_k": .int(10), "query": .string("dmg")])
+        XCTAssertEqual(clamped["top_k"]?.intValue, VoiceToolBudget.maxResultCount)
+        XCTAssertEqual(clamped["query"]?.stringValue, "dmg", "other arguments must pass through")
+    }
+
+    /// Only ever lowers. A model that asked for 2 had a reason, and raising it to
+    /// a house number would be inventing a request nobody made.
+    func testASmallerRequestIsLeftAlone() {
+        XCTAssertEqual(VoiceToolBudget.clamp(arguments: ["top_k": .int(2)])["top_k"]?.intValue, 2)
+    }
+
+    func testEveryNameASizeArgumentGoesByIsCovered() {
+        for key in ["top_k", "limit", "count", "max_results", "n"] {
+            XCTAssertEqual(
+                VoiceToolBudget.clamp(arguments: [key: .int(50)])[key]?.intValue,
+                VoiceToolBudget.maxResultCount,
+                "\(key) is a size argument and must be capped"
+            )
+        }
+    }
+}

@@ -1017,16 +1017,21 @@ public final class ToolLoop: @unchecked Sendable {
             )
         }
 
+        // Clamped on the way out, budgeted on the way in — see `VoiceToolBudget`.
+        // Both sit here rather than in the prompt because a request the model
+        // can talk itself out of is a convention, not a mechanism.
+        let asked = VoiceToolBudget.clamp(arguments: call.arguments)
+
         do {
-            let raw = try await mcp.call(name: call.name, arguments: call.arguments)
+            let raw = try await mcp.call(name: call.name, arguments: asked)
             // SAGE appends a turn-discipline nudge aimed at an agent that drives
             // its own `sage_turn`. This appliance's daemon does that instead, so
             // the nudge only ever reaches a model that cannot act on it.
-            let output = Self.withoutServerNudge(raw)
+            let output = VoiceToolBudget.fit(Self.withoutServerNudge(raw))
             return ToolCallRecord(
                 iteration: iteration,
                 name: call.name,
-                arguments: call.arguments,
+                arguments: asked,
                 result: output.isEmpty ? "(the tool returned no content)" : output,
                 failed: false,
                 durationSeconds: Date().timeIntervalSince(started)
