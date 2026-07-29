@@ -605,11 +605,27 @@ final class SettingsModel {
         return "\(short) (\(build))"
     }
 
+    /// The version of the SAGE this Mac is actually running.
+    ///
+    /// **It reported the wrong one.** This resolved through
+    /// `probe?.sage.executablePath`, and the probe is vendored-first — its job
+    /// is finding *a* runnable node on a bare machine. So on a Mac with SAGE
+    /// installed, About named the version of the copy inside this app, which is
+    /// not the copy operating the owner's memories. `SageNodeChoice` exists
+    /// precisely because an installed node wins and is never managed, and this
+    /// is now the third place that had to learn it — after the memories screen
+    /// and the task board.
+    ///
+    /// The two versions happen to match today, which is exactly why nobody saw
+    /// it and exactly why it is worth fixing before they diverge. Same shape as
+    /// the pause file, the ghost identity and the plist-versus-launchctl
+    /// question: reporting what we shipped rather than what is running.
     var nodeVersion: String? {
-        guard let path = probe?.sage.executablePath else { return nil }
-        guard let bundle = SageNodeLocator.appBundle(containing: URL(fileURLWithPath: path)) else {
-            return nil
-        }
+        let executable = SageNodeChoice
+            .resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable
+            ?? probe?.sage.executablePath.map(URL.init(fileURLWithPath:))
+        guard let executable,
+              let bundle = SageNodeLocator.appBundle(containing: executable) else { return nil }
         return SageNodeLocator.bundleVersion(at: bundle)
     }
 }
@@ -722,6 +738,7 @@ struct SettingsView: View {
     /// the owner asked for.
     @State private var isLinkingPhone = false
     @State private var isPastingKey = false
+    @State private var isChangingModel = false
 
     /// Seeded from disk rather than defaulted, so the switch shows what the
     /// daemon will actually do rather than what this app assumes.
@@ -789,6 +806,34 @@ struct SettingsView: View {
             } onClose: {
                 model.refresh()
                 isLinkingPhone = false
+            }
+        }
+        .sheet(isPresented: $isChangingModel) {
+            if let option = model.brainOption {
+                BrainModelSheet(
+                    option: option,
+                    // A real list when the node can supply one, and none when it
+                    // cannot. The probe knows exactly what is installed for a
+                    // local runtime; for an API provider nobody here knows what
+                    // the company is serving this week, and a hardcoded list of
+                    // model names is a list that goes stale silently — which is
+                    // the same reason no version number is typed into this app.
+                    installed: model.probe?.localRuntime.installedModels.sorted() ?? []
+                ) { chosen in
+                    isChangingModel = false
+                    guard let chosen else { return }
+                    BrainSelectionStore.save(chosen)
+                    model.refresh()
+                    // Both halves, because the model is two things: the window
+                    // builds its own engine, and the appliance answering the
+                    // phone is a separate process that reads the choice at
+                    // launch. Changing one and not the other is how the window
+                    // and the phone end up on different models.
+                    Task {
+                        await conversation.reconnect()
+                        await app.reconcileAnsweringService()
+                    }
+                }
             }
         }
         .sheet(isPresented: $isPastingKey) {
@@ -1005,6 +1050,8 @@ struct SettingsView: View {
             ) {
                 MynahButton("Change", kind: .secondary) { app.restartSetup() }
             }
+            MynahDivider()
+            modelRow
             if brain.needsAKey {
                 MynahDivider()
                 SettingsRow(
@@ -1059,6 +1106,30 @@ struct SettingsView: View {
     private func destinationTone(_ brain: BrainChoice) -> MynahTone {
         guard conversation.trouble == nil else { return .caution }
         return brain.keepsWordsOnDevice ? .good : .caution
+    }
+
+    /// Changing which model does the thinking.
+    ///
+    /// **There was no way to do this at all.** The key could be replaced and
+    /// re-checked, but the model could only be changed by re-running the whole
+    /// of setup through "Change where your words go" — and the Calls row
+    /// actively sends the owner there: *"Change where your words go to one of
+    /// the API models and calling works."* So the app named the fix and then
+    /// made him reinstall to apply it. Changing model is an ordinary thing an
+    /// owner does; it is not a reinstallation.
+    ///
+    /// It sits beside the key because that is the other thing about the brain
+    /// he can change, and the two fail in related ways — a model name the
+    /// provider does not serve and a key it will not accept produce the same
+    /// silence at the same moment.
+    private var modelRow: some View {
+        SettingsRow(
+            "The model it thinks with",
+            detail: model.brain?.modelName.map { "Currently \($0)." }
+                ?? "Mynah is using whatever this provider gives it by default."
+        ) {
+            MynahButton("Change", kind: .secondary) { isChangingModel = true }
+        }
     }
 
     private var recheckRow: some View {
@@ -2061,6 +2132,167 @@ private struct BrainKeySheet: View {
                 // went wrong here is ours. The detail goes to the log.
                 settingsLog.error("key sheet failed: \(String(describing: error), privacy: .public)")
                 verdict = .unusable("Mynah couldn't save that key. Quit Mynah and open it again.")
+            }
+        }
+    }
+}
+
+/// Choosing which model does the thinking, without walking the whole of setup.
+///
+/// **It verifies rather than accepting.** A model name is a string the provider
+/// either serves or does not, and the failure mode of a wrong one is not an
+/// error dialog — it is Mynah going quiet the next time the owner asks it
+/// something, hours later, with nothing on screen connecting the two. So this
+/// does what `recheckKey` does: builds the real backend with the candidate name
+/// and asks it a real question. The same machinery that catches a key which has
+/// run out of credit catches a model that does not exist.
+///
+/// Two modes, because the honest answer differs by provider. A local runtime
+/// publishes exactly what is installed, so that is a list. An API provider's
+/// catalogue is a thing that changes without telling us, and a hardcoded list of
+/// model names would go stale the way a typed-in version number does — so that
+/// is a field, and the verification is what makes a field safe.
+private struct BrainModelSheet: View {
+    let option: BrainSetupOption
+    /// Model names the local runtime actually has. Empty for an API provider.
+    let installed: [String]
+    /// The option to save, or `nil` when the owner backed out.
+    let onClose: (BrainSetupOption?) -> Void
+
+    @State private var name: String
+    @State private var verdict: BrainKeyValidator.Verdict?
+    @State private var isChecking = false
+
+    init(option: BrainSetupOption, installed: [String], onClose: @escaping (BrainSetupOption?) -> Void) {
+        self.option = option
+        self.installed = installed
+        self.onClose = onClose
+        _name = State(initialValue: option.modelName ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("The model Mynah thinks with")
+                .mynahFont(.title1)
+                .foregroundStyle(Palette.ink.primary)
+                .accessibilityAddTraits(.isHeader)
+            Text(subtitle)
+                .mynahFont(.body)
+                .foregroundStyle(Palette.ink.secondary)
+                .mynahProse()
+                .padding(.top, s2)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: s5) {
+                    if installed.isEmpty { field } else { list }
+                    resultLine
+                }
+                .padding(.vertical, s6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+
+            ActionRow(quietTitle: "Cancel", quietAction: { onClose(nil) }) {
+                MynahButton(
+                    "Use this model",
+                    isEnabled: !isChecking && !trimmed.isEmpty && trimmed != option.modelName,
+                    isDefault: true,
+                    action: check
+                )
+            }
+            .padding(.top, s5)
+        }
+        .padding(s8)
+        .frame(width: 620, height: 560)
+        .background(Palette.surface.overlay)
+        .mynahAnimation(Motion.snap, value: verdict)
+        // Escape is Cancel. Nothing here is saved until it verifies.
+        .onExitCommand { onClose(nil) }
+    }
+
+    private var subtitle: String {
+        installed.isEmpty
+            ? "Whatever name your provider uses. Mynah asks it a real question before keeping it, "
+                + "so a name it doesn't serve is caught here rather than mid-answer."
+            : "These are the models installed on this Mac. Mynah asks the one you pick a real "
+                + "question before keeping it."
+    }
+
+    private var field: some View {
+        VStack(alignment: .leading, spacing: s3) {
+            Text("Model name").mynahFont(.label).foregroundStyle(Palette.ink.secondary)
+            TextField("", text: $name)
+                .textFieldStyle(.plain)
+                .mynahFont(.mono)
+                .foregroundStyle(Palette.ink.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Palette.surface.sunken, in: RoundedRectangle.mynah(r.control))
+                .mynahBorder(r.control)
+                .onSubmit(check)
+        }
+    }
+
+    private var list: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(installed.enumerated()), id: \.element) { index, candidate in
+                if index > 0 { MynahDivider() }
+                Button { name = candidate } label: {
+                    HStack(spacing: s3) {
+                        StatusDot(candidate == trimmed ? .accent : .neutral)
+                        Text(candidate).mynahFont(.mono).foregroundStyle(Palette.ink.primary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, s3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
+        }
+        .mynahGroupCard()
+    }
+
+    @ViewBuilder
+    private var resultLine: some View {
+        if isChecking {
+            HStack(spacing: s3) {
+                ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                Text("Asking \(trimmed) a question…")
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.secondary)
+            }
+        } else if let verdict {
+            Text(verdict.spokenDescription)
+                .mynahFont(.body)
+                .foregroundStyle(verdict.isUsable ? Palette.state.good : Palette.state.critical)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var trimmed: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func check() {
+        guard !isChecking, !trimmed.isEmpty else { return }
+        var candidate = option
+        candidate.modelName = trimmed
+        verdict = nil
+        isChecking = true
+        Task {
+            defer { isChecking = false }
+            do {
+                let backend = try BrainFactory.makeBackend(
+                    for: candidate,
+                    apiKey: candidate.keyProviderIdentifier.flatMap(KeyStorage.key(forProvider:))
+                )
+                let result = await BrainKeyValidator().validate(backend)
+                verdict = result
+                guard result.isUsable else { return }
+                onClose(candidate)
+            } catch {
+                settingsLog.error("model change failed: \(String(describing: error), privacy: .public)")
+                verdict = .unusable("Mynah couldn't set that model up. Check the name and try again.")
             }
         }
     }

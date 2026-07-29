@@ -885,7 +885,13 @@ struct AgentsView: View {
     /// Fixed rather than proportional. It holds one line of name and one of
     /// metadata, which does not get more readable with width — everything the
     /// extra room is worth goes to the detail pane, which holds sentences.
-    private static let rosterWidth: CGFloat = 300
+    /// 320 rather than 300, and the 20pt is a consequence rather than taste.
+    /// Giving each row a leading kind mark cost it about 30pt of text width, and
+    /// a render showed the metadata line wrapping — "member ·" on one line and
+    /// "clearance 1 · 4,068 memories" on the next, in every row. A mark that
+    /// makes the list scannable and then breaks the line under it has taken more
+    /// than it gave.
+    private static let rosterWidth: CGFloat = 320
 
     /// `@MainActor` because `AgentsModel` is, and a `View`'s initialiser is not
     /// isolated by default even though SwiftUI only ever calls it here.
@@ -987,7 +993,11 @@ struct AgentsView: View {
         VStack(alignment: .leading, spacing: 0) {
             columnHeader("On this Mac", count: model.roster.agents.count)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // Spacing between rows rather than none. Rows that touch read as
+                // a table; rows with air between them read as a list of things,
+                // which is what they are — and each one now carries its own
+                // bounded shape rather than sharing an edge with its neighbour.
+                LazyVStack(alignment: .leading, spacing: s2) {
                     // The appliance first and always, whatever it has stored.
                     // It is the row the owner opened this screen for, and
                     // sorting it in by memory count would bury it at the bottom
@@ -1252,6 +1262,66 @@ private struct AgentListRow: View {
     @State private var isHovering = false
 
     var body: some View {
+        // A mark, then the words. Twenty rows of name-over-metadata with no
+        // marks and no edges is a table, which is what the owner called it. The
+        // glyph also carries the distinction the list was not making: Mynah's
+        // own row is not the same kind of thing as an agent somebody installed,
+        // and an administrator is not the same kind as a member.
+        HStack(alignment: .top, spacing: s2) {
+            kindMark
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 1)
+            rowText
+        }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background, in: RoundedRectangle.mynah(r.control))
+        .overlay {
+            // An edge on every row, not only the selected one. Without it the
+            // unselected rows have no shape at all and the selection looks like
+            // the only object on the list rather than the chosen one.
+            RoundedRectangle.mynah(r.control)
+                .strokeBorder(
+                    isSelected ? Palette.accent.fill.opacity(0.55) : Palette.line.hairline,
+                    lineWidth: 1
+                )
+        }
+        .mynahAnimation(Motion.fade, value: isSelected)
+        .mynahAnimation(Motion.fade, value: isHovering)
+        .onHover { isHovering = $0 }
+        .pointingHandCursor()
+        .accessibilityElement(children: .combine)
+        // The dot is invisible to VoiceOver, so the word goes in the label —
+        // the one place where the pill's text still has to exist for a row.
+        .accessibilityLabel(
+            "\(agent.name). \(agent.standingLine). \(agent.memoryLine)."
+                + (agent.permissions.isRestricted ? " Restricted." : "")
+        )
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// What kind of thing this row is.
+    ///
+    /// Mynah's own row gets the app's own mark — the same bird as the Dock icon
+    /// and the sidebar — because "which of these is me" is the first question
+    /// the list has to answer and a name is a slower way to answer it than a
+    /// picture. An administrator gets a key, which is literal rather than
+    /// decorative: holding admin on this node is precisely the power to grant.
+    /// Everyone else is a person, because that is how the owner talks about them
+    /// — "ask Perplexity" — and it matches the sidebar glyph for this screen.
+    @ViewBuilder
+    private var kindMark: some View {
+        if agent.isThisAppliance {
+            MynahMark(side: 20)
+        } else {
+            Image(systemName: agent.role == "admin" ? "key" : "person")
+                .mynahIcon(.row)
+                .foregroundStyle(Palette.ink.secondary)
+        }
+    }
+
+    private var rowText: some View {
         VStack(alignment: .leading, spacing: s1) {
             // The name gets the whole width. It shared the line with the
             // `Restricted` pill until a render showed what that costs: at 300pt
@@ -1298,29 +1368,17 @@ private struct AgentListRow: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal, s4)
-        .padding(.vertical, s4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background, in: RoundedRectangle.mynah(r.control))
-        .mynahAnimation(Motion.fade, value: isSelected)
-        .mynahAnimation(Motion.fade, value: isHovering)
-        .onHover { isHovering = $0 }
-        .pointingHandCursor()
-        .accessibilityElement(children: .combine)
-        // The dot is invisible to VoiceOver, so the word goes in the label —
-        // the one place where the pill's text still has to exist for a row.
-        .accessibilityLabel(
-            "\(agent.name). \(agent.standingLine). \(agent.memoryLine)."
-                + (agent.permissions.isRestricted ? " Restricted." : "")
-        )
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     /// Selection takes the accent wash, which is what `OptionCard` uses for the
     /// same job — the one live thing on the screen is the row being read.
+    ///
+    /// Unselected rows are `surface.raised` rather than clear. On the canvas
+    /// that is a card, and a card is a thing; clear was what made twenty of them
+    /// a table.
     private var background: Color {
         if isSelected { return Palette.accent.wash }
-        return isHovering ? Palette.surface.well : .clear
+        return isHovering ? Palette.surface.well : Palette.surface.raised
     }
 }
 

@@ -44,37 +44,61 @@ final class AgentsRenderHarness: XCTestCase {
                     // it carries `.pointingHandCursor()`, which is an
                     // `NSViewRepresentable`, and `ImageRenderer` refuses
                     // anything AppKit-backed. This is its body with that one
-                    // modifier omitted — everything about the density,
-                    // typography, selection wash and the two marks that matter
-                    // is the same.
-                    VStack(alignment: .leading, spacing: 0) {
+                    // modifier omitted, kept in step by hand — which is the
+                    // standing cost of reconstructing a view rather than
+                    // rendering it, and the reason this file carries a warning
+                    // rather than a guarantee.
+                    VStack(alignment: .leading, spacing: s2) {
                         ForEach(roster) { row in
-                            VStack(alignment: .leading, spacing: s1) {
-                                HStack(spacing: s3) {
-                                    Text(row.name).mynahFont(.body)
-                                        .foregroundStyle(Palette.ink.primary)
-                                        .lineLimit(1).truncationMode(.tail)
-                                    if row.permissions.isRestricted {
-                                        Circle().fill(Palette.state.caution).frame(width: 6, height: 6)
+                            HStack(alignment: .top, spacing: s2) {
+                                Group {
+                                    if row.isThisAppliance {
+                                        MynahMark(side: 18)
+                                    } else {
+                                        Image(systemName: row.role == "admin" ? "key" : "person")
+                                            .mynahIcon(.row)
+                                            .foregroundStyle(Palette.ink.secondary)
                                     }
-                                    Spacer(minLength: 0)
                                 }
-                                HStack(spacing: s2) {
-                                    Text(row.standingLine).mynahFont(.label)
-                                        .foregroundStyle(Palette.ink.secondary)
-                                    Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
-                                    Text(row.memoryLine).mynahFont(.label)
-                                        .foregroundStyle(row.memoryCount == 0
-                                            ? Palette.state.caution : Palette.ink.secondary)
-                                    Spacer(minLength: 0)
+                                .frame(width: 18, alignment: .center)
+                                .padding(.top, 1)
+
+                                VStack(alignment: .leading, spacing: s1) {
+                                    HStack(spacing: s3) {
+                                        Text(row.name).mynahFont(.body)
+                                            .foregroundStyle(Palette.ink.primary)
+                                            .lineLimit(1).truncationMode(.tail)
+                                        if row.permissions.isRestricted {
+                                            Circle().fill(Palette.state.caution).frame(width: 6, height: 6)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    HStack(spacing: s2) {
+                                        Text(row.standingLine).mynahFont(.label)
+                                            .foregroundStyle(Palette.ink.secondary)
+                                        Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
+                                        Text(row.memoryLine).mynahFont(.label)
+                                            .foregroundStyle(row.memoryCount == 0
+                                                ? Palette.state.caution : Palette.ink.secondary)
+                                        Spacer(minLength: 0)
+                                    }
                                 }
                             }
                             .padding(.horizontal, s4).padding(.vertical, s4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
-                                row.id == mynah.id ? Palette.accent.wash : .clear,
+                                row.id == mynah.id ? Palette.accent.wash : Palette.surface.raised,
                                 in: RoundedRectangle.mynah(r.control)
                             )
+                            .overlay {
+                                RoundedRectangle.mynah(r.control)
+                                    .strokeBorder(
+                                        row.id == mynah.id
+                                            ? Palette.accent.fill.opacity(0.55)
+                                            : Palette.line.hairline,
+                                        lineWidth: 1
+                                    )
+                            }
                         }
                     }
                     .padding(.horizontal, s5)
@@ -93,7 +117,7 @@ final class AgentsRenderHarness: XCTestCase {
                     }
                     .padding(.horizontal, s6).padding(.vertical, s5)
                 }
-                .frame(width: 300)
+                .frame(width: 320)
                 Rectangle().fill(Palette.line.divider).frame(width: 1)
                 VStack(alignment: .leading, spacing: s6) {
                     VStack(alignment: .leading, spacing: s2) {
