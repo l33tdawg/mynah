@@ -382,17 +382,6 @@ final class SettingsModel {
         KeyStorage.load().keys.sorted()
     }
 
-    /// The agent CLIs installed here — detected, and deliberately not offered.
-    ///
-    /// Empty until the probe answers, and empty on a Mac that has neither, which
-    /// is the point: the sentence explaining why `claude` is not on the menu is
-    /// shown only to somebody who has `claude`. Nobody else is told about
-    /// software they do not run.
-    var installedAgentCLIs: [AgentCLIKind] {
-        guard let probe else { return [] }
-        return AgentCLIKind.allCases.filter { probe.cli($0).isInstalled }
-    }
-
     func refresh() {
         brain = BrainChoiceStore.current(defaults: defaults)
         speech = SpeechFacts.detect()
@@ -1150,35 +1139,21 @@ struct SettingsView: View {
                 MynahDivider()
                 recheckRow
             }
-            agentCLIRows
         }
     }
 
-    /// Why the assistant already open on this Mac is not on the menu.
-    ///
-    /// **This used to be two greyed cards in the brain picker**, each carrying
-    /// this sentence as its unavailability reason. The owner read grey as "not
-    /// detected" — *"we have codex and claude installed clearly; i'm using you
-    /// right — yet it thinks we don't"* — because in a list of things you might
-    /// choose, that is what grey means. The answer was sitting next to the thing
-    /// generating the question.
-    ///
-    /// So it moved here, where somebody goes to ask rather than trips over it,
-    /// and it appears only if the CLI is actually installed. `AgentCLINotOffered`
-    /// holds the wording and the reason it will not change back.
-    @ViewBuilder
-    private var agentCLIRows: some View {
-        let clis = model.installedAgentCLIs
-        if !clis.isEmpty {
-            MynahDivider()
-            SettingsRow(
-                AgentCLINotOffered.heading(for: clis),
-                detail: clis.map(AgentCLINotOffered.explanation(for:)).joined(separator: "\n\n")
-            ) {
-                EmptyView()
-            }
-        }
-    }
+    // **"Why Claude Code and Codex aren't options" is gone**, on the owner's
+    // instruction: *"remove claude and codex if we can't use it bro - wtf is the
+    // point of this section and message?!"*
+    //
+    // He is right, and the reasoning that put it here was about the wrong
+    // problem. It began as two greyed cards in the brain picker, which read as
+    // "not detected" for software he was visibly running. Moving the sentence to
+    // Settings fixed the misreading and kept the mistake underneath it: a
+    // settings screen is for things you can change, and this was several
+    // paragraphs about two things that will never appear, shown only to the
+    // people most likely to be annoyed by them. The honest fix for an
+    // explanation nobody asked for is to stop explaining, not to relocate it.
 
     /// The appliance's own report, or an honest absence.
     @ViewBuilder

@@ -1,6 +1,45 @@
 // swift-tools-version: 5.9
 
+import Foundation
 import PackageDescription
+
+// **The native voice is built only where its runtime has been provisioned.**
+//
+// `vendor/` is gitignored and produced by the scripts in `scripts/` — the same
+// arrangement `asr` and `signal` already use. So on a fresh clone the ONNX
+// Runtime header genuinely is not there, and a target that referenced it
+// unconditionally would make the package fail to load rather than fail to
+// build, which is a much worse error to hand somebody.
+//
+// Run `scripts/provision-onnxruntime.sh` and the targets below appear.
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+let onnxRuntimeRoot = packageRoot + "/vendor/onnxruntime"
+let hasOnnxRuntime = FileManager.default.fileExists(
+    atPath: onnxRuntimeRoot + "/lib/libonnxruntime.dylib"
+)
+
+/// Absolute rather than relative, because these reach the linker with no
+/// promise about its working directory — and an `@rpath` that resolves during
+/// `swift build` but not during `swift test` is a failure that only appears in
+/// CI. The bundle-relative entry is what lets the shipped app find the copy
+/// `package-app.sh` puts in `Contents/Frameworks`.
+let onnxLinkerSettings: [LinkerSetting] = [
+    .unsafeFlags([
+        "-L\(onnxRuntimeRoot)/lib",
+        "-lonnxruntime",
+        "-Xlinker", "-rpath", "-Xlinker", "\(onnxRuntimeRoot)/lib",
+        "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+    ])
+]
+
+let onnxTargets: [Target] = hasOnnxRuntime ? [
+    .systemLibrary(name: "COnnxRuntime", path: "Sources/COnnxRuntime"),
+    .target(
+        name: "KokoroEngine",
+        dependencies: ["SageVoiceCore", "COnnxRuntime"],
+        linkerSettings: onnxLinkerSettings
+    ),
+] : []
 
 let package = Package(
     name: "sage-voice-bridge",
@@ -48,5 +87,11 @@ let package = Package(
             name: "SageVoiceCoreTests",
             dependencies: ["SageVoiceCore", "MynahMac"]
         ),
-    ]
+    ] + onnxTargets + (hasOnnxRuntime ? [
+        .testTarget(
+            name: "KokoroEngineTests",
+            dependencies: ["KokoroEngine"],
+            linkerSettings: onnxLinkerSettings
+        )
+    ] : [])
 )

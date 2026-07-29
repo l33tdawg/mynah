@@ -53,27 +53,31 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertEqual(BrainSetupOptionID(rawValue: "cli.codex"), .codexCLI)
     }
 
-    /// Detection stays, and the sentence that needs it stays with it.
+    /// **The explanation is gone, and this asserts it stays gone.**
     ///
-    /// Removing the card must not remove the probe: Settings shows the
-    /// explanation only to an owner who actually has the CLI installed, which is
-    /// a question only the probe can answer. And the copy carries the
-    /// measurement on purpose — a verdict invites re-litigation, a number tells
-    /// whoever reopens this to re-measure instead.
-    func testTheExplanationSurvivesTheCardAndCarriesTheMeasurement() {
-        let sentence = AgentCLINotOffered.explanation(for: .claudeCode)
+    /// It was two greyed cards in the brain picker, which read as "not detected"
+    /// for software the owner was visibly running. That was fixed by moving the
+    /// sentence to Settings — which cured the misreading and kept the mistake
+    /// underneath it. His verdict on the result: *"remove claude and codex if we
+    /// can't use it bro - wtf is the point of this section and message?!"*
+    ///
+    /// A settings screen is for things you can change. Several paragraphs about
+    /// two things that will never appear, shown only to the people most likely
+    /// to be irritated by them, is not a feature — and the fix for an
+    /// explanation nobody asked for is to stop explaining rather than to move it
+    /// somewhere quieter.
+    ///
+    /// The probe still detects them, because `sage-voiced` reports what it finds
+    /// on the machine and that is a diagnostic rather than a menu.
+    func testTheAgentCLIsAreNeitherOfferedNorExplained() {
+        let choices = planner.plan(for: .machine())
 
-        XCTAssertTrue(sentence.contains("can see Claude Code on this Mac"))
-        XCTAssertTrue(sentence.contains("4.4 seconds"))
-        XCTAssertTrue(sentence.contains("26,000"))
-        XCTAssertEqual(
-            AgentCLINotOffered.heading(for: [.claudeCode, .codex]),
-            "Why Claude Code and Codex aren't options"
-        )
-        XCTAssertEqual(
-            AgentCLINotOffered.heading(for: [.codex]),
-            "Why Codex isn't an option"
-        )
+        for id in [BrainSetupOptionID.claudeCodeCLI, .codexCLI] {
+            XCTAssertFalse(
+                choices.availableOptions.contains { $0.id == id },
+                "\(id) came back onto the menu"
+            )
+        }
     }
 
     /// **This test asserted the state that was withdrawn, so it now asserts the
@@ -568,9 +572,9 @@ final class BrainSetupPlannerTests: XCTestCase {
     ///
     /// **Amended again for the two agent CLIs**, withdrawn for a different
     /// reason than Google's — not "we will not serve this" but "a row in a
-    /// picker claims choosability, and these never will be". The explanation
-    /// they carried now lives in `AgentCLINotOffered` and renders in Settings,
-    /// to an owner who actually has the CLI installed.
+    /// picker claims choosability, and these never will be". They carried an
+    /// explanation for a while, in the picker and then in Settings; it is gone
+    /// now, and they are simply absent.
     func testEveryOptionIsOfferableSoNoChoiceIsHiddenFromTheOwner() {
         let withdrawn: Set<BrainSetupOptionID> = [
             .googleSignIn, .googleAPIKey, .claudeCodeCLI, .codexCLI,

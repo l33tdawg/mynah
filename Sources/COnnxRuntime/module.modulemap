@@ -1,0 +1,15 @@
+// The ONNX Runtime C API, as a Swift-importable module.
+//
+// The C API and not the C++ one, deliberately: `onnxruntime_cxx_api.h` pulls in
+// <string>, <vector> and <memory>, and a Swift module map cannot consume a C++
+// standard library header. The C surface is complete for what a session needs —
+// create an environment, load a model, bind three tensors, run.
+//
+// The header path is relative to this file and points into `vendor/`, which is
+// gitignored and produced by `scripts/provision-onnxruntime.sh`. That is why
+// the target using this module is added to Package.swift conditionally: on a
+// fresh clone the header genuinely is not there yet.
+module COnnxRuntime {
+    header "../../vendor/onnxruntime/include/onnxruntime_c_api.h"
+    export *
+}
