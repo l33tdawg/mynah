@@ -515,13 +515,23 @@ extension View {
     }
 }
 
-/// An `.eyebrow` heading and the rows it introduces, as one card.
+/// An `.eyebrow` heading, the rows it introduces, and — when there is more to
+/// say than a row can hold — a caption under the card.
+///
+/// The caption is where an explanation longer than a line or two belongs. It is
+/// what macOS does, and the reason is structural rather than aesthetic: an
+/// explanation *inside* a row makes every row as tall as its longest sentence,
+/// so six settings become a page of prose with controls hidden in it. Under the
+/// card, the same words are available to anyone who wants them and cost the
+/// scannable list nothing.
 struct SettingsGroup<Content: View>: View {
     let title: String
+    var caption: String?
     @ViewBuilder var content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(_ title: String, caption: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
+        self.caption = caption
         self.content = content()
     }
 
@@ -530,6 +540,14 @@ struct SettingsGroup<Content: View>: View {
             SectionHeader(title)
             VStack(alignment: .leading, spacing: 0) { content }
                 .mynahGroupCard()
+            if let caption {
+                Text(caption)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, s3)
+                    .padding(.horizontal, s2)
+            }
         }
     }
 }
@@ -1711,20 +1729,29 @@ struct SettingsRow<Control: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: s5) {
-            VStack(alignment: .leading, spacing: s1) {
-                Text(title).mynahFont(.title3).foregroundStyle(Palette.ink.primary)
+        // `.firstTextBaseline`, so a pill or a switch sits on the label's line
+        // rather than floating in the middle of a two-line row.
+        HStack(alignment: .firstTextBaseline, spacing: s5) {
+            VStack(alignment: .leading, spacing: 1) {
+                // `.body`, not `.title3`. Every row was set at the size and
+                // weight this app uses for card titles, so a group of six rows
+                // read as six headings stacked on each other — which is what
+                // made the owner call these panes web pages. macOS sets a
+                // settings label at body weight and lets the group heading do
+                // the shouting.
+                Text(title).mynahFont(.body).foregroundStyle(Palette.ink.primary)
                 if let detail {
                     Text(detail)
-                        .mynahFont(.callout)
+                        .mynahFont(.label)
                         .foregroundStyle(Palette.ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: MynahWidth.settingsCaption, alignment: .leading)
                 }
             }
-            Spacer(minLength: s6)
+            Spacer(minLength: s5)
             control
         }
-        .padding(.vertical, s4)
+        .padding(.vertical, s3)
     }
 }
 

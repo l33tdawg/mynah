@@ -861,6 +861,19 @@ final class AgentsModel {
 /// SAGEs" had been collapsed into one idea that answered neither.
 struct AgentsView: View {
     @State private var model: AgentsModel
+    /// Which agent's facts the right-hand pane is showing.
+    ///
+    /// Holds the *id* rather than the agent, because the roster is re-read and
+    /// replaced wholesale: keeping a value would pin a stale copy and quietly
+    /// stop updating the moment a poll landed.
+    @State private var selectedID: String?
+
+    /// The roster column.
+    ///
+    /// Fixed rather than proportional. It holds one line of name and one of
+    /// metadata, which does not get more readable with width — everything the
+    /// extra room is worth goes to the detail pane, which holds sentences.
+    private static let rosterWidth: CGFloat = 300
 
     /// `@MainActor` because `AgentsModel` is, and a `View`'s initialiser is not
     /// isolated by default even though SwiftUI only ever calls it here.
@@ -873,156 +886,283 @@ struct AgentsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Your agents")
-                    .mynahFont(.title1)
-                    .foregroundStyle(Palette.ink.primary)
-                    .accessibilityAddTraits(.isHeader)
-
-                roster.padding(.top, s6)
-                applianceAccess
-                network
-                joining
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Palette.surface.canvas)
+            .task { await model.load() }
+            // Mynah's own row is what the owner came to look at, so it is
+            // selected the moment the roster arrives. Only ever fills an *empty*
+            // selection: re-selecting on every poll would drag the owner off
+            // whatever row they had clicked, every thirty seconds.
+            .onChange(of: model.roster) { _, roster in
+                if selectedID == nil { selectedID = roster.appliance?.id ?? roster.agents.first?.id }
             }
-            .frame(maxWidth: MynahWidth.settings, alignment: .leading)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, s8)
-            .padding(.top, s7)
-            .padding(.bottom, s9)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(Palette.surface.canvas)
-        .task { await model.load() }
     }
 
-    // MARK: On this Mac
-
     @ViewBuilder
-    private var roster: some View {
+    private var content: some View {
         switch model.phase {
         case .loading:
             // Nothing at all, on purpose. This is one local HTTP call, and a
             // breathing indicator on every visit is an appliance asking to be
             // watched.
-            Color.clear.frame(height: 1)
+            Color.clear
 
         case .failed(let trouble):
-            InlineBanner(
-                tone: trouble == .locked ? .caution : .critical,
-                headline: trouble.headline,
-                explanation: trouble.explanation,
-                actionTitle: trouble.isWorthRetrying ? "Try again" : nil,
-                action: trouble.isWorthRetrying ? { Task { await model.load() } } : nil
-            )
+            // Full width, not in a column: with no roster there is no
+            // master–detail to draw, and a failure squeezed into a 300pt gutter
+            // reads as a footnote rather than the reason the screen is empty.
+            centred {
+                EmptyState(
+                    glyph: "person.2",
+                    title: trouble.headline,
+                    message: trouble.explanation,
+                    actionTitle: trouble.isWorthRetrying ? "Try again" : nil,
+                    action: trouble.isWorthRetrying ? { Task { await model.load() } } : nil
+                )
+            }
 
         case .ready:
             if model.roster.agents.isEmpty {
-                EmptyState(
-                    glyph: "person.2",
-                    title: "Nobody is registered yet",
-                    message: "Agents appear here the first time they connect to the SAGE on this "
-                        + "Mac. Mynah registers itself the first time you talk to it."
-                )
-                .padding(.top, s8)
-            } else if model.roster.others.isEmpty {
-                SettingsGroup("On this Mac") {
-                    SettingsRow(
-                        "Only Mynah so far",
-                        detail: "Nothing else has connected to this node yet. Adding one is below."
-                    ) { EmptyView() }
+                centred {
+                    EmptyState(
+                        glyph: "person.2",
+                        title: "Nobody is registered yet",
+                        message: "Agents appear here the first time they connect to the SAGE on "
+                            + "this Mac. Mynah registers itself the first time you talk to it."
+                    )
                 }
             } else {
-                SettingsGroup("On this Mac") {
-                    ForEach(Array(model.roster.others.enumerated()), id: \.element.id) { index, agent in
-                        if index > 0 { MynahDivider() }
-                        AgentRow(agent: agent)
-                    }
-                }
+                masterDetail
             }
         }
     }
 
-    // MARK: Mynah's own standing
-    //
-    // The section the owner needed two days ago. Mynah had stored nothing on a
-    // node holding thousands of memories, and until this screen said so there
-    // was no way to find that out from inside the product.
+    private func centred<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            content()
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, s8)
+    }
+
+    /// Roster on the left, the selected agent on the right.
+    ///
+    /// An `HStack` with an explicit width rather than `HSplitView`, for two
+    /// reasons that both come down to being able to check the work: a split view
+    /// is AppKit-backed, so it will not draw in an `ImageRenderer` harness and
+    /// nobody can look at this layout before it ships; and this pane already
+    /// lives inside the shell's `NavigationSplitView`, where nesting another
+    /// one is a good way to get two draggable dividers arguing about the same
+    /// pixels.
+    private var masterDetail: some View {
+        HStack(spacing: 0) {
+            rosterColumn
+                .frame(width: Self.rosterWidth)
+            Rectangle()
+                .fill(Palette.line.divider)
+                .frame(width: 1)
+            detailColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    // MARK: The roster
+
+    private var rosterColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            columnHeader("On this Mac", count: model.roster.agents.count)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // The appliance first and always, whatever it has stored.
+                    // It is the row the owner opened this screen for, and
+                    // sorting it in by memory count would bury it at the bottom
+                    // precisely when it has none — which is the case that
+                    // matters.
+                    if let appliance = model.roster.appliance {
+                        row(appliance)
+                    }
+                    ForEach(model.roster.others) { agent in
+                        row(agent)
+                    }
+                }
+                .padding(.horizontal, s5)
+                .padding(.bottom, s5)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            Spacer(minLength: 0)
+            MynahDivider()
+            network
+        }
+    }
+
+    private func row(_ agent: NodeAgent) -> some View {
+        AgentListRow(agent: agent, isSelected: agent.id == selectedID)
+            .contentShape(Rectangle())
+            .onTapGesture { selectedID = agent.id }
+    }
+
+    private func columnHeader(_ title: String, count: Int?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: s3) {
+            Text(title)
+                .mynahFont(.eyebrow)
+                .foregroundStyle(Palette.ink.secondary)
+                .accessibilityAddTraits(.isHeader)
+            if let count {
+                Text("\(count)")
+                    .mynahFont(.mono)
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.ink.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, s6)
+        .padding(.top, s6)
+        .padding(.bottom, s4)
+    }
+
+    // MARK: The detail
 
     @ViewBuilder
-    private var applianceAccess: some View {
-        if case .ready = model.phase {
-            SettingsGroup("Mynah's own access") {
-                if let appliance = model.roster.appliance {
-                    AgentRow(agent: appliance)
-                    MynahDivider()
-                    ApplianceStanding(agent: appliance)
-                } else {
-                    // Registration happens on the first turn. Before that there
-                    // is genuinely no row, and that is not a permissions problem
-                    // — saying so beats an empty space.
-                    SettingsRow(
-                        "Not registered yet",
-                        detail: "Mynah registers itself with your node the first time you talk to "
-                            + "it. Send it a voice note and it will appear here."
-                    ) { EmptyView() }
+    private var detailColumn: some View {
+        if let agent = selectedAgent {
+            ScrollView {
+                VStack(alignment: .leading, spacing: s6) {
+                    detailHeading(agent)
+                    StandingFacts(agent: agent)
+                    if agent.isThisAppliance {
+                        ApplianceStanding(agent: agent)
+                        grantsLine
+                    } else {
+                        otherAgentStanding(agent)
+                    }
+                    joining
                 }
-                MynahDivider()
-                SettingsRow(
-                    "What it's been granted",
-                    detail: FederationHelp.grantsAreNotReadableHere
-                ) { EmptyView() }
+                .frame(maxWidth: MynahWidth.prose + s9, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, s8)
+                .padding(.vertical, s7)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        } else {
+            // Only reachable in the instant between the roster arriving and the
+            // default selection landing.
+            Color.clear
+        }
+    }
+
+    private var selectedAgent: NodeAgent? {
+        guard let selectedID else { return model.roster.appliance }
+        return model.roster.agents.first { $0.id == selectedID } ?? model.roster.appliance
+    }
+
+    private func detailHeading(_ agent: NodeAgent) -> some View {
+        VStack(alignment: .leading, spacing: s2) {
+            Text(agent.name)
+                .mynahFont(.title2)
+                .foregroundStyle(Palette.ink.primary)
+                .textSelection(.enabled)
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: s3) {
+                Text(agent.standingLine)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                Text("·")
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.quaternary)
+                Text(agent.memoryLine)
+                    .mynahFont(.label)
+                    .foregroundStyle(
+                        agent.memoryCount == 0 ? Palette.state.caution : Palette.ink.secondary
+                    )
+                if !agent.isActive { StatusPill("Inactive", tone: .caution) }
             }
         }
+    }
+
+    /// What this screen can and cannot say about somebody else's agent.
+    ///
+    /// Short by construction. The grant list needs a signed request, so for any
+    /// agent but the appliance the honest answer is the mask and nothing more —
+    /// and the mask is usually empty, which is worth one sentence rather than a
+    /// section.
+    @ViewBuilder
+    private func otherAgentStanding(_ agent: NodeAgent) -> some View {
+        VStack(alignment: .leading, spacing: s4) {
+            if agent.permissions.isRestricted {
+                Text("SAGE has restricted this agent's key. That is a decision made on your node, "
+                    + "and only somebody with administrator access to it can change it.")
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Nothing on this agent's key restricts it. What it can reach beyond that is "
+                    + "down to the subjects it has been given access to.")
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            grantsLine
+        }
+    }
+
+    private var grantsLine: some View {
+        Text(FederationHelp.grantsAreNotReadableHere)
+            .mynahFont(.callout)
+            .foregroundStyle(Palette.ink.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: The network
 
-    /// The owner's button, and what came back. Separate from the roster above it
-    /// because it answers a different question — nothing found here is on this
-    /// Mac.
+    /// The owner's button, at the foot of the roster because it answers the same
+    /// question the roster does — who is out there — for a different somewhere.
+    /// Nothing it finds is on this Mac, which the copy says.
     private var network: some View {
-        SettingsGroup("Other SAGEs on your network") {
-            VStack(alignment: .leading, spacing: s5) {
-                HStack(spacing: s4) {
-                    MynahButton(
-                        model.scan == .scanning ? "Looking…" : "Look for agents on your network",
-                        kind: .secondary,
-                        isEnabled: model.scan != .scanning
-                    ) {
-                        Task { await model.lookForAgents() }
-                    }
-                    Spacer(minLength: 0)
-                }
-                scanResult
+        VStack(alignment: .leading, spacing: s4) {
+            MynahButton(
+                model.scan == .scanning ? "Looking…" : "Look for agents on your network",
+                kind: .secondary,
+                isEnabled: model.scan != .scanning
+            ) {
+                Task { await model.lookForAgents() }
             }
-            .padding(.vertical, s4)
+            scanResult
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, s6)
+        .padding(.vertical, s5)
     }
 
     @ViewBuilder
     private var scanResult: some View {
         switch model.scan {
         case .idle:
-            Text("Mynah will ask your node which other SAGEs it can reach, and which of their "
-                + "subjects it is allowed to read. It changes nothing.")
-                .mynahFont(.callout)
+            Text("Asks your node which other SAGEs it can reach. It changes nothing.")
+                .mynahFont(.label)
                 .foregroundStyle(Palette.ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
         case .scanning:
             Text("Asking your node…")
-                .mynahFont(.callout)
+                .mynahFont(.label)
                 .foregroundStyle(Palette.ink.secondary)
 
         case .failed(let trouble):
-            InlineBanner(
-                tone: .critical,
-                headline: trouble.headline,
-                explanation: trouble.explanation,
-                actionTitle: trouble.isWorthRetrying ? "Try again" : nil,
-                action: trouble.isWorthRetrying ? { Task { await model.lookForAgents() } } : nil
-            )
+            VStack(alignment: .leading, spacing: s3) {
+                Text(trouble.headline)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.state.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+                if trouble.isWorthRetrying {
+                    MynahButton("Try again", kind: .quiet) {
+                        Task { await model.lookForAgents() }
+                    }
+                    .padding(.leading, -s3)
+                }
+            }
 
         case .found(let report):
             if report.foundNothing {
@@ -1030,7 +1170,7 @@ struct AgentsView: View {
                 // which for most owners is both correct and what they want.
                 Text("No other SAGEs answered. Nothing is shared with anyone else, and nothing "
                     + "of theirs is readable from here.")
-                    .mynahFont(.callout)
+                    .mynahFont(.label)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -1041,202 +1181,166 @@ struct AgentsView: View {
 
     // MARK: Getting another agent here
 
-    /// What the owner does next, and what they are agreeing to when they do it.
+    /// Behind a disclosure, closed by default.
     ///
-    /// Present in every state including the failures, because an owner who
-    /// cannot see their agents today is exactly the person who wants to know how
-    /// this is supposed to work.
-    @ViewBuilder
+    /// It is reference material — three steps and three permission levels — and
+    /// it was previously the tallest thing on the screen, sitting under every
+    /// visit whether or not anybody was adding an agent. Reachable in one click
+    /// and out of the way otherwise.
     private var joining: some View {
-        if case .loading = model.phase {
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsGroup("Adding another agent") {
-                    VStack(alignment: .leading, spacing: s5) {
-                        NumberedStepList(steps: FederationHelp.steps)
-                        Text(FederationHelp.admin)
+        DisclosureGroup("Adding another agent") {
+            VStack(alignment: .leading, spacing: s5) {
+                NumberedStepList(steps: FederationHelp.steps)
+                Text(FederationHelp.admin)
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(FederationHelp.levels, id: \.name) { level in
+                    VStack(alignment: .leading, spacing: s1) {
+                        Text(level.name)
+                            .mynahFont(.bodyEmphasis)
+                            .foregroundStyle(Palette.ink.primary)
+                        Text(level.meaning)
                             .mynahFont(.callout)
                             .foregroundStyle(Palette.ink.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.vertical, s4)
                 }
-
-                SettingsGroup("What you can let an agent do") {
-                    ForEach(Array(FederationHelp.levels.enumerated()), id: \.element.name) { index, level in
-                        if index > 0 { MynahDivider() }
-                        SettingsRow(level.name, detail: level.meaning) { EmptyView() }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: s3) {
-                    // Keeps the two models apart. Granting is real; it is not
-                    // what is stopping Mynah, and this section must not be read
-                    // as the fix for the section above it.
-                    Text(FederationHelp.grantsDoNotLiftRestrictions)
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    // The candour line, and the reason this section exists.
-                    Text(FederationHelp.grantsAreReal)
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, s5)
+                Text(FederationHelp.grantsDoNotLiftRestrictions)
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(FederationHelp.grantsAreReal)
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.top, s4)
         }
+        .mynahFont(.title3)
+        .foregroundStyle(Palette.ink.primary)
+        .padding(.top, s5)
     }
 }
 
-// MARK: - One agent
+// MARK: - One row in the roster
 
-/// A row: who it is, what it is allowed to be, and how much it has stored.
+/// Name, then everything else on one metadata line.
 ///
-/// The memory count is the third thing the owner asked for — "what memories are
-/// stored by mynah" — and because it is per agent, the same row answers it for
-/// every other agent on the node too. It is also the only visible symptom of the
-/// permissions problem this screen exists to surface, which is why a zero is
-/// drawn in caution ink rather than as a quiet grey number nobody reads.
-private struct AgentRow: View {
+/// It was three stacked paragraphs in a card — table data set as prose, which is
+/// what made this pane read like a web page. What survives the compression is
+/// the pair that carries the whole point of the screen: the `Restricted` pill
+/// and the caution-ink memory count. Those are the *only* visible difference
+/// between an agent that works and one that is silently muted, and a density
+/// pass that quietly ate them would have removed the reason this screen exists.
+struct AgentListRow: View {
     let agent: NodeAgent
+    let isSelected: Bool
+
+    @State private var isHovering = false
 
     var body: some View {
-        SettingsRow(agent.name, detail: detail) {
+        VStack(alignment: .leading, spacing: s1) {
+            // The name gets the whole width. It shared the line with the
+            // `Restricted` pill until a render showed what that costs: at 300pt
+            // "Mynah - Sage Voice Bridge" came out as "Mynah -…oice Bridge",
+            // truncating the one word that identifies it. Tail truncation, not
+            // middle — middle is for paths and ids, where the end carries the
+            // meaning; in a name the beginning does.
             HStack(spacing: s3) {
-                if !agent.isActive {
-                    StatusPill("Inactive", tone: .caution)
-                }
-                // The mark the row otherwise has no way of carrying. Everything
-                // else about a restricted agent reads as ordinary — same role,
-                // same clearance, same active status as the nineteen beside it
-                // that write freely.
+                Text(agent.name)
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                // A dot, not the `Restricted` pill. The pill is the right
+                // component and it does not fit: at 300pt beside the metadata it
+                // wrapped and hyphenated itself to "Restrict / ed", and beside
+                // the name it truncated the name. A 6pt caution dot costs ten
+                // points, never wraps, and pairs with the caution-ink count
+                // below it — two marks that say the same thing in a place the
+                // eye already scans. The word itself survives in the detail
+                // pane, where there is room for it.
                 if agent.permissions.isRestricted {
-                    StatusPill("Restricted", tone: .caution)
+                    StatusDot(.caution)
                 }
+                Spacer(minLength: 0)
+            }
+            // Both marks on one line, which is also where they belong: the pill
+            // and the caution-ink count are the two halves of one fact — this
+            // agent is muted — and they now sit together instead of at opposite
+            // corners of the row.
+            HStack(spacing: s2) {
+                Text(agent.standingLine)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                Text("·")
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.quaternary)
                 Text(agent.memoryLine)
                     .mynahFont(.label)
                     .foregroundStyle(
                         agent.memoryCount == 0 ? Palette.state.caution : Palette.ink.secondary
                     )
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
         }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background, in: RoundedRectangle.mynah(r.control))
+        .mynahAnimation(Motion.fade, value: isSelected)
+        .mynahAnimation(Motion.fade, value: isHovering)
+        .onHover { isHovering = $0 }
+        .pointingHandCursor()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(agent.name). \(detail). \(agent.memoryLine).")
+        // The dot is invisible to VoiceOver, so the word goes in the label —
+        // the one place where the pill's text still has to exist for a row.
+        .accessibilityLabel(
+            "\(agent.name). \(agent.standingLine). \(agent.memoryLine)."
+                + (agent.permissions.isRestricted ? " Restricted." : "")
+        )
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// Role and clearance, plus the effective answer when it differs from what
-    /// they imply — which is the whole problem this row exists to expose.
-    private var detail: String {
-        guard agent.permissions.isRestricted else { return agent.standingLine }
-        return "\(agent.standingLine) · \(agent.permissions.writingLine)"
+    /// Selection takes the accent wash, which is what `OptionCard` uses for the
+    /// same job — the one live thing on the screen is the row being read.
+    private var background: Color {
+        if isSelected { return Palette.accent.wash }
+        return isHovering ? Palette.surface.well : .clear
     }
 }
 
-// MARK: - What Mynah itself can do
+// MARK: - What an agent can read and write
 
-/// The effective answer for the appliance: what it can do, why not, and who has
-/// to change it.
+/// The standing facts, for whichever agent is selected.
 ///
-/// Shaped as SAGE's own team described the direction — "the UI shows the
-/// effective result — can read / can write / why denied — instead of exposing
-/// five cryptic checkboxes as the primary control". So there are no checkboxes
-/// and no bit numbers in the sentences; the one number on the screen is the
-/// preset name an operator has to type somewhere else.
-private struct ApplianceStanding: View {
+/// Always present, never in alarm ink, and unchanged by whether anything is
+/// wrong. The warning below can clear; these cannot, because "what can it read"
+/// stays a fact about the owner's machine after somebody has fixed the
+/// permissions — and the Companion profile in particular *widens* reading, which
+/// is the moment it most needs saying.
+struct StandingFacts: View {
     let agent: NodeAgent
 
-    /// The same value the boot check and the setup flow render, built from the
-    /// row this screen already has rather than by asking the node twice.
-    ///
-    /// Sharing the *type* rather than the sentences is what keeps one mechanism
-    /// from acquiring two explanations: `headline`, `reasons` and `remedy` below
-    /// are `voice`'s strings, so an owner who meets this at boot and again here
-    /// reads the same words both times.
-    private var readiness: ApplianceWriteReadiness {
-        ApplianceWriteReadiness(agentID: agent.id, standing: .registered(mask: agent.capabilities))
-    }
-
-    /// The one thing to say when something is wrong, or `nil` when nothing is.
-    ///
-    /// `nil` is passed for the observed refusal because `ConversationModel.ritual`
-    /// is private, so no view can reach `SageRitual.writeDenial` yet. That is the
-    /// predictive half and it is exactly what this screen already did — when the
-    /// denial is exposed, this argument is the only line that changes, and the
-    /// page starts quoting what consensus actually said instead of inferring
-    /// from a mask.
-    private var status: ApplianceMemoryStatus? {
-        readiness.status(observing: nil)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: s5) {
-            // Always, whatever else is true. What Mynah can read and what it can
-            // remember are facts about the owner's appliance, not symptoms —
-            // and staying silent about them once the warning clears is the
-            // true-by-omission we spent the session removing. The Companion
-            // profile in particular *widens* what Mynah can read; the moment to
-            // say so is when somebody turns it on, not after they notice.
-            standingFacts
-
-            if let status {
-                InlineBanner(tone: .caution, headline: status.headline, explanation: status.remedy)
-                // SAGE's own sentence about the refusal, when there has been
-                // one. Never paraphrased, and visibly the node speaking rather
-                // than us.
-                if let detail = status.detail {
-                    Text(detail)
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                whoToAsk
-                footnotes
-            } else if agent.permissions.hasCompanionProfile {
-                // Somebody has looked at this agent and assigned it the right
-                // profile. Whether it can actually write additionally depends on
-                // owning a subject, which no unsigned caller can see — so this
-                // says what is true and stops.
-                Text("An administrator has given Mynah the companion profile. Remembering also "
-                    + "needs a subject of its own; this screen can't see who owns what, so the "
-                    + "proof is whether new memories appear below.")
-                    .mynahFont(.callout)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if agent.memoryCount == 0 {
-                // Nothing on the key explains it, and the *other* gate — the
-                // per-agent subject allowlist — needs a signed request to read.
-                // Naming it as unknown beats implying the key is the only thing
-                // that can stop a write.
-                Text("Nothing on Mynah's key is holding it back, and it hasn't remembered anything "
-                    + "yet. The other thing that can stop it is the list of subjects it's allowed "
-                    + "to write, which this screen can't read.")
-                    .mynahFont(.callout)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // Beyond that, nothing. No badge, no tick, no "all good" row: the
-            // *warning* disappears when somebody has configured this correctly.
-            // The facts above it do not.
-        }
-        .padding(.vertical, s4)
-    }
-
-    /// What it can read, and what it can remember. Present in every state.
-    ///
-    /// Two lines rather than a table, and in the appliance's own voice — this
-    /// section is about Mynah's memory, spoken to its owner, so the verb is
-    /// "remember". The roster rows above speak about arbitrary agents in a
-    /// permissions table, where the verb is "write"; those are two different
-    /// sentences about one mechanism and collapsing them would make one of them
-    /// wrong.
-    private var standingFacts: some View {
         VStack(alignment: .leading, spacing: s3) {
             fact("Can read", agent.permissions.readingLine)
-            fact("Can remember", rememberingLine)
+            fact(agent.isThisAppliance ? "Can remember" : "Can write", writeLine)
         }
+    }
+
+    /// The appliance speaks the memory verb, because there it is Mynah's memory
+    /// being discussed with its owner. Any other agent gets the permissions-table
+    /// verb: "can remember what you tell it" is false of somebody else's research
+    /// agent, which the owner tells nothing.
+    private var writeLine: String {
+        guard agent.isThisAppliance else { return agent.permissions.writingLine }
+        guard agent.permissions.writesAreRestricted else { return "What you tell it." }
+        return agent.permissions.needsASubjectAssigned
+            ? "Nothing yet — it needs a subject of its own first."
+            : "Only into a subject that already belongs to it."
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -1253,18 +1357,109 @@ private struct ApplianceStanding: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value)")
     }
+}
 
-    /// The write fact in the appliance's voice.
+// MARK: - What Mynah itself can do
+
+/// The appliance's own standing: the warning when there is one, why, who has to
+/// change it, and the notes a boot line has no room for.
+///
+/// Shaped as SAGE's own team described the direction — "the UI shows the
+/// effective result — can read / can write / why denied — instead of exposing
+/// five cryptic checkboxes as the primary control". The read/write half is
+/// `StandingFacts` above; this is the "why denied" half, and it is the only part
+/// that disappears when somebody has configured the agent correctly.
+struct ApplianceStanding: View {
+    let agent: NodeAgent
+
+    /// The same value the boot check and the setup flow render, built from the
+    /// row this screen already has rather than by asking the node twice.
     ///
-    /// Not `AgentPermissions.writingLine`, which is the permissions-table
-    /// wording for any agent on the node. "Can remember what you tell it" is
-    /// true of Mynah and false of somebody else's research agent — the owner
-    /// does not tell that one anything, and its memory is not theirs.
-    private var rememberingLine: String {
-        guard agent.permissions.writesAreRestricted else { return "What you tell it." }
-        return agent.permissions.needsASubjectAssigned
-            ? "Nothing yet — it needs a subject of its own first."
-            : "Only into a subject that already belongs to it."
+    /// Sharing the *type* rather than the sentences is what keeps one mechanism
+    /// from acquiring two explanations: `headline`, `reasons` and `remedy` are
+    /// `voice`'s strings, so an owner who meets this at boot and again here
+    /// reads the same words both times.
+    private var readiness: ApplianceWriteReadiness {
+        ApplianceWriteReadiness(agentID: agent.id, standing: .registered(mask: agent.capabilities))
+    }
+
+    /// `nil` is passed for the observed refusal because `ConversationModel.ritual`
+    /// is private, so no view can reach `SageRitual.writeDenial` yet. That is the
+    /// predictive half and it is exactly what this screen already did — when the
+    /// denial is exposed, this argument is the only line that changes, and the
+    /// page starts quoting what consensus actually said instead of inferring
+    /// from a mask.
+    private var status: ApplianceMemoryStatus? {
+        readiness.status(observing: nil)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: s5) {
+            if let status {
+                InlineBanner(tone: .caution, headline: status.headline, explanation: status.remedy)
+                // SAGE's own sentence about the refusal, when there has been
+                // one. Never paraphrased, and visibly the node speaking rather
+                // than us.
+                if let detail = status.detail {
+                    Text(detail)
+                        .mynahFont(.callout)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                reasons
+                whoToAsk
+                footnotes
+            } else if agent.permissions.hasCompanionProfile {
+                // Somebody has looked at this agent and assigned it the right
+                // profile. Whether it can actually write additionally depends on
+                // owning a subject, which no unsigned caller can see — so this
+                // says what is true and stops.
+                note("An administrator has given Mynah the companion profile. Remembering also "
+                    + "needs a subject of its own; this screen can't see who owns what, so the "
+                    + "proof is whether new memories appear.")
+            } else if agent.memoryCount == 0 {
+                // Nothing on the key explains it, and the *other* gate — the
+                // per-agent subject allowlist — needs a signed request to read.
+                // Naming it as unknown beats implying the key is the only thing
+                // that can stop a write.
+                note("Nothing on Mynah's key is holding it back, and it hasn't remembered "
+                    + "anything yet. The other thing that can stop it is the list of subjects "
+                    + "it's allowed to write, which this screen can't read.")
+            }
+            // Beyond that, nothing. No badge, no tick, no "all good" row: the
+            // *warning* disappears when somebody has configured this correctly.
+            // The facts above it do not.
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .mynahFont(.callout)
+            .foregroundStyle(Palette.ink.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var reasons: some View {
+        VStack(alignment: .leading, spacing: s3) {
+            Text("Why")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+            // Reading is unaffected by every bit in the mask, and saying so is
+            // the difference between "Mynah is broken" and "Mynah can't remember
+            // this yet" — it still answers, and it still knows what it knew.
+            ForEach(["It can still read what it already knows."] + readiness.reasons, id: \.self) { line in
+                HStack(alignment: .firstTextBaseline, spacing: s3) {
+                    Text("·")
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.ink.quaternary)
+                    Text(line)
+                        .mynahFont(.callout)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     /// Who has to make the change — the one thing that genuinely differs by how
@@ -1282,50 +1477,18 @@ private struct ApplianceStanding: View {
     @ViewBuilder
     private var whoToAsk: some View {
         if let node = SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL()) {
-            Text(node.isTheOwners
+            note(node.isTheOwners
                  ? "Mynah is a guest on the SAGE that was already on this Mac, so whoever "
                     + "administers that node is who makes this change."
                  : "This Mac had no SAGE, so Mynah brought one. The node is yours and its "
                     + "administrator key is on this Mac — there is nobody else to ask.")
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var reasons: some View {
-        VStack(alignment: .leading, spacing: s3) {
-            Text("What it can and can't do")
-                .mynahFont(.label)
-                .foregroundStyle(Palette.ink.secondary)
-            // Reading is unaffected by every bit in the mask, and saying so is
-            // the difference between "Mynah is broken" and "Mynah can't
-            // remember this yet" — it still answers, and it still knows what it
-            // knew.
-            ForEach(["It can still read what it already knows."] + readiness.reasons, id: \.self) { line in
-                HStack(alignment: .firstTextBaseline, spacing: s3) {
-                    Text("·")
-                        .mynahFont(.body)
-                        .foregroundStyle(Palette.ink.quaternary)
-                    Text(line)
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
     }
 
     private var footnotes: some View {
         VStack(alignment: .leading, spacing: s3) {
-            Text(FederationHelp.looksOrdinaryButIsMuted)
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(FederationHelp.cannotFixItself)
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            note(FederationHelp.looksOrdinaryButIsMuted)
+            note(FederationHelp.cannotFixItself)
             // The only number on the screen, and it is here because the person
             // who has to act on this is typing it into another product.
             Text(FederationHelp.companionPresetDetail)

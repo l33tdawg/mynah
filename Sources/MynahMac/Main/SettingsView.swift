@@ -1405,12 +1405,14 @@ struct SettingsView: View {
             // only one the owner did not cause by speaking — it happens on its
             // own — which makes leaving it off the list the worst omission
             // available. The switch is in About, named here so it can be found.
+            // Shortened, and the length was duplication rather than thoroughness:
+            // the About tab carries the same explanation at the row where the
+            // owner can actually act on it. This one's job is to appear on the
+            // list of things that leave, which it now does in a line.
             SettingsRow(
                 "Checking for a newer Mynah",
-                detail: "Once a day Mynah asks GitHub whether a newer version has been released. "
-                    + "GitHub learns that a Mac asked; it is told nothing about you or what you "
-                    + "have said. Nothing is downloaded or installed on its own. The switch for "
-                    + "it is on the About tab."
+                detail: "Mynah asks GitHub once a day whether there is a newer version. "
+                    + "The switch is on the About tab."
             ) {
                 StatusPill(
                     model.checksForUpdates ? "Once a day" : "Turned off",
@@ -1616,7 +1618,16 @@ struct SettingsView: View {
     /// About panel reporting a version the owner is not running is worse than
     /// one reporting none.
     private var aboutSection: some View {
-        SettingsGroup(SettingsGroupTitle.about) {
+        SettingsGroup(
+            SettingsGroupTitle.about,
+            // No promise of a page to visit instead. This repository is private:
+            // a link most people would get a 404 from is worse than no link,
+            // which is why About carries none either.
+            caption: "The update check asks GitHub once a day whether a newer version has been "
+                + "released. That request tells GitHub a Mac asked, which is a third party "
+                + "learning this machine exists — the one thing Mynah does that you did not ask "
+                + "for by speaking. Turn it off and Mynah never contacts GitHub at all."
+        ) {
             // The full name here, and only here. In running copy it stays
             // "Mynah" — "Mynah (Sage Voice Bridge) keeps what you tell it" is a
             // sentence nobody wants to read twice. The parenthetical exists to
@@ -1644,16 +1655,11 @@ struct SettingsView: View {
             updateRow
             MynahDivider()
 
-            SettingsRow(
-                "Check GitHub for a newer version",
-                // No promise of a page to visit instead. This repository is
-                // private: a link most people would get a 404 from is worse
-                // than no link, which is why About carries none either.
-                detail: "Once a day. That request tells GitHub a Mac asked, which is a third "
-                    + "party learning this machine exists — it is the one thing Mynah does that "
-                    + "you did not ask for by speaking. Turn it off and Mynah never contacts "
-                    + "GitHub at all."
-            ) {
+            // The explanation moved to the group's caption. It is the longest
+            // sentence in Settings and it made this row four lines tall with a
+            // switch stranded beside it; under the card it is the same words,
+            // available to anyone who wants them, costing the list nothing.
+            SettingsRow("Check GitHub for a newer version", detail: "Once a day.") {
                 Toggle("", isOn: Binding(
                     get: { model.checksForUpdates },
                     set: { model.setChecksForUpdates($0) }

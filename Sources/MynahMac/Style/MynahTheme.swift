@@ -246,7 +246,30 @@ enum MynahWidth {
     /// Prose inside that column — ~62 characters at 13pt.
     static let prose: CGFloat = 460
     /// A settings pane.
+    ///
+    /// Deliberately still 640, and widening it was tried and reverted. The pane
+    /// sits beside a 284pt sidebar in a 1180pt window, so the obvious reading of
+    /// "there is too much blank space" is to make the column wider — which
+    /// measurably made it worse: the label stays left and the control stays
+    /// right, so a wider row is a *bigger* gap between them, which is the thing
+    /// that was being complained about. Unused width wants a second column, not
+    /// a stretched one.
     static let settings: CGFloat = 640
+
+    /// The measure a settings caption wraps at.
+    ///
+    /// A detail that runs the full width of the card is a paragraph; the same
+    /// sentence capped is a caption under a label, which is most of why a
+    /// settings pane reads as documentation rather than as settings.
+    ///
+    /// 480 rather than 420, and the 60pt matters more than it looks. At 420 an
+    /// ordinary one-sentence detail — "Sent to Anthropic each time you ask
+    /// something, so it can work out an answer" — wrapped onto a second line, so
+    /// capping the prose made the common row *taller* while only helping the
+    /// rare long one. 480 keeps a sentence on one line and still forces an
+    /// essay to wrap, which is the shape that was wanted: cap the paragraphs,
+    /// not the captions.
+    static let settingsCaption: CGFloat = 480
     /// A memory detail view.
     static let memoryDetail: CGFloat = 720
     /// A choice card's summary line.
