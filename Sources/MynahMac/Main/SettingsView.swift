@@ -382,6 +382,17 @@ final class SettingsModel {
         KeyStorage.load().keys.sorted()
     }
 
+    /// The agent CLIs installed here — detected, and deliberately not offered.
+    ///
+    /// Empty until the probe answers, and empty on a Mac that has neither, which
+    /// is the point: the sentence explaining why `claude` is not on the menu is
+    /// shown only to somebody who has `claude`. Nobody else is told about
+    /// software they do not run.
+    var installedAgentCLIs: [AgentCLIKind] {
+        guard let probe else { return [] }
+        return AgentCLIKind.allCases.filter { probe.cli($0).isInstalled }
+    }
+
     func refresh() {
         brain = BrainChoiceStore.current(defaults: defaults)
         speech = SpeechFacts.detect()
@@ -859,7 +870,7 @@ struct SettingsView: View {
                     // the company is serving this week, and a hardcoded list of
                     // model names is a list that goes stale silently — which is
                     // the same reason no version number is typed into this app.
-                    installed: model.probe?.localRuntime.installedModels.sorted() ?? []
+                    installed: localModels
                 ) { chosen in
                     isChangingModel = false
                     guard let chosen else { return }
@@ -1140,6 +1151,33 @@ struct SettingsView: View {
                 MynahDivider()
                 recheckRow
             }
+            agentCLIRows
+        }
+    }
+
+    /// Why the assistant already open on this Mac is not on the menu.
+    ///
+    /// **This used to be two greyed cards in the brain picker**, each carrying
+    /// this sentence as its unavailability reason. The owner read grey as "not
+    /// detected" — *"we have codex and claude installed clearly; i'm using you
+    /// right — yet it thinks we don't"* — because in a list of things you might
+    /// choose, that is what grey means. The answer was sitting next to the thing
+    /// generating the question.
+    ///
+    /// So it moved here, where somebody goes to ask rather than trips over it,
+    /// and it appears only if the CLI is actually installed. `AgentCLINotOffered`
+    /// holds the wording and the reason it will not change back.
+    @ViewBuilder
+    private var agentCLIRows: some View {
+        let clis = model.installedAgentCLIs
+        if !clis.isEmpty {
+            MynahDivider()
+            SettingsRow(
+                AgentCLINotOffered.heading(for: clis),
+                detail: clis.map(AgentCLINotOffered.explanation(for:)).joined(separator: "\n\n")
+            ) {
+                EmptyView()
+            }
         }
     }
 
@@ -1218,16 +1256,48 @@ struct SettingsView: View {
     /// above reports what the phone is *actually* running, and if the two ever
     /// disagree the owner can see it rather than being told a number that is
     /// true of only half the product.
+    /// **The owner no longer picks a cloud model, so this row no longer offers
+    /// to change one.** It still reports, because what is running is worth
+    /// knowing and the two-places-to-land problem above is still real.
+    ///
+    /// The button survives for a local runtime only, and the distinction is not
+    /// an inconsistency. A cloud model name is a lookup against a catalogue that
+    /// changes without telling anyone, in a vocabulary the owner has no reason
+    /// to have learned — that is the whole argument for Mynah picking it. None
+    /// of that is true of a model sitting on this Mac: it does not get retired
+    /// behind his back, and somebody who ran `ollama pull` knows exactly what
+    /// they pulled and why. Taking that away would be applying the rule past the
+    /// thing the rule was aimed at.
     private var modelRow: some View {
         SettingsRow(
             "The model it thinks with",
-            detail: (model.brain?.modelName.map { "Currently \($0)." }
-                ?? "Mynah is using whatever this provider gives it by default.")
-                + " This window changes over straight away. Your phone picks it up "
-                + "the next time the appliance starts."
+            detail: modelRowDetail
         ) {
-            MynahButton("Change", kind: .secondary) { isChangingModel = true }
+            if !localModels.isEmpty {
+                MynahButton("Change", kind: .secondary) { isChangingModel = true }
+            }
         }
+    }
+
+    /// Model names the local runtime actually has. Empty for an API provider —
+    /// which is also what hides the button.
+    private var localModels: [String] {
+        model.probe?.localRuntime.installedModels.sorted() ?? []
+    }
+
+    private var modelRowDetail: String {
+        let current = model.brain?.modelName.map { "Currently \($0)." }
+            ?? "Mynah hasn't recorded which model it is on."
+        guard localModels.isEmpty else {
+            return current + " This window changes over straight away. Your phone picks it up "
+                + "the next time the appliance starts."
+        }
+        // No longer "whatever this provider gives it by default" — that was
+        // never true. Mynah asks for a specific model; it just isn't one the
+        // owner was ever asked to name.
+        return current + " Mynah picks the model for each provider — a fast one that can "
+            + "hold a conversation and drive its tools. To change it, change where your "
+            + "words go above."
     }
 
     private var recheckRow: some View {
@@ -2298,14 +2368,22 @@ private struct BrainKeySheet: View {
 /// and asks it a real question. The same machinery that catches a key which has
 /// run out of credit catches a model that does not exist.
 ///
-/// Two modes, because the honest answer differs by provider. A local runtime
-/// publishes exactly what is installed, so that is a list. An API provider's
-/// catalogue is a thing that changes without telling us, and a hardcoded list of
-/// model names would go stale the way a typed-in version number does — so that
-/// is a field, and the verification is what makes a field safe.
+/// **Local runtimes only.** It used to have a second mode — a free-text field
+/// for API providers — and that mode is gone, because the owner no longer names
+/// cloud models. Mynah picks those; see `CloudBrainModelCatalog` and
+/// `docs/MODEL-CHOICES.md`.
+///
+/// What is left is a list of what this Mac actually has, and that is a different
+/// kind of choice rather than a survivor of the old one. A cloud model name is a
+/// lookup against a catalogue that changes without telling anyone; a model the
+/// owner pulled onto their own disk is neither unfamiliar nor liable to vanish.
+/// The verification stays regardless — a local model that is installed but will
+/// not drive tools fails here rather than mid-answer.
 private struct BrainModelSheet: View {
     let option: BrainSetupOption
-    /// Model names the local runtime actually has. Empty for an API provider.
+    /// Model names the local runtime actually has. Never empty: the row that
+    /// opens this sheet is hidden when there is nothing to choose between, so
+    /// "a sheet with no options" is unreachable rather than handled.
     let installed: [String]
     /// The option to save, or `nil` when the owner backed out.
     let onClose: (BrainSetupOption?) -> Void
@@ -2335,7 +2413,7 @@ private struct BrainModelSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: s5) {
-                    if installed.isEmpty { field } else { list }
+                    list
                     resultLine
                 }
                 .padding(.vertical, s6)
@@ -2362,26 +2440,9 @@ private struct BrainModelSheet: View {
     }
 
     private var subtitle: String {
-        installed.isEmpty
-            ? "Whatever name your provider uses. Mynah asks it a real question before keeping it, "
-                + "so a name it doesn't serve is caught here rather than mid-answer."
-            : "These are the models installed on this Mac. Mynah asks the one you pick a real "
-                + "question before keeping it."
-    }
-
-    private var field: some View {
-        VStack(alignment: .leading, spacing: s3) {
-            Text("Model name").mynahFont(.label).foregroundStyle(Palette.ink.secondary)
-            TextField("", text: $name)
-                .textFieldStyle(.plain)
-                .mynahFont(.mono)
-                .foregroundStyle(Palette.ink.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(Palette.surface.sunken, in: RoundedRectangle.mynah(r.control))
-                .mynahBorder(r.control)
-                .onSubmit(check)
-        }
+        "These are the models installed on this Mac. Mynah asks the one you pick a real "
+            + "question before keeping it, so one that can't drive its tools is caught here "
+            + "rather than mid-answer."
     }
 
     private var list: some View {
