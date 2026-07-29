@@ -358,13 +358,13 @@ final class AgentPermissionsTests: XCTestCase {
 
     /// The state the owner hit: an agent that looks like every other member and
     /// cannot save a thing.
-    func testTheSelfRegisteredMaskClosesEveryRouteToSaving() {
+    func testTheSelfRegisteredMaskClosesEveryRouteToWriting() {
         XCTAssertTrue(selfRegistered.isRestricted)
         XCTAssertTrue(selfRegistered.writesAreRestricted)
         XCTAssertTrue(selfRegistered.needsASubjectAssigned)
         XCTAssertEqual(
             selfRegistered.writingLine,
-            "Can't save anything until it's given a subject of its own."
+            "Can't write anything until it's given a subject of its own."
         )
     }
 
@@ -396,7 +396,7 @@ final class AgentPermissionsTests: XCTestCase {
     func testNoMaskMeansNoRestrictions() {
         XCTAssertFalse(unrestricted.isRestricted)
         XCTAssertFalse(unrestricted.writesAreRestricted)
-        XCTAssertEqual(unrestricted.writingLine, "Can save what you tell it.")
+        XCTAssertEqual(unrestricted.writingLine, "Can write memories.")
     }
 
     /// The direction SAGE's own team asked for: the effective result and the
@@ -444,7 +444,7 @@ final class AgentPermissionsTests: XCTestCase {
 
         XCTAssertTrue(readAll.isRestricted, "the mask is not zero, so the row is not ordinary")
         XCTAssertFalse(readAll.writesAreRestricted)
-        XCTAssertEqual(readAll.writingLine, "Can save what you tell it.")
+        XCTAssertEqual(readAll.writingLine, "Can write memories.")
     }
 
     /// The mask is read off the public roster — no signature, no unlock.
@@ -465,6 +465,115 @@ final class AgentPermissionsTests: XCTestCase {
         // The nineteen others: the field is absent, and absent is unrestricted.
         XCTAssertEqual(roster.others.first?.capabilities, 0)
         XCTAssertFalse(roster.others.first?.permissions.isRestricted == true)
+    }
+}
+
+// MARK: - One verb, and the scope it actually has
+
+/// The product says **remember** when it talks to the owner about Mynah's
+/// memory — and says **write** when it describes what an arbitrary agent may do
+/// to a store.
+///
+/// `voice` guards the `SageVoiceCore` half; this guards both, because a rule
+/// enforced in one module and not the other drifts on the first reword, and
+/// `SageVoiceCoreTests` can import `MynahMac` (`PauseIsOneStoreTests` already
+/// does). The strings and the test land together: a ban on a word fails the
+/// moment it arrives unless the copy arrived with it.
+///
+/// **The scope is the interesting part, and it is `voice`'s argument, not
+/// mine.** I proposed banning "save" outright and that would have been wrong.
+/// `AgentPermissions.writingLine` renders on *every* row, including other
+/// people's agents — "can remember what you tell it" is false of somebody
+/// else's research agent, since the owner tells it nothing and its memory is not
+/// theirs. So the rule is not one word everywhere; it is one word per audience,
+/// and the two audiences are on the same screen. A mechanical sweep would have
+/// collapsed them and produced a rule nobody could apply without an exception
+/// list.
+final class OneVerbForMemoryTests: XCTestCase {
+
+    /// Everything the owner reads *about Mynah's own memory*, across both
+    /// modules.
+    @MainActor
+    private var applianceSentences: [String] {
+        let restricted = ApplianceWriteReadiness(
+            agentID: "x",
+            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        )
+        return restricted.reasons
+            + [restricted.headline, restricted.remedy, restricted.shortRemedy].compactMap { $0 }
+            + [
+                FederationHelp.looksOrdinaryButIsMuted,
+                FederationHelp.cannotFixItself,
+                FederationHelp.grantsAreNotReadableHere
+            ]
+    }
+
+    @MainActor
+    func testNothingAboutMynahsMemorySaysSaveOrStore() {
+        for sentence in applianceSentences {
+            for wrong in ["save", "saved", "saving", "stored"] {
+                XCTAssertFalse(
+                    sentence.lowercased().contains(wrong),
+                    "\"\(wrong)\" is the wrong verb for Mynah's memory: \(sentence)"
+                )
+            }
+        }
+    }
+
+    /// The other half of the same rule: a row about an arbitrary agent must not
+    /// borrow the appliance's vocabulary, or it starts claiming the owner's
+    /// relationship with somebody else's agent.
+    func testARowAboutAnyAgentSaysWriteRatherThanRemember() {
+        for mask in [UInt32(0), 15, 30] {
+            let line = AgentPermissions(mask: mask).writingLine
+            XCTAssertTrue(line.lowercased().contains("write"), "a row line lost the verb: \(line)")
+            XCTAssertFalse(
+                line.lowercased().contains("remember"),
+                "a row about any agent claimed the owner's memory: \(line)"
+            )
+        }
+    }
+}
+
+// MARK: - Standing facts
+
+/// What Mynah can read and what it can write are shown whether or not anything
+/// is wrong. The *warning* clears when somebody has reviewed the key; the facts
+/// do not, because the Companion profile is not only a fix — it is also a
+/// widening of what Mynah can see, and an owner turning it on deserves to be
+/// told that at the moment they turn it on rather than afterwards.
+final class StandingFactTests: XCTestCase {
+
+    /// Bit 1 is the only bit that grants. Under the Companion profile the
+    /// appliance reads across subjects it was never granted, bounded by its
+    /// clearance — nineteen other agents' subjects on the owner's node.
+    func testTheCompanionProfileSaysItCanReadAcrossSubjects() {
+        let line = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion).readingLine
+
+        XCTAssertTrue(line.contains("every subject"))
+        XCTAssertTrue(line.contains("other agents"), "the widening was stated without saying whose")
+        XCTAssertTrue(line.contains("clearance"), "the bound was dropped")
+    }
+
+    /// And the self-registration default does not read widely, so the two
+    /// profiles must not describe reading identically.
+    func testAnUnreviewedKeyDoesNotClaimToReadWidely() {
+        let pending = AgentPermissions(mask: ApplianceWriteReadiness.Capability.pendingReview)
+
+        XCTAssertEqual(pending.readingLine, "Only the subjects it's been given access to.")
+        XCTAssertNotEqual(
+            pending.readingLine,
+            AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion).readingLine
+        )
+    }
+
+    /// A reading fact exists for every mask, including the unrestricted one —
+    /// otherwise the screen would have nothing to say in the state it spends
+    /// most of its life in.
+    func testEveryMaskHasSomethingTrueToSayAboutReading() {
+        for mask in [UInt32(0), 1, 15, 30, 31] {
+            XCTAssertFalse(AgentPermissions(mask: mask).readingLine.isEmpty)
+        }
     }
 }
 

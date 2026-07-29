@@ -319,6 +319,14 @@ struct ReadyStage: View {
     /// is lost.
     private var title: String {
         if !unfinished.isEmpty { return "One thing left." }
+        // Both at once, and it is the state the owner's own machine is in:
+        // capability mask 30 *and* a pause marker left over from a previous
+        // install. Handled first because neither single-condition sentence
+        // survives the other — "can answer" is false while paused, and "ready"
+        // is false while it cannot save. Ordering by which is graver settles
+        // which fact leads; it does not licence a title to assert the thing the
+        // other condition contradicts.
+        if app.isPaused && cannotRemember { return "Mynah is paused, and can't remember yet." }
         // Not a softened "almost ready". It can answer — that part is true and
         // worth saying — and it cannot remember, which is the fact the banner
         // below then explains.
@@ -339,8 +347,16 @@ struct ReadyStage: View {
     /// the gate, so the one deferrable step left is the API key — and the flow
     /// already has a drawing of a key held inside the machine that keeps it.
     /// A phone here would now illustrate the wrong problem entirely.
+    ///
+    /// The paused branch exists for the same reason the title has one: the ready
+    /// drawing is *a machine settled and listening, with a small light on it*,
+    /// and rendering it above a headline that says "paused" is a picture
+    /// contradicting the sentence beside it. `moon` is not a new invention —
+    /// `AppModel.Presence.sleeping` and `TalkView`'s empty state already draw a
+    /// paused appliance that way, and one state should not acquire two pictures.
     private var markName: String {
         if !unfinished.isEmpty { return StageIllustration.mark(.connect) }
+        if app.isPaused { return "moon" }
         // Points where the sentence points.
         return cannotRemember ? "person.2" : StageIllustration.mark(.ready)
     }
@@ -674,13 +690,21 @@ struct Sidebar: View {
     /// This is the platform-chrome exception `Palette.accent` describes.
     private func row(_ section: MainSection) -> some View {
         HStack(alignment: .top, spacing: s4) {
+            // `.well` is the largest glyph size the scale has short of `.hero`,
+            // which is the single 30pt mark on an empty state and would be a
+            // cartoon in a list. This was `.card` at 18pt, which is a card
+            // header's size — a step up from a default sidebar label and not
+            // what "big icons" meant. The owner asked twice.
             Image(systemName: section.glyph)
-                .mynahIcon(.card)
+                .mynahIcon(.well)
                 // A fixed column so four glyphs of different widths still leave
                 // their titles on one vertical line.
-                .frame(width: 24, alignment: .center)
+                .frame(width: 30, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
-                Text(section.title).mynahFont(.title3)
+                // `.title2`, the card-title size, rather than `.title3`, the
+                // list-row size. This is the app's primary navigation and it
+                // should not be set at the density of a settings list.
+                Text(section.title).mynahFont(.title2)
                 Text(section.summary)
                     .mynahFont(.callout)
                     .foregroundStyle(.secondary)
@@ -688,7 +712,10 @@ struct Sidebar: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, s3)
+        // Four destinations in a window this wide can afford the air. The rows
+        // land near 56pt, which is roughly twice a stock sidebar row — the
+        // point of the change rather than a side effect of it.
+        .padding(.vertical, s4)
         // Two `Text`s and a glyph read as three stops in VoiceOver, which turns
         // four destinations into twelve. One stop, one sentence.
         .accessibilityElement(children: .combine)

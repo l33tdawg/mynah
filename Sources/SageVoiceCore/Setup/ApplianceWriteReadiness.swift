@@ -276,8 +276,14 @@ public struct ApplianceMemoryStatus: Sendable, Equatable {
     /// What has to change, and by whom.
     public let remedy: String
     /// True when this came from a real refusal rather than from reading a mask.
-    /// Rendered the same either way; exposed because "we watched this fail" and
-    /// "we expect this to fail" are different claims and a caller may care.
+    ///
+    /// **Not for display.** "We watched this fail" and "we expect this to fail"
+    /// read identically to an owner — the distinction is ours, not theirs, and
+    /// a badge drawing it would be the product explaining its own internals
+    /// instead of the owner's problem. It is exposed because a *caller* may
+    /// legitimately care: a diagnostic dump, a log line, or a future decision
+    /// about how hard to insist. Every screen should render `headline`,
+    /// `detail` and `remedy` the same way regardless of this flag.
     public let isObserved: Bool
 
     public init(headline: String, detail: String?, remedy: String, isObserved: Bool) {

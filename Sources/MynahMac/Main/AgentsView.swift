@@ -149,12 +149,39 @@ struct AgentPermissions: Equatable, Sendable {
         mask & Capability.denyOwningASubject != 0 && mask & Capability.denyForeignWrite != 0
     }
 
-    /// The headline answer about saving, in the owner's words.
+    /// The effective write answer for **any** agent on the node.
+    ///
+    /// The verb is "write", not "remember" and not "save", and that is a
+    /// decision rather than a synonym. This line is rendered on every row,
+    /// including other people's agents: "can remember what you tell it" is false
+    /// of somebody else's research agent — the owner tells it nothing and its
+    /// memory is not theirs — while "write" is what the mechanism is and what
+    /// anybody reading a permissions table expects. `voice` made this argument
+    /// and it is right; the appliance's own section speaks the memory verb
+    /// instead, because there it *is* Mynah's memory being discussed with its
+    /// owner.
     var writingLine: String {
-        guard writesAreRestricted else { return "Can save what you tell it." }
+        guard writesAreRestricted else { return "Can write memories." }
         return needsASubjectAssigned
-            ? "Can't save anything until it's given a subject of its own."
-            : "Can only save to a subject that belongs to it."
+            ? "Can't write anything until it's given a subject of its own."
+            : "Can only write to a subject that belongs to it."
+    }
+
+    /// The effective read answer, and the reason this is a *standing fact*
+    /// rather than a warning.
+    ///
+    /// Bit 1 is the only bit in the mask that grants rather than denies, and the
+    /// Companion profile carries it: it lifts the domain and submitting-agent
+    /// filters, so a companion reads across subjects it was never granted,
+    /// bounded only by its clearance. On this owner's node that is nineteen
+    /// other agents' subjects. Nothing the app says claims otherwise, but never
+    /// saying it — and then falling silent entirely once the profile is assigned
+    /// and the warning clears — is exactly the true-by-omission this screen
+    /// exists to stop.
+    var readingLine: String {
+        mask & Capability.readAcrossSubjects != 0
+            ? "Across every subject on this node, including other agents', up to its clearance."
+            : "Only the subjects it's been given access to."
     }
 
     /// **What is deliberately not here: the sentences.**
@@ -1131,24 +1158,50 @@ private struct ApplianceStanding: View {
         ApplianceWriteReadiness(agentID: agent.id, standing: .registered(mask: agent.capabilities))
     }
 
+    /// The one thing to say when something is wrong, or `nil` when nothing is.
+    ///
+    /// `nil` is passed for the observed refusal because `ConversationModel.ritual`
+    /// is private, so no view can reach `SageRitual.writeDenial` yet. That is the
+    /// predictive half and it is exactly what this screen already did — when the
+    /// denial is exposed, this argument is the only line that changes, and the
+    /// page starts quoting what consensus actually said instead of inferring
+    /// from a mask.
+    private var status: ApplianceMemoryStatus? {
+        readiness.status(observing: nil)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: s5) {
-            if let headline = readiness.headline {
-                InlineBanner(
-                    tone: .caution,
-                    headline: headline,
-                    explanation: readiness.remedy ?? ""
-                )
-                reasons
+            // Always, whatever else is true. What Mynah can read and what it can
+            // remember are facts about the owner's appliance, not symptoms —
+            // and staying silent about them once the warning clears is the
+            // true-by-omission we spent the session removing. The Companion
+            // profile in particular *widens* what Mynah can read; the moment to
+            // say so is when somebody turns it on, not after they notice.
+            standingFacts
+
+            if let status {
+                InlineBanner(tone: .caution, headline: status.headline, explanation: status.remedy)
+                // SAGE's own sentence about the refusal, when there has been
+                // one. Never paraphrased, and visibly the node speaking rather
+                // than us.
+                if let detail = status.detail {
+                    Text(detail)
+                        .mynahFont(.callout)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                whoToAsk
                 footnotes
             } else if agent.permissions.hasCompanionProfile {
                 // Somebody has looked at this agent and assigned it the right
                 // profile. Whether it can actually write additionally depends on
                 // owning a subject, which no unsigned caller can see — so this
                 // says what is true and stops.
-                Text("An administrator has given Mynah the companion profile. Saving also needs a "
-                    + "subject of its own; this screen can't see who owns what, so the proof is "
-                    + "whether new memories appear below.")
+                Text("An administrator has given Mynah the companion profile. Remembering also "
+                    + "needs a subject of its own; this screen can't see who owns what, so the "
+                    + "proof is whether new memories appear below.")
                     .mynahFont(.callout)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1157,19 +1210,87 @@ private struct ApplianceStanding: View {
                 // per-agent subject allowlist — needs a signed request to read.
                 // Naming it as unknown beats implying the key is the only thing
                 // that can stop a write.
-                Text("Nothing on Mynah's key is holding it back, and it hasn't saved anything yet. "
-                    + "The other thing that can stop it is the list of subjects it's allowed to "
-                    + "write, which this screen can't read.")
+                Text("Nothing on Mynah's key is holding it back, and it hasn't remembered anything "
+                    + "yet. The other thing that can stop it is the list of subjects it's allowed "
+                    + "to write, which this screen can't read.")
                     .mynahFont(.callout)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // And when the key is clear and memories exist: nothing at all. No
-            // badge, no tick, no "all good" row. This section exists to say the
-            // one thing that is wrong; a permissions screen that congratulates
-            // itself is a permissions screen people stop reading.
+            // Beyond that, nothing. No badge, no tick, no "all good" row: the
+            // *warning* disappears when somebody has configured this correctly.
+            // The facts above it do not.
         }
-        .padding(.vertical, readiness.headline == nil && agent.memoryCount > 0 ? 0 : s4)
+        .padding(.vertical, s4)
+    }
+
+    /// What it can read, and what it can remember. Present in every state.
+    ///
+    /// Two lines rather than a table, and in the appliance's own voice — this
+    /// section is about Mynah's memory, spoken to its owner, so the verb is
+    /// "remember". The roster rows above speak about arbitrary agents in a
+    /// permissions table, where the verb is "write"; those are two different
+    /// sentences about one mechanism and collapsing them would make one of them
+    /// wrong.
+    private var standingFacts: some View {
+        VStack(alignment: .leading, spacing: s3) {
+            fact("Can read", agent.permissions.readingLine)
+            fact("Can remember", rememberingLine)
+        }
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: s4) {
+            Text(label)
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .frame(width: 96, alignment: .leading)
+            Text(value)
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
+    }
+
+    /// The write fact in the appliance's voice.
+    ///
+    /// Not `AgentPermissions.writingLine`, which is the permissions-table
+    /// wording for any agent on the node. "Can remember what you tell it" is
+    /// true of Mynah and false of somebody else's research agent — the owner
+    /// does not tell that one anything, and its memory is not theirs.
+    private var rememberingLine: String {
+        guard agent.permissions.writesAreRestricted else { return "What you tell it." }
+        return agent.permissions.needsASubjectAssigned
+            ? "Nothing yet — it needs a subject of its own first."
+            : "Only into a subject that already belongs to it."
+    }
+
+    /// Who has to make the change — the one thing that genuinely differs by how
+    /// SAGE got onto this Mac.
+    ///
+    /// **A description of today, not an architecture.** On the bundled SAGE the
+    /// two install paths do not differ in Mynah's standing at all: a
+    /// self-registered key gets the same mask either way, `role=admin` is
+    /// downgraded to `member` at registration, and the mask is enforced with no
+    /// admin exemption — so a nominally root agent still cannot write a word.
+    /// What differs is only who the owner has to ask. When app-v23 ships and the
+    /// bundled node is re-vendored, genesis provisions the Companion profile and
+    /// a home subject before anybody sees a screen, and the vendored branch here
+    /// stops being reachable — delete it then rather than preserving it.
+    @ViewBuilder
+    private var whoToAsk: some View {
+        if let node = SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL()) {
+            Text(node.isTheOwners
+                 ? "Mynah is a guest on the SAGE that was already on this Mac, so whoever "
+                    + "administers that node is who makes this change."
+                 : "This Mac had no SAGE, so Mynah brought one. The node is yours and its "
+                    + "administrator key is on this Mac — there is nobody else to ask.")
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var reasons: some View {
