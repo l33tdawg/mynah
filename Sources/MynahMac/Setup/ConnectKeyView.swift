@@ -28,6 +28,15 @@ enum ConnectKeyPhase: Equatable {
     /// The key works. The model behind it cannot drive the assistant, so
     /// sending the owner back for another key would be the wrong errand.
     case unusable(String)
+    /// The key works. The model Mynah picked for this provider is not there.
+    ///
+    /// Separate from `unusable` even though it offers the same button, because
+    /// the two are different facts and one of them is about *us*: the owner did
+    /// not choose this model, a name in this build did, and the vendor has since
+    /// retired it. Folding it back into `unusable` would restore the exact
+    /// collapse this case was added to undo — and would tell the owner their
+    /// provider's model "can't run the assistant" when the truth is it is gone.
+    case modelGone(String)
     /// Nothing is wrong with the key — this Mac could not reach the provider.
     case unreachable(String)
     /// Accepted, and the message names the model that answered.
@@ -100,6 +109,7 @@ struct ConnectKeyView: View {
             switch model.lastVerdict {
             case .unreachable: return .unreachable(sentence)
             case .unusable: return .unusable(sentence)
+            case .modelGone: return .modelGone(sentence)
             // `nil` is the offline shape check, which already produced its own
             // sentence and never reached a provider.
             case .rejected, .works, .none: return .refused(sentence)
@@ -283,6 +293,12 @@ struct ConnectKeyScreen: View {
             return .checking("Checking this key with \(provider)…")
         case .refused(let sentence), .unusable(let sentence):
             return .rejected(sentence)
+        case .modelGone(let sentence):
+            // Neutral, like `unreachable`: the key in that field is correct, and
+            // marking it red would send the owner to replace the one thing here
+            // that is not broken.
+            _ = sentence
+            return .idle(helper: instructions.looksLikeHint)
         case .unreachable:
             // Neutral on purpose: marking the field red would tell the owner to
             // go and replace a key that is very probably fine.
@@ -299,6 +315,10 @@ struct ConnectKeyScreen: View {
         switch phase {
         case .refused: return "Get \(BrainSetupPlanner.indefiniteArticle(for: provider)) \(provider) key"
         case .unusable: return "Choose a different brain"
+        // Same door, different reason: nothing about this provider will work
+        // until Mynah ships a new model name, so the offer is another provider
+        // rather than another key.
+        case .modelGone: return "Use a different provider for now"
         case .untested, .shapeProblem, .checking, .unreachable, .accepted: return nil
         }
     }
@@ -306,7 +326,7 @@ struct ConnectKeyScreen: View {
     private var fixAction: (() -> Void)? {
         switch phase {
         case .refused: return { NSWorkspace.shared.open(instructions.keyPageURL) }
-        case .unusable: return onChooseAnotherBrain
+        case .unusable, .modelGone: return onChooseAnotherBrain
         case .untested, .shapeProblem, .checking, .unreachable, .accepted: return nil
         }
     }
@@ -333,6 +353,9 @@ struct ConnectKeyScreen: View {
         switch phase {
         case .accepted: return true
         case .checking, .shapeProblem: return false
+        // No retry for `modelGone`: the key is already correct, so a Verify
+        // button is an invitation to paste it again and watch it fail.
+        case .modelGone: return false
         case .untested, .refused, .unusable, .unreachable:
             return !APIKeyOnboarding.normalise(key).isEmpty
         }

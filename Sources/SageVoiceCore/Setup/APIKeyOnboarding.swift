@@ -239,6 +239,26 @@ public struct BrainKeyValidator: Sendable {
         /// Key accepted, but the model cannot do what this product needs.
         case unusable(String)
         case unreachable(String)
+        /// **The key is good. The model Mynah picked is not there.**
+        ///
+        /// Its own case because it is the only verdict here that is nobody's
+        /// mistake — not the owner's, not the provider's. The owner stopped
+        /// choosing models; Mynah chooses them, from a name compiled into this
+        /// build. Vendors retire names on their own schedule, so this verdict is
+        /// not an edge case, it is the guaranteed eventual state of every
+        /// hardcoded model id in `docs/MODEL-CHOICES.md`.
+        ///
+        /// It used to land in `.unusable`, which says *"the key works, but this
+        /// model can't run the assistant"* — blaming the model's **capability**
+        /// for what is actually its **absence**, and pointing the owner at a
+        /// judgement about a name they never typed. The 403 variant was worse:
+        /// filed under `.rejected`, it rendered as "That key was refused. The
+        /// provider accepted the key but refused this model." — two halves of one
+        /// sentence contradicting each other.
+        ///
+        /// Both were the same defect: the check had already established the
+        /// distinction and the type threw it away at the boundary.
+        case modelGone(model: String, provider: String, restricted: Bool)
 
         public var isUsable: Bool {
             if case .works = self { return true }
@@ -256,6 +276,30 @@ public struct BrainKeyValidator: Sendable {
                 return "The key works, but this model can't run the assistant. \(detail)"
             case .unreachable:
                 return "I couldn't reach the provider. Check this Mac's internet connection."
+            case .modelGone(let model, let provider, let restricted):
+                // Says the true thing plainly and puts the fault where it is:
+                // on this build, not on the owner and not on their key. The
+                // owner cannot fix this by retyping anything, so the sentence
+                // must not read like an instruction to try again.
+                let cause = restricted
+                    ? "\(provider) won't give this account access to \(model)"
+                    : "\(provider) no longer offers \(model)"
+                return "Your key is fine — \(cause), and that's the model Mynah "
+                    + "picks for \(provider). This needs a Mynah update, not "
+                    + "anything from you. Another provider will work in the meantime."
+            }
+        }
+
+        /// Whether the owner can do anything about this.
+        ///
+        /// The one distinction the UI genuinely needs: a verdict the owner can
+        /// act on gets them a retry, and one they cannot must not — a retry
+        /// button under `modelGone` is an invitation to paste the same correct
+        /// key repeatedly and watch it fail.
+        public var isOwnersToFix: Bool {
+            switch self {
+            case .works, .modelGone: return false
+            case .rejected, .unusable, .unreachable: return true
             }
         }
     }
@@ -303,7 +347,7 @@ public struct BrainKeyValidator: Sendable {
             // should see what they really got.
             return .works(modelName: reply.model.isEmpty ? backend.modelName : reply.model)
         } catch let error as BrainBackendError {
-            return Self.classify(error)
+            return Self.classify(error, model: backend.modelName, provider: backend.identifier)
         } catch {
             return .unreachable("\(error)")
         }
@@ -312,7 +356,17 @@ public struct BrainKeyValidator: Sendable {
     /// `BrainBackendError` is already structured, so this switches on it rather
     /// than pattern-matching its description. Matching on rendered text is how
     /// a reworded error message silently becomes an unhelpful diagnosis.
-    static func classify(_ error: BrainBackendError) -> Verdict {
+    ///
+    /// `model` and `provider` are required rather than defaulted on purpose.
+    /// A default would let `.modelGone` be built with an empty name and render
+    /// "no longer offers ." to the owner — the same class of bug this whole
+    /// widening exists to remove, reintroduced for the convenience of three
+    /// call sites.
+    static func classify(
+        _ error: BrainBackendError,
+        model: String,
+        provider: String
+    ) -> Verdict {
         switch error {
         case .unauthorized:
             return .rejected("Check you copied the whole thing, and that it hasn't been deleted.")
@@ -329,10 +383,13 @@ public struct BrainKeyValidator: Sendable {
             return .unusable(detail)
         case .badResponse(let status, _):
             switch status {
+            // Both of these mean "the key reached the provider and the provider
+            // will not serve this model to it" — an absence, not a capability
+            // and not a bad credential. See `Verdict.modelGone`.
             case 403:
-                return .rejected("The provider accepted the key but refused this model. It may be restricted.")
+                return .modelGone(model: model, provider: provider, restricted: true)
             case 404:
-                return .unusable("That model name isn't available on this account.")
+                return .modelGone(model: model, provider: provider, restricted: false)
             default:
                 // Deliberately not the status code: the owner cannot act on 502.
                 return .rejected("The provider refused the request.")

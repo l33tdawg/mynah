@@ -61,17 +61,16 @@ enum BrainFactory {
         }
     }
 
-    /// The same defaults the CLI harness uses, so a brain set up in the app and
-    /// one set up from a terminal answer with the same model.
+    /// The model Mynah picks — read from the one catalogue, not restated here.
+    ///
+    /// This used to be a second copy of the daemon's list, under a comment
+    /// saying the two matched. They did not: DeepSeek was `deepseek-v4-flash` in
+    /// the daemon and the dead `deepseek-chat` alias here, so a brain set up in
+    /// the app asked for a model that no longer resolved while the same brain
+    /// set up from a terminal worked. The comment is what made the drift
+    /// invisible. Now there is one list and nothing to keep in sync.
     private static func defaultModelName(for provider: OpenAICompatProvider) -> String {
-        switch provider.identifier {
-        case "gemini":   return "gemini-3.6-flash"
-        case "openai":   return "gpt-5"
-        case "deepseek": return "deepseek-chat"
-        case "moonshot": return "kimi-k2-0905-preview"
-        case "groq":     return "llama-3.3-70b-versatile"
-        default:         return "local-model"
-        }
+        CloudBrainModelCatalog.model(forProvider: provider.identifier) ?? "local-model"
     }
 }
 

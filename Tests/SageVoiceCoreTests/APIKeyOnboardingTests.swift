@@ -229,7 +229,11 @@ final class BrainKeyValidatorTests: XCTestCase {
             .malformedResponse("unexpected JSON")
         ]
         for error in errors {
-            let verdict = BrainKeyValidator.classify(error)
+            let verdict = BrainKeyValidator.classify(
+                error,
+                model: "some-model-v1",
+                provider: "DeepSeek"
+            )
             XCTAssertFalse(verdict.isUsable)
             XCTAssertFalse(verdict.spokenDescription.isEmpty)
             for leak in ["HTTP", "PERMISSION_DENIED", "API_KEY_INVALID", "<html>", "502"] {
@@ -243,15 +247,82 @@ final class BrainKeyValidatorTests: XCTestCase {
 
     /// A rate limit that says when to come back should say so.
     func testARetryAfterIsPassedOn() {
-        let verdict = BrainKeyValidator.classify(.rateLimited(provider: "Gemini", retryAfterSeconds: 30))
+        let verdict = BrainKeyValidator.classify(
+            .rateLimited(provider: "Gemini", retryAfterSeconds: 30),
+            model: "some-model-v1",
+            provider: "Gemini"
+        )
         XCTAssertTrue(verdict.spokenDescription.contains("30"))
+    }
+
+    /// **The verdict the owner cannot fix, and must not be asked to.**
+    ///
+    /// Mynah picks the model now, from a name compiled into this build, so a
+    /// provider retiring that name is this build going stale — not a bad key and
+    /// not a bad model. Both HTTP shapes mean the same thing and used to read as
+    /// two different accusations: 404 became "this model can't run the
+    /// assistant" (blaming capability for absence) and 403 became "That key was
+    /// refused. The provider accepted the key…" (contradicting itself mid-
+    /// sentence). Either way the owner was sent to re-check a key that was fine.
+    func testARetiredModelIsNotBlamedOnTheOwnerOrTheirKey() {
+        for (status, restricted) in [(404, false), (403, true)] {
+            let verdict = BrainKeyValidator.classify(
+                .badResponse(status: status, body: "model not found"),
+                model: "deepseek-v4-flash",
+                provider: "DeepSeek"
+            )
+
+            guard case .modelGone(let model, let provider, let wasRestricted) = verdict else {
+                return XCTFail("HTTP \(status) must be its own verdict, got \(verdict)")
+            }
+            XCTAssertEqual(model, "deepseek-v4-flash")
+            XCTAssertEqual(provider, "DeepSeek")
+            XCTAssertEqual(wasRestricted, restricted)
+
+            // The two things the sentence must do: exonerate the key, and not
+            // ask for a retry that cannot possibly succeed.
+            let spoken = verdict.spokenDescription
+            XCTAssertTrue(spoken.contains("key is fine"), "must exonerate the key: \(spoken)")
+            XCTAssertTrue(spoken.contains("deepseek-v4-flash"), "must name the model: \(spoken)")
+            XCTAssertFalse(
+                verdict.isOwnersToFix,
+                "a retry button here invites pasting a correct key until it fails"
+            )
+        }
+    }
+
+    /// The distinction the Bool used to destroy, at the layer that establishes it.
+    func testModelListingSeparatesARetiredModelFromEveryOtherFailure() {
+        let offered = ["deepseek-chat", "deepseek-reasoner"]
+
+        XCTAssertEqual(
+            BrainAvailability.modelNotOffered(model: "deepseek-v9", offered: offered).isUsable,
+            false
+        )
+        // "I could not tell" is not "no" — a compatible server that omits
+        // /models must not be treated as a dead one.
+        XCTAssertTrue(BrainAvailability.indeterminate.isUsable)
+        XCTAssertTrue(BrainAvailability.ready.isUsable)
+        XCTAssertFalse(BrainAvailability.noCredential.isUsable)
+        XCTAssertFalse(BrainAvailability.unreachable("dns").isUsable)
+
+        // …and the cases stay distinguishable, which is the entire point:
+        // collapsing them again would make this equality hold.
+        XCTAssertNotEqual(
+            BrainAvailability.modelNotOffered(model: "deepseek-v9", offered: offered),
+            BrainAvailability.credentialRefused(status: 401)
+        )
     }
 
     /// Where the Anthropic temperature bug lands: a good key with a request
     /// shape the provider refuses. Blaming the key sends the owner to fix the
     /// one thing that is not broken.
     func testARejectedRequestIsNotBlamedOnTheKey() {
-        let verdict = BrainKeyValidator.classify(.requestRejected("temperature is not supported"))
+        let verdict = BrainKeyValidator.classify(
+            .requestRejected("temperature is not supported"),
+            model: "some-model-v1",
+            provider: "Anthropic"
+        )
         guard case .unusable = verdict else {
             return XCTFail("expected unusable, got \(verdict)")
         }
@@ -265,5 +336,52 @@ final class BrainKeyValidatorTests: XCTestCase {
         guard case .unreachable = verdict else {
             return XCTFail("a network failure must not be blamed on the key, got \(verdict)")
         }
+    }
+}
+
+// MARK: - The model Mynah picks
+
+/// The drift these guard against was real and shipping: `BrainFactory` carried a
+/// second copy of the daemon's model list under a comment saying the two
+/// matched. They did not — DeepSeek was `deepseek-v4-flash` in the daemon and
+/// the dead `deepseek-chat` alias in the app — so a brain set up in the app
+/// asked for a model that no longer resolved, and the comment is what made that
+/// invisible.
+final class CloudBrainModelCatalogTests: XCTestCase {
+
+    /// Every provider the setup flow can *offer* must have a model to ask for.
+    ///
+    /// This is the assertion that would have caught the drift: it walks the
+    /// offered catalogue rather than a list written out here, so a provider
+    /// added to setup without a model pick fails without anyone remembering to
+    /// update a test.
+    func testEveryOfferableProviderHasAModelToAskFor() {
+        for provider in APIKeyOnboarding.keyedProviders {
+            // `nil` is legitimate for providers we have not settled on — they
+            // are not offered in setup. What must never happen is a provider
+            // being offered with no model behind it.
+            guard let model = CloudBrainModelCatalog.model(forProvider: provider) else { continue }
+            XCTAssertFalse(
+                model.trimmingCharacters(in: .whitespaces).isEmpty,
+                "\(provider) has an empty model name, which reaches the provider as a 400"
+            )
+        }
+    }
+
+    /// A pick that does not exist is `nil`, never a plausible-looking guess.
+    ///
+    /// A fallback string here would be sent to a real provider on the owner's
+    /// real key and fail as "no such model" — indistinguishable from the
+    /// appliance being broken, which is the failure this whole area exists to
+    /// stop. Not choosing has to be representable.
+    func testAnUnchosenProviderIsNilRatherThanAGuess() {
+        XCTAssertNil(CloudBrainModelCatalog.model(forProvider: "glm"))
+        XCTAssertNil(CloudBrainModelCatalog.model(forProvider: "a-provider-nobody-has-heard-of"))
+    }
+
+    /// The specific regression: the alias that stopped resolving must not
+    /// come back, from either direction.
+    func testDeepSeekDoesNotRegressToTheAliasThatStoppedResolving() {
+        XCTAssertEqual(CloudBrainModelCatalog.model(forProvider: "deepseek"), "deepseek-v4-flash")
     }
 }

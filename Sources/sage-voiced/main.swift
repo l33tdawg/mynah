@@ -166,6 +166,22 @@ func makeBackend(
         )
     }
 
+    /// The model Mynah picks for a provider, from the one catalogue.
+    ///
+    /// Throws rather than substituting a fallback string. A guessed model name
+    /// would be sent to a real provider on the owner's real key and come back as
+    /// "no such model" — which from the outside is indistinguishable from the
+    /// appliance being broken. Naming the gap is the whole point.
+    func catalogueModel(_ identifier: String) throws -> String {
+        guard let pick = CloudBrainModelCatalog.model(forProvider: identifier) else {
+            throw HarnessError(
+                "no model chosen for '\(identifier)' — add one to CloudBrainModelCatalog "
+                + "and record why in docs/MODEL-CHOICES.md, or pass --model"
+            )
+        }
+        return pick
+    }
+
     switch provider {
     case "ollama":
         // `--ollama` points at a daemon over an SSH tunnel, so the appliance's
@@ -179,25 +195,20 @@ func makeBackend(
         )
     case "anthropic":
         return AnthropicBackend(
-            modelName: model ?? "claude-opus-5",
+            // Speed first: this is spoken conversation, not a coding agent.
+            modelName: try model ?? catalogueModel("anthropic"),
             apiKey: try environmentKey("ANTHROPIC_API_KEY")
         )
     case "openai":
-        return try openAICompat(.openAI, defaultModel: "gpt-5", keyVariable: "OPENAI_API_KEY")
+        return try openAICompat(.openAI, defaultModel: try catalogueModel("openai"), keyVariable: "OPENAI_API_KEY")
     case "deepseek":
-        // v4-flash, not "deepseek-chat": the alias no longer resolves on this
-        // account — /v1/models serves only deepseek-v4-flash and deepseek-v4-pro.
-        // Flash is the owner's choice and the right one here, since the whole
-        // reason to leave the local model is turn latency.
-        return try openAICompat(.deepSeek, defaultModel: "deepseek-v4-flash", keyVariable: "DEEPSEEK_API_KEY")
+        return try openAICompat(.deepSeek, defaultModel: try catalogueModel("deepseek"), keyVariable: "DEEPSEEK_API_KEY")
     case "moonshot", "kimi":
-        return try openAICompat(.moonshot, defaultModel: "kimi-k2-0905-preview", keyVariable: "MOONSHOT_API_KEY")
+        return try openAICompat(.moonshot, defaultModel: try catalogueModel("moonshot"), keyVariable: "MOONSHOT_API_KEY")
     case "groq":
-        return try openAICompat(.groq, defaultModel: "llama-3.3-70b-versatile", keyVariable: "GROQ_API_KEY")
+        return try openAICompat(.groq, defaultModel: try catalogueModel("groq"), keyVariable: "GROQ_API_KEY")
     case "gemini":
-        // gemini-2.5-flash was two generations stale. 3.6 Flash went GA on
-        // 2026-07-21 and keeps the free tier this product depends on.
-        return try openAICompat(.gemini, defaultModel: "gemini-3.6-flash", keyVariable: "GEMINI_API_KEY")
+        return try openAICompat(.gemini, defaultModel: try catalogueModel("gemini"), keyVariable: "GEMINI_API_KEY")
     case "lmstudio":
         return try openAICompat(.lmStudio(), defaultModel: "local-model", keyVariable: nil)
 

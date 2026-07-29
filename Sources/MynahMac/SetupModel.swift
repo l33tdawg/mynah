@@ -279,7 +279,7 @@ final class SetupModel {
             case .works:
                 try KeyStorage.save(key, forProvider: provider)
                 keyState = .accepted(verdict.spokenDescription)
-            case .rejected, .unusable, .unreachable:
+            case .rejected, .unusable, .unreachable, .modelGone:
                 keyState = .rejected(verdict.spokenDescription)
             }
         } catch {

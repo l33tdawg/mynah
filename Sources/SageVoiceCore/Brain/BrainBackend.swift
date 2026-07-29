@@ -425,10 +425,73 @@ public protocol BrainBackend: Sendable {
 
     /// Cheap liveness/credential probe. Returns `false` rather than throwing so
     /// the setup flow can rank several candidates without exception plumbing.
+    ///
+    /// **Prefer `availability()`.** This stays because ranking candidates only
+    /// needs a yes/no, but a `false` from here is four different facts wearing
+    /// the same hat — see `BrainAvailability`.
     func isAvailable() async -> Bool
+
+    /// The same probe, with its findings intact.
+    func availability() async -> BrainAvailability
 
     /// One completion round trip.
     func complete(_ request: BrainRequest) async throws -> BrainReply
+}
+
+/// Why a backend is or is not ready — the distinctions `isAvailable()` discards.
+///
+/// `isAvailable()` asks a genuinely useful question (*is the credential good,
+/// and is the model we picked actually offered to this account?*) and then
+/// answers it with one bit. Every one of the cases below arrives at the call
+/// site as a bare `false`, so "your provider retired the model Mynah picks"
+/// is indistinguishable from "your Wi-Fi is down".
+///
+/// That matters more now than it did when the Bool was written. The owner used
+/// to choose the model, so a missing one was their typo to fix. Mynah chooses it
+/// now, from a name compiled into the build, and vendors retire names on their
+/// own schedule — which makes `modelNotOffered` the guaranteed eventual state of
+/// every id in `docs/MODEL-CHOICES.md`, and the one state that must never
+/// present as the appliance being broken.
+public enum BrainAvailability: Sendable, Equatable {
+    /// Credential accepted and the model is offered.
+    case ready
+    /// Nothing to authenticate with.
+    case noCredential
+    /// The provider was reached and refused the credential.
+    case credentialRefused(status: Int)
+    /// **The credential is good; this model is not in the account's catalogue.**
+    /// `offered` is what the provider listed instead, which is what turns this
+    /// from a complaint into something the next maintainer can act on.
+    case modelNotOffered(model: String, offered: [String])
+    /// Transport failure: DNS, timeout, connection refused.
+    case unreachable(String)
+    /// The provider answered acceptably but told us nothing that separates the
+    /// cases above — e.g. a compatible server with no `/models` endpoint.
+    ///
+    /// Deliberately not folded into `ready`: "I could not tell" is not "yes",
+    /// and giving it its own case is what stops a silent assumption from being
+    /// laundered into a fact further up the stack.
+    case indeterminate
+
+    /// Whether it is safe to send a real turn at this backend.
+    ///
+    /// `indeterminate` counts as usable — refusing to try because a server
+    /// omits an optional endpoint would break working setups — but callers that
+    /// need to *explain* themselves must switch on the case, not read this.
+    public var isUsable: Bool {
+        switch self {
+        case .ready, .indeterminate: return true
+        case .noCredential, .credentialRefused, .modelNotOffered, .unreachable: return false
+        }
+    }
+}
+
+public extension BrainBackend {
+    /// Backends that have not been taught the distinction say so, rather than
+    /// having a richer answer invented for them.
+    func availability() async -> BrainAvailability {
+        await isAvailable() ? .indeterminate : .unreachable("This backend does not report why.")
+    }
 }
 
 public extension BrainBackend {

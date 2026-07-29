@@ -142,26 +142,50 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     /// the credential works *and* that the requested model is actually offered
     /// to this account, which is a common way "it just doesn't answer" happens.
     public func isAvailable() async -> Bool {
+        await availability().isUsable
+    }
+
+    /// The same round trip, with every distinction it establishes kept.
+    ///
+    /// This method always knew more than it said. It fetches the account's model
+    /// list and checks our model is in it — then returned one bit, so a retired
+    /// model, a rejected key and a dead network all arrived as `false`. The
+    /// findings were being made and discarded in the same function.
+    public func availability() async -> BrainAvailability {
         var request = URLRequest(url: provider.baseURL.appendingPathComponent("models"))
         request.timeoutInterval = min(timeoutSeconds, 15)
+
         guard let headers = try? await credential.authorizationHeaders() else {
-            return false
+            return .noCredential
         }
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
+
         guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
-            return false
+              let http = response as? HTTPURLResponse else {
+            return .unreachable("Could not reach \(provider.displayName).")
         }
+        guard (200..<300).contains(http.statusCode) else {
+            return .credentialRefused(status: http.statusCode)
+        }
+
         guard let ids = JSONValue.parse(data)?["data"]?.arrayValue?
             .compactMap({ $0["id"]?.stringValue }) else {
             // Some compatible servers do not implement /models. A 2xx is still
-            // evidence the credential is accepted, so do not fail on that alone.
-            return true
+            // evidence the credential is accepted — but it is *not* evidence
+            // about the model, so this is `indeterminate` rather than `ready`.
+            // Claiming `ready` here would be asserting something this request
+            // never established.
+            return .indeterminate
         }
-        return ids.isEmpty || ids.contains(modelName)
+        // An empty list is the same non-answer: a server that lists nothing has
+        // not told us our model is missing, only that it does not enumerate.
+        guard !ids.isEmpty else { return .indeterminate }
+
+        return ids.contains(modelName)
+            ? .ready
+            : .modelNotOffered(model: modelName, offered: ids)
     }
 
     // MARK: Completion
