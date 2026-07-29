@@ -16,23 +16,29 @@ final class AgentsRenderHarness: XCTestCase {
 
     private func agent(
         _ name: String, mask: UInt32 = 0, memories: Int = 0, appliance: Bool = false,
-        role: String = "member", clearance: Int = 1, active: Bool = true
+        role: String = "member", clearance: Int = 1, active: Bool = true, daysAgo: Int? = nil
     ) -> NodeAgent {
         NodeAgent(
             id: name, name: name, role: role, clearance: clearance, memoryCount: memories,
-            isActive: active, lastSeen: nil, capabilities: mask, isThisAppliance: appliance
+            isActive: active,
+            lastSeen: daysAgo.map { Date(timeIntervalSinceNow: -Double($0) * 86_400) },
+            capabilities: mask, isThisAppliance: appliance
         )
     }
 
     func testRenderAgentsPane() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MYNAH_RENDER_PNGS"] == "1", "opt-in")
 
-        let mynah = agent("Mynah - Sage Voice Bridge", mask: 30, appliance: true)
+        // Ages taken from his live node: five seen today, then 1, 2, 4, 9, 18,
+        // 22, 37, 89 days, and two never run. The render has to show the two
+        // ends of that, or it flatters a list where every row looks alike —
+        // which is what made the unfiltered roster read as unfixed.
+        let mynah = agent("Mynah - Sage Voice Bridge", mask: 30, appliance: true, daysAgo: 0)
         let roster = [
             mynah,
-            agent("claude-code/l33tdawg", memories: 4068),
-            agent("codex-sage", memories: 1558, clearance: 2),
-            agent("macmini", memories: 105, role: "admin", clearance: 3, active: false)
+            agent("claude-code/l33tdawg", memories: 4068, daysAgo: 0),
+            agent("codex-sage", memories: 1558, clearance: 2, daysAgo: 22),
+            agent("macmini", memories: 105, role: "admin", clearance: 3, active: false, daysAgo: nil)
         ]
 
         for scheme in [ColorScheme.light, .dark] {
@@ -80,7 +86,7 @@ final class AgentsRenderHarness: XCTestCase {
                                         Spacer(minLength: 0)
                                     }
                                     HStack(spacing: s2) {
-                                        Text(row.standingLine).mynahFont(.label)
+                                        Text(row.recencyLine).mynahFont(.label)
                                             .foregroundStyle(Palette.ink.secondary)
                                         Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
                                         Text(row.memoryLine).mynahFont(.label)

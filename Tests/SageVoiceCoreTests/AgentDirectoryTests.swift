@@ -888,3 +888,45 @@ final class AgentActivityTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(days, 0)
     }
 }
+
+/// What the card says, and what the Send button offers.
+///
+/// `thread`'s wording, and the design decision underneath it: **show the age,
+/// not a verdict.** Any threshold between about three and eight days partitions
+/// his node identically, so with the age on the card the constant decides only
+/// emphasis. "Dormant" stays in the code and never reaches him.
+final class AgentRecencyCopyTests: XCTestCase {
+
+    private func agent(daysAgo: Int?) -> NodeAgent {
+        NodeAgent(
+            id: "x", name: "x", role: "member", clearance: 1, memoryCount: 0,
+            isActive: true,
+            lastSeen: daysAgo.map { Date(timeIntervalSinceNow: -Double($0) * 86_400) },
+            capabilities: 0, isThisAppliance: false
+        )
+    }
+
+    func testTheCardStatesTheAgeRatherThanAVerdict() {
+        XCTAssertEqual(agent(daysAgo: 0).recencyLine, "seen today")
+        XCTAssertEqual(agent(daysAgo: 1).recencyLine, "seen yesterday")
+        XCTAssertEqual(agent(daysAgo: 89).recencyLine, "seen 89 days ago")
+    }
+
+    /// He cares that it has not run, not that nobody observed it.
+    func testAnAgentThatHasNeverRunSaysSo() {
+        XCTAssertEqual(agent(daysAgo: nil).recencyLine, "never run")
+    }
+
+    /// **The word the owner must never see.** It is a code-side bucket, and a
+    /// label would make the seven-day constant load-bearing — deciding
+    /// information rather than emphasis.
+    func testTheOwnerIsNeverToldSomethingIsDormant() {
+        for days in [0, 1, 8, 89] {
+            XCTAssertFalse(
+                agent(daysAgo: days).recencyLine.lowercased().contains("dormant"),
+                "a code-side bucket reached the owner"
+            )
+        }
+        XCTAssertFalse(agent(daysAgo: nil).recencyLine.lowercased().contains("dormant"))
+    }
+}

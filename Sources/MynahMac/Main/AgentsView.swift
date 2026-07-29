@@ -117,6 +117,27 @@ struct NodeAgent: Identifiable, Equatable, Sendable {
         return days <= 7 ? .active(daysAgo: max(0, days)) : .dormant(daysAgo: days)
     }
 
+    /// `thread`'s wording. **A fact, not a verdict** — "dormant" stays in the
+    /// code and never reaches the owner. Their reasoning, which is the reason
+    /// the seven-day constant stopped worrying me: show the age and the
+    /// threshold decides only *emphasis*; show a label and it decides
+    /// *information*, which is when a judgement call becomes load-bearing.
+    ///
+    /// "Never run" rather than "never seen" — he cares that it has not run, not
+    /// that nobody observed it.
+    var recencyLine: String {
+        switch activity {
+        case .active(let days), .dormant(let days):
+            switch days {
+            case 0: return "seen today"
+            case 1: return "seen yesterday"
+            default: return "seen \(days) days ago"
+            }
+        case .neverSeen:
+            return "never run"
+        }
+    }
+
     /// Deliberately three cases rather than a `Bool`.
     ///
     /// "Never seen" is not a very old "dormant" — it is an agent that
@@ -1463,14 +1484,49 @@ struct AgentsView: View {
     /// things and only the node maps between them.
     private func sendRow(_ agent: NodeAgent) -> some View {
         VStack(alignment: .leading, spacing: s3) {
-            MynahButton("Send a message", kind: .secondary) {
+            MynahButton(sendVerb(agent), kind: .secondary) {
                 isWritingTo = Recipient(name: agent.name)
             }
-            Text("Goes to that agent's SAGE inbox. It needs no access grant, which is why "
-                + "this works while reading its memories does not.")
+            Text(sendNote(agent))
                 .mynahFont(.label)
                 .foregroundStyle(Palette.ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// **The verb carries it, not the state of the button.** `thread`'s design,
+    /// and the register team-lead asked for: not the same act, not a broken
+    /// one.
+    ///
+    /// The button stays live in all three cases. A queued message to a dormant
+    /// agent is legitimate and he may well want to leave one — `sage_pipe`
+    /// accepts it and the agent reads it whenever it next runs. Disabling would
+    /// be the interface refusing something the transport allows.
+    ///
+    /// What it must not do is look identical for an agent seen today and one
+    /// last seen in April. "Leave a message" is the honest description of
+    /// posting into a queue nobody is currently reading, and it is a normal
+    /// thing a person does willingly.
+    private func sendVerb(_ agent: NodeAgent) -> String {
+        agent.activity.wouldBeRead ? "Send" : "Leave a message"
+    }
+
+    /// The helper under it, which is the same mechanism stated calmly in all
+    /// three cases rather than reassurance in one and a warning in the others.
+    ///
+    /// **Delivery is never receipt** — `sage_pipe` queues, and SAGE's own words
+    /// are that the target sees it *"on their next `sage_turn` or `sage_inbox`
+    /// call"*. An agent seen today is a better bet, not a different guarantee,
+    /// and the active line says so rather than promising anything.
+    private func sendNote(_ agent: NodeAgent) -> String {
+        switch agent.activity {
+        case .active:
+            return "It picks up messages when it next runs."
+        case .dormant:
+            return "\(agent.recencyLine.prefix(1).uppercased())\(agent.recencyLine.dropFirst()). "
+                + "This waits in its inbox until it runs again."
+        case .neverSeen:
+            return "This one has never run. Your message waits in its inbox until it does."
         }
     }
 
@@ -1694,7 +1750,7 @@ private struct AgentListRow: View {
         // The dot is invisible to VoiceOver, so the word goes in the label —
         // the one place where the pill's text still has to exist for a row.
         .accessibilityLabel(
-            "\(agent.name). \(agent.standingLine). \(agent.memoryLine)."
+            "\(agent.name). \(agent.recencyLine). \(agent.standingLine). \(agent.memoryLine)."
                 + (agent.permissions.isRestricted ? " Restricted." : "")
         )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -1751,10 +1807,21 @@ private struct AgentListRow: View {
             // and the caution-ink count are the two halves of one fact — this
             // agent is muted — and they now sit together instead of at opposite
             // corners of the row.
+            // **Recency and volume, and role and clearance moved out.**
+            //
+            // `thread`'s call, and the reason is what a card is for: these two
+            // answer "is this thing alive, and does it know anything", which is
+            // what he is deciding at a glance. Role and clearance are RBAC
+            // facts that mean little at this size and now live in the detail
+            // pane, where there is room to say what they imply.
+            //
+            // A fourth fact was not an option — at 300pt the last addition to
+            // this line hyphenated `Restricted` into "Restrict / ed".
             HStack(spacing: s2) {
-                Text(agent.standingLine)
+                Text(agent.recencyLine)
                     .mynahFont(.label)
                     .foregroundStyle(Palette.ink.secondary)
+                    .lineLimit(1)
                 Text("·")
                     .mynahFont(.label)
                     .foregroundStyle(Palette.ink.quaternary)
