@@ -213,15 +213,11 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     /// own is still refused. The SAGE team confirmed it in as many words: "a
     /// level-2 grant is not a substitute."
     public var remedy: String? {
-        guard needsTheOwner else { return nil }
         // Names the subject from the constant rather than spelling it, so the
         // sentence cannot survive a rename of the thing it is telling somebody
         // to assign. That mismatch would fail exactly the way the original bug
         // did: writes refused, nothing said.
-        return "Someone with administrator access to your SAGE node has to give Mynah the "
-            + "companion profile and make it the owner of the subject “\(SageRitual.memoryDomain)”, "
-            + "in CEREBRUM. An access grant won't do it — the restriction is checked before "
-            + "grants are. Until then Mynah will answer you, but it won't remember anything."
+        needsTheOwner ? Self.ownRemedy : nil
     }
 
     /// The one-line version, for a moment when the owner is waiting rather than
@@ -246,6 +242,92 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
         return "[sage] \(headline) \(reasons.joined(separator: " ")) "
             + "\(remedy ?? "") (agent \(agentID?.prefix(16) ?? "unknown"), capability mask \(mask))"
     }
+}
+
+// MARK: - The two signals, combined
+
+/// What to tell the owner about Mynah's memory, given everything known.
+///
+/// There are two signals and they fail in opposite ways, so neither is enough
+/// alone:
+///
+/// | | before any write | after a real refusal |
+/// |---|---|---|
+/// | `ApplianceWriteReadiness` | predicts | can be stale |
+/// | `SageRitual.WriteDenial` | silent | authoritative |
+///
+/// The readiness check reads a capability mask, which is a *prediction* about
+/// what will happen. A latched denial is an *observation* of what did happen,
+/// carrying SAGE's own reason code and per-cause remedy. So an observation
+/// outranks a prediction of the same thing — and it must, because the mask
+/// cannot see the other silent write gate at all: a `DomainAccess` allowlist
+/// refuses writes with a clear mask, and only a real refusal reveals it.
+///
+/// This type exists so that rule lives in one place. Two screens render this —
+/// the Agents page and Ready — and a precedence rule reimplemented twice is a
+/// precedence rule that will eventually disagree with itself.
+public struct ApplianceMemoryStatus: Sendable, Equatable {
+
+    /// The one-line fact, in the product's voice.
+    public let headline: String
+    /// SAGE's own sentence about the refusal, when there has been one. Never
+    /// paraphrased — if consensus said it, the owner sees it verbatim.
+    public let detail: String?
+    /// What has to change, and by whom.
+    public let remedy: String
+    /// True when this came from a real refusal rather than from reading a mask.
+    /// Rendered the same either way; exposed because "we watched this fail" and
+    /// "we expect this to fail" are different claims and a caller may care.
+    public let isObserved: Bool
+
+    public init(headline: String, detail: String?, remedy: String, isObserved: Bool) {
+        self.headline = headline
+        self.detail = detail
+        self.remedy = remedy
+        self.isObserved = isObserved
+    }
+}
+
+extension ApplianceWriteReadiness {
+
+    /// The single thing a screen should render, or nil when there is nothing to
+    /// say.
+    ///
+    /// Nil is the common case and the important one: when Mynah is working this
+    /// state does not exist at all — no badge, no green tick, no "all good" row.
+    ///
+    /// - Parameter denial: the latched refusal from `SageRitual.writeDenial`,
+    ///   if any. Pass it whenever it is available; a caller that cannot reach it
+    ///   still gets the predictive half.
+    public func status(observing denial: SageRitual.WriteDenial?) -> ApplianceMemoryStatus? {
+        if let denial {
+            return ApplianceMemoryStatus(
+                headline: "Mynah can't remember anything yet.",
+                detail: denial.detail,
+                // SAGE's own remedy when it sent one: it is per-cause and
+                // maintained by the people who own the rule. Ours is the
+                // fallback for a server too old to have an opinion — which is
+                // any server before v11.14.2, and therefore not rare.
+                remedy: denial.remedy ?? Self.ownRemedy,
+                isObserved: true
+            )
+        }
+        guard let headline, let remedy else { return nil }
+        return ApplianceMemoryStatus(
+            headline: headline,
+            detail: nil,
+            remedy: remedy,
+            isObserved: false
+        )
+    }
+
+    /// The remedy we write ourselves, for the predictive path and for a server
+    /// that sent no per-cause one.
+    static let ownRemedy = "Someone with administrator access to your SAGE node has to give "
+        + "Mynah the companion profile and make it the owner of the subject "
+        + "“\(SageRitual.memoryDomain)”, in CEREBRUM. An access grant won't do it — the "
+        + "restriction is checked before grants are. Until then Mynah will answer you, but "
+        + "it won't remember anything."
 }
 
 // MARK: - Asking the node

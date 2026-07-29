@@ -163,3 +163,65 @@ final class ReadyStagePhoneTests: XCTestCase {
         XCTAssertFalse(SetupModel.Stage.allCases.map(\.title).contains("Phone"))
     }
 }
+
+/// The other promise this screen can break, and the one the owner is about to
+/// meet.
+///
+/// The pause marker lives in Application Support, so it outlives the app that
+/// set it and survives a reinstall. Somebody who paused Mynah weeks ago reaches
+/// the end of setup with an appliance that will not answer — and until this,
+/// every line on that screen said everything was fine. `voice` found the marker
+/// still on the owner's disk while the DMG was being packaged, which is exactly
+/// who will hit it first.
+@MainActor
+final class ReadyStagePausedTests: XCTestCase {
+
+    private func makeApp(paused: Bool) throws -> AppModel {
+        let defaults = UserDefaults(suiteName: "mynah.ready.\(UUID().uuidString)")!
+        defaults.set(true, forKey: "mynah.setupComplete")
+        // A pause marker of this test's own, never the developer's. `voice`
+        // removed the defaults mirror precisely because the file is the store
+        // that counts, and a test that reads the real one passes or fails on
+        // whether whoever ran it happened to have Mynah paused.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ready-pause-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let marker = PauseState(fileURL: root.appendingPathComponent("paused"))
+        if paused { try marker.setPaused(true) }
+        return AppModel(defaults: defaults, pauseState: marker)
+    }
+
+    /// The state that must not read as "ready".
+    func testAPausedApplianceIsNotDescribedAsReady() throws {
+        let app = try makeApp(paused: true)
+        XCTAssertTrue(app.isPaused, "the injected marker did not take")
+    }
+
+    /// And the ordinary case still is. A screen that hedged permanently would be
+    /// the Companion trap again in a different costume.
+    func testAnUnpausedApplianceIsUnaffected() throws {
+        let app = try makeApp(paused: false)
+        XCTAssertFalse(app.isPaused)
+    }
+
+    /// The click the screen offers has to actually clear the marker, not just
+    /// the in-memory flag — the daemon reads the file, and a Resume that only
+    /// updated the window is the original bug.
+    func testStartingAnsweringClearsTheMarkerAndNotJustTheFlag() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ready-resume-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let marker = PauseState(fileURL: root.appendingPathComponent("paused"))
+        try marker.setPaused(true)
+
+        let defaults = UserDefaults(suiteName: "mynah.ready.\(UUID().uuidString)")!
+        defaults.set(true, forKey: "mynah.setupComplete")
+        let app = AppModel(defaults: defaults, pauseState: marker)
+        XCTAssertTrue(marker.isPaused())
+
+        app.isPaused = false
+
+        XCTAssertFalse(app.isPaused)
+        XCTAssertFalse(marker.isPaused(), "Resume left the marker on disk, so the daemon stays paused")
+    }
+}

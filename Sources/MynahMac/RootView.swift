@@ -252,12 +252,24 @@ struct ReadyStage: View {
                             value: app.keepsAnsweringWhenClosed ? "On" : "Off",
                             tone: app.keepsAnsweringWhenClosed ? .good : .neutral
                         )
+                        // A pause the owner set before this build, or before
+                        // this install. The marker lives in Application Support
+                        // and survives both, so somebody who paused Mynah weeks
+                        // ago reaches the end of setup with an appliance that
+                        // will not answer — and every other line on this card
+                        // says everything is fine. Stated here because this is
+                        // the card that summarises what is true.
+                        if app.isPaused {
+                            MynahDivider()
+                            StatusLine("Answering", value: "Paused", tone: .caution)
+                        }
                         ForEach(unfinished) { step in
                             MynahDivider()
                             StatusLine(step.title, value: "Not done", tone: .caution)
                         }
                     }
                 }
+                resumeOffer
                 phoneOffer
             }
             .frame(maxWidth: MynahWidth.stageColumn)
@@ -298,12 +310,25 @@ struct ReadyStage: View {
     /// and they will find out a week later, if ever. That is the same
     /// false-confidence failure that was in the memories empty state and the
     /// task board, arriving at the highest-stakes moment in the product.
+    /// Ordered worst first, and the order is the argument.
+    ///
+    /// Not remembering outranks being paused: a pause is visible, deliberate and
+    /// one click from undone, while an appliance that answers and stores nothing
+    /// looks exactly like a working one. When both are true the graver claim
+    /// takes the title and the pause is stated on the card below it, so neither
+    /// is lost.
     private var title: String {
         if !unfinished.isEmpty { return "One thing left." }
         // Not a softened "almost ready". It can answer — that part is true and
         // worth saying — and it cannot remember, which is the fact the banner
         // below then explains.
-        return cannotRemember ? "Mynah can answer, but not remember yet." : "Mynah is ready."
+        if cannotRemember { return "Mynah can answer, but not remember yet." }
+        // The pause marker outlives the app that set it. Somebody who paused
+        // Mynah weeks ago, or in a previous install, finishes setup with an
+        // appliance that will not answer — and "Mynah is ready." would be the
+        // last thing they read before a silent phone.
+        if app.isPaused { return "Mynah is ready, but paused." }
+        return "Mynah is ready."
     }
 
     /// The drawing is the end of the setup story — a machine settled and
@@ -339,6 +364,44 @@ struct ReadyStage: View {
            let remedy = readiness.shortRemedy {
             InlineBanner(tone: .caution, headline: headline, explanation: remedy)
                 .frame(maxWidth: MynahWidth.stageColumn)
+        }
+    }
+
+    /// The one click that undoes it, on the screen that says it is true.
+    ///
+    /// The alternative was to state the pause and let the owner find Resume on
+    /// the next screen. That is a worse trade than it sounds: the marker
+    /// survives reinstalling, so the person most likely to meet this is someone
+    /// who paused Mynah long enough ago to have forgotten, arriving at the end
+    /// of setup to be told their brand-new install will not answer. Being told
+    /// and being able to fix it in the same breath is the difference between
+    /// "it is broken again" and "it noticed".
+    ///
+    /// Shown in the same card shape as the phone offer, and never at the same
+    /// time as anything else competing for the eye — a pause is rare, and when
+    /// it is there it is the most actionable thing on the screen.
+    @ViewBuilder
+    private var resumeOffer: some View {
+        if app.isPaused {
+            MynahCard {
+                HStack(alignment: .top, spacing: s5) {
+                    VStack(alignment: .leading, spacing: s2) {
+                        Text("Mynah is paused")
+                            .mynahFont(.title3)
+                            .foregroundStyle(Palette.ink.primary)
+                        // Says where it came from. Somebody who has just
+                        // installed a fresh copy and is told it is paused will
+                        // otherwise reasonably conclude the app arrived broken.
+                        Text("You paused it at some point — the setting outlives the app, so a "
+                             + "new copy finds it again. Start it and it answers straight away.")
+                            .mynahFont(.callout)
+                            .foregroundStyle(Palette.ink.secondary)
+                            .mynahProse()
+                    }
+                    Spacer(minLength: s4)
+                    MynahButton("Start answering", kind: .secondary) { app.isPaused = false }
+                }
+            }
         }
     }
 

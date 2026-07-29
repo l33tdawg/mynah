@@ -88,6 +88,81 @@ public struct SageNodeChoice: Sendable, Equatable {
         return SageNodeChoice(executable: vendored, source: .vendored)
     }
 
+    // MARK: - Why setup does not provision Mynah's permissions
+    //
+    // DELIBERATELY ABSENT, and this note exists so nobody rebuilds the dead end.
+    //
+    // On a `.vendored` node — one Mynah created — a first run lands with the
+    // appliance agent carrying capability mask **0**: no restrictions at all.
+    // That reads like an oversight. It is not, and the obvious fixes do not
+    // work. Measured and verified against a real chain, 2026-07-29.
+    //
+    // ## Why it happens
+    //
+    // A fresh node starts at app_version 1 and climbs to 22 through sixteen
+    // governance forks, each needing ~200 blocks to activate — **60 to 90
+    // minutes**, not the 30 seconds the watchdog's tick suggests. The
+    // fail-closed mask (`DefaultSelfRegisteredAgentCapabilities`, 30) is only
+    // stamped on keys registering *after* app-v22 activates, and
+    // `processAgentRegister` preserves an existing agent's capabilities
+    // forever. So every realistic setup — an API key in minutes, a local brain
+    // in tens of minutes — registers long before the restriction exists and is
+    // grandfathered unrestricted. The mute case needs somebody to abandon setup
+    // for over an hour.
+    //
+    // ## Why "setup promotes Mynah to admin" cannot be built
+    //
+    // There is no transaction that promotes an existing agent to global admin:
+    //
+    //   * `AgentSetPermission` — behind `PUT /v1/agent/{id}/permission` —
+    //     carries Clearance, DomainAccess, VisibleAgents, OrgID, DeptID and
+    //     Capabilities. **No Role field.**
+    //   * `processAgentRegister` silently downgrades a wire-supplied
+    //     `role=admin` to `member` (app-v9).
+    //   * `bootstrapAdminFromSQL` is disabled post-app-v11.
+    //   * Genesis seeding is the only route, and it happens at chain creation.
+    //
+    // Role would not have been enough anyway: the capability mask is enforced
+    // in `processMemorySubmit` with **no admin exemption** — an agent that is
+    // nominally root and carries mask 30 still cannot write a word.
+    //
+    // ## What the intended mechanism is
+    //
+    // SAGE has already built it. `genesisAppStateForVendoredAgent` in
+    // `cmd/sage-gui/node.go` writes an app-v23 genesis manifest for exactly
+    // this case — its own comment says it lets "a bundled application consume
+    // the same stable identity without any manual CEREBRUM ceremony". Both the
+    // root key and the agent key sign a chain-bound manifest carrying:
+    //
+    //     Profile:      Companion
+    //     Capabilities: ReadAllDomains | DenySharedDomainWrite
+    //                 | DenyDomainClaim | DenyForeignDomainWrite   (= 15)
+    //     HomeDomain:   <configured>        ← `SageRitual.memoryDomain`
+    //     AgentID:      <the bundled app's key>  ← `applianceKeyURL()`
+    //
+    // That is Companion plus an owned home subject **from block 1** — no race,
+    // no ordering window, and no interim state where Mynah can claim arbitrary
+    // subjects. It also refuses to let the root and agent keys be the same
+    // file, which is `MynahIdentity`'s own rule enforced at genesis.
+    //
+    // ## Why it is not wired up yet
+    //
+    // The bundled SAGE is **11.14.1 with `max_app_version = 22`**. app-v23 is
+    // present in consensus but dormant (`appV23AppliedHeight == 0`), the
+    // auto-advance ladder will not climb to it, and no REST route exposes
+    // `LocalAgentApprove` or `AgentRoleChange`.
+    //
+    // So the work is **a re-vendor plus a config**, not a feature: run
+    // `scripts/vendor-sage.sh` for a SAGE with app-v23 active, then pass
+    // `VendoredAgentBootstrapConfig{AgentKeyFile:, HomeDomain:, Clearance:}` at
+    // node creation. Until then the gap is covered honestly by
+    // `ApplianceWriteReadiness`, which is what it is for.
+    //
+    // One thing to design for when it ships: `LocalAgentApprove` requires the
+    // **target** key to sign its own approval, so on an `.installed` node the
+    // owner cannot approve Mynah alone — Mynah has to produce a signature and
+    // hand it to CEREBRUM. That is a real flow with a UI consequence.
+
     private static func identifier(ofBundleAt url: URL, fileManager: FileManager) -> String? {
         let plist = url.appendingPathComponent("Contents/Info.plist")
         guard let data = fileManager.contents(atPath: plist.path),

@@ -280,4 +280,57 @@ final class ApplianceWriteReadinessTests: XCTestCase {
             throw XCTSkip("no reachable SAGE node: \(why)")
         }
     }
+
+    // MARK: - Combining the two signals
+
+    /// An observation outranks a prediction of the same thing. It must: the
+    /// mask cannot see the `DomainAccess` allowlist at all, so a clear mask
+    /// with a real refusal is a state only the denial knows about.
+    func testARealRefusalOutranksTheMask() {
+        let denial = SageRitual.WriteDenial(
+            domain: "voice-interface",
+            detail: "access denied: agent cannot write shared domain self",
+            reasonCode: "shared_write_restricted",
+            remedy: "Submit to the agent's owned non-shared home domain."
+        )
+        let status = readiness(mask: 0).status(observing: denial)
+        XCTAssertEqual(status?.isObserved, true, "a clear mask silenced a refusal we watched happen")
+        XCTAssertEqual(status?.remedy, "Submit to the agent's owned non-shared home domain.")
+        XCTAssertEqual(status?.detail, denial.detail)
+    }
+
+    /// With no denial, the predictive half still speaks.
+    func testThePredictionSpeaksWhenNothingHasBeenRefusedYet() {
+        let status = readiness(mask: 30).status(observing: nil)
+        XCTAssertEqual(status?.isObserved, false)
+        XCTAssertNil(status?.detail, "there is no server sentence to quote yet")
+        XCTAssertTrue(status?.remedy.contains("companion profile") == true)
+    }
+
+    /// The rule the whole feature turns on: when Mynah is working, this state
+    /// does not exist. No badge, no green tick, no "all good" row.
+    func testAWorkingApplianceProducesNothingToRender() {
+        XCTAssertNil(readiness(mask: 0).status(observing: nil))
+        XCTAssertNil(readiness(mask: 15).status(observing: nil))
+    }
+
+    /// An older server sends no per-cause remedy, and that is not rare — it is
+    /// every server before v11.14.2. Ours has to stand in.
+    func testAnOlderServersDenialFallsBackToOurRemedy() {
+        let denial = SageRitual.WriteDenial(domain: "voice-interface", detail: "access denied")
+        let status = readiness(mask: 30).status(observing: denial)
+        XCTAssertEqual(status?.isObserved, true)
+        XCTAssertTrue(status?.remedy.contains("companion profile") == true)
+    }
+
+    /// One voice across both paths, so a screen cannot say one thing when it
+    /// predicted and another when it observed.
+    func testBothPathsUseTheSameHeadline() {
+        let observed = readiness(mask: 30).status(
+            observing: SageRitual.WriteDenial(domain: "d", detail: "x")
+        )
+        let predicted = readiness(mask: 30).status(observing: nil)
+        XCTAssertEqual(observed?.headline, predicted?.headline)
+        XCTAssertEqual(observed?.headline, "Mynah can't remember anything yet.")
+    }
 }
