@@ -246,15 +246,18 @@ let s9: CGFloat = 48
 
 /// Four radii, all continuous. Named `r` so `r.card` is shorter to type than
 /// `14` is to remember.
+/// Radii scale with the boxes they round. Every box grew when the type did, and
+/// a 14pt radius on a card that is now half again as tall reads sharper than it
+/// did — the corner is a proportion of the shape, not a constant.
 enum r {
     /// Pills, chips, keycaps, tiny badges.
-    static let chip: CGFloat = 7
+    static let chip: CGFloat = 9
     /// Buttons, text fields, list rows, segmented track.
-    static let control: CGFloat = 10
+    static let control: CGFloat = 12
     /// Cards, panels, wells, group containers.
-    static let card: CGFloat = 14
+    static let card: CGFloat = 18
     /// Sheets, floating HUD, modal overlays.
-    static let sheet: CGFloat = 22
+    static let sheet: CGFloat = 26
 }
 
 extension RoundedRectangle {
@@ -393,24 +396,47 @@ enum MynahFont: CaseIterable, Sendable {
     /// 12/medium/monospaced. Keys, paths, durations, sizes.
     case mono
 
+    /// **The scale the owner asked for, and what it replaces.**
+    ///
+    /// It was 13pt body, 22pt title, 32pt display — System Settings sizing. Read
+    /// back against the reference he sent (QuietType), his verdict was *"a bit
+    /// too Anthropic"*, and the diagnosis is exact: muted, low-contrast, and
+    /// typeset for a preference pane rather than an app somebody looks at.
+    ///
+    /// The reference is not subtle and does not need to be. A 44pt headline over
+    /// a 15pt subtitle, numerals big enough to read across a desk, and sidebar
+    /// items you hit without aiming. That is Apple's own current display
+    /// typography — Music, Fitness, System Settings' own hero rows — rather than
+    /// anything web.
+    ///
+    /// **Every size moved up together on purpose.** Enlarging headings alone
+    /// widens the gap until the page reads as a poster with fine print under it;
+    /// the ratios between steps are what make a scale feel deliberate, so those
+    /// are preserved and the whole thing is shifted.
     var size: CGFloat {
         switch self {
-        case .display: return 32
-        case .title1: return 22
-        case .title2: return 17
-        case .title3: return 15
-        case .body, .bodyEmphasis: return 13
-        case .callout, .mono: return 12
-        case .label: return 11
-        case .eyebrow: return 10
-        case .numeral: return 28
+        case .display: return 44
+        case .title1: return 30
+        case .title2: return 22
+        case .title3: return 17
+        case .body, .bodyEmphasis: return 15
+        case .callout, .mono: return 13
+        case .label: return 12
+        case .eyebrow: return 11
+        case .numeral: return 42
         }
     }
 
+    /// Heavier at the top, unchanged at the bottom.
+    ///
+    /// `display` and `numeral` go to `.bold`, and `title1` with them — at 30pt,
+    /// semibold reads as regular. Body stays `.regular`: bolding paragraph text
+    /// is how "bold and modern" turns into shouting, and the reference does not
+    /// do it either. The contrast comes from the *jump* between steps.
     var weight: Font.Weight {
         switch self {
-        case .display: return .bold
-        case .title1, .title2, .title3, .eyebrow, .numeral: return .semibold
+        case .display, .title1, .numeral: return .bold
+        case .title2, .title3, .eyebrow: return .semibold
         case .body, .callout: return .regular
         case .bodyEmphasis, .label, .mono: return .medium
         }
@@ -419,26 +445,39 @@ enum MynahFont: CaseIterable, Sendable {
     /// SF Pro's default tracking is metrically correct at 13pt and visibly loose
     /// above 20pt. Apple's own display type is always tightened; without this
     /// every heading in the app is 3–4% wider than it should be.
+    /// Tightened further, because the sizes moved.
+    ///
+    /// Tracking is a proportion of the size and these values were set for a
+    /// 32pt display. At 44pt the old `-0.6` leaves the headline visibly airy —
+    /// the exact "web page" look he objected to twice. Apple's display faces
+    /// tighten roughly linearly above 20pt and these follow that.
     var tracking: CGFloat {
         switch self {
-        case .display: return -0.6
-        case .title1: return -0.35
-        case .title2: return -0.2
-        case .title3: return -0.1
+        case .display: return -1.1
+        case .title1: return -0.6
+        case .title2: return -0.3
+        case .title3: return -0.15
         case .body, .bodyEmphasis, .mono: return 0
         case .callout: return 0.05
         case .label: return 0.15
         case .eyebrow: return 0.8
-        case .numeral: return -0.4
+        case .numeral: return -1.0
         }
     }
 
+    /// Leading grows with the type, except where the type is a single line.
+    ///
+    /// A 44pt headline at the old 5pt spacing sets too tight when it wraps to
+    /// two lines, which the Home headline does at narrow widths. Numerals and
+    /// labels stay at 0 — they never wrap, and spacing on a single line only
+    /// pushes it off its own baseline.
     var lineSpacing: CGFloat {
         switch self {
-        case .display: return 5
-        case .title1, .body, .bodyEmphasis: return 4
-        case .title2, .callout: return 3
-        case .title3: return 2
+        case .display: return 7
+        case .title1: return 6
+        case .body, .bodyEmphasis: return 5
+        case .title2, .callout: return 4
+        case .title3: return 3
         case .label, .eyebrow, .numeral, .mono: return 0
         }
     }
@@ -534,13 +573,20 @@ enum MynahIcon: Sendable {
     /// 30/medium. The single glyph on an onboarding stage or empty state.
     case hero
 
+    /// Raised with the type scale, because glyphs are sized against the text
+    /// they stand beside rather than in the abstract.
+    ///
+    /// A 20pt sidebar glyph next to a 17pt label was already deliberate. Beside
+    /// the new 22pt label it reads as an afterthought — the icon has to lead,
+    /// which is what "large icons" meant in the reference he sent. Each step
+    /// keeps its old relationship to its neighbouring text size.
     var size: CGFloat {
         switch self {
-        case .inline: return 12
-        case .row: return 15
-        case .card: return 18
-        case .well: return 20
-        case .hero: return 30
+        case .inline: return 13
+        case .row: return 17
+        case .card: return 22
+        case .well: return 26
+        case .hero: return 40
         }
     }
 

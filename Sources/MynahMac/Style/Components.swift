@@ -2119,3 +2119,100 @@ enum OptionCardInk {
     /// The other half of the same comparison.
     static let staysHere = Palette.state.good
 }
+
+// MARK: - Stat card
+
+/// One fact, at the size of the fact.
+///
+/// **The owner sent a reference and a verdict: *"current design is a bit too
+/// 'Anthropic'"*, then *"more Apple style and bold / modern"*.** The reference
+/// (QuietType) leads with three filled black cards carrying one large numeral
+/// each, and that inversion is the single most recognisable thing on the page —
+/// more than the type scale, because it is the only element that is not a
+/// variation of "text on a light card with a hairline".
+///
+/// So this is the one component in the app that inverts. `surface.raised` with a
+/// hairline is the house style and stays the house style; a page of them is
+/// quiet, which is right for Settings and wrong for the first thing you see.
+///
+/// ## Why the numeral leads and the caption follows
+///
+/// The reading order is value-then-meaning: **3** then "Sessions today", not
+/// "Sessions today: 3". A dashboard is scanned rather than read, and the number
+/// is what the eye is looking for. The caption exists so the number means
+/// something once the eye has stopped.
+///
+/// The glyph sits above both at `.row`, deliberately smaller than the numeral —
+/// it is a category marker, not the subject. An icon competing with a 42pt
+/// figure produces two focal points and no hierarchy.
+///
+/// ## Constrained on purpose
+///
+/// Three properties, no colour parameter, no shadow, no interactive variant. The
+/// value it carries is a `String` rather than a number precisely so "Ready" and
+/// "120 WPM" are as ordinary as "3" — the reference's third card is a word, and
+/// a component that only accepted numbers would have pushed that back into
+/// bespoke layout.
+struct MynahStatCard: View {
+    let glyph: String
+    /// The thing being read across the desk. Kept short — three or four
+    /// characters is the shape this is designed around, and anything past about
+    /// eight will shrink to fit rather than wrap.
+    let value: String
+    let caption: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Image(systemName: glyph)
+                .mynahIcon(.row)
+                .foregroundStyle(Palette.button.primaryInk.opacity(0.65))
+            // Fixed gap rather than a `Spacer`. A spacer is greedy, and inside a
+            // row that a parent stretches it took the card to ~640pt tall with
+            // the numeral stranded at the bottom — caught by rendering it, not
+            // by reading it.
+            Spacer(minLength: 0).frame(height: s7)
+            Text(value)
+                .mynahFont(.numeral)
+                .foregroundStyle(Palette.button.primaryInk)
+                // The reference's "120 WPM" is wider than its "3" and both sit
+                // in equal cards, so the long one gives rather than the layout.
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+            Text(caption)
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.button.primaryInk.opacity(0.7))
+                .lineLimit(1)
+                .padding(.top, s2)
+        }
+        .padding(s6)
+        // Fixed height, not minimum. These sit in a row that other layouts will
+        // stretch, and a stat card that grows to fill its container stops being
+        // a card and becomes a panel with a number in the corner.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 150)
+        .background(Palette.button.primaryFill, in: RoundedRectangle.mynah(r.card))
+        // One stop per card. "3, Sessions today" is the sentence somebody
+        // listening wants; three separate stops for glyph, value and caption is
+        // how a dashboard becomes nine stops in VoiceOver.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(value). \(caption)")
+    }
+}
+
+/// The row of them, so three cards are three lines of call site.
+///
+/// Equal widths via `.fixedSize(horizontal: false)` on the stack's children
+/// rather than a `Grid`: the count is small and known, and a grid would let one
+/// card's long value widen its column and unbalance the row — which is exactly
+/// what `minimumScaleFactor` above exists to prevent.
+struct MynahStatRow: View {
+    let stats: [(glyph: String, value: String, caption: String)]
+
+    var body: some View {
+        HStack(spacing: s4) {
+            ForEach(Array(stats.enumerated()), id: \.offset) { _, stat in
+                MynahStatCard(glyph: stat.glyph, value: stat.value, caption: stat.caption)
+            }
+        }
+    }
+}

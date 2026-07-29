@@ -65,6 +65,53 @@ func runAndExit(_ body: @escaping () async -> Int32) -> Never {
     exit(status)
 }
 
+/// Every line the daemon writes, stamped and unbuffered.
+///
+/// **`bridge.log` had no clock**, which is why every diagnosis today began by
+/// correlating log lines against a file's modification date — the appliance's
+/// own record could say *what* happened and never *when*. `signal.log` has
+/// timestamps because signal-cli writes its own; ours had none because these
+/// lines are bare text to a redirected stream.
+///
+/// Same format as `MynahLog` on purpose, so `appliance.log`, `mynah.log` and
+/// this one read together in one `sort`.
+///
+/// **And it is stderr rather than `print`, which is the half that is not about
+/// timestamps.** `print` goes to stdout, and stdout redirected to a file is
+/// *block*-buffered rather than line-buffered — so those lines sat in a 4KB
+/// buffer until it filled, arriving late and out of order beside the stderr
+/// lines written straight through.
+///
+/// **The damage to old logs is measurable rather than estimated**, which is the
+/// version worth having. In his `bridge.log`, lines 216–249 are fourteen
+/// `[daemon]` turn lines and their `[signal]` neighbours with **zero `[sage]`
+/// lines among them** — then `[sage]` resumes as a three-line block at 250.
+/// Everywhere quieter in the same file the pattern is one three-line `[sage]`
+/// group per turn. The tool sources logged through `print`; the daemon and the
+/// transport did not. Two streams into one file, one buffered and one not.
+///
+/// So the caution for anything read out of a pre-fix `bridge.log` is not "some
+/// lines may be missing" — the `[sage]` lines survived in bulk. It is that
+/// **their position is unreliable**: attributing tool activity to the nearest
+/// `[daemon]` turn above it reads an artifact of buffering as a fact about the
+/// turn. `thread` found this and it is not repairable in the existing file.
+///
+/// Losing lines entirely was the other risk — launchd SIGTERMs on every
+/// reconcile, and a full buffer dies with the process — but the counts that
+/// matter were never exposed to it: the `[signal]` and `[daemon]` lines were
+/// already on stderr, so the eight disconnect episodes are a total and not a
+/// floor. stderr is unbuffered; a line written is a line on disk.
+func note(_ message: String) {
+    let stamp = daemonClock.string(from: Date())
+    FileHandle.standardError.write(Data("\(stamp) \(message)\n".utf8))
+}
+
+private let daemonClock: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return formatter
+}()
+
 func fail(_ message: String) -> Int32 {
     FileHandle.standardError.write(Data("\(message)\n".utf8))
     return 1
@@ -254,7 +301,7 @@ func makeToolSource(
     mcp: MCPClient,
     allowWeb: Bool
 ) -> (tools: ToolProviding, notes: NotesToolSource) {
-    let notes = NotesToolSource(delivery: .attachedToReply, log: { print($0) })
+    let notes = NotesToolSource(delivery: .attachedToReply, log: { note($0) })
 
     var sources: [CompositeToolSource.Source] = [
         .init(
@@ -281,14 +328,14 @@ func makeToolSource(
                 label: "web search",
                 provider: WebSearchToolSource(
                     backends: WebSearchToolSource.defaultBackends(),
-                    log: { print($0) }
+                    log: { note($0) }
                 ),
                 isRequired: false,
                 expectedToolNames: [WebSearchToolSource.toolName]
             )
         )
     }
-    return (CompositeToolSource(sources: sources, log: { print($0) }), notes)
+    return (CompositeToolSource(sources: sources, log: { note($0) }), notes)
 }
 
 func runBrain(_ arguments: [String]) -> Never {
@@ -333,7 +380,7 @@ func runBrain(_ arguments: [String]) -> Never {
     let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
-    FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
+    note("[daemon] reply style: \(style.rawValue)")
 
 
     runAndExit {
@@ -429,7 +476,7 @@ func runSearch(_ arguments: [String]) -> Never {
     guard let query = arguments.first, !query.hasPrefix("--") else { usage() }
 
     let backends = WebSearchToolSource.defaultBackends()
-    let source = WebSearchToolSource(backends: backends, log: { print($0) })
+    let source = WebSearchToolSource(backends: backends, log: { note($0) })
 
     runAndExit {
         print("providers: \(backends.map(\.providerName).joined(separator: " → "))")
@@ -691,7 +738,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
-    FileHandle.standardError.write(Data("[daemon] reply style: \(style.rawValue)\n".utf8))
+    note("[daemon] reply style: \(style.rawValue)")
     // Which of Kokoro's 54 voices sounds like the appliance is pure taste, and
     // taste is only discoverable by hearing it on a call. A flag means trying
     // another one is a restart rather than a rebuild and a redeploy.
@@ -773,11 +820,11 @@ func runDaemon(_ arguments: [String]) -> Never {
                 transcriber = try await LocalASRRuntime.shared.prepare()
             }
         } catch {
-            FileHandle.standardError.write(Data("""
-            [daemon] speech recognition is unavailable, so voice notes cannot be transcribed: \(error)
-            [daemon] text messages will still be answered
-
-            """.utf8))
+            // Two stamped lines rather than one block: a multi-line write puts
+            // one timestamp on the first line and leaves the second looking
+            // like it happened at no particular moment.
+            note("[daemon] speech recognition is unavailable, so voice notes cannot be transcribed: \(error)")
+            note("[daemon] text messages will still be answered")
             transcriber = UnavailableTranscriber(reason: "\(error)")
         }
 
@@ -792,9 +839,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                 synthesizer = await system.isAvailable() ? system : nil
             }
             if synthesizer == nil {
-                FileHandle.standardError.write(
-                    Data("[daemon] no local speech synthesizer is available; replies will be text\n".utf8)
-                )
+                note("[daemon] no local speech synthesizer is available; replies will be text")
             }
         } else {
             synthesizer = nil
@@ -833,9 +878,7 @@ func runDaemon(_ arguments: [String]) -> Never {
         var systemVoice = SystemSpeechSynthesizer()
         systemVoice.sampleRate = 48_000
         let callVoice: any SpeechSynthesizing = await kokoro.isAvailable() ? kokoro : systemVoice
-        FileHandle.standardError.write(Data(
-            "[call] voice: \(await kokoro.isAvailable() ? "kokoro \(callVoiceName)" : "say (kokoro unreachable)")\n".utf8
-        ))
+        note("[call] voice: \(await kokoro.isAvailable() ? "kokoro \(callVoiceName)" : "say (kokoro unreachable)")")
         // A call is answered in the spoken style regardless of the owner's voice
         // note setting, because the medium is not a choice here — it is being
         // read aloud down a phone line. The written style is right for a screen
@@ -864,7 +907,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                 await callHistory.remember(result.messages)
                 return result.reply
             },
-            log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+            log: { note($0) }
         )
         // Detached, so a call that fails to start never stops Signal working.
         // The socket is the only thing //call needs; everything else about the
@@ -873,9 +916,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             do {
                 try await callServer.run()
             } catch {
-                FileHandle.standardError.write(
-                    Data("[call] calling is unavailable: \(error)\n".utf8)
-                )
+                note("[call] calling is unavailable: \(error)")
             }
         }
         defer { callTask.cancel() }
@@ -900,7 +941,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                 : SageRitual(
                     tools: mcp,
                     displayName: SageRitual.applianceDisplayName,
-                    log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+                    log: { note($0) }
                 ),
             notes: notes,
             conversations: ConversationStore(),
