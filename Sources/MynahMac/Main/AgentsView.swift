@@ -1110,6 +1110,25 @@ struct AgentsView: View {
     /// and reaches the roster only through the store `RootView` fills at
     /// launch.
     ///
+    /// ## A default argument that can build a real collaborator is a hidden constructor
+    ///
+    /// **This cost a day twice, and both times nothing failed.** In the
+    /// morning, `AppModel.init` defaulted `backgroundServices` to the live
+    /// manager, so tests about a pause marker deleted the owner's LaunchAgents
+    /// and left his phone unanswered for an hour. In the afternoon, this
+    /// initialiser defaulted `source` to a live directory, so the boot-time
+    /// roster was wired, tested, green — and completely unused, with the
+    /// per-view unsigned read exactly where it had always been.
+    ///
+    /// Neither was caught by a test. Both were caught by grepping for the type
+    /// name afterwards, which is luck rather than method.
+    ///
+    /// The general form, worth more than either instance: **moving a dependency
+    /// is not finished until the old path cannot be reached.** A default that
+    /// can construct the real thing keeps the old path alive while looking like
+    /// a convenience, and it survives exactly the review that reads the diff
+    /// and sees a fetch move.
+    ///
     /// `@MainActor` because `AgentsModel` is, and a `View`'s initialiser is not
     /// isolated by default even though SwiftUI only ever calls it here.
     @MainActor

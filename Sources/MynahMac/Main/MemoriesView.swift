@@ -831,17 +831,45 @@ struct MemoriesView: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.isSearching {
+            // **This used to send the owner away to rephrase, and rephrasing
+            // could not have worked.**
+            //
+            // A search is `sage_recall`, and recall is silently narrowed to
+            // what this agent may read — measured: an unfiltered query against
+            // a node of 13,372 memories returned three, all from the one
+            // subject the caller owns, with nothing in the response saying
+            // ~700 subjects had been excluded. So "nothing matched" was being
+            // said about a corpus the search never looked at, and the advice
+            // that followed it — describe rather than quote — put the fault on
+            // the owner's wording.
+            //
+            // The second sentence is not a hedge. It is the difference between
+            // somebody trying three more phrasings and somebody understanding
+            // that the thing they are looking for was never in scope.
             EmptyState(
                 glyph: "magnifyingglass",
-                title: "Nothing matched",
-                message: "Mynah searches by meaning rather than spelling, so try describing "
-                    + "the thing rather than quoting it."
+                title: MemoriesEmpty.searchTitle,
+                message: MemoriesEmpty.searchMessage
             )
         } else if model.topic != nil {
+            // **Closed and empty are the same picture here, and this used to
+            // pick the reassuring one.**
+            //
+            // Measured as the appliance: naming a subject another agent owns
+            // returns `0 of 0` — not a refusal, not an error, zero rows. So
+            // this screen genuinely cannot tell "nothing has been kept here"
+            // from "this belongs to somebody else". It said the first, which is
+            // the same substitution as a locked board reading as an empty
+            // plate.
+            //
+            // Saying it cannot tell is not a failure of the copy. It is the
+            // only true sentence available until SAGE distinguishes the two,
+            // and an owner who knows the question is open will go and look in
+            // CEREBRUM rather than conclude the subject is bare.
             EmptyState(
                 glyph: "text.append",
-                title: "Nothing about that yet",
-                message: "Mynah hasn't learned anything on this subject.",
+                title: MemoriesEmpty.subjectTitle,
+                message: MemoriesEmpty.subjectMessage,
                 actionTitle: "Show everything",
                 action: { model.topic = nil }
             )
@@ -1188,4 +1216,58 @@ private struct MemoriesPreviewPair: View {
 #Preview("Memories — can't reach it") {
     MemoriesPreviewPair(store: PreviewMemoryStore(memories: [], trouble: .unreachable))
         .frame(width: 1500, height: 520)
+}
+
+
+// MARK: - What an empty screen is allowed to claim
+
+/// The two empty states produced by a **narrowed** read, kept as values.
+///
+/// Named constants rather than literals inside the view because the tests that
+/// hold these honest were greping the source and the source wraps: the sentence
+/// `"This screen cannot tell which"` is three string segments in the file and
+/// never appears contiguously, so a check for it passed nothing and would have
+/// gone on passing nothing. team-lead's rule from this morning, arriving where
+/// it belongs — **a test that greps source is testing the wrong thing, and its
+/// failure mode is silence.** Assert on a value.
+///
+/// `thread`'s rule is what the copy has to satisfy: *a result set that has been
+/// silently narrowed must never be presented as a complete answer to the
+/// question that was asked.*
+enum MemoriesEmpty {
+
+    static let searchTitle = "Nothing Mynah can read matched"
+
+    /// **The old version sent the owner away to rephrase, and rephrasing could
+    /// not have worked.** A search is `sage_recall`, which is silently narrowed
+    /// to what this agent may read — measured, as the appliance: an unfiltered
+    /// query against 13,372 memories returned three, all from the one subject
+    /// the caller owns, with nothing in the response saying that some seven
+    /// hundred subjects had been excluded.
+    ///
+    /// The last clause is not a hedge. It is the difference between somebody
+    /// trying three more phrasings and somebody understanding that what they
+    /// want was never in scope.
+    static let searchMessage =
+        "Mynah searches by meaning rather than spelling, so it is worth describing the "
+            + "thing rather than quoting it. But this only searches what Mynah is allowed "
+            + "to read — anything another agent keeps to itself will not appear here, "
+            + "however you word it."
+
+    static let subjectTitle = "Nothing Mynah can read here"
+
+    /// **Closed and empty are the same picture, and this used to pick the
+    /// reassuring one.** Naming a subject another agent owns returns `0 of 0` —
+    /// not a refusal, not an error, zero rows. So the screen genuinely cannot
+    /// tell "nothing kept here" from "belongs to somebody else", and saying so
+    /// is the only true sentence available.
+    ///
+    /// **No count.** How much was filtered is a number SAGE does not return and
+    /// an open request to that team; implying one would be inventing the most
+    /// consequential fact on the screen, which is the habit this whole area is
+    /// being corrected for.
+    static let subjectMessage =
+        "Either nothing has been kept under this subject, or it belongs to another agent "
+            + "and Mynah is not allowed to see it. This screen cannot tell which — both "
+            + "look the same from here."
 }

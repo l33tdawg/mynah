@@ -316,3 +316,62 @@ private actor CountingDirectory: AgentDirectorySource {
         return .empty
     }
 }
+
+/// What an empty screen is allowed to claim.
+///
+/// `thread`'s rule, from the measurements: **a result set that has been
+/// silently narrowed must never be presented as a complete answer to the
+/// question that was asked.**
+///
+/// Three shapes were measured as the appliance. Naming a subject it cannot read
+/// gives a clean refusal — loud and fine. Naming one another agent owns gives
+/// `0 of 0`, so closed presents as empty. Naming nothing silently filters to
+/// what it may read, with no signal that anything was excluded.
+@MainActor
+final class EmptyStateHonestyTests: XCTestCase {
+
+    /// A search that found nothing must not blame the owner's wording, because
+    /// rephrasing cannot reach a subject the search was never allowed into.
+    func testAnEmptySearchSaysItOnlyCoveredWhatMynahCanRead() {
+        XCTAssertTrue(
+            MemoriesEmpty.searchMessage.contains("however you word it"),
+            "the owner is being sent to rephrase a query that could not have worked"
+        )
+        XCTAssertTrue(MemoriesEmpty.searchTitle.contains("can read"))
+    }
+
+    /// A subject with nothing in it and a subject somebody else owns are the
+    /// same picture, and the screen must not pick the reassuring one.
+    func testAnEmptySubjectDoesNotClaimNothingIsThere() {
+        XCTAssertTrue(
+            MemoriesEmpty.subjectMessage.contains("cannot tell which"),
+            "the screen claims to know which of the two situations it is in"
+        )
+        XCTAssertFalse(MemoriesEmpty.subjectMessage.contains("hasn't learned anything"))
+    }
+
+    /// **No invented precision.** How much a query was narrowed by is a number
+    /// SAGE does not return and an open request to that team. A count we cannot
+    /// obtain must not appear, even softened.
+    func testNoEmptyStateImpliesACountItCannotObtain() {
+        for message in [MemoriesEmpty.searchMessage, MemoriesEmpty.subjectMessage] {
+            for invented in ["subjects were excluded", "of your subjects", "some subjects are hidden"] {
+                XCTAssertFalse(
+                    message.contains(invented),
+                    "a filtered count the API never gives us: \(invented)"
+                )
+            }
+        }
+    }
+
+    /// **This suite used to grep the source, and one of its checks was watching
+    /// nothing.** The sentence it looked for is three string segments in the
+    /// file and never appears contiguously, so the assertion could only ever
+    /// have failed for the wrong reason. Values now, per team-lead's rule: a
+    /// test that greps source is testing the wrong thing, and its failure mode
+    /// is silence rather than red.
+    func testTheseAreValuesRatherThanSourceGreps() {
+        XCTAssertFalse(MemoriesEmpty.searchMessage.isEmpty)
+        XCTAssertFalse(MemoriesEmpty.subjectMessage.isEmpty)
+    }
+}
