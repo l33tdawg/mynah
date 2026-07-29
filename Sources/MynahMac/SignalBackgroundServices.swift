@@ -193,6 +193,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         try bridgeData.write(to: bridgeURL, options: .atomic)
 
         Self.log.notice("restarting the phone bridge to apply a changed configuration")
+        record("restarting the phone bridge to apply a changed configuration")
 
         // bootout returns non-zero on a first install; that only means there
         // was nothing stale to stop.
@@ -246,6 +247,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         Self.log.error(
             "removing both LaunchAgents, so the phone will stop being answered: \(reason, privacy: .public)"
         )
+        record("removing both LaunchAgents, so the phone will stop being answered: \(reason)")
         _ = await bootout(Self.bridgeLabel)
         _ = await bootout(Self.signalLabel)
 
@@ -307,6 +309,54 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         subsystem: "local.sage.voicebridge",
         category: "appliance"
     )
+
+    /// The same line, in a file we own.
+    ///
+    /// **`os_log` is not readable after the fact on the owner's Mac, and this
+    /// was measured rather than assumed.** A standalone binary emitting at
+    /// `.error` on that machine:
+    ///
+    ///     log stream …  → E  [local.sage.voicebridge:appliance] <the line>
+    ///     log show   …  → nothing, even matching raw message text, even --info
+    ///
+    /// So emission is fine and **retrieval is not**. Something about that Mac's
+    /// logging configuration — not checkable without root, and not worth
+    /// guessing at — means the unified log answers live and forgets.
+    ///
+    /// That matters because the whole point of this line is being read *hours
+    /// later, by somebody who does not yet know what they are looking for*. A
+    /// diagnostic you can only see if you were already watching is not a
+    /// diagnostic.
+    ///
+    /// `~/Library/Logs/Mynah/` is where `bridge.log` and `signal.log` live, and
+    /// those have been readable all day — every appliance fault today was
+    /// diagnosed out of them. So the appliance's own lifecycle goes beside
+    /// them, in the folder somebody already knows to open.
+    ///
+    /// Append-only, best-effort, never throwing: a failure to record why the
+    /// appliance stopped must not become a second reason it stopped.
+    private func record(_ line: String) {
+        let logs = homeDirectory.appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
+        try? fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
+        let file = logs.appendingPathComponent("appliance.log")
+        let stamped = "\(Self.timestamp.string(from: Date())) \(line)\n"
+        guard let data = stamped.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: file) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: file)
+        }
+    }
+
+    private static let timestamp: DateFormatter = {
+        let formatter = DateFormatter()
+        // Local time and seconds, because every diagnosis today started by
+        // matching a line against a file's modification date.
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 
     private func bootout(_ label: String) async -> Bool {
         let result = await runner.run(

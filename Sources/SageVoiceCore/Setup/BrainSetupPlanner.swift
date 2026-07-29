@@ -320,7 +320,6 @@ public struct BrainSetupPlanner: Sendable {
     public func plan(for probe: EnvironmentProbeResult) -> BrainSetupChoices {
         var options: [BrainSetupOption] = []
         options.append(contentsOf: AgentCLIKind.allCases.map { cliOption(probe.cli($0)) })
-        options.append(googleSignInOption())
         options.append(contentsOf: apiKeyOptions(probe.ambientAPIKeys))
         options.append(fullyLocalOption(probe))
 
@@ -451,38 +450,37 @@ public struct BrainSetupPlanner: Sendable {
         )
     }
 
-    // MARK: Google sign-in
+    // MARK: Google
 
-    /// Always listed, never yet offerable.
+    /// Google is not offered, by either route.
     ///
-    /// This was the recommendation on a bare Mac, and it had no screen behind it:
-    /// `requirement` is `.signIn`, the flow has no sign-in stage, so `advance()`
-    /// skipped straight past it and Ready declared "Mynah is ready" for a brain
-    /// that had never been connected to anything. `GoogleSignInSession` and
-    /// `GeminiKeyProvisioner` exist, but only the CLI drives them, and consumer
-    /// sign-in routes to Code Assist rather than the Gemini API — a different
-    /// wire format, so there is no backend either (`backendPlan` is `nil`).
+    /// Two cards used to carry it and neither survived contact with the owner.
     ///
-    /// It stays in the catalog rather than being hidden: the card says in plain
-    /// words that this is coming, which is more useful than an option that
-    /// silently is not there.
-    private func googleSignInOption() -> BrainSetupOption {
-        BrainSetupOption(
-            id: .googleSignIn,
-            label: "Sign in with Google",
-            summary: "Sign in with a Google account — no API key and no card. What you say goes "
-                + "to Google.",
-            requirement: .signIn,
-            keepsWordsOnDevice: false,
-            availability: .unavailable(
-                reason: "Signing in with Google isn't ready yet. Pick another way for now — "
-                    + "you can switch to this later. If you already have a Google key, "
-                    + "“Google Gemini API key” below works today."
-            ),
-            tier: .zeroFrictionSignIn,
-            backendIdentifier: "gemini"
-        )
-    }
+    /// "Sign in with Google" was the *recommendation* on a bare Mac and had no
+    /// screen behind it: `requirement` was `.signIn`, the flow has no sign-in
+    /// stage, so `advance()` skipped straight past it and Ready declared "Mynah
+    /// is ready" for a brain that had never been connected to anything. It was
+    /// then left in the catalog permanently unavailable, on the theory that a
+    /// card saying "this is coming" beats an option that silently is not there.
+    /// That theory only holds while the thing is actually coming. Consumer
+    /// Google sign-in routes to Code Assist, which is a different wire format
+    /// from the Gemini API entirely — nothing in this product speaks it and
+    /// nothing is being built to. A permanent "coming soon" is a promise, and
+    /// leaving one on the first screen the owner sees is a lie with a long tail.
+    ///
+    /// The API-key card went for a plainer reason: the owner asked for Google
+    /// out. It is the one provider here that also reads the owner's mail.
+    ///
+    /// What deliberately did *not* go: `BrainSetupOptionID.googleAPIKey`, its
+    /// `backendPlan`, and the `"google"` alias in `APIKeyOnboarding`. An owner
+    /// who chose Gemini in a shipped build has `key.google` written to disk. If
+    /// the case were deleted, their stored choice would decode to `nil` on the
+    /// next launch — and an unreadable choice is indistinguishable from no
+    /// choice, so the appliance would quietly ask them to set it up again while
+    /// a working key sat in the file. Removing an *offer* is not the same as
+    /// removing an *identity*, and only the offer was asked for. Their brain
+    /// keeps answering; they simply cannot pick it fresh.
+    private static let providersNoLongerOffered: Set<APIKeyProvider> = [.google]
 
     // MARK: API keys
 
@@ -515,6 +513,13 @@ public struct BrainSetupPlanner: Sendable {
 
     private func apiKeyOptions(_ keys: AmbientAPIKeyReport) -> [BrainSetupOption] {
         APIKeyProvider.allCases.compactMap { provider in
+            // Withdrawn providers never reach the menu — see `providersNoLongerOffered`
+            // above for why this is a subtraction from the offer and not from the
+            // vocabulary. An ambient key does not bring one back: the whole point
+            // of the paragraph below is that evidence orders the menu rather than
+            // populating it, and a withdrawn provider is not on the menu to order.
+            guard !Self.providersNoLongerOffered.contains(provider) else { return nil }
+
             // Structural guard, not a filter anyone expects to fire: an option
             // that needs a key we cannot explain how to obtain must not be
             // offerable at all. "Google Gemini API key" shipped for months with

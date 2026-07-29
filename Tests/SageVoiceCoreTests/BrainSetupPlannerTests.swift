@@ -37,18 +37,62 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
     }
 
-    /// The majority case the product is aimed at, and the one that had no screen
-    /// behind it. `requirement` is `.signIn`, the flow has no sign-in stage, and
-    /// consumer Google sign-in routes to a different API than the one this app
-    /// speaks — so it is listed, explained, and not offered.
-    func testGoogleSignInIsListedWithAReasonAndNeverRecommended() throws {
+    /// **This test asserted the state that was withdrawn, so it now asserts the
+    /// withdrawal.**
+    ///
+    /// It used to check that "Sign in with Google" was listed, unavailable, and
+    /// carried the reason "isn't ready yet" — the theory being that a card
+    /// explaining itself beats an option that silently is not there. That theory
+    /// holds only while the thing is coming. It was not: consumer Google sign-in
+    /// routes to Code Assist, a different wire format from the Gemini API, and
+    /// nothing in this product speaks it. A permanent "isn't ready yet" on the
+    /// first screen the owner reads is a promise nobody intends to keep, and the
+    /// test was what kept it there.
+    ///
+    /// Both Google routes are gone. Not from the vocabulary — see the companion
+    /// assertion below, which is the half that actually protects an owner.
+    func testGoogleIsNotOfferedByEitherRoute() {
         let choices = planner.plan(for: .machine())
-        let google = try XCTUnwrap(choices.option(withID: .googleSignIn))
 
-        XCTAssertFalse(google.isAvailable)
-        XCTAssertEqual(google.requirement, .signIn)
-        XCTAssertTrue(try XCTUnwrap(google.availability.reason).contains("isn't ready yet"))
-        XCTAssertNotEqual(choices.recommendation?.optionID, .googleSignIn)
+        XCTAssertNil(choices.option(withID: .googleSignIn))
+        XCTAssertNil(choices.option(withID: .googleAPIKey))
+    }
+
+    /// An ambient key must not resurrect a withdrawn provider.
+    ///
+    /// Evidence orders the menu; it does not populate it. A `GEMINI_API_KEY`
+    /// already exported on this Mac is exactly the case where the old
+    /// "rises on evidence" rule would quietly put Google back on the screen.
+    func testAnAmbientGoogleKeyDoesNotBringGoogleBack() {
+        let probe = EnvironmentProbeResult.machine(
+            ambientKeys: AmbientAPIKeyReport(
+                providers: [.google],
+                variableNames: ["GEMINI_API_KEY"]
+            )
+        )
+
+        XCTAssertNil(planner.plan(for: probe).option(withID: .googleAPIKey))
+    }
+
+    /// The half of the withdrawal that protects an owner who already chose it.
+    ///
+    /// `key.google` is written to disk by shipped builds. Deleting the case
+    /// would make that stored choice decode to `nil` on the next launch — and an
+    /// unreadable choice is indistinguishable from no choice, so the appliance
+    /// would ask a Gemini owner to set his brain up again while a working key sat
+    /// in the file. Removing an offer is not removing an identity.
+    func testAStoredGoogleChoiceStillResolvesAndStillHasABackend() throws {
+        let stored = try XCTUnwrap(
+            BrainSetupOptionID(rawValue: "key.google"),
+            "An owner's stored choice must still decode after the offer is withdrawn"
+        )
+
+        XCTAssertEqual(stored, .googleAPIKey)
+        XCTAssertNotNil(stored.backendPlan, "A withdrawn offer must still be buildable")
+        XCTAssertNotNil(
+            APIKeyOnboarding.instructions(forProvider: try XCTUnwrap(stored.keyProviderIdentifier)),
+            "…and must still be able to explain its own key screen"
+        )
     }
 
     /// An ambient key needs no input, so it outranks a key the owner has to go
@@ -336,11 +380,14 @@ final class BrainSetupPlannerTests: XCTestCase {
         XCTAssertNotNil(withKey.option(withID: .groqAPIKey), "the others must not vanish because one has evidence")
     }
 
-    /// The three mainstream providers stay in the catalog even with no evidence,
+    /// The mainstream providers stay in the catalog even with no evidence,
     /// because an owner who holds a key needs somewhere to put it.
+    ///
+    /// Google was the third of these and is deliberately no longer in the list —
+    /// see `testGoogleIsNotOfferedByEitherRoute`.
     func testMainstreamProvidersAreAlwaysOffered() {
         let choices = planner.plan(for: .machine())
-        for id in [BrainSetupOptionID.anthropicAPIKey, .openAIAPIKey, .googleAPIKey] {
+        for id in [BrainSetupOptionID.anthropicAPIKey, .openAIAPIKey] {
             let option = choices.option(withID: id)
             XCTAssertNotNil(option, "\(id) must always be offerable")
             XCTAssertEqual(option?.requirement, .apiKey)
@@ -362,8 +409,8 @@ final class BrainSetupPlannerTests: XCTestCase {
             "Expected \"an OpenAI\""
         )
         XCTAssertTrue(
-            try XCTUnwrap(choices.option(withID: .googleAPIKey)).summary.contains("a Google"),
-            "Expected \"a Google\""
+            try XCTUnwrap(choices.option(withID: .deepSeekAPIKey)).summary.contains("a DeepSeek"),
+            "Expected \"a DeepSeek\""
         )
     }
 
@@ -467,9 +514,17 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// availability, not membership. What is worth pinning here instead is that
     /// every id survives planning, because the failure this replaces was an
     /// owner never being shown a choice he had decided to make.
+    ///
+    /// **Amended for the Google withdrawal.** The rule is no longer "every id
+    /// appears" but "every id appears unless it was deliberately withdrawn", and
+    /// the withdrawn set is spelled out here rather than derived. That is the
+    /// point: a future option that goes missing by accident still fails this
+    /// test, because accidental omission cannot add itself to the list below.
     func testEveryOptionIsOfferableSoNoChoiceIsHiddenFromTheOwner() {
+        let withdrawn: Set<BrainSetupOptionID> = [.googleSignIn, .googleAPIKey]
         let choices = planner.plan(for: .machine())
-        for id in BrainSetupOptionID.allCases {
+
+        for id in BrainSetupOptionID.allCases where !withdrawn.contains(id) {
             XCTAssertNotNil(
                 choices.option(withID: id),
                 "\(id) is missing from the catalogue — an owner cannot pick what he is never shown"
@@ -479,9 +534,9 @@ final class BrainSetupPlannerTests: XCTestCase {
 
     func testSelectReturnsExactlyTheNamedOption() throws {
         let choices = planner.plan(for: .machine())
-        let selection = try XCTUnwrap(choices.select(.googleAPIKey))
+        let selection = try XCTUnwrap(choices.select(.openAIAPIKey))
 
-        XCTAssertEqual(selection.option.id, .googleAPIKey)
+        XCTAssertEqual(selection.option.id, .openAIAPIKey)
         XCTAssertNotEqual(
             selection.option.id,
             choices.recommendation?.optionID,

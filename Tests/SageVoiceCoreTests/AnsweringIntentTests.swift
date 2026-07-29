@@ -74,14 +74,46 @@ final class AnsweringIntentTests: XCTestCase {
         ]
     }
 
-    /// Setup being unfinished is a stop rather than a shrug: on a first run
-    /// there is genuinely nothing to answer with, and leaving jobs installed
-    /// from a previous life would be worse than removing them.
-    func testUnfinishedSetupIsADecisionAndNotADoubt() {
+    /// **This test was called `testUnfinishedSetupIsADecisionAndNotADoubt`, and
+    /// the name was the belief that cost the owner his phone.**
+    ///
+    /// The reasoning was that a re-run may invalidate the configuration, so
+    /// unfinished setup should stop the appliance. Defensible in the abstract,
+    /// and wrong about the moment: he opened "Change where your words go" to
+    /// take a screenshot of the provider list, and **every screenshot deleted
+    /// both LaunchAgents.** Looking at your options took your phone away.
+    ///
+    /// He has not chosen anything. The configuration that was answering a
+    /// second ago is still on disk and still valid. So this is the third case —
+    /// *I cannot currently tell what the configuration should be* — and
+    /// `cannotTell` changes nothing.
+    ///
+    /// Third time today a test name has encoded a wrong belief and then
+    /// defended it. The others were "does not claim to read widely" and "says
+    /// it cannot read grants".
+    func testUnfinishedSetupIsADoubtAndNotADecision() {
         let app = makeApp(services: RecordingServices(), configuration: .fixture, setupComplete: false)
-        guard case .stop = app.answeringIntent() else {
-            return XCTFail("an appliance with no setup is trying to answer a phone")
+
+        guard case .cannotTell = app.answeringIntent() else {
+            return XCTFail("opening setup is being treated as a decision to stop answering")
         }
+    }
+
+    /// The owner's bug, pinned directly.
+    ///
+    /// Entering setup must leave a working appliance alone — not stop it, not
+    /// restart it, not touch it at all.
+    func testOpeningSetupDoesNotTakeThePhoneAway() async {
+        let services = RecordingServices()
+        let defaults = makeDefaults()
+        BrainSelectionStore.save(.fixtureBrain, defaults: defaults)
+        let app = makeApp(services: services, configuration: .fixture, defaults: defaults)
+
+        app.restartSetup()
+        await app.reconcileAnsweringService()
+
+        let removed = await services.disableCount
+        XCTAssertEqual(removed, 0, "opening the brain picker deleted the owner's LaunchAgents")
     }
 
     /// Whatever removes the appliance has to say why, in the line that records
@@ -173,16 +205,22 @@ final class AnsweringIntentTests: XCTestCase {
         BrainSelectionStore.save(.fixtureBrain, defaults: defaults)
         let app = makeApp(services: services, configuration: .fixture, defaults: defaults)
 
+        // **The precondition this used to rely on is gone, deliberately.**
+        //
+        // It asserted that restarting setup removed the appliance first, then
+        // that cancelling brought it back. Entering setup no longer removes
+        // anything — see `testOpeningSetupDoesNotTakeThePhoneAway` — so the
+        // interesting property is now the weaker, still-necessary one: backing
+        // out reconciles, so an appliance that *was* stopped for some other
+        // reason during the flow is restored rather than left down.
         app.restartSetup()
         await app.reconcileAnsweringService()
-        let removed = await services.disableCount
-        XCTAssertGreaterThanOrEqual(removed, 1, "the precondition never happened")
 
         XCTAssertTrue(app.canCancelSetupRestart, "there is nothing to back out to")
         app.cancelSetupRestart()
 
         let cameBack = await poll { await services.enabled.isEmpty == false }
-        XCTAssertTrue(cameBack, "cancelling a restart left the phone bridge uninstalled")
+        XCTAssertTrue(cameBack, "cancelling a restart did not reconcile the appliance")
     }
 
     // MARK: Helpers
