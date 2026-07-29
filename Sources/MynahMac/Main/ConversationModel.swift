@@ -628,7 +628,16 @@ final class ConversationModel {
             readiness = .blocked(
                 Exchange.Failure(
                     headline: "Mynah can't find what it remembers.",
-                    explanation: "Quit Mynah and open it again. If that doesn't help, install it once more.",
+                    // Not "install it once more". Reinstalling is the thing an
+                    // owner reaches for and the thing that cannot help: the
+                    // identity lives in Application Support, which macOS keeps
+                    // when an app is trashed, and the node preserves an existing
+                    // agent's capabilities when the same key registers again. A
+                    // reinstalled Mynah comes back as exactly the same agent
+                    // with exactly the same standing, having cost the owner a
+                    // download to learn nothing.
+                    explanation: "Quit Mynah and open it again. If that doesn't help, your SAGE node "
+                        + "isn't running — open it, or check the Agents screen for what it says.",
                     isSevere: true
                 )
             )

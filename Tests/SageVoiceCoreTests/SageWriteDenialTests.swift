@@ -9,11 +9,16 @@ import XCTest
 /// same log line and the same response — try again next turn, forever.
 ///
 /// Every string below is quoted from SAGE rather than invented: the consensus
-/// messages come from `processMemorySubmit` (`internal/abci/app.go`) and the
-/// problem type from `api/rest/memory_handler.go` and `internal/mcp/server.go`.
-/// If SAGE rewords one of these, this test is the thing that notices — the
-/// production path has no typed channel to read instead, because
-/// `ToolProviding.call` hands back prose.
+/// messages come from `processMemorySubmit` (`internal/abci/app.go`), the
+/// problem type from `api/rest/memory_handler.go` and `internal/mcp/server.go`,
+/// and the reason codes from `rest-api.md`.
+///
+/// There are two paths here on purpose. SAGE v11.14.2 added a typed channel —
+/// a stable `reason_code`, `retryable:false` and a per-cause `remedy` — which
+/// is now read first. The prose matcher underneath stays because the same
+/// reference says "generic denials from older servers retain the bounded
+/// compatibility recovery path", and an appliance talking to the node the owner
+/// already had is exactly that case.
 final class SageWriteDenialTests: XCTestCase {
 
     // MARK: - The refusals that must latch
