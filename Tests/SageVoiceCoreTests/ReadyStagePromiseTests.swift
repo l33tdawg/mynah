@@ -188,7 +188,7 @@ final class ReadyStagePausedTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let marker = PauseState(fileURL: root.appendingPathComponent("paused"))
         if paused { try marker.setPaused(true) }
-        return AppModel(defaults: defaults, pauseState: marker)
+        return AppModel(defaults: defaults, backgroundServices: InertAppliance(), pauseState: marker)
     }
 
     /// The state that must not read as "ready".
@@ -254,7 +254,7 @@ final class ReadyStagePausedTests: XCTestCase {
 
         let defaults = UserDefaults(suiteName: "mynah.ready.\(UUID().uuidString)")!
         defaults.set(true, forKey: "mynah.setupComplete")
-        let app = AppModel(defaults: defaults, pauseState: marker)
+        let app = AppModel(defaults: defaults, backgroundServices: InertAppliance(), pauseState: marker)
         XCTAssertTrue(marker.isPaused())
 
         app.isPaused = false

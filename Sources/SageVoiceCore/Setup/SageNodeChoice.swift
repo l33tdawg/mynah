@@ -65,6 +65,23 @@ public struct SageNodeChoice: Sendable, Equatable {
     /// node beside it — the exact outcome this exists to prevent. Whether it can
     /// be trusted to *run* is a separate question from whether Mynah is entitled
     /// to replace it.
+    /// ## The pair, and which question each answers
+    ///
+    /// **This is installed-wins. `EnvironmentProbe.defaultSageBundleExecutables`
+    /// is vendored-first.** Both return a path to a `sage-gui`, both look
+    /// correct at the call site, and picking the wrong one produces an empty
+    /// screen rather than an error.
+    ///
+    /// - *This* answers **"which node holds the owner's memories?"** Use it for
+    ///   anything that reads, writes or shows the owner's data.
+    /// - The probe list answers **"what can this app run?"** Use it during
+    ///   setup, when the question really is about capability.
+    ///
+    /// The failure is silent because a vendored node is a perfectly valid node
+    /// — it simply has none of the owner's memories in it. So the wrong choice
+    /// starts a second, empty brain beside theirs and every cheap check passes.
+    /// The Memories screen, the task board and About have each shipped that
+    /// way.
     public static func resolve(
         vendored: URL?,
         installedCandidates: [URL] = SageNodeChoice.installedCandidates(),

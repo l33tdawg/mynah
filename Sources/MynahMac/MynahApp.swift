@@ -284,6 +284,23 @@ final class AppModel {
     private let serviceConfiguration: () -> SignalServiceConfiguration?
     private(set) var answeringServiceError: String?
 
+    /// - Parameter backgroundServices: **inject this from a test, whatever the
+    ///   test is about.** The default is the shared manager, and the shared
+    ///   manager is aimed at the real home directory — so a test that omits it
+    ///   is holding the live appliance of the machine it is running on.
+    ///
+    ///   That is not theoretical. On 29 July tests about the *pause marker*
+    ///   deleted both LaunchAgent plists out of `~/Library/LaunchAgents`, and
+    ///   the owner's phone went unanswered for an hour while the window carried
+    ///   on working. No test failed and nothing logged, which is why it read as
+    ///   a product regression and was looked for in entirely the wrong place.
+    ///
+    ///   The manager now refuses to touch launchd when a test reaches the real
+    ///   home, so forgetting cannot destroy anything. Inject anyway: only three
+    ///   members reach `reconcileAnsweringService` today — `isPaused`,
+    ///   `keepsAnsweringWhenClosed` and `refreshPauseState()` — and the day
+    ///   somebody adds a fourth, every un-injected site arms itself at once and
+    ///   says nothing. `Tests/SageVoiceCoreTests/InertAppliance.swift`.
     init(
         defaults: UserDefaults = .standard,
         backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared,

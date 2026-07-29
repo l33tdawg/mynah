@@ -75,9 +75,21 @@ public enum MynahIdentity {
     // They returned `keyURL()` — `agent.key`, the app window's identity from
     // before "One appliance is one agent". Nothing registers that key any more,
     // so anything signing with it signs as an agent the node has never heard
-    // of. That fails *silently*: the REST layer answers a caller-filtered query
-    // for an unknown agent with an empty result, not an error, so the screen
-    // shows nothing and looks merely new.
+    // of.
+    //
+    // **The node answers that emptily rather than refusing**, and that is the
+    // whole reason it survived four times. An unknown agent is not an error to
+    // a caller-filtered query — it is an agent with nothing, which is exactly
+    // what a new install looks like. So every cheap check passes: the request
+    // is signed, the node replies 200, the JSON parses, the array is empty, the
+    // screen renders its empty state. Nothing anywhere throws.
+    //
+    // The general shape, which has now cost this codebase four surfaces here
+    // and three more in the vendored/installed pair below: **two functions that
+    // answer different questions, where the wrong answer is indistinguishable
+    // from a true one, and where the name you reach for by instinct is the
+    // wrong one.** `applianceEnvironment()` is the only correct way to build a
+    // child's identity; see `SageNodeChoice.resolve` for the other pair.
     //
     // Four surfaces were caught by these two functions in a single session —
     // the Memories screen, the appliance row on the Agents screen, the

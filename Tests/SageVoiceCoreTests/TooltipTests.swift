@@ -23,25 +23,25 @@ final class TooltipPreferenceTests: XCTestCase {
     /// default of off would hide the product's reasoning from the one person who
     /// has not read any of it.
     func testExplanationsAreOnUntilTurnedOff() {
-        XCTAssertTrue(AppModel(defaults: makeDefaults()).showsTooltips)
+        XCTAssertTrue(AppModel(defaults: makeDefaults(), backgroundServices: InertAppliance()).showsTooltips)
     }
 
     /// A preference that reset overnight would be worse than none — the owner
     /// would switch it off every morning.
     func testTheChoiceSurvivesRelaunch() {
         let defaults = makeDefaults()
-        AppModel(defaults: defaults).showsTooltips = false
+        AppModel(defaults: defaults, backgroundServices: InertAppliance()).showsTooltips = false
 
-        XCTAssertFalse(AppModel(defaults: defaults).showsTooltips)
+        XCTAssertFalse(AppModel(defaults: defaults, backgroundServices: InertAppliance()).showsTooltips)
     }
 
     func testTurningThemBackOnAlsoSurvives() {
         let defaults = makeDefaults()
-        let app = AppModel(defaults: defaults)
+        let app = AppModel(defaults: defaults, backgroundServices: InertAppliance())
         app.showsTooltips = false
         app.showsTooltips = true
 
-        XCTAssertTrue(AppModel(defaults: defaults).showsTooltips)
+        XCTAssertTrue(AppModel(defaults: defaults, backgroundServices: InertAppliance()).showsTooltips)
     }
 
     /// The environment default is what a view sees when nobody has supplied the
@@ -51,7 +51,7 @@ final class TooltipPreferenceTests: XCTestCase {
     func testTheEnvironmentDefaultMatchesTheAppDefault() {
         XCTAssertEqual(
             EnvironmentValues().mynahShowsTooltips,
-            AppModel(defaults: makeDefaults()).showsTooltips
+            AppModel(defaults: makeDefaults(), backgroundServices: InertAppliance()).showsTooltips
         )
     }
 }

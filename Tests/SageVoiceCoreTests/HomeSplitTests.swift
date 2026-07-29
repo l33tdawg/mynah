@@ -33,7 +33,7 @@ final class HomeSplitTests: XCTestCase {
         XCTAssertTrue(AppModel.HomeSplit.both.showsBoard)
         XCTAssertTrue(AppModel.HomeSplit.both.showsConversation)
 
-        let app = AppModel(defaults: makeDefaults())
+        let app = AppModel(defaults: makeDefaults(), backgroundServices: InertAppliance())
         XCTAssertEqual(app.homeSplit, .both, "a window that has never been folded opens folded")
     }
 
@@ -54,10 +54,10 @@ final class HomeSplitTests: XCTestCase {
     func testAFoldSurvivesRelaunch() {
         let defaults = makeDefaults()
 
-        let first = AppModel(defaults: defaults)
+        let first = AppModel(defaults: defaults, backgroundServices: InertAppliance())
         first.homeSplit = .conversationOnly
 
-        let afterRelaunch = AppModel(defaults: defaults)
+        let afterRelaunch = AppModel(defaults: defaults, backgroundServices: InertAppliance())
         XCTAssertEqual(
             afterRelaunch.homeSplit,
             .conversationOnly,
@@ -68,11 +68,11 @@ final class HomeSplitTests: XCTestCase {
     func testFoldingBackToBothAlsoSurvives() {
         let defaults = makeDefaults()
 
-        let first = AppModel(defaults: defaults)
+        let first = AppModel(defaults: defaults, backgroundServices: InertAppliance())
         first.homeSplit = .boardOnly
         first.homeSplit = .both
 
-        XCTAssertEqual(AppModel(defaults: defaults).homeSplit, .both)
+        XCTAssertEqual(AppModel(defaults: defaults, backgroundServices: InertAppliance()).homeSplit, .both)
     }
 
     /// A value written by a newer build, or a corrupted one, opens showing both
@@ -81,14 +81,14 @@ final class HomeSplitTests: XCTestCase {
         let defaults = makeDefaults()
         defaults.set("something-else", forKey: "mynah.homeSplit")
 
-        XCTAssertEqual(AppModel(defaults: defaults).homeSplit, .both)
+        XCTAssertEqual(AppModel(defaults: defaults, backgroundServices: InertAppliance()).homeSplit, .both)
     }
 
     /// Two windows over one preference must not disagree about which half is
     /// folded — the value is the app's, not the view's.
     func testTheFoldIsAPropertyOfTheAppAndNotOfAView() {
         let defaults = makeDefaults()
-        let app = AppModel(defaults: defaults)
+        let app = AppModel(defaults: defaults, backgroundServices: InertAppliance())
 
         app.homeSplit = .boardOnly
 

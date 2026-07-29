@@ -87,6 +87,28 @@ public struct EnvironmentProbe {
     /// so it runs without Gatekeeper prompts and without the owner installing
     /// anything. QuietType has shipped this arrangement for a while and it is
     /// why its SAGE detection effectively never fails.
+    /// ## Not the one to use for talking to the owner's node
+    ///
+    /// **This is vendored-first. `SageNodeChoice.resolve(vendored:)` is
+    /// installed-wins. They answer different questions and picking the wrong
+    /// one fails silently.**
+    ///
+    /// - *This* answers **"what can this app run?"** — a probe question, asked
+    ///   during setup, where our own bundled copy is the right first answer
+    ///   because it is signed with us and needs nothing installed.
+    /// - `SageNodeChoice.resolve` answers **"which node holds the owner's
+    ///   memories?"** — which is whichever SAGE they already had, always, even
+    ///   if ours is newer. Starting a second node beside theirs gives them two
+    ///   brains that cannot see each other's memories.
+    ///
+    /// Anything that reads, writes or displays the owner's data wants
+    /// `SageNodeChoice`. Three surfaces have shipped with this one instead —
+    /// the Memories screen, the task board and About — and the symptom every
+    /// time was an empty screen rather than an error, because a freshly
+    /// vendored node is a *valid, working, empty* node. Nothing throws.
+    ///
+    /// The instinct is the trap: this has the more available name and lives on
+    /// the type you are already holding during setup.
     public static let defaultSageBundleExecutables: [URL] = {
         var candidates: [URL] = []
         if let vendored = SageNodeLocator.vendoredExecutableURL() {
