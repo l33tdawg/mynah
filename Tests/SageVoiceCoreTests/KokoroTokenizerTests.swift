@@ -65,11 +65,48 @@ final class KokoroTokenizerTests: XCTestCase {
         XCTAssertEqual(KokoroTokenizer.ids(for: "a a"), [43, 16, 43])
     }
 
-    /// The combining tilde is a single Unicode scalar that Swift would happily
-    /// fold into the preceding character if this were keyed on anything but
-    /// `Character` — worth asserting because the failure would be invisible.
-    func testTheCombiningTildeIsItsOwnEntry() {
+    /// **The scalar-versus-grapheme trap, as a test.**
+    ///
+    /// Python iterates a `str` scalar by scalar. Swift's `Character` is a
+    /// grapheme cluster, so "e" followed by U+0303 is the *single* `Character`
+    /// "ẽ" — which matches no vocabulary key, dropping **both** tokens where
+    /// Python emits 47 then 17. Nothing crashes; the speech is quietly missing a
+    /// nasal, and no test keyed on an isolated tilde would ever notice.
+    ///
+    /// The first version of this file had exactly that bug, and exactly that
+    /// blind test.
+    func testACombiningMarkIsTokenizedSeparatelyFromItsBaseVowel() {
         XCTAssertEqual(KokoroTokenizer.vocabulary["\u{0303}"], 17)
+
+        // One Character, two scalars, two tokens.
+        let nasal = "e\u{0303}"
+        XCTAssertEqual(nasal.count, 1, "precondition: Swift folds this into one Character")
+        XCTAssertEqual(nasal.unicodeScalars.count, 2)
+        XCTAssertEqual(
+            KokoroTokenizer.ids(for: nasal), [47, 17],
+            "a combining mark was folded into its base vowel and both tokens were lost"
+        )
+    }
+
+    /// The table has to be keyed on scalars for the above to be possible at all.
+    func testTheVocabularyIsKeyedOnScalarsRatherThanGraphemes() {
+        XCTAssertEqual(KokoroTokenizer.vocabulary.count, 114, "the table lost or gained an entry")
+    }
+
+    /// Script g, not ASCII g. `ɡ` is U+0261; ASCII `g` (U+0067) is absent from
+    /// the table entirely and would be silently dropped — and the two are
+    /// indistinguishable in most editors.
+    func testTheScriptGIsNotTheASCIIG() {
+        XCTAssertEqual(KokoroTokenizer.vocabulary["\u{0261}"], 92)
+        XCTAssertNil(KokoroTokenizer.vocabulary["g"], "ASCII g crept into the table")
+        XCTAssertEqual(KokoroTokenizer.ids(for: "g"), [], "ASCII g was tokenized")
+    }
+
+    /// The length mark is U+02D0 TRIANGULAR COLON, not an ASCII colon — which
+    /// *is* in the table, as a different id.
+    func testTheLengthMarkIsNotAColon() {
+        XCTAssertEqual(KokoroTokenizer.vocabulary["\u{02D0}"], 158)
+        XCTAssertEqual(KokoroTokenizer.vocabulary[":"], 2)
     }
 
     /// Ids the table does not contain are absent on purpose. This guards the
@@ -111,24 +148,31 @@ final class KokoroTokenizerTests: XCTestCase {
 
     // MARK: Length
 
-    /// The positional embedding is 510 long and the style array has 510 rows.
-    /// A sequence past that has nowhere to index, so the caller must split
-    /// first — this is the predicate it splits on.
-    func testTheLengthLimitIsMeasuredOnTheUnpaddedCount() {
-        let long = String(repeating: "a", count: 510)
-        XCTAssertTrue(KokoroTokenizer.fits(long))
-        XCTAssertEqual(KokoroTokenizer.ids(for: long).count, 510)
-        // Padding takes it to 512, which is expected and is not what `fits`
-        // measures.
-        XCTAssertEqual(KokoroTokenizer.tokens(for: long).count, 512)
-
-        XCTAssertFalse(KokoroTokenizer.fits(String(repeating: "a", count: 511)))
+    /// **509, not 510.** Each voice is `(510, 1, 256)` indexed by token count, so
+    /// rows 0…509 are valid — but upstream truncates the phoneme string at 510
+    /// and then indexes with the result, so a 510-token sequence asks for
+    /// `voice[510]` and raises `IndexError`. Verified against the running
+    /// package. This port takes the bound that actually works.
+    func testTheUsableLimitStopsShortOfTheUpstreamOffByOne() {
+        XCTAssertEqual(KokoroTokenizer.maximumTokens, 509)
+        XCTAssertTrue(KokoroTokenizer.fits(String(repeating: "a", count: 509)))
+        XCTAssertFalse(
+            KokoroTokenizer.fits(String(repeating: "a", count: 510)),
+            "510 tokens would index a style row that does not exist"
+        )
     }
 
-    /// Characters that are dropped do not count toward the limit, because they
-    /// do not reach the model.
-    func testDroppedCharactersDoNotCountTowardTheLimit() {
-        let text = String(repeating: "a", count: 510) + String(repeating: "日", count: 100)
+    /// The string is truncated before tokenizing, matching upstream's order.
+    func testAnOverlongStringIsTruncatedRatherThanRejected() {
+        let ids = KokoroTokenizer.ids(for: String(repeating: "a", count: 600))
+        XCTAssertEqual(ids.count, 510, "truncation happens on the scalars, at 510")
+    }
+
+    /// Scalars that are dropped do not consume the budget, because the
+    /// truncation is on the input string and the drop happens after.
+    func testDroppedScalarsDoNotCountTowardTheTokenCount() {
+        let text = String(repeating: "日", count: 100) + String(repeating: "a", count: 400)
+        XCTAssertEqual(KokoroTokenizer.ids(for: text).count, 400)
         XCTAssertTrue(KokoroTokenizer.fits(text))
     }
 }

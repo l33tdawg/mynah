@@ -25,14 +25,32 @@ public enum KokoroTokenizer {
     /// The padding token, used at both ends of every sequence.
     public static let padding: Int64 = 0
 
-    /// The model's positional embedding is 510 long, and the style vector is
-    /// selected by token count from an array of the same size — so a sequence
-    /// longer than this has nowhere to index. `kokoro_onnx` splits the phoneme
-    /// string into batches before it gets here.
-    public static let maximumTokens = 510
+    /// What `kokoro_onnx` truncates the phoneme string to before tokenizing.
+    public static let maximumPhonemes = 510
 
-    /// Phoneme character to token id, as `kokoro_onnx.tokenizer` holds it.
-    public static let vocabulary: [Character: Int64] = [
+    /// The most tokens that can actually be synthesized.
+    ///
+    /// **509, not 510, and the difference is a bug upstream.** Each voice is a
+    /// `(510, 1, 256)` array indexed by token count, so the valid rows are
+    /// 0…509 — but `kokoro_onnx` truncates the phoneme string at 510 and then
+    /// indexes with the resulting count, so a 510-token sequence reaches
+    /// `voice[510]` and raises `IndexError: index 510 is out of bounds for axis
+    /// 0 with size 510`. Verified against the running package.
+    ///
+    /// Its own batch splitter caps at 509 and never hits this; only a caller
+    /// passing phonemes directly can. This port takes the bound that works.
+    public static let maximumTokens = 509
+
+    /// Phoneme scalar to token id, as `kokoro_onnx.tokenizer` holds it.
+    ///
+    /// **Keyed on `Unicode.Scalar`, not `Character`, and that is load-bearing.**
+    /// Python iterates a `str` scalar by scalar; Swift's `Character` is a
+    /// grapheme cluster. Key this on `Character` and a combining mark fuses with
+    /// the vowel before it — "e" followed by U+0303 becomes the single
+    /// `Character` "ẽ", which matches nothing, so **both** tokens are silently
+    /// dropped where Python emits 47 and then 17. Nothing crashes; the speech is
+    /// just quietly missing a nasal.
+    public static let vocabulary: [Unicode.Scalar: Int64] = [
         ";": 1, ":": 2, ",": 3, ".": 4, "!": 5, "?": 6, "—": 9, "…": 10,
         "\"": 11, "(": 12, ")": 13, "“": 14, "”": 15, " ": 16,
         "\u{0303}": 17, "ʣ": 18, "ʥ": 19, "ʦ": 20, "ʨ": 21, "ᵝ": 22, "ꭧ": 23,
@@ -54,12 +72,16 @@ public enum KokoroTokenizer {
 
     /// The ids for a phoneme string, **without** the padding at either end.
     ///
-    /// Characters outside the vocabulary are dropped rather than substituted.
-    /// That is what `kokoro_onnx` does, and the alternative — mapping the unknown
-    /// to some nearby sound — would put a phoneme in the owner's speech that
-    /// nothing in the text asked for.
+    /// Scalars outside the vocabulary are dropped rather than substituted. That
+    /// is what `kokoro_onnx` does — there is no unknown token — and the
+    /// alternative, mapping the unknown to some nearby sound, would put a
+    /// phoneme in the owner's speech that nothing in the text asked for.
+    ///
+    /// The string is truncated **before** tokenizing rather than the ids after,
+    /// matching the order upstream uses: dropped scalars do not consume any of
+    /// the budget there either.
     public static func ids(for phonemes: String) -> [Int64] {
-        phonemes.compactMap { vocabulary[$0] }
+        phonemes.unicodeScalars.prefix(maximumPhonemes).compactMap { vocabulary[$0] }
     }
 
     /// The full sequence fed to the graph: a pad, the phonemes, a pad.
@@ -73,7 +95,8 @@ public enum KokoroTokenizer {
     /// Whether a phoneme string fits in one pass.
     ///
     /// Measured on the **unpadded** count, because that is what indexes the
-    /// style vector — see `KokoroVoices`.
+    /// style vector — not the phoneme character count, and not the padded
+    /// length. They coincide only when every scalar is in the vocabulary.
     public static func fits(_ phonemes: String) -> Bool {
         ids(for: phonemes).count <= maximumTokens
     }
