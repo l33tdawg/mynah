@@ -87,7 +87,11 @@ public enum BrainPrompts {
     Never the other way round: if anything interrupts you between the two, that order leaves a \
     duplicate, and the other order leaves nothing at all.
     - Store one subject per memory. If the owner mentions two unrelated things in one sentence, \
-    that is two memories in two domains, not one.
+    that is two memories, not one.
+    - Always store into the domain "\(SageRitual.memoryDomain)", and never invent a domain per \
+    subject. Put the subject in the tags instead: one or two short lowercase words. \
+    Leaving the domain out is not neutral — it defaults to a domain this agent is not \
+    allowed to write, and the memory is silently lost.
 
     REMEMBERING EARLIER CONVERSATIONS
     - "we talked about", "you told me", "the ones from before", "our list" mean an earlier \

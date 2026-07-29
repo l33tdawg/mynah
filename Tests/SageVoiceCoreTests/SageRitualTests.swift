@@ -137,7 +137,14 @@ final class SageRitualTests: XCTestCase {
         XCTAssertEqual(tools.names, [SageRitual.Tool.turn])
         let arguments = tools.recorded[0].arguments
         XCTAssertEqual(arguments["topic"]?.stringValue, "what is the population of Kuala Lumpur")
-        XCTAssertEqual(arguments["domain"]?.stringValue, "voice-appliance")
+        // The constant, not the literal. This asserted "voice-appliance" and
+        // therefore had to be edited when the domain changed — which is the
+        // wrong way round: the name has to match a domain an administrator
+        // actually assigns on the node, so it will change again, and a test
+        // that pins the old spelling turns a deliberate change into a failure
+        // instead of checking the thing that matters. What matters is that the
+        // turn is written to whichever domain this appliance claims as its own.
+        XCTAssertEqual(arguments["domain"]?.stringValue, SageRitual.memoryDomain)
     }
 
     /// SAGE silently drops observations under 30 characters as low-value, so a

@@ -125,11 +125,26 @@ final class RecallDisciplineTests: XCTestCase {
 
     /// The other half of the same bug: the memory was wrong because it was
     /// stored fused in the first place.
-    func testThePromptAsksForOneSubjectPerMemory() {
+    ///
+    /// This used to require the phrase "two memories in two domains", and that
+    /// half of the instruction is now deliberately gone. Under app-v22 an agent
+    /// may only write a domain it owns, so a domain invented per subject is a
+    /// memory that is refused and lost — the prompt was teaching the model to
+    /// destroy the very memories this rule exists to keep. One subject per
+    /// memory survives; splitting by domain is replaced by tags.
+    func testThePromptAsksForOneSubjectPerMemoryWithoutSplittingTheDomain() {
         XCTAssertTrue(prompt.contains("Store one subject per memory"))
         XCTAssertTrue(
-            prompt.contains("two memories in two domains"),
+            prompt.contains("that is two memories, not one"),
             "nothing tells it what to do with a sentence carrying two subjects"
+        )
+        XCTAssertFalse(
+            prompt.contains("two memories in two domains"),
+            "a domain invented per subject cannot be written and the memory is lost"
+        )
+        XCTAssertTrue(
+            prompt.contains("Put the subject in the tags instead"),
+            "removing the domain split leaves nothing carrying the subject"
         )
     }
 

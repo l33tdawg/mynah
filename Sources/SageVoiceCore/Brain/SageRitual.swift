@@ -26,6 +26,23 @@ import Foundation
 /// iterations. It is the appliance's own housekeeping, so the appliance does it.
 public actor SageRitual {
 
+    /// A write the node will never accept, however often it is retried.
+    ///
+    /// Distinct from an ordinary failure on purpose. A refused *permission* and
+    /// a refused *connection* look identical at the call site and want opposite
+    /// handling: one is fixed by trying again, the other is only ever fixed by
+    /// the owner granting something in CEREBRUM. Conflating them is a known,
+    /// expensive bug — an untyped 403 was read as a stale session, so every
+    /// single write paid a full re-registration plus a backoff ladder before
+    /// failing anyway, on a machine nobody is sitting at.
+    public struct WriteDenial: Sendable, Equatable {
+        /// The domain the appliance was trying to write. Named so the owner is
+        /// told what to grant rather than that "something" was refused.
+        public let domain: String
+        /// What the node said, for the log and for the settings row.
+        public let detail: String
+    }
+
     /// SAGE's own tool names. Not in the voice allowlist on purpose: the model
     /// must never reach these, because *it* calling them is the failure mode
     /// this type exists to replace.
@@ -95,6 +112,49 @@ public actor SageRitual {
     /// often and the ledger fills with noise that dilutes real recall.
     public static let reflectEveryTurns = 10
 
+    /// The one domain this appliance writes.
+    ///
+    /// Everything it stores goes here and nowhere else, and that is now a
+    /// requirement rather than tidiness. Under app-v22 an agent carries a
+    /// capability mask; the fail-closed mask a self-registered key receives
+    /// denies writes to the shared domains (`general`, `self`, `meta`,
+    /// `sage-*`), denies claiming an unowned domain, and denies writing a
+    /// domain owned by anybody else — the last one *even when a level-2 grant
+    /// exists*. So a domain invented per subject is a domain the appliance can
+    /// never write, and `general` — the default when no domain is passed — is
+    /// among the ones explicitly closed.
+    ///
+    /// One domain the appliance owns is therefore the only shape that can work,
+    /// and subject has to be carried some other way. `sage_remember` takes a
+    /// `tags` array for exactly that; `sage_turn` does not take one at all, so
+    /// the per-turn record below carries subject in its topic string and
+    /// nothing else. Do not "fix" that by splitting the domain.
+    ///
+    /// Not named `sage-voice-bridge`, deliberately: `sage-*` is a reserved
+    /// ownerless shared prefix, so that name is unwritable by construction.
+    ///
+    /// ## Why `voice-interface` and not `voice-appliance`
+    ///
+    /// This was `voice-appliance`, which the appliance had never once succeeded
+    /// in writing. The remedy is for an administrator to *transfer ownership* of
+    /// a domain to this agent, and transfer needs a domain that already exists —
+    /// the appliance cannot bring one into being, because every path that would
+    /// make it an owner is denied to it (first-write auto-registration and
+    /// explicit registration alike).
+    ///
+    /// `voice-interface` already exists on the owner's node, owned by the
+    /// genesis admin, so the ownership transfer has something to transfer and
+    /// CEREBRUM can drive it end to end. It is also the name SAGE's own RBAC
+    /// reference uses when describing this exact arrangement. `voice-appliance`
+    /// would have required the administrator to create it first, which is a
+    /// further step for no gain.
+    ///
+    /// **This name must match the domain that is actually assigned.** A
+    /// mismatch fails the same silent way the original bug did — writes refused,
+    /// nothing said. A test asserts the system prompt names the same domain this
+    /// constant does, so the two cannot drift apart unnoticed.
+    public static let memoryDomain = "voice-interface"
+
     private let tools: ToolProviding
     private let log: @Sendable (String) -> Void
 
@@ -103,6 +163,25 @@ public actor SageRitual {
     /// What `sage_inception` returned, trimmed. Nil until boot, and nil forever
     /// if boot failed — the appliance still works, it just starts cold.
     public private(set) var bootContext: String?
+
+    /// Set once the node has permanently refused a write, and never cleared.
+    ///
+    /// Latched rather than re-tested per turn. Nothing the appliance can do
+    /// changes the answer — only the owner can, in CEREBRUM — so every
+    /// subsequent attempt would spend a round trip to be told the same thing,
+    /// forever, at one per spoken turn. Reading this is how the app and the
+    /// daemon know to tell the owner that Mynah cannot save what it is being
+    /// told, and which domain it wanted.
+    public private(set) var writeDenial: WriteDenial?
+
+    /// What the node said about this agent's standing at boot.
+    ///
+    /// The forward-looking half of `writeDenial`: that one is what happened
+    /// when a write was refused, this one is known before any write is
+    /// attempted. Both exist because they catch different gates — the mask is
+    /// visible here, and a `DomainAccess` allowlist is not visible to an
+    /// unauthenticated reader and only shows up as a refusal.
+    public private(set) var readiness: ApplianceWriteReadiness?
 
     /// - Parameter agentName: what this process registers as. Defaults to the
     ///   appliance so existing call sites keep their identity.
@@ -115,19 +194,26 @@ public actor SageRitual {
     ///     happens only where a call site has asked for it by name.
     ///   - displayNameMarker: where the applied name is recorded, so the rename
     ///     happens once rather than on every boot.
+    ///   - readinessCheck: asks the node whether this agent may write. Injected
+    ///     so a test can drive every standing without a node, and so the check
+    ///     stays one line at the call site.
     public init(
         tools: ToolProviding,
         agentName: String = SageRitual.applianceAgentName,
         displayName: String? = nil,
         displayNameMarker: URL? = SageRitual.defaultDisplayNameMarker(),
+        readinessCheck: (@Sendable () async -> ApplianceWriteReadiness)? = nil,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.tools = tools
         self.agentName = agentName
         self.displayName = displayName
         self.displayNameMarker = displayNameMarker
+        self.readinessCheck = readinessCheck ?? { await ApplianceWriteReadinessCheck().check() }
         self.log = log
     }
+
+    private let readinessCheck: @Sendable () async -> ApplianceWriteReadiness
 
     public static func defaultDisplayNameMarker(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -152,6 +238,7 @@ public actor SageRitual {
     @discardableResult
     public func boot() async -> String? {
         await register()
+        await checkWhetherItCanSaveAnything()
         do {
             let reply = try await tools.call(name: Tool.inception, arguments: [:])
             let trimmed = Self.condense(reply, to: Self.maximumBootContextCharacters)
@@ -165,6 +252,28 @@ public actor SageRitual {
             log("[sage] inception failed, starting without prior context: \(error)")
             return nil
         }
+    }
+
+    /// Asks the node whether this agent is allowed to save anything, at boot,
+    /// before a single turn has been discarded.
+    ///
+    /// Runs after `register()` so a first run has had its chance to appear on
+    /// the roster, and before `inception` so the answer is in the log above the
+    /// first turn rather than buried under it.
+    ///
+    /// It never blocks or fails the boot. A node that cannot be reached, or an
+    /// agent not yet on the roster, is reported as unknown and says nothing —
+    /// an appliance that cannot see its node must not tell the owner their
+    /// permissions are wrong.
+    private func checkWhetherItCanSaveAnything() async {
+        let readiness = await self.readinessCheck()
+        self.readiness = readiness
+        guard let line = readiness.logLine else { return }
+        // Logged at boot, every boot, for as long as it is true. Not once and
+        // not on first failure: the whole failure this replaces was a fault
+        // that was perfectly silent for the life of an identity, and a line
+        // that scrolls past once would have been just as silent.
+        log(line)
     }
 
     /// Claims an on-chain identity for the appliance.
@@ -183,11 +292,30 @@ public actor SageRitual {
     /// it happens here rather than in the model's catalogue.
     private func register() async {
         do {
-            _ = try await tools.call(
+            let reply = try await tools.call(
                 name: Tool.register,
-                arguments: ["name": .string(agentName)]
+                arguments: [
+                    "name": .string(agentName),
+                    // Was omitted, and the omission shipped. `sage_inception`
+                    // auto-registers too, and when it gets there first the node
+                    // keeps ITS name and bio forever — `RegisteredName` is
+                    // immutable. That is why the appliance on the author's node
+                    // reads `registered_name: "agent-74140c2d"` with the bio
+                    // "Auto-registered  agent for project ''" (the double space
+                    // is an empty provider): `autoAgentName()` falls back to
+                    // "agent-" + the first 8 hex of the key when provider and
+                    // project are both empty, which they are for a launchd
+                    // daemon.
+                    //
+                    // Registering BEFORE inception is what makes this the name
+                    // that sticks, so this call must stay ahead of it in
+                    // `boot()`. The bio is the part a person reads in CEREBRUM
+                    // when deciding what to grant, so it says what the agent is
+                    // for rather than what registered it.
+                    "boot_bio": .string(Self.bootBio)
+                ]
             )
-            log("[sage] registered as \(agentName)")
+            log("[sage] registered as \(agentName): \(Self.condense(reply, to: 200))")
             await adoptDisplayName()
         } catch {
             // Non-fatal: memory still works unregistered, and an appliance that
@@ -196,6 +324,17 @@ public actor SageRitual {
             log("[sage] registration failed, task tools may return 401: \(error)")
         }
     }
+
+    /// What CEREBRUM shows under the agent's name.
+    ///
+    /// Written for the person deciding whether to grant this agent anything.
+    /// It names the domain it needs, because that decision is otherwise made
+    /// with no information at all — the previous bio said only that something
+    /// had auto-registered itself.
+    static let bootBio = """
+    Mynah, the voice appliance on this Mac. Answers the owner's Signal messages \
+    and calls, and stores what it is told in the \(memoryDomain) domain.
+    """
 
     /// Sets the name CEREBRUM shows, if it is not already set.
     ///
@@ -262,6 +401,11 @@ public actor SageRitual {
         let topic = Self.topic(from: transcript)
         let observation = Self.observation(transcript: transcript, reply: reply, usedTools: usedTools)
 
+        // Already refused once. See `writeDenial`: retrying is the bug, not the
+        // fix. The turn still counted above so the reflect cadence stays honest
+        // if the owner grants access and restarts.
+        guard writeDenial == nil else { return }
+
         do {
             _ = try await tools.call(
                 name: Tool.turn,
@@ -269,15 +413,17 @@ public actor SageRitual {
                     "topic": .string(topic),
                     "observation": .string(observation),
                     // A dedicated domain, so the appliance's episodic chatter
-                    // does not dilute recall in the domains real work uses.
-                    "domain": .string("voice-appliance")
+                    // does not dilute recall in the domains real work uses —
+                    // and, since app-v22, the only domain it is able to write.
+                    // See `memoryDomain`.
+                    "domain": .string(Self.memoryDomain)
                 ]
             )
         } catch {
-            log("[sage] turn failed: \(error)")
+            note(error, whileDoing: "turn")
         }
 
-        if turnsSinceReflect >= Self.reflectEveryTurns {
+        if writeDenial == nil, turnsSinceReflect >= Self.reflectEveryTurns {
             turnsSinceReflect = 0
             await reflect()
         }
@@ -291,13 +437,82 @@ public actor SageRitual {
                     "task_summary": .string(
                         "Voice appliance handled \(turnCount) spoken turns for the owner over Signal."
                     ),
-                    "domain": .string("voice-appliance")
+                    "domain": .string(Self.memoryDomain)
                 ]
             )
             log("[sage] reflected after \(turnCount) turns")
         } catch {
-            log("[sage] reflect failed: \(error)")
+            note(error, whileDoing: "reflect")
         }
+    }
+
+    // MARK: - Telling a refusal from a failure
+
+    /// Records a failed write, latching the permanent kind.
+    ///
+    /// The distinction is the whole point of this function: a transport failure
+    /// is worth trying again next turn and a permission refusal is not, and the
+    /// appliance previously logged both with the same sentence and forgot them
+    /// both just as fast.
+    private func note(_ error: Error, whileDoing what: String) {
+        guard let denial = Self.permanentDenial(in: "\(error)") else {
+            log("[sage] \(what) failed: \(error)")
+            return
+        }
+        writeDenial = denial
+        // Loud, once, and naming the domain. This is the sentence someone reads
+        // in a log six months from now while wondering why an appliance that
+        // has answered thousands of questions remembers none of them.
+        log(
+            "[sage] PERMANENTLY REFUSED: this agent cannot write the domain "
+                + "\"\(denial.domain)\", so nothing said to Mynah is being stored. "
+                + "The owner has to grant it in CEREBRUM. Not retrying. Node said: \(denial.detail)"
+        )
+    }
+
+    /// The RFC 7807 problem type SAGE returns for a refusal that will not change
+    /// on its own (`api/rest/memory_handler.go`, `internal/mcp/server.go`).
+    ///
+    /// This string is the contract, so it is matched first and exactly.
+    static let domainWriteDeniedProblemType = "https://sage.dev/errors/domain-write-denied"
+
+    /// Whether a failure is a permission refusal rather than a bad moment.
+    ///
+    /// Matching on message text is normally how a UI ends up rewritten by a
+    /// reworded sentence, and this file's own neighbours say so. It is done here
+    /// because there is no typed channel to read instead: `ToolProviding.call`
+    /// returns a `String`, so a tool failure arrives as prose whatever the node
+    /// meant by it.
+    ///
+    /// So the problem-type URI is tried first and is a real contract. The
+    /// consensus phrases below are the fallback for a denial that reaches us as
+    /// a raw ABCI log rather than through the REST problem shape — they are
+    /// quoted from `processMemorySubmit` and are NOT a contract. A denial this
+    /// misses is logged as an ordinary failure and retried next turn, which is
+    /// the safe direction to be wrong in: noisy, not silent.
+    static func permanentDenial(in message: String) -> WriteDenial? {
+        let lowered = message.lowercased()
+        let isDenial = lowered.contains(domainWriteDeniedProblemType)
+            || lowered.contains("cannot write shared domain")
+            || lowered.contains("cannot claim unowned domain")
+            || lowered.contains("cannot write domain")
+            || lowered.contains("no write access to domain")
+            || lowered.contains("does not have write access")
+        guard isDenial else { return nil }
+        return WriteDenial(domain: domain(in: message) ?? memoryDomain, detail: condense(message, to: 300))
+    }
+
+    /// Pulls the domain out of the node's sentence, so the owner is told which
+    /// one to grant. Falls back to the domain we asked for, which is the same
+    /// answer in every case the appliance itself produces.
+    private static func domain(in message: String) -> String? {
+        for marker in ["domain '", "domain \"", "domain "] {
+            guard let range = message.range(of: marker) else { continue }
+            let rest = message[range.upperBound...]
+            let name = rest.prefix { !$0.isWhitespace && $0 != "'" && $0 != "\"" && $0 != "," }
+            if !name.isEmpty { return String(name) }
+        }
+        return nil
     }
 
     // MARK: - Shaping

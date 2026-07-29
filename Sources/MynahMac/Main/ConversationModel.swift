@@ -297,10 +297,23 @@ actor ToolLoopTurnEngine: TurnEngine {
         // The raw node, not the composed source: the boot ritual calls tools the
         // loop's allowlist deliberately withholds from the model.
         // Registered as the appliance, for the same reason it signs as it.
+        // With a log sink, and that is not decoration. `SageRitual.log` defaults
+        // to `{ _ in }`, this call site never passed one, and so every
+        // "[sage] turn failed" the app produced went into a closure that threw
+        // it away. The appliance recorded zero memories against its agent while
+        // the Memories screen told the owner, in a confident sentence, that the
+        // screen "fills up as you talk to it".
+        //
+        // A store that fails silently is worse than one that fails: the owner
+        // cannot tell "nothing has happened yet" from "nothing has ever
+        // worked", and neither can we — the reason it recorded nothing is not
+        // recoverable from any log on the machine, because it was never
+        // written down.
         self.ritual = SageRitual(
             tools: mcp,
             agentName: SageRitual.applianceAgentName,
-            displayName: SageRitual.applianceDisplayName
+            displayName: SageRitual.applianceDisplayName,
+            log: { conversationLog.error("\($0, privacy: .public)") }
         )
     }
 
