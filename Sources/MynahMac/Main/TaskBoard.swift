@@ -117,6 +117,17 @@ struct TaskBoard: Equatable, Sendable {
     /// how many there are and leaves it there.
     var unclassified: [BoardTask] = []
 
+    /// Whether the source that filled this board can speak about finished work
+    /// at all.
+    ///
+    /// `sage_backlog` answers with **open** tasks; done and dropped work is not
+    /// empty in its reply, it is absent. Drawing a Done column from it would
+    /// print "Nothing finished yet." permanently over work that exists and was
+    /// completed — a column that is always wrong is worse than a column that is
+    /// not there. So the reader says what it can see and the view draws only
+    /// that.
+    var coversFinishedWork: Bool = true
+
     /// How long a finished or abandoned card stays on the board.
     ///
     /// Seven days from the terminal transition, which is what CEREBRUM does with
@@ -150,7 +161,7 @@ struct TaskBoard: Equatable, Sendable {
     }
 
     /// Splits what the node returned into columns.
-    static func from(rows: [BoardTask]) -> TaskBoard {
+    static func from(rows: [BoardTask], coversFinishedWork: Bool = true) -> TaskBoard {
         // Newest first within a column. For open work that is when it was
         // asked for; for finished work it is when it finished, which is the
         // order somebody scanning "what got done" actually wants.
@@ -162,7 +173,8 @@ struct TaskBoard: Equatable, Sendable {
             inProgress: ordered.filter { $0.progress == .inProgress },
             done: ordered.filter { $0.progress == .done },
             dropped: ordered.filter { $0.progress == .dropped },
-            unclassified: ordered.filter { $0.progress == nil }
+            unclassified: ordered.filter { $0.progress == nil },
+            coversFinishedWork: coversFinishedWork
         )
     }
 }
@@ -519,7 +531,11 @@ final class TaskBoardModel {
 
     private let source: any TaskSource
 
-    init(source: any TaskSource = CerebrumTaskSource.shared) {
+    /// **MCP, not the CEREBRUM feed.** The unsigned dashboard read this used to
+    /// make is answered `401` on the owner's node and has never once opened —
+    /// see `MCPTaskSource` for why the narrow, signed, self-scoped tool is the
+    /// correct answer rather than the consolation prize.
+    init(source: any TaskSource = MCPTaskSource.shared) {
         self.source = source
     }
 

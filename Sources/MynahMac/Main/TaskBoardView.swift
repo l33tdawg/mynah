@@ -74,30 +74,38 @@ struct TaskBoardView: View {
                 tasks: board.inProgress,
                 emptyLine: "Nothing under way."
             )
-            columnRule
-            BoardColumnView(
-                title: "Done",
-                glyph: "checkmark.circle",
-                tone: .good,
-                count: board.done.count,
-                tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
-                emptyLine: "Nothing finished yet.",
-                isHistory: true
-            )
-            columnRule
-            BoardColumnView(
-                title: "Dropped",
-                // A cross, not a warning triangle. Abandoning a task is a
-                // decision the owner made, not a fault, and this column should
-                // read as closed rather than as something needing attention —
-                // which is why it is `neutral` and not `critical`.
-                glyph: "xmark.circle",
-                tone: .neutral,
-                count: board.dropped.count,
-                tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
-                emptyLine: "Nothing dropped.",
-                isHistory: true
-            )
+            // **Absent, not empty.** `sage_backlog` answers with open work only,
+            // so finished and abandoned tasks are not in its reply at all. A
+            // Done column fed from it would read "Nothing finished yet." for
+            // ever, over work the owner knows they completed — and a column that
+            // is permanently and confidently wrong costs more trust than a
+            // column that is not drawn.
+            if board.coversFinishedWork {
+                columnRule
+                BoardColumnView(
+                    title: "Done",
+                    glyph: "checkmark.circle",
+                    tone: .good,
+                    count: board.done.count,
+                    tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
+                    emptyLine: "Nothing finished yet.",
+                    isHistory: true
+                )
+                columnRule
+                BoardColumnView(
+                    title: "Dropped",
+                    // A cross, not a warning triangle. Abandoning a task is a
+                    // decision the owner made, not a fault, and this column should
+                    // read as closed rather than as something needing attention —
+                    // which is why it is `neutral` and not `critical`.
+                    glyph: "xmark.circle",
+                    tone: .neutral,
+                    count: board.dropped.count,
+                    tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
+                    emptyLine: "Nothing dropped.",
+                    isHistory: true
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -138,6 +146,17 @@ struct TaskBoardView: View {
                  ? "1 older task has no status recorded, so it isn't in a column. CEREBRUM can set it."
                  : "\(board.unclassified.count) older tasks have no status recorded, so they aren't "
                     + "in a column. CEREBRUM can set them.")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if !board.coversFinishedWork {
+            // Said once, quietly, rather than implied four times by a pair of
+            // columns that never fill. The owner should not have to work out
+            // from two permanently empty headings that this screen is showing
+            // them a different question than they thought.
+            Text("This is the work assigned to Mynah. Finished tasks and other agents' "
+                 + "work aren't part of what it can ask for — those live in CEREBRUM.")
                 .mynahFont(.label)
                 .foregroundStyle(Palette.ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
