@@ -813,13 +813,23 @@ struct SettingsView: View {
             if let probe = model.probe {
                 BrainProviderSheet(
                     choices: BrainSetupPlanner().plan(for: probe),
-                    current: model.brainOption
+                    current: model.brainOption,
+                    // What Ollama has actually pulled. The sheet lists these and
+                    // offers no way to type a name — a model named by hand is a
+                    // typo that becomes a failure two screens later, and the
+                    // machine already knows the answer.
+                    installedLocalModels: localModels
                 ) { outcome in
                     isChangingProvider = false
                     switch outcome {
                     case .cancelled:
                         break
                     case .chose(let option):
+                        // **No `needsAKeyFirst` any more.** That case closed this
+                        // sheet, saved a brain that could not answer, and opened a
+                        // second sheet to collect the key — which is why the owner
+                        // reported there was nowhere to set one. The field is on
+                        // the sheet now, and nothing arrives here unverified.
                         BrainSelectionStore.save(option)
                         model.refresh()
                         // Both consumers, same as the model picker. The window
@@ -831,15 +841,6 @@ struct SettingsView: View {
                             await conversation.reconnect()
                             await app.reconcileAnsweringService()
                         }
-                    case .needsAKeyFirst(let option):
-                        // Saved first so the key sheet knows which provider it
-                        // is collecting for, and because the sheet has already
-                        // established this is a deliberate choice. The brain is
-                        // unusable until the key lands, which the key sheet is
-                        // the thing that fixes.
-                        BrainSelectionStore.save(option)
-                        model.refresh()
-                        isPastingKey = true
                     }
                 }
             } else {

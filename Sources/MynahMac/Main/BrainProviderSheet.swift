@@ -3,85 +3,91 @@ import SwiftUI
 
 /// Changing *where the owner's words go*, without walking setup again.
 ///
-/// **The owner's report:** *"changing the model shouldn't redo the whole
-/// setup."* He is right, and the shape of the mistake is one this screen has
-/// already made once. "Change where your words go" called `restartSetup()`,
-/// which drops `hasCompletedSetup` and puts the whole app back to Welcome →
-/// Brain → Connect → Ready — on a Mac that was set up hours ago.
+/// ## The shape this screen is, and why
 ///
-/// That is the same failure as the Calls row telling him to change model and
-/// sending him to onboarding to do it: **a small, reversible change routed
-/// through the largest, least reversible flow in the product.**
+/// One question first — **does this stay on the Mac, or go to a company** — and
+/// only then the details of whichever they picked. The owner asked for exactly
+/// that: *"it should be a clear switch - local model (qwen only) or you can
+/// change manually if you downloaded your own via ollama, cloud (choose
+/// provider, provide key)"*.
 ///
-/// It also has teeth beyond the annoyance. `hasCompletedSetup == false` is a
-/// `stop` intent, so entering that flow **removes both LaunchAgents** and his
-/// phone stops being answered until he finishes or backs out. Opening it out of
-/// curiosity costs him the appliance.
+/// It used to be one flat list mixing both, which buried the only distinction on
+/// the screen that has consequences. Every cloud row spends the owner's money
+/// and sends their words off the machine; the local row does neither. Sorting by
+/// "tier" put those side by side as though the difference were a preference.
 ///
-/// ## What this keeps from the flow it replaces
+/// ## The key is on this screen
 ///
-/// Two things, both deliberate rather than inherited:
+/// Picking a cloud provider used to hand back to the caller with
+/// `needsAKeyFirst`, which closed this sheet, saved a brain that could not
+/// answer, and opened a second sheet to collect the key. The owner's report was
+/// blunt — *"there's no where to set the api keys for cloud providers"* — and he
+/// was right in the way that matters: a thing you can only reach by first
+/// choosing something broken is not somewhere you can set it.
 ///
-/// 1. **Nothing is saved until it answers.** The chosen brain is built for
-///    real and asked a real question, exactly as `BrainModelSheet` does — a
-///    provider that will not serve is caught here rather than mid-answer on his
-///    phone.
-/// 2. **A provider that needs a key does not pretend otherwise.** It hands back
-///    to the caller to run the key flow first, because a brain saved without one
-///    is a brain that fails on the next question.
+/// So the field is here, under the provider it belongs to, and nothing is saved
+/// until the key it was given actually answers a question.
+///
+/// ## Models are the ones you have
+///
+/// The local side lists what Ollama has actually pulled. Not a text field —
+/// *"yes models you have pulled bro - wtf free text!? thats fucking dumb"* — and
+/// he is right: a name typed by hand is a typo that becomes a failure two
+/// screens later, and the machine already knows the answer.
 struct BrainProviderSheet: View {
 
     let choices: BrainSetupChoices
     /// What he is on now, so the sheet can show it and refuse a no-op.
     let current: BrainSetupOption?
-    /// The chosen option, or `nil` if he backed out. A second value says the
-    /// caller must run the key flow before this can be saved.
+    /// Model names the local runtime has actually pulled.
+    let installedLocalModels: [String]
     let onClose: (Outcome) -> Void
 
     enum Outcome: Equatable {
         case cancelled
+        /// Verified, with its model name and key already settled.
         case chose(BrainSetupOption)
-        /// Verified as far as it can be without a key, which is not very far.
-        case needsAKeyFirst(BrainSetupOption)
     }
 
-    @State private var selected: BrainSetupOption?
-    /// The sentence a failed check produced, rather than the verdict itself.
-    ///
-    /// `BrainKeyValidator.Verdict` has no public initialiser — deliberately, so
-    /// nothing outside can mint a passing one — and the failure path here needs
-    /// to report a build error that never reached the validator at all. Holding
-    /// the sentence keeps that honest: this state means "the last attempt did
-    /// not work, and here is why", not "the validator said so".
+    typealias Destination = BrainProviderChoice.Destination
+
+    /// Every decision on this sheet, in a value the tests can reach.
+    @State private var choice: BrainProviderChoice
     @State private var refusal: String?
     @State private var isChecking = false
 
+    init(
+        choices: BrainSetupChoices,
+        current: BrainSetupOption?,
+        installedLocalModels: [String],
+        onClose: @escaping (Outcome) -> Void
+    ) {
+        self.choices = choices
+        self.current = current
+        self.installedLocalModels = installedLocalModels
+        self.onClose = onClose
+
+        _choice = State(initialValue: BrainProviderChoice(
+            current: current, installedLocalModels: installedLocalModels
+        ))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: s2) {
-                Text("Where your words go")
-                    .mynahFont(.title2)
-                    .foregroundStyle(Palette.ink.primary)
-                Text("Mynah asks whichever you pick a real question before keeping it, so a "
-                    + "brain that will not answer is caught here rather than on your phone.")
-                    .mynahFont(.callout)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.bottom, s5)
+            header
+            switcher.padding(.bottom, s4)
 
             ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(choices.availableOptions.enumerated()), id: \.element.id) { index, option in
-                        if index > 0 { MynahDivider() }
-                        row(option)
+                VStack(alignment: .leading, spacing: 0) {
+                    switch choice.destination {
+                    case .thisMac: localSide
+                    case .cloud: cloudSide
                     }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
 
-            resultLine
-                .padding(.top, s5)
+            resultLine.padding(.top, s4)
 
             ActionRow(quietTitle: "Cancel", quietAction: { onClose(.cancelled) }) {
                 MynahButton(
@@ -94,41 +100,106 @@ struct BrainProviderSheet: View {
             .padding(.top, s5)
         }
         .padding(s8)
-        .frame(width: 620, height: 580)
+        .frame(width: 620, height: 620)
         .background(Palette.surface.overlay)
         .mynahAnimation(Motion.snap, value: refusal)
-        // Escape is Cancel. Nothing is saved until it verifies — the same
-        // promise `BrainModelSheet` makes, and the reason neither sheet needs
-        // an "are you sure".
+        .mynahAnimation(Motion.snap, value: choice.destination)
         .onExitCommand { onClose(.cancelled) }
     }
 
-    private func row(_ option: BrainSetupOption) -> some View {
+    // MARK: - Header and switch
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: s2) {
+            Text("Where your words go")
+                .mynahFont(.title2)
+                .foregroundStyle(Palette.ink.primary)
+            Text("Mynah asks whichever you pick a real question before keeping it, so a "
+                + "brain that will not answer is caught here rather than on your phone.")
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, s5)
+    }
+
+    private var switcher: some View {
+        VStack(alignment: .leading, spacing: s2) {
+            Picker("", selection: $choice.destination) {
+                ForEach(Destination.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: choice.destination) { _, new in
+                refusal = nil
+                choice.moved(
+                    to: new,
+                    localOption: localOption,
+                    cloudOptions: cloudOptions,
+                    current: current
+                )
+            }
+
+            Text(choice.destination.explanation)
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - On this Mac
+
+    var localOption: BrainSetupOption? { choices.localOption }
+
+    @ViewBuilder
+    private var localSide: some View {
+        if let option = localOption, option.isAvailable {
+            if installedLocalModels.isEmpty {
+                // Not a text field. There is nothing to choose between yet, and
+                // inviting him to type a model name he has not downloaded is
+                // inviting a failure two screens later.
+                InlineBanner(
+                    headline: "No local model has finished downloading.",
+                    explanation: option.summary
+                )
+                .padding(.top, s2)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(installedLocalModels.enumerated()), id: \.element) { index, name in
+                        if index > 0 { MynahDivider() }
+                        modelRow(name, option: option)
+                    }
+                }
+            }
+        } else if let option = localOption {
+            // The hardware reason, in the words the planner already wrote.
+            InlineBanner(
+                headline: "This Mac can't run a brain on its own.",
+                explanation: option.availability.reason ?? option.summary
+            )
+            .padding(.top, s2)
+        }
+    }
+
+    private func modelRow(_ name: String, option: BrainSetupOption) -> some View {
         Button {
-            selected = option
+            choice.localModel = name
+            choice.selected = option
             refusal = nil
         } label: {
             HStack(alignment: .top, spacing: s4) {
-                StatusDot(option.id == selected?.id ? .accent : .neutral)
+                StatusDot(choice.localModel == name ? .accent : .neutral)
                     .padding(.top, 5)
                 VStack(alignment: .leading, spacing: s1) {
                     HStack(spacing: s3) {
-                        Text(option.label)
+                        Text(name)
                             .mynahFont(.body)
                             .foregroundStyle(Palette.ink.primary)
-                        if option.id == current?.id {
+                        if name == current?.modelName, current?.id == option.id {
                             StatusPill("Now", tone: .neutral)
                         }
                         Spacer(minLength: 0)
                     }
-                    // The summary already says where the words go — it is the
-                    // sentence the brain picker uses in setup, and it is the
-                    // one thing on this sheet he is actually choosing between.
-                    Text(option.summary)
-                        .mynahFont(.label)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
                 }
             }
             .padding(.vertical, s4)
@@ -138,6 +209,110 @@ struct BrainProviderSheet: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
     }
+
+    // MARK: - Cloud
+
+    var cloudOptions: [BrainSetupOption] { choices.cloudOptions }
+
+    @ViewBuilder
+    private var cloudSide: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(cloudOptions.enumerated()), id: \.element.id) { index, option in
+                if index > 0 { MynahDivider() }
+                cloudRow(option)
+            }
+        }
+    }
+
+    private func cloudRow(_ option: BrainSetupOption) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                choice.selected = option
+                choice.typedKey = ""
+                refusal = nil
+            } label: {
+                HStack(alignment: .top, spacing: s4) {
+                    StatusDot(option.id == choice.selected?.id ? .accent : .neutral)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: s1) {
+                        HStack(spacing: s3) {
+                            Text(option.label)
+                                .mynahFont(.body)
+                                .foregroundStyle(Palette.ink.primary)
+                            if option.id == current?.id {
+                                StatusPill("Now", tone: .neutral)
+                            }
+                            if hasSavedKey(option) {
+                                StatusPill("Key saved", tone: .good)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        Text(option.summary)
+                            .mynahFont(.label)
+                            .foregroundStyle(Palette.ink.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                .padding(.vertical, s4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+
+            // **Inline, under the provider it belongs to.** The owner's ruling:
+            // *"in line is best - less clicking"*.
+            if option.id == choice.selected?.id {
+                keyField(for: option).padding(.bottom, s4)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func keyField(for option: BrainSetupOption) -> some View {
+        let instructions = option.keyProviderIdentifier
+            .flatMap(APIKeyOnboarding.instructions(forProvider:))
+
+        VStack(alignment: .leading, spacing: s2) {
+            SecureField(
+                hasSavedKey(option) ? "Paste a new key to replace the saved one" : "Paste your key",
+                text: $choice.typedKey
+            )
+            .textFieldStyle(.roundedBorder)
+            .mynahFont(.body)
+            .onSubmit { if canCommit { commit() } }
+
+            HStack(spacing: s3) {
+                if let instructions {
+                    Text(instructions.looksLikeHint)
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                    Spacer(minLength: 0)
+                    Link("Get a key", destination: instructions.keyPageURL)
+                        .mynahFont(.label)
+                        .pointingHandCursor()
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if let note = instructions?.costNote {
+                Text(note)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, s7)
+    }
+
+    private func hasSavedKey(_ option: BrainSetupOption) -> Bool {
+        guard let provider = option.keyProviderIdentifier else { return false }
+        return KeyStorage.key(forProvider: provider) != nil
+    }
+
+    // MARK: - Result
 
     @ViewBuilder
     private var resultLine: some View {
@@ -149,9 +324,8 @@ struct BrainProviderSheet: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
         } else if let refusal {
-            // Caution, not critical: nothing is broken and nothing changed —
-            // the old brain is still the one answering, because this saves
-            // nothing until it passes.
+            // Nothing is broken and nothing changed — the old brain is still
+            // answering, because this saves nothing until it passes.
             InlineBanner(
                 headline: "That one didn't answer.",
                 explanation: refusal
@@ -160,26 +334,34 @@ struct BrainProviderSheet: View {
         }
     }
 
+    // MARK: - Committing
+
     private var canCommit: Bool {
-        guard let selected, !isChecking else { return false }
-        return selected.id != current?.id
+        guard !isChecking else { return false }
+        return choice.canCommit(current: current) { KeyStorage.key(forProvider: $0) != nil }
     }
 
     private func commit() {
-        guard let option = selected else { return }
-
-        // A provider that needs a key it has not got cannot be verified, and
-        // saving it unverified would hand him a brain that fails on his next
-        // question. Handed back rather than half-done.
-        if let provider = option.keyProviderIdentifier,
-           KeyStorage.key(forProvider: provider) == nil {
-            onClose(.needsAKeyFirst(option))
-            return
-        }
+        guard let option = choice.resolved() else { return }
+        let key = choice.typedKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         isChecking = true
         Task {
             defer { isChecking = false }
+
+            // Saved before the check, because the check is what proves it works
+            // and it has to be readable by the thing being checked. A key that
+            // fails is replaced by the next attempt; one that is never written
+            // cannot be tested at all.
+            if let provider = option.keyProviderIdentifier, !key.isEmpty {
+                do {
+                    try KeyStorage.save(key, forProvider: provider)
+                } catch {
+                    refusal = "Mynah couldn't save that key to this Mac."
+                    return
+                }
+            }
+
             do {
                 let backend = try BrainFactory.makeBackend(
                     for: option,
