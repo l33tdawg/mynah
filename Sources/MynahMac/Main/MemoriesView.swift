@@ -337,6 +337,20 @@ actor SageMemoryStore: MemoryStoring {
         )
     }
 
+    /// Any MCP tool, through the connection this actor already holds.
+    ///
+    /// Exposed so surfaces other than Memories can reach the node **as the
+    /// appliance** without spawning a second one — the handshake costs about
+    /// four seconds, and two children would mean two identities' worth of
+    /// confusion on a screen that exists to say who Mynah is.
+    ///
+    /// `ApplianceRoster` is the first caller. It used to read `GET /v1/agents`
+    /// unsigned, which is the one endpoint a locked node answers in full, and
+    /// therefore the one that cannot answer "who may Mynah contact".
+    func callTool(_ tool: String, arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
+        try await payload(from: tool, arguments: arguments)
+    }
+
     private func payload(from tool: String, arguments: [String: JSONValue]) async throws -> JSONValue {
         let client = try connection()
         let text: String

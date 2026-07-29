@@ -66,7 +66,7 @@ final class ApplianceRoster {
 
     private let source: any AgentDirectorySource
 
-    init(source: any AgentDirectorySource = NodeAgentDirectory()) {
+    init(source: any AgentDirectorySource = MCPAgentDirectory()) {
         self.source = source
     }
 
