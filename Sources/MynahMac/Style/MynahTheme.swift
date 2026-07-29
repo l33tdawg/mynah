@@ -137,6 +137,30 @@ enum Palette {
     /// Deliberately disjoint from `accent`. Green means "your words stay here";
     /// yellow means "MYNAH is doing something". Conflating them would make the
     /// privacy signal indistinguishable from a spinner.
+    ///
+    /// **When `caution` is the right ink, and when it is not.**
+    ///
+    /// The owner looked at an amber mark on his task area and reported *"signal
+    /// crashed again — see it's yellow now (paused mode colour)"*. Signal had
+    /// not crashed. Both processes were up. What he had learned all day, and
+    /// learned correctly, is that amber on this product means **Mynah is not
+    /// doing what you think** — the readiness banner, the restricted dot, the
+    /// paused switch. So amber anywhere near the appliance reads as a statement
+    /// about the appliance, whatever it was attached to.
+    ///
+    /// The test is not severity, it is **subject**:
+    ///
+    /// - **A property of the product** — paused, restricted, needs the owner,
+    ///   setup unfinished, cannot remember anything. Caution. The owner has to
+    ///   do something or the appliance stays wrong.
+    /// - **A property of a view** — this list is stale, this scan found
+    ///   nothing, this deletion is still going through. **Not caution.**
+    ///   Secondary ink and a sentence. Nothing is wrong with Mynah, and saying
+    ///   otherwise in colour costs more than the fact is worth.
+    ///
+    /// A colour that means four things is read as its most alarming meaning,
+    /// and the owner will sometimes be right, which is what makes the habit
+    /// expensive rather than merely untidy.
     enum state {
         static let good = Color.mynah(light: .mynahHex(0x1D8A4E), dark: .mynahHex(0x3FD07E))
         static let caution = Color.mynah(light: .mynahHex(0x9C5F00), dark: .mynahHex(0xF0A73B))

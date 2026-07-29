@@ -544,18 +544,16 @@ final class OneVerbForMemoryTests: XCTestCase {
 /// told that at the moment they turn it on rather than afterwards.
 final class StandingFactTests: XCTestCase {
 
-    /// Bit 1 is the only bit that grants. Under the Companion profile the
-    /// appliance reads across subjects it was never granted, bounded by its
-    /// clearance — nineteen other agents' subjects on the owner's node.
-    /// The scope and its bound, on the row.
+    /// Bit 1 lifts *discovery filters* — what search will surface — and does
+    /// not defeat a per-domain ACL. So the companion line says "every subject
+    /// on this node **it can reach**", and the qualifier is the whole sentence:
+    /// an earlier version said "every subject on this node" flat, and that was
+    /// false in the same way the roster line was.
     ///
-    /// **"Whose memories" deliberately moved and did not vanish.** This used to
-    /// require the row to say "other agents", and it no longer does — that fact
-    /// is now carried once by `FederationHelp.howWideThatReachIs` under the
-    /// roster, where it belongs: it is a property of the page rather than of
-    /// any one agent, and repeating it on twenty rows is the noise the list
-    /// framing exists to remove. `RosterFramingTests.testTheReachIsStatedWithItsBound`
-    /// is what holds it now, so this may relax without the fact going missing.
+    /// A companion paragraph under the roster used to carry "whose memories",
+    /// and it has been **deleted rather than relocated** — it claimed a breadth
+    /// nothing established. Establishing it needs the grant list, and the grant
+    /// list is an operator view this app cannot open.
     func testTheCompanionProfileSaysItCanReadAcrossSubjects() {
         let line = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion)
             .readingLine.lowercased()

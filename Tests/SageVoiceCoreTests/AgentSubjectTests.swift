@@ -127,46 +127,32 @@ final class RosterFramingTests: XCTestCase {
         )
     }
 
-    /// The claim that must never come back. Reading is what this appliance *can*
-    /// do, and a sentence saying otherwise sat on screen while Mynah listed the
-    /// owner's own subjects back to him in the panel below it.
-    func testItNeverSaysMynahCannotRead() {
-        let line = FederationHelp.whatMynahMayDoWithTheseAgents.lowercased()
-
-        for claim in ["can't read", "cannot read", "isn't allowed to read"] {
-            XCTAssertFalse(line.contains(claim), "the false read claim is back: \(claim)")
-        }
-    }
-
-    /// **The other direction, which team-lead asked for and which forbidding
-    /// the false phrasing does not cover.**
+    /// **Two tests stood here and both defended a false claim. I wrote them an
+    /// hour after warning, in this file, about exactly this.**
     ///
-    /// A line saying nothing at all about reading passes every prohibition
-    /// above. So the next tidy-up drops the half that says Mynah *can* read —
-    /// in the name of brevity, entirely reasonably — and the page is back to
-    /// implying a limit by omission. The claim has to be present, not merely
-    /// un-contradicted.
-    func testSomethingOnThePageSaysMynahCanRead() {
-        XCTAssertTrue(
-            FederationHelp.whatMynahMayDoWithTheseAgents.lowercased().contains("can read"),
-            "the page no longer says Mynah can read, so a limit is implied by silence"
-        )
-    }
-
-    /// The breadth is the part an owner would not infer, so it has to be stated
-    /// rather than left to the row-level reading lines.
+    /// One forbade every phrasing of "Mynah can't read". The other — added at
+    /// team-lead's request, and a good request — *required* the page to say
+    /// Mynah **can** read, so a later tidy-up could not quietly drop that half.
+    /// Together they made the false version the only version that compiled.
     ///
-    /// Pinned including the uncomfortable clause. `thread` chose "bounded by
-    /// its clearance and nothing else" deliberately, and a later edit that
-    /// keeps the scope but drops the bound would read as reassurance nobody
-    /// wrote.
-    func testTheReachIsStatedWithItsBound() {
-        let reach = FederationHelp.howWideThatReachIs.lowercased()
-
-        XCTAssertTrue(reach.contains("every subject on this mac"), "the scope was narrowed")
-        XCTAssertTrue(reach.contains("other agents"), "whose memories went unsaid")
-        XCTAssertTrue(reach.contains("clearance and nothing else"), "the bound was softened")
-    }
+    /// The claim was wrong. Reads are gated per domain: `sage_list` against
+    /// this agent's own subject returns 60 memories with content; against
+    /// `exploit-patterns` or `general` it returns "Access denied". `sage_status`
+    /// looked like proof and is not — it returns subject *names* and counts,
+    /// needs no read access at all, and is what Mynah recited to the owner. A
+    /// table of contents, read as proof it had read the book.
+    ///
+    /// I had already written here that *"a test that asserts a specific wrong
+    /// sentence is worse than no test — it turns a mistake into a rule."* Then
+    /// I did it, in the same file, on the same subject, twice. So the lesson
+    /// that generalises is narrower and less comfortable: **a test can only pin
+    /// a fact somebody has verified, and "we all agreed" is not verification.**
+    /// Three of us agreed on this one, and two of us had run the same
+    /// non-evidence to confirm it.
+    ///
+    /// Nothing replaces them. The property worth holding — both halves present,
+    /// capability before restriction — is already covered above, and it is the
+    /// one that survived being wrong in both directions.
 
     /// "subject", never "domain" — the owner-facing word for this everywhere in
     /// the product.

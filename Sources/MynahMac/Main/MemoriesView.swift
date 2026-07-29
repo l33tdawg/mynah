@@ -988,7 +988,11 @@ private struct MemoryEntry: View {
                 Text("Mynah has been asked to forget this, and hasn't finished yet. "
                     + "It should be gone shortly.")
                     .mynahFont(.callout)
-                    .foregroundStyle(Palette.state.caution)
+                    // Work in progress, not a fault. Amber here says something
+                    // went wrong with a deletion that is going exactly to plan,
+                    // and consensus taking a moment is the ordinary case rather
+                    // than the alarming one.
+                    .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

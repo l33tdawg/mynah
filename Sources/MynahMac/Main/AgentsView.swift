@@ -206,8 +206,8 @@ struct AgentPermissions: Equatable, Sendable {
     /// instance of the false claim and the last one found.
     var readingLine: String {
         mask & Capability.readAcrossSubjects != 0
-            ? "Every subject on this node, up to its clearance."
-            : "What other agents on this Mac remember, up to its clearance."
+            ? "Every subject on this node it can reach, up to its clearance."
+            : "The subjects it has been given access to."
     }
 
     /// **What is deliberately not here: the sentences.**
@@ -710,26 +710,37 @@ enum FederationHelp {
     /// *write* and *pipe* denials with nothing about reading in it. So the
     /// asymmetry is real and runs the other way: it reads freely and cannot
     /// write a word.
+    /// **This has now been wrong in both directions, and the second time was
+    /// worse than the first.**
+    ///
+    /// It first said Mynah could not read what these agents remember. The owner
+    /// asked Mynah over Signal, it answered with a list of his subjects, and we
+    /// concluded the line was false and inverted it — to "can read what these
+    /// agents remember, right across this Mac".
+    ///
+    /// That inversion was false, and `thread` caught it by asking the node for
+    /// *content* rather than for totals:
+    ///
+    ///     sage_list domain=<its own>          → 60 memories
+    ///     sage_list domain=exploit-patterns   → Access denied
+    ///     sage_list domain=general            → Access denied
+    ///
+    /// Reads are gated per domain, exactly as writes are. Confirmed here
+    /// independently, both directions, before this string was changed back.
+    ///
+    /// **What misled us is worth keeping.** `sage_status` returns 13,372
+    /// memories, ~700 subject *names* and every agent's count — and needs no
+    /// read access at all, because none of it is content. That aggregate is
+    /// what Mynah recited to the owner. His screenshot was real and its answer
+    /// was real; it had read a directory, not the files. We took a table of
+    /// contents as proof it had read the book.
+    ///
+    /// The RBAC line about a `member` reading other members' domains is real
+    /// but conditional — "of any shared Access Group" — and there is no shared
+    /// group here, so the permission never applies.
     static let whatMynahMayDoWithTheseAgents =
-        "Mynah can read what these agents remember, right across this Mac. "
+        "Mynah can read the subjects it has been given access to, and no others. "
             + "What it can't do is save anything of its own — that limit is on its own key."
-
-    /// The breadth, said out loud rather than left to be inferred.
-    ///
-    /// It belongs to the page rather than to any row, which is why it sits
-    /// under the line above instead of in the list. The owner raised the
-    /// cross-subject reading as a *capability* and he is right — but a voice
-    /// appliance reachable from his phone can read what nineteen other agents
-    /// have stored, and that is worth him seeing in a sentence rather than
-    /// working out.
-    ///
-    /// "bounded by its clearance and nothing else" is `thread`'s clause and the
-    /// least comfortable one in the product. Kept exactly as written: it is not
-    /// a sentence he should later feel was softened for him.
-    static let howWideThatReachIs =
-        "That means the appliance answering your phone can read every subject on this Mac, "
-            + "including what your other agents have remembered. It is bounded by its "
-            + "clearance and nothing else."
 
     /// The domain the appliance writes everything to.
     ///
@@ -1135,29 +1146,22 @@ struct AgentsView: View {
             // — the caution dot and the caution-ink count. A row that matches
             // the line above says nothing extra, which is what stops the list
             // becoming twenty repetitions of one sentence.
-            VStack(alignment: .leading, spacing: s3) {
-                Text(FederationHelp.whatMynahMayDoWithTheseAgents)
-                    .foregroundStyle(Palette.ink.secondary)
-                // Same ink as the line above, deliberately.
-                //
-                // It was one step lighter and the render showed what that
-                // costs: the sentence telling the owner his phone can read
-                // every subject on this Mac came out as the faintest text in
-                // the column. Hierarchy is worth having, but not paid for out
-                // of the one fact he would not otherwise infer — team-lead
-                // asked for this prominent and tertiary ink is the opposite.
-                // The paragraph break carries the separation on its own.
-                //
-                // Not a caution colour either: this is a true description of a
-                // working appliance, and amber would say something is wrong
-                // when what is happening is the product doing its job.
-                Text(FederationHelp.howWideThatReachIs)
-                    .foregroundStyle(Palette.ink.secondary)
-            }
-            .mynahFont(.callout)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, s6)
-            .padding(.bottom, s5)
+            // One paragraph, not two.
+            //
+            // A second one stated the breadth — "can read every subject on this
+            // Mac, including what your other agents have remembered" — and it
+            // was **false**. It is deleted rather than softened: there is no
+            // true version of it that this app can establish, because working
+            // out what Mynah can actually reach needs the grant list, and the
+            // grant list is an operator view. A page saying nothing about reach
+            // is honest; a hedged almost-version would be the same mistake in a
+            // quieter voice.
+            Text(FederationHelp.whatMynahMayDoWithTheseAgents)
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, s6)
+                .padding(.bottom, s5)
             ScrollView {
                 // Spacing between rows rather than none. Rows that touch read as
                 // a table; rows with air between them read as a list of things,

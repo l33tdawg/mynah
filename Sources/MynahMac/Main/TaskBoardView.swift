@@ -191,7 +191,22 @@ struct TaskBoardView: View {
         HStack(spacing: s4) {
             Text("Showing what it last saw — it can't reach your list right now.")
                 .mynahFont(.label)
-                .foregroundStyle(Palette.state.caution)
+                // Not caution ink, and the owner is the reason.
+                //
+                // He saw amber on the task area and reported "signal crashed
+                // again — see it's yellow now (paused mode colour)". Signal had
+                // not crashed; both processes were up and both plists intact.
+                // He had spent the day learning that amber on this product
+                // means *Mynah is not doing what you think* — the readiness
+                // banner, the restricted dot, the paused switch — so amber
+                // anywhere near the appliance reads as a state of the
+                // appliance.
+                //
+                // This is a property of a **list**, not of the product: the
+                // tasks are stale and the words say so. Nothing is wrong with
+                // Mynah. Secondary ink says "here is a fact" where amber said
+                // "something is broken", and the sentence carries the rest.
+                .foregroundStyle(Palette.ink.secondary)
                 .lineLimit(1)
             Spacer(minLength: s4)
             MynahButton("Try again", kind: .quiet) { Task { await model.refresh() } }

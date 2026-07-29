@@ -219,9 +219,24 @@ struct TalkView: View {
     /// What is behind the fold, so the owner knows what a click gets back.
     ///
     /// A bare rule with a chevron on it is a mystery. The counts are the same
-    /// three numbers the column headers carry, and the dot appears only when the
-    /// board has something wrong with it — folding a problem away and saying
-    /// nothing would be the screen keeping a secret.
+    /// three numbers the column headers carry.
+    ///
+    /// **There used to be an amber dot here when the board had trouble, and the
+    /// owner misread it as the appliance having stopped.** He reported "signal
+    /// crashed again — see it's yellow now (paused mode colour)". Signal had not
+    /// crashed; both processes were up and both plists intact. He was reading
+    /// the colour correctly and the colour was wrong.
+    ///
+    /// Amber everywhere else in this product means *Mynah is not doing what you
+    /// think* — paused, restricted, needs the owner. So amber **on a folded
+    /// bar** reads as a state of the appliance whatever it is attached to, and a
+    /// dot with no subject is ambiguous by construction: it could belong to
+    /// anything behind the fold.
+    ///
+    /// The distinction that matters is subject, not severity. A property of the
+    /// *product* earns caution ink; a property of a *view* — this list cannot be
+    /// opened — does not, however annoying it is. The summary text says it
+    /// instead, and says whose problem it is.
     @ViewBuilder
     private var collapsedSummary: some View {
         switch app.homeSplit {
@@ -229,7 +244,6 @@ struct TalkView: View {
             EmptyView()
         case .conversationOnly:
             HStack(spacing: s3) {
-                if board.trouble != nil { StatusDot(.caution) }
                 Text(boardSummary)
                     .mynahFont(.label)
                     .foregroundStyle(Palette.ink.secondary)
@@ -247,7 +261,13 @@ struct TalkView: View {
         guard let plate = board.board else {
             // Never "no tasks". Nothing has been read, and the fold is not the
             // place to invent an answer.
-            return board.trouble == nil ? "Tasks" : "Tasks — something needs a look"
+            //
+            // The trouble half said "something needs a look", which has no
+            // subject either — it was the sentence beside the amber dot the
+            // owner read as the appliance having stopped, and it did nothing to
+            // correct him. It names the list now, so the worst a glance can
+            // conclude is true.
+            return board.trouble == nil ? "Tasks" : "Tasks — this list won't open"
         }
         let parts = [
             "\(plate.planned.count) planned",
