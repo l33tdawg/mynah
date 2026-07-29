@@ -951,8 +951,24 @@ final class AgentsModel {
         case failed(AgentTrouble)
     }
 
-    private(set) var phase: Phase = .loading
-    private(set) var roster = AgentRoster.empty
+    /// The roster is **not fetched here any more.** It comes from
+    /// `ApplianceRoster`, filled once at app boot — the owner's ruling, and the
+    /// reason is that this page used to read `GET /v1/agents` unsigned on every
+    /// appearance. See that type for the whole argument.
+    private let rosterStore: ApplianceRoster
+
+    var phase: Phase {
+        switch rosterStore.phase {
+        // Boot has not run yet. Not `.ready`, because a screen that has not
+        // asked must not answer — and not `.failed`, because nothing failed.
+        case .notAsked, .loading: return .loading
+        case .ready: return .ready
+        case .unavailable(let trouble): return .failed(trouble)
+        }
+    }
+
+    var roster: AgentRoster { rosterStore.roster }
+
     private(set) var scan: ScanPhase = .idle
 
     /// Subjects per agent, for the agents a node has actually answered about.
@@ -961,18 +977,34 @@ final class AgentsModel {
     /// case today and draws nothing. See `AgentSubjectSource`.
     private(set) var subjects: [String: [String]] = [:]
 
-    private let source: any AgentDirectorySource
     private let federation: any FederationScanning
     private let subjectSource: any AgentSubjectSource
 
     init(
-        source: any AgentDirectorySource = NodeAgentDirectory(),
+        rosterStore: ApplianceRoster? = nil,
         federation: any FederationScanning = SageFederationScan.shared,
         subjectSource: any AgentSubjectSource = UnaskableSubjects()
     ) {
-        self.source = source
+        // Resolved here rather than as a default argument: `ApplianceRoster.shared`
+        // is main-actor isolated and a default argument is evaluated in the
+        // caller's context, which is not.
+        self.rosterStore = rosterStore ?? .shared
         self.federation = federation
         self.subjectSource = subjectSource
+    }
+
+    /// Convenience for previews and tests that want a roster of their own
+    /// without building a store around it.
+    convenience init(
+        source: any AgentDirectorySource,
+        federation: any FederationScanning = SageFederationScan.shared,
+        subjectSource: any AgentSubjectSource = UnaskableSubjects()
+    ) {
+        self.init(
+            rosterStore: ApplianceRoster(source: source),
+            federation: federation,
+            subjectSource: subjectSource
+        )
     }
 
     /// Asked for one agent at a time, when the owner selects it.
@@ -988,19 +1020,18 @@ final class AgentsModel {
         subjects[id] = found
     }
 
+    /// Makes sure the boot fetch has happened, and does nothing if it has.
+    ///
+    /// **Not a per-view read.** Opening this page a dozen times asks the node
+    /// once. The only case that re-asks is a boot that failed — see
+    /// `ApplianceRoster.loadOnce`.
     func load() async {
-        // The previous answer stays on screen while this runs. A refresh that
-        // blanks the list first makes a working node look like it dropped out
-        // every time the owner comes back to the pane.
-        do {
-            roster = try await source.roster()
-            phase = .ready
-        } catch let trouble as AgentTrouble {
-            phase = .failed(trouble)
-        } catch {
-            agentsLog.error("roster failed: \(String(describing: error), privacy: .public)")
-            phase = .failed(.unreachable)
-        }
+        await rosterStore.loadOnce()
+    }
+
+    /// The owner pressing "Try again" on the failure state.
+    func retry() async {
+        await rosterStore.reload()
     }
 
     /// The owner's button. Never automatic: it starts a node process and asks
@@ -1070,13 +1101,25 @@ struct AgentsView: View {
     /// than it gave.
     private static let rosterWidth: CGFloat = 320
 
+    /// The shipping initialiser. **Takes no directory**, which is the point.
+    ///
+    /// It used to default `source:` to a live `NodeAgentDirectory`, so every
+    /// `AgentsView()` built its own fetcher and read `GET /v1/agents` unsigned
+    /// on every appearance. Moving the fetch to boot is worth nothing while the
+    /// view can still open its own — so the default path now has no way to,
+    /// and reaches the roster only through the store `RootView` fills at
+    /// launch.
+    ///
     /// `@MainActor` because `AgentsModel` is, and a `View`'s initialiser is not
     /// isolated by default even though SwiftUI only ever calls it here.
     @MainActor
-    init(
-        source: any AgentDirectorySource = NodeAgentDirectory(),
-        federation: any FederationScanning = SageFederationScan.shared
-    ) {
+    init(federation: any FederationScanning = SageFederationScan.shared) {
+        _model = State(initialValue: AgentsModel(federation: federation))
+    }
+
+    /// Previews and tests, which want a roster of their own and no node.
+    @MainActor
+    init(source: any AgentDirectorySource, federation: any FederationScanning) {
         _model = State(initialValue: AgentsModel(source: source, federation: federation))
     }
 
@@ -1133,7 +1176,7 @@ struct AgentsView: View {
                     title: trouble.headline,
                     message: trouble.explanation,
                     actionTitle: trouble.isWorthRetrying ? "Try again" : nil,
-                    action: trouble.isWorthRetrying ? { Task { await model.load() } } : nil
+                    action: trouble.isWorthRetrying ? { Task { await model.retry() } } : nil
                 )
             }
 

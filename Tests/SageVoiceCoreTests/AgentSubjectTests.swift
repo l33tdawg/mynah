@@ -226,3 +226,93 @@ private struct StubDirectory: AgentDirectorySource {
 private struct StubScan: FederationScanning {
     func scan() async throws -> FederationReport { FederationReport() }
 }
+
+/// The roster, fetched once at boot.
+///
+/// The owner's ruling — *"you only see the agents you can actually talk to"* —
+/// after he caught the page showing twenty cards beside a Mynah that told him
+/// over Signal it could see nobody.
+@MainActor
+final class ApplianceRosterTests: XCTestCase {
+
+    /// **The distinction the whole type exists for.**
+    ///
+    /// A boot fetch that failed means the app does not know who is out there.
+    /// An empty roster means it asked and there is nobody. Collapsing them is
+    /// the substitution this codebase has spent a day removing, and the one the
+    /// owner has caught himself twice.
+    func testAFailedFetchIsUnavailableRatherThanEmpty() async {
+        let store = ApplianceRoster(source: FailingDirectory())
+
+        await store.loadOnce()
+
+        guard case .unavailable = store.phase else {
+            return XCTFail("a roster nobody could fetch is being reported as a fact")
+        }
+        XCTAssertNotEqual(store.phase, .ready(.empty), "unavailable collapsed into empty")
+    }
+
+    /// And a node with nobody on it is a real answer, distinct from the above.
+    func testAnEmptyNodeIsAnAnswerAndNotAFailure() async {
+        let store = ApplianceRoster(source: FixedDirectory(.empty))
+
+        await store.loadOnce()
+
+        XCTAssertEqual(store.phase, .ready(.empty))
+    }
+
+    /// Before boot has run the store says nothing at all. A screen that has not
+    /// asked must not answer.
+    func testNothingIsClaimedBeforeBootHasRun() {
+        XCTAssertEqual(ApplianceRoster(source: FailingDirectory()).phase, .notAsked)
+    }
+
+    /// **Not a per-view read.** Opening the page a dozen times asks the node
+    /// once — the whole point of moving this to boot.
+    func testASuccessfulFetchIsNeverRepeated() async {
+        let source = CountingDirectory()
+        let store = ApplianceRoster(source: source)
+
+        await store.loadOnce()
+        await store.loadOnce()
+        await store.loadOnce()
+
+        let asks = await source.calls
+        XCTAssertEqual(asks, 1, "the roster is being re-fetched, which is what boot-time replaced")
+    }
+
+    /// A boot that failed *is* retryable, though — the node may still have been
+    /// starting up, and a slow launch must not cost the owner the roster for
+    /// the whole session.
+    func testAFailedFetchCanBeAskedAgain() async {
+        let source = CountingDirectory(failing: true)
+        let store = ApplianceRoster(source: source)
+
+        await store.loadOnce()
+        await store.loadOnce()
+
+        let asks = await source.calls
+        XCTAssertEqual(asks, 2, "a failed boot left the owner with no way to try again")
+    }
+}
+
+private struct FailingDirectory: AgentDirectorySource {
+    func roster() async throws -> AgentRoster { throw AgentTrouble.unreachable }
+}
+
+private struct FixedDirectory: AgentDirectorySource {
+    let value: AgentRoster
+    init(_ value: AgentRoster) { self.value = value }
+    func roster() async throws -> AgentRoster { value }
+}
+
+private actor CountingDirectory: AgentDirectorySource {
+    private(set) var calls = 0
+    private let failing: Bool
+    init(failing: Bool = false) { self.failing = failing }
+    func roster() async throws -> AgentRoster {
+        calls += 1
+        if failing { throw AgentTrouble.unreachable }
+        return .empty
+    }
+}

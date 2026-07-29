@@ -90,6 +90,14 @@ struct RootView: View {
             // linked Signal on the previous run, the two LaunchAgents are
             // restored here without another button or QR scan.
             Task { await app.reconcileAnsweringService() }
+            // Who Mynah can reach, asked once, here.
+            //
+            // The owner's ruling: *"let mynah get it from mcp or we do it at
+            // app boot"*. It used to be read on every appearance of the Agents
+            // page, unsigned — an app asking a question as nobody, repeatedly.
+            // At boot it is a startup fact instead, and opening that page a
+            // dozen times asks the node once. See `ApplianceRoster`.
+            Task { await ApplianceRoster.shared.loadOnce() }
         }
     }
 }
