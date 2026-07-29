@@ -414,8 +414,11 @@ func (r *relay) handleEnrol(w http.ResponseWriter, req *http.Request) {
 	log.Printf("enrolled appliance %s", id)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"id":     id,
-		"secret": hex.EncodeToString(secret),
+		"id": id,
+		// Already hex text — see DeriveApplianceSecret. Encoding it again would
+		// hand the appliance a value twice the length of the key the relay
+		// verifies with, which is the bug this replaced.
+		"secret": string(secret),
 	})
 }
 

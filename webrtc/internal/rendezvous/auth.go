@@ -54,10 +54,23 @@ func ApplianceCredential(secret []byte, now time.Time) string {
 //
 // Domain-separated with a fixed prefix so this root key cannot be made to
 // produce a value some other use of the same key would also accept.
+//
+// **Returns the hex text, not the raw digest, and that distinction cost a
+// working call.** The endpoint reads its secret file with `os.ReadFile` and
+// `bytes.TrimSpace` and uses those bytes verbatim as the HMAC key — it does not
+// hex-decode, because a hand-provisioned secret is an arbitrary string. So the
+// value handed out at enrolment and the value used as a key have to be the same
+// bytes. Returning the raw digest here meant the relay verified with 32 decoded
+// bytes while the appliance signed with the 64 characters it had been given, and
+// every minted appliance got a 401.
+//
+// The first test of this passed because it hex-decoded the enrolment response
+// before signing — reproducing the relay's arithmetic instead of the client's,
+// which is the one thing an end-to-end check must not do.
 func DeriveApplianceSecret(rootKey []byte, id string) []byte {
 	mac := hmac.New(sha256.New, rootKey)
 	mac.Write([]byte("sage-call-appliance:" + id))
-	return mac.Sum(nil)
+	return []byte(hex.EncodeToString(mac.Sum(nil)))
 }
 
 // Identify checks a credential against every issued secret and reports which

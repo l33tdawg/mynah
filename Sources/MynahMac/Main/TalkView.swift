@@ -446,12 +446,24 @@ struct TalkView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: s8) {
-                    if phoneComesFirst {
-                        phoneConversation
-                        typedHere
-                    } else {
-                        typedHere
-                        phoneConversation
+                    ForEach(timeline) { entry in
+                        if let label = entry.label {
+                            ConversationSourceLabel(text: label)
+                        }
+                        switch entry.item {
+                        case .phone(let exchange):
+                            MirroredExchangeView(exchange: exchange, inset: Self.cardInset)
+                        case .here(let exchange):
+                            ExchangeView(
+                                exchange: exchange,
+                                inset: Self.cardInset,
+                                answerWidth: Self.answerWidth,
+                                showsFirstTurnHint: !model.hasEverAnswered,
+                                onStop: { model.stop() },
+                                onRetry: { model.retry(exchange.id) }
+                            )
+                            .id(exchange.id)
+                        }
                     }
                     // A zero-height anchor rather than scrolling to the last
                     // exchange: an answer that is still growing would otherwise
@@ -498,58 +510,107 @@ struct TalkView: View {
         }
     }
 
-    /// The Signal thread, oldest exchange at the top.
+    // MARK: One conversation, in the order it happened
+
+    /// Something said, from either side, with the time it was said.
     ///
-    /// Labelled whenever there is anything to show, because "this came off your
-    /// phone" is the fact that makes the screen make sense — it is the reason an
-    /// answer the owner has never seen in this window is sitting in it.
-    @ViewBuilder
-    private var phoneConversation: some View {
-        if !mirror.messages.isEmpty {
-            ConversationSourceLabel(text: "From your phone")
-            ForEach(MirroredExchange.group(mirror.messages)) { exchange in
-                MirroredExchangeView(exchange: exchange, inset: Self.cardInset)
+    /// **The two halves used to be two blocks and that is the bug the owner
+    /// found.** The phone's messages were drawn as one run and the window's as
+    /// another, and a heuristic decided which run went on top — so a `//call`
+    /// from 19:01 sat underneath an answer from 19:11, and the next question at
+    /// 19:12 underneath that. Every message on that screen was in the wrong
+    /// place relative to half the others.
+    ///
+    /// It was invisible until the messages carried times, which is the useful
+    /// part: the timestamps he asked for so he could measure the model's speed
+    /// exposed an ordering fault nobody could see. The block layout was always
+    /// wrong; it was only ever *arguably* wrong while the evidence was missing.
+    enum TranscriptItem: Identifiable {
+        case phone(MirroredExchange)
+        case here(Exchange)
+
+        var id: String {
+            switch self {
+            case .phone(let exchange): return "phone-\(exchange.id)"
+            case .here(let exchange): return "here-\(exchange.id)"
+            }
+        }
+
+        var cameFromPhone: Bool {
+            if case .phone = self { return true }
+            return false
+        }
+
+        /// When this exchange started, when that is known.
+        ///
+        /// The *earliest* time in a phone exchange rather than the latest: an
+        /// exchange is placed by when it began, so a long answer cannot push its
+        /// own question below something said while it was still being written.
+        var at: Date? {
+            switch self {
+            case .here(let exchange):
+                return exchange.askedAt
+            case .phone(let exchange):
+                return (exchange.asked + exchange.answered).compactMap(\.at).min()
             }
         }
     }
 
-    /// What the owner has asked in this window, with the waiting and failure
-    /// states the phone's record cannot carry.
-    ///
-    /// Labelled only when the phone's conversation is also on screen. On its own
-    /// it needs no explanation — the composer is directly underneath it.
-    @ViewBuilder
-    private var typedHere: some View {
-        if !model.exchanges.isEmpty {
-            if !mirror.messages.isEmpty {
-                ConversationSourceLabel(text: "In this window")
-            }
-            ForEach(model.exchanges) { exchange in
-                ExchangeView(
-                    exchange: exchange,
-                    inset: Self.cardInset,
-                    answerWidth: Self.answerWidth,
-                    showsFirstTurnHint: !model.hasEverAnswered,
-                    onStop: { model.stop() },
-                    onRetry: { model.retry(exchange.id) }
-                )
-                .id(exchange.id)
-            }
-        }
+    /// A transcript entry: the thing to draw, and the label above it when the
+    /// conversation changes hands.
+    struct TranscriptEntry: Identifiable {
+        let item: TranscriptItem
+        /// Set only where the source changes, so a conversation that moves
+        /// between the phone and the window says so at each handover instead of
+        /// once at a seam that no longer exists.
+        let label: String?
+        var id: String { item.id }
     }
 
-    /// Which block sits at the bottom, decided on the only two times that are
-    /// real: when the saved conversation was last spoken in, and when the owner
-    /// last asked something here.
+    /// Both sides merged into the order they actually happened.
     ///
-    /// Newest at the bottom is what every messaging app does and what the eye
-    /// expects. Pinning the phone above the window permanently would have been
-    /// simpler and would put a message from a moment ago above one from an hour
-    /// before it, which is the one thing a transcript may not do.
-    private var phoneComesFirst: Bool {
-        guard let lastAskedHere = model.exchanges.last?.askedAt,
-              let lastSpokenOnPhone = mirror.lastActivity else { return true }
-        return lastSpokenOnPhone <= lastAskedHere
+    /// **Messages with no time go first, and that is not a fallback.** A missing
+    /// stamp means the message was written before the store recorded them — see
+    /// `ConversationStore.StoredTurn.at` — so it is genuinely older than
+    /// everything that has one. Sorting them to the top is the true answer
+    /// rather than the convenient one.
+    ///
+    /// Sorted on `(time, original position)` rather than time alone, because
+    /// Swift's sort is not stable: two things said in the same second would
+    /// otherwise be free to swap on every redraw, and a transcript that
+    /// reshuffles while it is being read is worse than one in the wrong order.
+    var timeline: [TranscriptEntry] {
+        var items: [TranscriptItem] = MirroredExchange.group(mirror.messages).map { .phone($0) }
+        items.append(contentsOf: model.exchanges.map { .here($0) })
+
+        let ordered = items.enumerated()
+            .sorted { first, second in
+                switch (first.element.at, second.element.at) {
+                case let (lhs?, rhs?):
+                    return lhs == rhs ? first.offset < second.offset : lhs < rhs
+                // Undated is older than dated; two undated keep their order.
+                case (nil, _?): return true
+                case (_?, nil): return false
+                case (nil, nil): return first.offset < second.offset
+                }
+            }
+            .map(\.element)
+
+        // Labelled at each handover. With one source there is nothing to
+        // distinguish, so the label would be a caption on the obvious.
+        let hasBothSides = ordered.contains(where: \.cameFromPhone)
+            && ordered.contains(where: { !$0.cameFromPhone })
+        var previous: Bool?
+        return ordered.map { item in
+            defer { previous = item.cameFromPhone }
+            guard hasBothSides, previous != item.cameFromPhone else {
+                return TranscriptEntry(item: item, label: nil)
+            }
+            return TranscriptEntry(
+                item: item,
+                label: item.cameFromPhone ? "From your phone" : "In this window"
+            )
+        }
     }
 
     private static let bottomAnchor = "mynah.transcript.bottom"

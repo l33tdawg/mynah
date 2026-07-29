@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,11 +36,12 @@ func enrol(t *testing.T, server *httptest.Server) (string, []byte) {
 	if err := json.NewDecoder(response.Body).Decode(&minted); err != nil {
 		t.Fatalf("enrol: decode: %v", err)
 	}
-	secret, err := hex.DecodeString(minted.Secret)
-	if err != nil {
-		t.Fatalf("enrol: secret is not hex: %v", err)
-	}
-	return minted.ID, secret
+	// **Verbatim, exactly as the endpoint uses it.** This decoded the hex and
+	// that is precisely why it passed while every real appliance got a 401: it
+	// signed with the relay's decoded digest, where the endpoint signs with the
+	// bytes it read out of the file. A test that reproduces the server's
+	// arithmetic instead of the client's is not an end-to-end test.
+	return minted.ID, []byte(minted.Secret)
 }
 
 // TestAMintedApplianceCanListen is the whole point: an owner who has never been
@@ -81,7 +81,7 @@ func TestTheRelayKeepsNoRecordAndDerivesTheSecretAgain(t *testing.T) {
 	id, secret := enrol(t, server)
 
 	derived := rendezvous.DeriveApplianceSecret(r.rootKey, id)
-	if hex.EncodeToString(derived) != hex.EncodeToString(secret) {
+	if string(derived) != string(secret) {
 		t.Fatal("the relay cannot re-derive a secret it just issued")
 	}
 	if len(r.secrets) != 2 {
@@ -230,7 +230,7 @@ func TestEveryEnrolmentIsADifferentAppliance(t *testing.T) {
 	if first == second {
 		t.Fatal("two enrolments produced the same identity")
 	}
-	if hex.EncodeToString(firstSecret) == hex.EncodeToString(secondSecret) {
+	if string(firstSecret) == string(secondSecret) {
 		t.Fatal("two appliances were given the same secret")
 	}
 }
