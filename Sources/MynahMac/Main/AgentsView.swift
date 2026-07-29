@@ -1038,6 +1038,25 @@ struct AgentsView: View {
     /// stop updating the moment a poll landed.
     @State private var selectedID: String?
 
+    /// Messaging is its own model because it fails on its own terms and must
+    /// not take the roster down with it — same reason the network scan is
+    /// separate. An inbox that cannot be read is not a roster that cannot be
+    /// read, and one screen with one error state would conflate them.
+    @State private var messaging = AgentMessagingModel(
+        messaging: SageAgentMessaging(tools: ApplianceTools.shared)
+    )
+
+    /// Who the compose sheet is addressed to, or `nil` when it is closed.
+    ///
+    /// A wrapper rather than a bare `String` because `sheet(item:)` needs
+    /// `Identifiable`, and an agent name is exactly the kind of value that
+    /// should not silently become an identity.
+    struct Recipient: Identifiable, Equatable {
+        let name: String
+        var id: String { name }
+    }
+    @State private var isWritingTo: Recipient?
+
     /// The roster column.
     ///
     /// Fixed rather than proportional. It holds one line of name and one of
@@ -1080,6 +1099,18 @@ struct AgentsView: View {
             .task(id: selectedAgent?.id) {
                 guard let id = selectedAgent?.id else { return }
                 await model.loadSubjects(forAgent: id)
+            }
+            // Asked when the owner opens the page, never on a timer — see
+            // `AgentMessaging`. A background poll against a node that may
+            // refuse is a retry storm the owner generates by leaving a window
+            // open.
+            .task { await messaging.refreshInbox() }
+            .sheet(item: $isWritingTo) { recipient in
+                AgentMessageSheet(
+                    agentName: recipient.name,
+                    onClose: { isWritingTo = nil },
+                    model: messaging
+                )
             }
     }
 
@@ -1256,7 +1287,9 @@ struct AgentsView: View {
                         grantsLine
                     } else {
                         otherAgentStanding(agent)
+                        sendRow(agent)
                     }
+                    AgentInboxSection(model: messaging)
                     joining
                 }
                 .frame(maxWidth: MynahWidth.prose + s9, alignment: .leading)
@@ -1303,6 +1336,30 @@ struct AgentsView: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Can reach \(subjects.joined(separator: ", "))")
+        }
+    }
+
+    /// Writing to somebody else's agent.
+    ///
+    /// Absent on Mynah's own row rather than present and disabled: sending
+    /// yourself a pipeline message is not a thing the owner wants, and a
+    /// greyed-out button is a verb that leads nowhere — which every escape
+    /// hatch in this app is written not to be.
+    ///
+    /// The recipient is the roster's *name*, so the ordinary path cannot
+    /// misspell an agent into `noSuchAgent`. It still resolves through
+    /// `findAgent`, because a display name and a wire address are different
+    /// things and only the node maps between them.
+    private func sendRow(_ agent: NodeAgent) -> some View {
+        VStack(alignment: .leading, spacing: s3) {
+            MynahButton("Send a message", kind: .secondary) {
+                isWritingTo = Recipient(name: agent.name)
+            }
+            Text("Goes to that agent's SAGE inbox. It needs no access grant, which is why "
+                + "this works while reading its memories does not.")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

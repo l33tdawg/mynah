@@ -158,3 +158,58 @@ final class RecallDisciplineTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Answering the question that was asked
+
+/// The owner asked *"what agents can you see?"* and got a careful report about
+/// **federated connections** — zero remote SAGEs, operator configuration needed
+/// — while the Agents page beside it listed twenty agents on his Mac. His words:
+/// *"these cards are still showing up despite it saying it's not being able to
+/// see any other agents, which is weird."*
+///
+/// It is not a routing mistake. Verified against the tool reference:
+/// `sage_find_agent` requires a `name`, `sage_status` returns ids and counts
+/// with no names, and `sage_federation` takes **no parameters at all** — so it
+/// is the only agent-shaped tool the model can call without already knowing the
+/// answer. It reached for the one instrument it had.
+///
+/// Which makes this the same failure as everything else this week: a limitation
+/// rendered as a finding. The prompt cannot conjure the missing tool; it can
+/// stop the model from dressing its absence up as a result.
+final class AgentEnumerationHonestyTests: XCTestCase {
+
+    private var prompt: String { BrainPrompts.voiceAgentManager }
+
+    func testThePromptSaysItCannotListAgents() {
+        XCTAssertTrue(
+            prompt.contains("cannot list the agents on this Mac"),
+            "nothing tells it that enumeration is not something it can do"
+        )
+    }
+
+    /// The wrong answer was confident and adjacent. Naming the tool that
+    /// produced it is what stops it being reached for again.
+    func testThePromptForbidsAnsweringWithFederation() {
+        XCTAssertTrue(prompt.contains("NEVER answer this with sage_federation"))
+        XCTAssertTrue(
+            prompt.contains("connected *other SAGEs*"),
+            "does not say what federation actually reports, so the ban looks arbitrary"
+        )
+    }
+
+    /// A dead end is not an answer. The Agents page can enumerate — it reads the
+    /// roster over REST, which is exactly the capability MCP does not expose —
+    /// so the honest reply points there rather than stopping at "I can't".
+    func testThePromptPointsSomewhereThatCanAnswer() {
+        XCTAssertTrue(prompt.contains("Agents page"))
+    }
+
+    /// "Which do you have" and "do you have X" are different questions, and the
+    /// second one is answerable. Refusing both would trade a false positive for
+    /// a false negative.
+    func testLookingUpANamedAgentIsStillEncouraged() {
+        XCTAssertTrue(prompt.contains("If they name one, look it up"))
+        XCTAssertTrue(prompt.contains("sage_find_agent first with that name"))
+    }
+}
+

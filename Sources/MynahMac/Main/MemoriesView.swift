@@ -251,6 +251,19 @@ actor SageMemoryStore: MemoryStoring {
         SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable
     }
 
+    /// The same signed connection, for anything else on this Mac that needs to
+    /// talk to the node as the appliance.
+    ///
+    /// Exposed rather than duplicated because an `MCPClient` **spawns a node
+    /// process**. A second one for the agent inbox would be a second
+    /// `sage-gui mcp` child answering as the same identity, and this codebase
+    /// has already paid once for two things believing they were the appliance —
+    /// the ghost key, which the node answered emptily rather than refusing.
+    /// One appliance, one connection.
+    func toolProvider() throws -> any ToolProviding {
+        try connection()
+    }
+
     private func connection() throws -> MCPClient {
         if let client { return client }
         guard let executable = Self.executableURL else {
