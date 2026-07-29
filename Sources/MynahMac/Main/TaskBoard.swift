@@ -187,14 +187,35 @@ enum TaskBoardTrouble {
 
     /// The one that must never be mistaken for an empty plate.
     ///
-    /// An encrypted node answers an unsigned local read with `401
+    /// An unsigned local read of the CEREBRUM board answers `401
     /// {"login_required":true}` — verified against the owner's own node. Every
-    /// word of this is chosen so that a person with thirty-four open tasks and a
-    /// locked vault cannot read it as "you have nothing on".
+    /// word of this is chosen so that a person with thirty-four open tasks
+    /// cannot read it as "you have nothing on".
+    ///
+    /// **The node is not locked, and this used to say it was.** `login_required`
+    /// is the same token SAGE returns over MCP when a vault really is sealed,
+    /// which is how it came to be read as one here — but over REST, unsigned,
+    /// it only means *you are not an operator*. Checked by reading the node at
+    /// the moment this state was on screen: 13,372 memories across some 700
+    /// subjects, answered without complaint. One token, two doors, opposite
+    /// meanings, and the copy took the alarming one.
+    ///
+    /// **This said "Mynah just can't read them", and that is false.**
+    ///
+    /// Mynah reads this node freely — the owner has a screenshot of it listing
+    /// his subjects back to him, in a window whose top half was showing this
+    /// sentence. Two different doors were being conflated: Mynah reads memories
+    /// over MCP as a signed agent, and this board was asking a CEREBRUM
+    /// *operator* endpoint that the app has no session for. The 401 is about
+    /// the app's lack of a key, not about what the appliance may see.
+    ///
+    /// Naming Mynah in a sentence about the app's own limitation is what made
+    /// it read as a claim about the appliance.
     static let locked = Exchange.Failure(
-        headline: "Your SAGE node is locked.",
-        explanation: "Your tasks are all still there — Mynah just can't read them until the "
-            + "node is unlocked. Unlock it in CEREBRUM and this fills in.",
+        headline: "Your tasks need CEREBRUM.",
+        explanation: "They are all still there. This list comes from a part of your node "
+            + "that only answers a signed-in operator, and this window isn't one. "
+            + "Open CEREBRUM to see them.",
         canRetry: true
     )
 

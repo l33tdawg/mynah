@@ -96,27 +96,50 @@ final class AgentSubjectTests: XCTestCase {
 /// The line above the roster, which replaced filtering the roster.
 final class RosterFramingTests: XCTestCase {
 
-    /// Both halves, in the order that makes it a description rather than an
-    /// apology. The owner's objection was that the list promised more than it
-    /// meant; the finding was that the list was correct and the verb was wrong,
-    /// so what changed is what the page *says*, not which rows it shows.
-    func testTheLineCarriesBothHalvesOfTheAsymmetry() {
+    /// **This test asserted the false claim, and that is the finding.**
+    ///
+    /// The first version required the line to contain "can't read", because the
+    /// briefing said reading needed a grant. It does not: mask 30 is four write
+    /// and pipe denials, and an ordinary signed agent reads the whole node —
+    /// 13,372 memories across some 700 subjects, checked by running it.
+    ///
+    /// So a test written to protect a sentence pinned it in place instead, and
+    /// would have failed anybody who corrected it. **A test is only as true as
+    /// the fact it encodes**, and one that asserts a *specific wrong sentence*
+    /// is worse than no test — it turns a mistake into a rule.
+    ///
+    /// It now asserts the shape rather than the wording: both halves present,
+    /// capability before restriction so the line reads as a description rather
+    /// than an apology, and the restriction is about *writing*. `thread` owns
+    /// the words and can change all of them without touching this.
+    func testTheLineCarriesBothHalvesOfTheAsymmetry() throws {
         let line = FederationHelp.whatMynahMayDoWithTheseAgents
 
-        XCTAssertTrue(line.contains("send"), "the half Mynah can do went missing")
-        XCTAssertTrue(line.contains("can't read"), "the half it cannot do went missing")
+        let reads = try XCTUnwrap(line.range(of: "read"), "the half Mynah can do went missing")
+        let writes = try XCTUnwrap(line.range(of: "write"), "the half it cannot do went missing")
         XCTAssertTrue(
-            line.range(of: "send")!.lowerBound < line.range(of: "can't read")!.lowerBound,
-            "the line leads with the restriction, which reads as an apology"
+            reads.lowerBound < writes.lowerBound,
+            "the line leads with what Mynah cannot do, which reads as an apology"
         )
+    }
+
+    /// The claim that must never come back. Reading is what this appliance *can*
+    /// do, and a sentence saying otherwise sat on screen while Mynah listed the
+    /// owner's own subjects back to him in the panel below it.
+    func testItNeverSaysMynahCannotRead() {
+        let line = FederationHelp.whatMynahMayDoWithTheseAgents.lowercased()
+
+        for claim in ["can't read", "cannot read", "isn't allowed to read"] {
+            XCTAssertFalse(line.contains(claim), "the false read claim is back: \(claim)")
+        }
     }
 
     /// "subject", never "domain" — the owner-facing word for this everywhere in
     /// the product.
     func testItUsesTheOwnersWordForASubject() {
-        let line = FederationHelp.whatMynahMayDoWithTheseAgents
-        XCTAssertTrue(line.contains("subjects"))
-        XCTAssertFalse(line.lowercased().contains("domain"))
+        XCTAssertFalse(
+            FederationHelp.whatMynahMayDoWithTheseAgents.lowercased().contains("domain")
+        )
     }
 
     /// The sidebar must not promise Mynah can query these agents. "Ask" is the

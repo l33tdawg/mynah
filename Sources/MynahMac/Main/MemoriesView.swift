@@ -124,6 +124,23 @@ enum MemoryTrouble: Error, Equatable, Sendable {
             return "Quit Mynah and open it again. If it still won't open, send the diagnostics "
                 + "from Settings — nothing you have told it is affected."
         case .locked:
+            // **Kept deliberately, and it is the only "can't read" claim that
+            // survived the sweep.** Three others were removed on 29 July for
+            // saying this falsely; this one is true, and the difference is
+            // which door the answer came through.
+            //
+            // The task board and the agents roster ask over *unsigned REST*,
+            // where a 401 means "you are not an operator" and says nothing
+            // about the node. This screen asks over **MCP, signed as the
+            // appliance** — see the reader below, which drives `sage_list` and
+            // `sage_recall` through `MCPClient`. When a signed request comes
+            // back sealed, the vault genuinely is sealed and Mynah genuinely
+            // cannot read it.
+            //
+            // `login_required` is the same token on both paths, which is
+            // exactly how the false version got written. If this sentence ever
+            // needs revisiting, the question is not "can Mynah read" — it is
+            // whether this screen is still signed.
             return "Everything Mynah remembers is still there — it just can't read any of it "
                 + "until the node is unlocked. Unlock it in CEREBRUM and this fills in."
         case .unreadable:

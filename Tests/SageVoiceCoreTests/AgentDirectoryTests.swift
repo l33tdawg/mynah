@@ -555,16 +555,35 @@ final class StandingFactTests: XCTestCase {
         XCTAssertTrue(line.contains("clearance"), "the bound was dropped")
     }
 
-    /// And the self-registration default does not read widely, so the two
-    /// profiles must not describe reading identically.
-    func testAnUnreviewedKeyDoesNotClaimToReadWidely() {
+    /// **This test encoded the mistake, and the name is the evidence.**
+    ///
+    /// It was called `testAnUnreviewedKeyDoesNotClaimToReadWidely` and pinned
+    /// the exact sentence "Only the subjects it's been given access to." An
+    /// unreviewed key **does** read widely: mask 30 is four write and pipe
+    /// denials, bit 1 is a *lift* of discovery filters rather than a permission
+    /// to read, and an agent with an empty `DomainAccess` has no per-domain
+    /// restriction at all. Verified by reading the node as an ordinary signed
+    /// agent — 13,372 memories, some 700 subjects, nothing refused.
+    ///
+    /// So a test written to defend a sentence held a false claim in place and
+    /// would have failed whoever corrected it. It now asserts the honest
+    /// property: without bit 1 the app **cannot tell** how wide the reach is,
+    /// so the line must not claim a limit it has not established — while still
+    /// differing from the companion line, which can.
+    func testAnUnreviewedKeyDoesNotOverstateWhatTheAppCanSee() {
         let pending = AgentPermissions(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let companion = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion)
 
-        XCTAssertEqual(pending.readingLine, "Only the subjects it's been given access to.")
         XCTAssertNotEqual(
-            pending.readingLine,
-            AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion).readingLine
+            pending.readingLine, companion.readingLine,
+            "two different capability states are described identically"
         )
+        for claim in ["only the subjects", "can't read", "cannot read"] {
+            XCTAssertFalse(
+                pending.readingLine.lowercased().contains(claim),
+                "the line claims a read limit the mask does not impose: \(claim)"
+            )
+        }
     }
 
     /// A reading fact exists for every mask, including the unrestricted one —
@@ -730,15 +749,27 @@ final class FederationHelpTests: XCTestCase {
         XCTAssertTrue(FederationHelp.grantsAreReal.contains("not a setting"))
     }
 
-    /// This screen cannot read the grant list — `/v1/access/grants/{id}` refuses
-    /// an unsigned caller. Saying "no grants" on the strength of a refused call
-    /// would be inventing the most consequential fact here.
-    func testTheScreenSaysItCannotReadGrantsRatherThanThatThereAreNone() {
+    /// The grant list is genuinely not shown here, and the load-bearing part is
+    /// that the screen must not turn that into "there are none" — inventing the
+    /// most consequential fact on the page out of a question it never got an
+    /// answer to.
+    ///
+    /// What changed is the *reason*. The sentence used to blame a lack of
+    /// signing, which reads as "Mynah is not signed" — and Mynah signs
+    /// everything over MCP. The real reason is that this is an operator view:
+    /// `sage_scope_list` and `sage_scope_get` are app-v20 quorum scopes,
+    /// node-operator/admin only, and no MCP tool exposes per-agent grants at
+    /// all. So the assertion is now on the claim rather than on a phrase that
+    /// smuggled a false one in beside it.
+    func testTheScreenSaysGrantsAreUnshownRatherThanAbsent() {
         let sentence = FederationHelp.grantsAreNotReadableHere.lowercased()
 
-        XCTAssertTrue(sentence.contains("can't read"))
-        XCTAssertFalse(sentence.contains("no grants"))
-        XCTAssertTrue(sentence.contains("cerebrum"))
+        XCTAssertFalse(sentence.contains("no grants"), "an unasked question became an answer")
+        XCTAssertFalse(
+            sentence.contains("signed request"),
+            "the reason implies Mynah is unsigned, and Mynah signs everything it does"
+        )
+        XCTAssertTrue(sentence.contains("cerebrum"), "the owner is not told where to look")
     }
 
     /// The steps name CEREBRUM and stop.

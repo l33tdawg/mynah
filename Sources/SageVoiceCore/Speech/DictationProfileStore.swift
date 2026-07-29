@@ -32,8 +32,14 @@ public actor DictationProfileStore {
 
     public static let shared = DictationProfileStore()
 
-    /// Supplies remembered text. Returns empty when Mynah cannot read its own
-    /// memories, which is the state on the owner's machine today.
+    /// Supplies remembered text. Returns empty when there is nothing to mine.
+    ///
+    /// This said "when Mynah cannot read its own memories, which is the state
+    /// on the owner's machine today", and both halves were wrong. Mynah reads
+    /// this node freely — its capability mask denies writes and pipes, not
+    /// reads. What is true on his machine is that it cannot *write*, so it has
+    /// no memories of its own to mine yet. Reading and having are different
+    /// facts, and conflating them is what put a false claim on three screens.
     public typealias MemorySource = @Sendable () async -> [String]
 
     private var cached: DictationProfile?

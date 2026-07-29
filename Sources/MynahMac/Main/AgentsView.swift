@@ -178,10 +178,24 @@ struct AgentPermissions: Equatable, Sendable {
     /// saying it — and then falling silent entirely once the profile is assigned
     /// and the warning clears — is exactly the true-by-omission this screen
     /// exists to stop.
+    /// **The second branch used to say "Only the subjects it's been given
+    /// access to", and that reads as a restriction this appliance does not
+    /// have.**
+    ///
+    /// The mask says nothing about reading — 30 is four write and pipe denials.
+    /// Without bit 1 the ordinary rules apply, and the ordinary rule for an
+    /// agent with an empty `DomainAccess` is no per-domain restriction at all.
+    /// So absence of the bit is not evidence of a limit; it is the absence of a
+    /// *lift*, and the app cannot see the grant list to tell which side of that
+    /// this agent falls on.
+    ///
+    /// The owner disproved the old wording in one message: he asked Mynah what
+    /// it had stored and it listed his subjects back, while this line said it
+    /// could not see them.
     var readingLine: String {
         mask & Capability.readAcrossSubjects != 0
             ? "Across every subject on this node, including other agents', up to its clearance."
-            : "Only the subjects it's been given access to."
+            : "Whatever it has been given access to, up to its clearance — CEREBRUM shows the list."
     }
 
     /// **What is deliberately not here: the sentences.**
@@ -288,7 +302,15 @@ enum AgentTrouble: Error, Equatable, Sendable {
         switch self {
         case .notSetUp: return "Mynah hasn't got a memory on this Mac yet."
         case .unreachable: return "Mynah can't reach your node."
-        case .locked: return "Your node is locked."
+        // Not "Your node is locked", which this claimed and could not know.
+        //
+        // The roster comes from `GET /v1/agents` **unsigned**, so a 401 or 403
+        // means the node declined an anonymous caller — not that anything is
+        // sealed. Same door, same mistake and same day as the task board: an
+        // app-level refusal described as a state of the owner's node, with
+        // "unlock it in CEREBRUM" attached, sending him to fix something that
+        // may be working perfectly. His was, throughout.
+        case .locked: return "This window couldn't read the list."
         case .refused: return "Your node wouldn't answer that."
         case .unreadable: return "Your node answered with something unexpected."
         }
@@ -305,8 +327,12 @@ enum AgentTrouble: Error, Equatable, Sendable {
             return "It may still be starting up. Give it a moment and try again. Your agents "
                 + "are unaffected."
         case .locked:
-            return "Unlock it in CEREBRUM and come back. Your agents are all still there — this "
-                + "screen simply isn't allowed to read them until you do."
+            // The second half was already right — "this screen", not "Mynah" —
+            // and it is the formulation the rest of the sweep was corrected to
+            // match. What had to go is the instruction in front of it, which
+            // asserted a lock nobody had established.
+            return "Your agents are all still there. Your node declined this window's request, "
+                + "and CEREBRUM can always show you the list."
         case .refused:
             return "Quit Mynah and open it again. If that doesn't help, set it up again."
         case .unreadable:
@@ -661,9 +687,20 @@ enum FederationHelp {
     /// is finally made, the sentence stops being absolute rather than becoming
     /// false — "none has been given" is a fact about today that will read as
     /// stale rather than as a lie.
+    /// **This said Mynah could not read what these agents remember. That was
+    /// false, and the owner caught it by asking Mynah over Signal — it answered
+    /// with a real inventory of his subjects while this line claimed it could
+    /// not see them.**
+    ///
+    /// The mistake was mine to brief: `checkDomainAccess` does gate reads, but
+    /// an agent whose `DomainAccess` is empty has no per-domain restriction at
+    /// all, and the capability mask this appliance carries — 30 — is four
+    /// *write* and *pipe* denials with nothing about reading in it. So the
+    /// asymmetry is real and runs the other way: it reads freely and cannot
+    /// write a word.
     static let whatMynahMayDoWithTheseAgents =
-        "Mynah can send any of these a message. It can't read what they remember — "
-            + "that needs access to their subjects, and none has been given."
+        "Mynah can send any of these a message, and read what they remember. "
+            + "What it can't do is write anything of its own — not yet."
 
     /// The domain the appliance writes everything to.
     ///
@@ -756,8 +793,23 @@ enum FederationHelp {
     /// `401 Missing authentication headers` to this app, which cannot sign
     /// requests. Saying "no grants" on the strength of a call that was refused
     /// would be inventing the most consequential fact on the screen.
-    static let grantsAreNotReadableHere = "Mynah can't read the grant list itself — your node "
-        + "only hands that to a signed request. CEREBRUM shows it in full."
+    /// **The claim is true; its reason was not, and the reason is what taught
+    /// the false lesson.**
+    ///
+    /// It said the grant list needs "a signed request", which reads as *Mynah
+    /// is not signed* — and Mynah signs everything it does over MCP. That
+    /// phrasing is the same conflation that put a false read claim on the
+    /// roster and a locked vault on the task board: the *app* is the unsigned
+    /// one, and three separate sentences quietly attributed its limitation to
+    /// the appliance.
+    ///
+    /// The list genuinely is not reachable, for a different reason. Checked:
+    /// `sage_scope_list` and `sage_scope_get` are app-v20 *quorum* scopes and
+    /// are node-operator/admin only — they are not per-agent grants, and no MCP
+    /// tool exposes those at all. So this is an operator view, like the task
+    /// board, and it says so in the same words.
+    static let grantsAreNotReadableHere = "The list of who can reach what is an operator view, "
+        + "so it isn't shown here. CEREBRUM has it in full."
 
     /// The remedy is deliberately NOT defined here.
     ///

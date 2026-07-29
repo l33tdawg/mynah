@@ -19,10 +19,17 @@ import Foundation
 /// byte-identical to today's behaviour.
 ///
 /// The temptation to report it is real, and wrong twice over. Once because the
-/// owner cannot act on it — he already knows his agent cannot read its
-/// memories, it is on the Agents page — and once because "cannot read memories"
-/// would arrive attached to a voice note, which is the least related place it
-/// could possibly appear.
+/// owner cannot act on it, and once because a complaint about memory would
+/// arrive attached to a voice note, which is the least related place it could
+/// possibly appear.
+///
+/// The original version of this comment justified the silence by saying the
+/// owner "already knows his agent cannot read its memories, it is on the Agents
+/// page". **Both halves were wrong.** The appliance reads this node freely —
+/// its capability mask denies writes and pipes, not reads — and the Agents page
+/// was carrying that false claim rather than establishing it. Left here as a
+/// marker: a comment that leans on another screen's wording inherits that
+/// screen's mistakes, and this one outlived the sentence it cited.
 public struct SageMemoryVocabularySource: Sendable {
 
     /// How many memories to mine. Recall returns most-relevant first, and the
