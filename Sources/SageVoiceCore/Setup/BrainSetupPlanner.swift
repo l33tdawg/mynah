@@ -319,7 +319,7 @@ public struct BrainSetupPlanner: Sendable {
 
     public func plan(for probe: EnvironmentProbeResult) -> BrainSetupChoices {
         var options: [BrainSetupOption] = []
-        options.append(contentsOf: AgentCLIKind.allCases.map { cliOption(probe.cli($0)) })
+        // The agent CLIs are deliberately absent — see `AgentCLINotOffered`.
         options.append(contentsOf: apiKeyOptions(probe.ambientAPIKeys))
         options.append(fullyLocalOption(probe))
 
@@ -342,111 +342,6 @@ public struct BrainSetupPlanner: Sendable {
         return BrainSetupChoices(
             options: ordered,
             recommendation: recommended.map(recommendation(for:))
-        )
-    }
-
-    // MARK: Agent CLIs
-
-    /// Why an agent CLI is never offerable today, in words a card can print.
-    ///
-    /// Driving `claude` or `codex` means owning a subprocess that speaks its own
-    /// protocol, and no such backend exists here — `BrainSetupOptionID.backendPlan`
-    /// says so in one place and this sentence is what the owner reads. Shipping
-    /// it as available is what produced the dead end a reviewer walked into:
-    /// pick the app's own sparkle-marked recommendation, finish setup, and the
-    /// first question answers "Mynah can't use that brain any more", with the
-    /// only offer being a wizard that recommends it again.
-    /// Leads with the detection, because the owner concluded the opposite.
-    ///
-    /// He read the greyed row as *"this Mac does not have it"* and said so:
-    /// *"we have codex and claude installed clearly; i'm using you right — yet
-    /// it thinks we don't"*. Detection was working the whole time; the sentence
-    /// naming the real reason was losing to the visual state, because grey means
-    /// "not found here" to everybody. So the first clause is now the fact he
-    /// doubted.
-    ///
-    /// **"yet" is gone, and that is deliberate.** It promised a backend that is
-    /// not coming in this shape. `claude -p` is not a model endpoint — it is an
-    /// agent with its own system prompt, its own tools and its own
-    /// `--mcp-config`, so it does not emit tool calls for `ToolLoop` to run, it
-    /// runs its own. Measured on the owner's Mac: 4.4 s and ~26,000 tokens of
-    /// context to answer "ok". Driving it would nest an agent inside an agent
-    /// and bypass the allowlist, the reply style and the turn budget that make
-    /// this an appliance.
-    ///
-    /// Handing whole conversations to it is a real and possibly good idea. It is
-    /// a different product decision, not this option, and saying "yet" would go
-    /// on quietly promising the version that cannot work.
-    private func cliUnsupportedReason(_ kind: AgentCLIKind) -> String {
-        "Mynah can see \(kind.displayName) on this Mac, and can't think through it. "
-            + "\(kind.displayName) is an assistant in its own right rather than a model "
-            + "Mynah can drive — it brings its own tools and its own memory. Pick another "
-            + "way for now."
-    }
-
-    private func cliOption(_ report: AgentCLIReport) -> BrainSetupOption {
-        let kind = report.kind
-        let id: BrainSetupOptionID = kind == .claudeCode ? .claudeCodeCLI : .codexCLI
-        let backend = kind == .claudeCode ? "claude-code-cli" : "codex-cli"
-
-        guard report.isInstalled else {
-            return BrainSetupOption(
-                id: id,
-                label: kind.displayName,
-                summary: "Use the \(kind.displayName) subscription you already pay for.",
-                // Moot while unavailable; recorded so the shape is consistent.
-                requirement: .signIn,
-                keepsWordsOnDevice: false,
-                availability: .unavailable(
-                    reason: "\(kind.displayName) isn't installed on this Mac."
-                ),
-                tier: .signedInSubscription,
-                backendIdentifier: backend
-            )
-        }
-
-        if report.hasSubscriptionCredential {
-            return BrainSetupOption(
-                id: id,
-                label: "\(kind.displayName) — already signed in",
-                summary: "Uses the \(kind.displayName) sign-in already on this Mac, so there's "
-                    + "nothing to set up and nothing extra to pay. What you say goes to "
-                    + "\(kind.vendorName).",
-                requirement: .nothing,
-                keepsWordsOnDevice: false,
-                availability: .unavailable(reason: cliUnsupportedReason(kind)),
-                tier: .signedInSubscription,
-                backendIdentifier: backend
-            )
-        }
-
-        if report.hasAmbientAPIKey {
-            return BrainSetupOption(
-                id: id,
-                label: "\(kind.displayName) — using the key in your environment",
-                summary: "\(kind.displayName) is installed and would run on the "
-                    + "\(kind.vendorName) API key already set on this Mac. That's billed per "
-                    + "use, not covered by a subscription. What you say goes to "
-                    + "\(kind.vendorName).",
-                requirement: .nothing,
-                keepsWordsOnDevice: false,
-                availability: .unavailable(reason: cliUnsupportedReason(kind)),
-                tier: .ambientAPIKey,
-                backendIdentifier: backend
-            )
-        }
-
-        return BrainSetupOption(
-            id: id,
-            label: "\(kind.displayName) — needs sign-in",
-            summary: "\(kind.displayName) is installed but not signed in. Sign in with your "
-                + "\(kind.vendorName) account to use it. What you say goes to "
-                + "\(kind.vendorName).",
-            requirement: .signIn,
-            keepsWordsOnDevice: false,
-            availability: .unavailable(reason: cliUnsupportedReason(kind)),
-            tier: .installedCLINeedingSignIn,
-            backendIdentifier: backend
         )
     }
 

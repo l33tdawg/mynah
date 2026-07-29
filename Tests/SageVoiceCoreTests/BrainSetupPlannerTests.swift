@@ -14,27 +14,66 @@ final class BrainSetupPlannerTests: XCTestCase {
 
     // MARK: - Ranking
 
-    /// An agent CLI keeps its tier, and is still not offerable.
+    /// **This test asserted the card, so it now asserts the card's absence.**
     ///
-    /// The ranking is about what *would* be best; availability is about what can
-    /// actually be built. Nothing in this product drives `claude` or `codex` as a
-    /// subprocess, so a signed-in CLI must not become the recommendation — that
-    /// is exactly the dead end that shipped: pick the app's own sparkle-marked
-    /// suggestion, finish setup, and the first question answers "Mynah can't use
-    /// that brain any more".
-    func testSignedInAgentCLIIsRankedFirstButNotOfferable() throws {
+    /// It used to check that a signed-in Claude Code kept its tier, sorted
+    /// first, and stayed unavailable with a reason attached — the theory being
+    /// that a disabled row explains itself better than a missing one. The owner
+    /// disproved it from the outside: he read grey as "not installed" and said
+    /// so, *"we have codex and claude installed clearly; i'm using you right —
+    /// yet it thinks we don't"*, because in a list of things you may choose,
+    /// that is what grey means. The explanation was losing to the visual state
+    /// no matter how it was worded, since the two rows were the only entries on
+    /// that screen that were not offers.
+    ///
+    /// Withdrawn even when the owner is signed in and it is the "best" tier —
+    /// entitlement was never the barrier. See `AgentCLINotOffered`.
+    func testAgentCLIsAreNotOffered() {
         let probe = EnvironmentProbeResult.machine(
             claudeCode: .signedIn(.claudeCode),
             ambientKeys: AmbientAPIKeyReport(providers: [.anthropic], variableNames: ["ANTHROPIC_API_KEY"])
         )
         let choices = planner.plan(for: probe)
 
-        let claude = try XCTUnwrap(choices.option(withID: .claudeCodeCLI))
-        XCTAssertEqual(claude.tier, .signedInSubscription)
-        XCTAssertFalse(claude.isAvailable, "Nothing can serve an agent CLI yet")
-        XCTAssertTrue(try XCTUnwrap(claude.availability.reason).contains("Claude Code"))
-        XCTAssertNotEqual(choices.recommendation?.optionID, .claudeCodeCLI)
+        XCTAssertNil(choices.option(withID: .claudeCodeCLI))
+        XCTAssertNil(choices.option(withID: .codexCLI))
         XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
+    }
+
+    /// The other half, and the one that protects an owner rather than a screen.
+    ///
+    /// Same guarantee `testGoogleKeepsItsIdentitySoAStoredChoiceStillDecodes`
+    /// makes, for the same reason: a build shipped these as selectable, so
+    /// `cli.claude-code` may be sitting in somebody's `BrainSelectionStore`. If
+    /// the case were deleted their recorded choice would decode to `nil`, and an
+    /// unreadable choice is indistinguishable from no choice — the app would
+    /// walk them through setup again with a working brain already configured.
+    func testAgentCLIsKeepTheirIdentitySoAStoredChoiceStillDecodes() {
+        XCTAssertEqual(BrainSetupOptionID(rawValue: "cli.claude-code"), .claudeCodeCLI)
+        XCTAssertEqual(BrainSetupOptionID(rawValue: "cli.codex"), .codexCLI)
+    }
+
+    /// Detection stays, and the sentence that needs it stays with it.
+    ///
+    /// Removing the card must not remove the probe: Settings shows the
+    /// explanation only to an owner who actually has the CLI installed, which is
+    /// a question only the probe can answer. And the copy carries the
+    /// measurement on purpose — a verdict invites re-litigation, a number tells
+    /// whoever reopens this to re-measure instead.
+    func testTheExplanationSurvivesTheCardAndCarriesTheMeasurement() {
+        let sentence = AgentCLINotOffered.explanation(for: .claudeCode)
+
+        XCTAssertTrue(sentence.contains("can see Claude Code on this Mac"))
+        XCTAssertTrue(sentence.contains("4.4 seconds"))
+        XCTAssertTrue(sentence.contains("26,000"))
+        XCTAssertEqual(
+            AgentCLINotOffered.heading(for: [.claudeCode, .codex]),
+            "Why Claude Code and Codex aren't options"
+        )
+        XCTAssertEqual(
+            AgentCLINotOffered.heading(for: [.codex]),
+            "Why Codex isn't an option"
+        )
     }
 
     /// **This test asserted the state that was withdrawn, so it now asserts the
@@ -115,22 +154,25 @@ final class BrainSetupPlannerTests: XCTestCase {
         )
     }
 
-    /// A binary on disk proves nothing about entitlement, and in any case there
-    /// is nothing to drive it with. It keeps its tier and stays unavailable.
-    func testInstalledButUnauthenticatedCLIIsExplainedRatherThanOffered() throws {
-        let probe = EnvironmentProbeResult.machine(claudeCode: .installedNotSignedIn(.claudeCode))
-        let choices = planner.plan(for: probe)
-
-        let claude = try XCTUnwrap(choices.option(withID: .claudeCodeCLI))
-        XCTAssertFalse(claude.isAvailable)
-        XCTAssertEqual(claude.tier, .installedCLINeedingSignIn)
-        XCTAssertNotNil(claude.availability.reason)
-
-        XCTAssertGreaterThan(
-            try XCTUnwrap(index(of: .claudeCodeCLI, in: choices)),
-            try XCTUnwrap(index(of: .anthropicAPIKey, in: choices))
-        )
-        XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
+    /// No CLI state puts one back on the menu.
+    ///
+    /// Three were reachable — installed-and-signed-in, installed-not-signed-in,
+    /// and installed-with-an-ambient-key — and each produced a differently
+    /// worded card. Sign-in was never the barrier, so none of them returns.
+    func testNoCLIStateBringsTheOfferBack() {
+        for state in [
+            EnvironmentProbeResult.machine(claudeCode: .installedNotSignedIn(.claudeCode)),
+            EnvironmentProbeResult.machine(claudeCode: .signedIn(.claudeCode)),
+            EnvironmentProbeResult.machine(claudeCode: .installedNotSignedIn(.claudeCode),
+                                           ambientKeys: AmbientAPIKeyReport(
+                                               providers: [.anthropic],
+                                               variableNames: ["ANTHROPIC_API_KEY"]
+                                           )),
+        ] {
+            let choices = planner.plan(for: state)
+            XCTAssertNil(choices.option(withID: .claudeCodeCLI))
+            XCTAssertEqual(choices.recommendation?.optionID, .fullyLocal)
+        }
     }
 
     /// Unavailable options are kept so the UI can explain them, but they must
@@ -414,13 +456,16 @@ final class BrainSetupPlannerTests: XCTestCase {
         )
     }
 
-    /// A CLI that is not installed is explained, not hidden.
-    func testMissingCLIIsListedWithAReason() throws {
+    /// A Mac with neither CLI is told nothing about either.
+    ///
+    /// The withdrawn card had a fourth wording for this case — "Codex isn't
+    /// installed on this Mac" — which was a true sentence about software the
+    /// owner had never asked about, on the first screen they ever saw.
+    func testAMacWithoutTheCLIsIsToldNothingAboutThem() {
         let choices = planner.plan(for: .machine())
-        let codex = try XCTUnwrap(choices.option(withID: .codexCLI))
 
-        XCTAssertFalse(codex.isAvailable)
-        XCTAssertTrue(try XCTUnwrap(codex.availability.reason).contains("isn't installed"))
+        XCTAssertNil(choices.option(withID: .codexCLI))
+        XCTAssertNil(choices.option(withID: .claudeCodeCLI))
     }
 
     // MARK: - Purity and re-runnability
@@ -520,8 +565,16 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// the withdrawn set is spelled out here rather than derived. That is the
     /// point: a future option that goes missing by accident still fails this
     /// test, because accidental omission cannot add itself to the list below.
+    ///
+    /// **Amended again for the two agent CLIs**, withdrawn for a different
+    /// reason than Google's — not "we will not serve this" but "a row in a
+    /// picker claims choosability, and these never will be". The explanation
+    /// they carried now lives in `AgentCLINotOffered` and renders in Settings,
+    /// to an owner who actually has the CLI installed.
     func testEveryOptionIsOfferableSoNoChoiceIsHiddenFromTheOwner() {
-        let withdrawn: Set<BrainSetupOptionID> = [.googleSignIn, .googleAPIKey]
+        let withdrawn: Set<BrainSetupOptionID> = [
+            .googleSignIn, .googleAPIKey, .claudeCodeCLI, .codexCLI,
+        ]
         let choices = planner.plan(for: .machine())
 
         for id in BrainSetupOptionID.allCases where !withdrawn.contains(id) {

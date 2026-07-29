@@ -63,12 +63,35 @@ final class BrainFactoryCoverageTests: XCTestCase {
 
     /// An option with no plan must refuse cleanly rather than crash, in case a
     /// stored choice from an older build survives an upgrade.
+    ///
+    /// **The source of these cases moved, and had to.** It used to take them
+    /// from a fresh plan and assert the list was non-empty — which held only
+    /// while the catalogue still carried unservable cards. All three are now
+    /// withdrawn (`signin.google`, `cli.claude-code`, `cli.codex`), so the plan
+    /// yields none and the old assertion inverted into a failure.
+    ///
+    /// That withdrawal makes this test *more* load-bearing, not less. These ids
+    /// are precisely the ones that can be sitting in a `BrainSelectionStore`
+    /// written by a build that offered them, and they no longer appear in any
+    /// catalogue where a mistake would be visible. So the cases come from the
+    /// id enum, which is the thing that actually decodes off disk.
     func testAnUnservableStoredChoiceRefusesInsteadOfCrashing() {
-        let choices = BrainSetupPlanner().plan(for: EnvironmentProbeResult())
-        let unservable = (choices.availableOptions + choices.unavailableOptions)
-            .filter { $0.id.backendPlan == nil }
+        let unservable = BrainSetupOptionID.allCases
+            .filter { $0.backendPlan == nil }
+            .map { id in
+                BrainSetupOption(
+                    id: id,
+                    label: id.rawValue,
+                    summary: "A choice recorded by an older build.",
+                    requirement: .nothing,
+                    keepsWordsOnDevice: false,
+                    availability: .available,
+                    tier: .signedInSubscription,
+                    backendIdentifier: id.rawValue
+                )
+            }
 
-        XCTAssertFalse(unservable.isEmpty, "expected the planner to still describe options it cannot serve")
+        XCTAssertFalse(unservable.isEmpty, "expected ids that nothing in this product can serve")
         for option in unservable {
             XCTAssertThrowsError(try BrainFactory.makeBackend(for: option, apiKey: "test-key")) { error in
                 guard case BrainFactory.Failure.notServiceable = error else {
