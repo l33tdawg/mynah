@@ -581,16 +581,7 @@ struct TalkView: View {
                         action: troubleAction(trouble)
                     )
                 }
-                HStack(alignment: .bottom, spacing: s4) {
-                    field
-                    if model.canHoldToTalk {
-                        HoldToTalkButton(
-                            isRecording: model.isRecording,
-                            onBegin: { model.beginRecording() },
-                            onEnd: { model.endRecording() }
-                        )
-                    }
-                }
+                field
                 if !model.canHoldToTalk {
                     Text("You can also send Mynah a voice note from your phone — the answer "
                         + "appears here too.")
@@ -624,7 +615,7 @@ struct TalkView: View {
 
     private var field: some View {
         @Bindable var model = model
-        return HStack(alignment: .bottom, spacing: s4) {
+        return HStack(alignment: .center, spacing: s4) {
             if model.isRecording {
                 Waveform(level: model.micLevel, isActive: true)
                 Spacer(minLength: s4)
@@ -655,17 +646,46 @@ struct TalkView: View {
                 // turn queued into a half-built engine used to come back as
                 // "Mynah couldn't finish that" on the owner's very first
                 // question.
+                // Mic to the left of Send, which is the owner's instruction and
+                // the arrangement every messaging app on his phone uses. It
+                // used to sit *outside* the composer well entirely, to the
+                // right of it, which put the least familiar control in the most
+                // prominent position and left Send looking like a label.
+                //
+                // Still absent rather than disabled when nothing can
+                // transcribe — `voice` built that deliberately and an icon
+                // makes greying-out tempting. A control that cannot lead
+                // anywhere does not ship.
+                if model.canHoldToTalk {
+                    HoldToTalkButton(
+                        isRecording: model.isRecording,
+                        onBegin: { model.beginRecording() },
+                        onEnd: { model.endRecording() }
+                    )
+                }
                 MynahButton(
                     model.isWakingUp ? "Waking up…" : "Send",
-                    kind: .quiet,
+                    kind: .primary,
                     isEnabled: model.canSend,
                     action: send
                 )
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
-        // Both states are the same height, so starting to speak never nudges the
-        // transcript above it.
+        // **`.center`, not `.bottom`, and this is the "text starts a line down"
+        // the owner reported.**
+        //
+        // The row is bottom-aligned so the buttons sit on the last line of a
+        // grown draft. But `minHeight: 28` is taller than one line of `.body`,
+        // so with a single line — which is almost always — the text was pushed
+        // to the *bottom* of the box and all the slack appeared above it. It
+        // read as a blank first line, because that is exactly what it looked
+        // like.
+        //
+        // Centring costs the multi-line case a little: at six lines the buttons
+        // sit at the middle rather than the last line. That is the rarer state
+        // and the smaller wrong, and it is the trade a Mac text field makes
+        // too.
         .frame(minHeight: 28)
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -674,9 +694,24 @@ struct TalkView: View {
         .overlay {
             // The focus ring. Nothing signals "this was finished" more cheaply
             // than tabbing into a field and watching focus land.
+            //
+            // **`Color.accentColor`, not `Palette.accent`, and the owner
+            // decided it**: *"the yellow box doesn't tell us anything"*. He is
+            // right, and it is the amber audit again in the control he uses
+            // most. MYNAH's yellow means *a property of the product that needs
+            // you* — the readiness banner, the restricted key, the paused
+            // switch. A cursor resting in a field is the least eventful state a
+            // control has, and giving it the loudest colour on the screen is
+            // the over-signalling that had him reading a caution dot as a
+            // stopped appliance.
+            //
+            // The system accent is what every other Mac app rings a focused
+            // field with, and it is the colour *he* chose in System Settings.
+            // See the note on `MynahApp`'s root: platform chrome keeps the
+            // platform's accent; MYNAH's is for surfaces MYNAH draws itself.
             if isComposerFocused && !model.isRecording {
                 RoundedRectangle.mynah(r.card + 3)
-                    .strokeBorder(Palette.accent.fill.opacity(0.30), lineWidth: 3)
+                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 3)
                     .padding(-3)
             }
         }
@@ -685,9 +720,17 @@ struct TalkView: View {
         .onTapGesture { isComposerFocused = true }
     }
 
+    /// Recording is the only state here that earns MYNAH's accent.
+    ///
+    /// These used to be two opacities of one colour — focused at 0.65, recording
+    /// at 1.0 — which made a cursor resting in a field and a live microphone the
+    /// same event at different volumes. They are not the same kind of thing at
+    /// all: one is where you are typing, the other is the appliance listening to
+    /// the room. Focus now takes the system's own ring and leaves the border
+    /// alone.
     private var borderColor: Color {
         if model.isRecording { return Palette.accent.fill }
-        return isComposerFocused ? Palette.accent.fill.opacity(0.65) : Palette.line.hairline
+        return Palette.line.hairline
     }
 
     private func send() {
@@ -864,9 +907,21 @@ private struct ThinkingRow: View {
 
 /// Press and hold to speak, release to put the words in the field.
 ///
-/// Not round: `Circle()` in MYNAH is reserved for the hero glyph and status
-/// dots. Not carrying a microphone glyph either — the live level meter beside it
-/// says "listening" far better than an icon of a microphone does.
+/// **A microphone glyph, on the owner's instruction**: *"make it like the mic
+/// icon bro — people are used to that kind of iconography."* He is right, and
+/// the previous reasoning here was wrong in a specific way worth keeping: it
+/// argued that the live level meter says "listening" better than an icon of a
+/// microphone. True — but that is about the *recording* state, and it decided
+/// the *resting* state. At rest there is no meter, and "Hold to talk" as a
+/// block of text is a control nobody has seen before sitting where every
+/// messaging app on his phone puts a mic.
+///
+/// The meter still does the work it was right about. It appears the moment
+/// recording starts, in the field, where it always did.
+///
+/// Hold-to-talk is a held gesture and he chose it over a toggle, so an icon has
+/// to make "hold me" discoverable: hence the tooltip, and a recording state
+/// that changes the glyph itself rather than only its colour.
 private struct HoldToTalkButton: View {
     let isRecording: Bool
     let onBegin: () -> Void
@@ -875,17 +930,25 @@ private struct HoldToTalkButton: View {
     @State private var isHovering = false
 
     var body: some View {
-        Text(isRecording ? "Release" : "Hold to talk")
-            .mynahFont(.title3)
-            .foregroundStyle(isRecording ? Palette.accent.ink : Palette.ink.primary)
-            .padding(.horizontal, s6)
-            // Matches the composer well exactly, so the two sit on one line.
-            .frame(height: 46)
+        // `mic.fill` while recording rather than only a colour change: the
+        // filled glyph reads as "live" at a glance and survives being looked at
+        // by somebody who cannot distinguish the two states by hue.
+        Image(systemName: isRecording ? "mic.fill" : "mic")
+            .mynahIcon(.well)
+            .foregroundStyle(isRecording ? Palette.accent.ink : Palette.ink.secondary)
+            // Square, and sized to the Send button beside it rather than to the
+            // composer well — it lives *inside* the well now.
+            .frame(width: 30, height: 30)
             .background(
-                isRecording ? Palette.accent.wash : Palette.surface.raised,
-                in: RoundedRectangle.mynah(r.control)
+                isRecording ? Palette.accent.wash : Color.clear,
+                in: RoundedRectangle.mynah(r.chip)
             )
-            .mynahBorder(r.control, border)
+            .mynahBorder(r.chip, border)
+            .mynahTooltip(
+                isRecording
+                    ? "Let go and Mynah types what you said."
+                    : "Hold to talk. Keep holding while you speak, then let go."
+            )
             .contentShape(RoundedRectangle.mynah(r.control))
             .contentShape(.focusEffect, RoundedRectangle.mynah(r.control))
             // A drag with no minimum distance is the only gesture that reports
@@ -903,9 +966,11 @@ private struct HoldToTalkButton: View {
             .accessibilityLabel(isRecording ? "Release to send what you said" : "Hold to talk")
     }
 
+    /// No border at rest. A glyph inside a field does not need a box around it,
+    /// and drawing one would put a second rectangle inside the composer's own.
     private var border: Color {
         if isRecording { return Palette.accent.fill }
-        return isHovering ? Palette.line.strong : Palette.line.hairline
+        return isHovering ? Palette.line.hairline : .clear
     }
 }
 

@@ -329,11 +329,47 @@ extension ApplianceWriteReadiness {
 
     /// The remedy we write ourselves, for the predictive path and for a server
     /// that sent no per-cause one.
+    /// ## Why this names a second effect
+    ///
+    /// The companion profile is mask 15, and **bit 1 is `ReadAllDomains`** —
+    /// SAGE's own reference says the preset *"can recall globally only within
+    /// its clearance"*. So applying this advice does two things and we used to
+    /// name one: Mynah becomes able to remember, **and** its discovery filters
+    /// come off, so the Memories page goes from showing nothing to showing a
+    /// slice of what every other agent on the node has stored.
+    ///
+    /// That is a privacy consequence of an action this product actively
+    /// instructs somebody to take, and leaving it unsaid is the same failure as
+    /// every other one this week — a true sentence that stops being the whole
+    /// truth because something else changed.
+    ///
+    /// **Stated evenly, and deliberately not as a caution.** The remedy is
+    /// right and the owner should apply it; it is his machine, his appliance,
+    /// and it still cannot write anywhere it does not own. Wording that made
+    /// the fix sound risky would be its own kind of dishonesty — it would
+    /// discourage the correct action to look careful.
+    ///
+    /// The clearance bound is named because it is real and because it is the
+    /// part that makes this calm rather than alarming: reading is lifted only
+    /// up to the agent's own clearance, which on this appliance is 1. Anything
+    /// classified above that stays invisible.
+    ///
+    /// It lives on the *remedy* rather than as a standing fact, which is the
+    /// distinction that matters: "here is what changes when you do this" is a
+    /// different sentence from "here is how things are", and only the first is
+    /// true today.
     static let ownRemedy = "Someone with administrator access to your SAGE node has to give "
         + "Mynah the companion profile and make it the owner of the subject "
         + "“\(SageRitual.memoryDomain)”, in CEREBRUM. An access grant won't do it — the "
-        + "restriction is checked before grants are. Until then Mynah will answer you, but "
-        + "it won't remember anything."
+        + "restriction is checked before grants are. That profile also lets Mynah read "
+        + "across subjects it wasn't given, up to its own clearance, so the Memories page "
+        // "remembered", not "stored" — `OneVerbForMemoryTests` caught this and
+        // the rule is right even though the clause is about *other* agents:
+        // this product has one verb for memory, and an owner reading "stored"
+        // here and "remembers" everywhere else has to work out whether they are
+        // the same thing. `voice`'s clause, one word changed.
+        + "will start showing what your other agents have remembered as well as Mynah's own. "
+        + "Until then Mynah will answer you, but it won't remember anything."
 }
 
 // MARK: - Asking the node

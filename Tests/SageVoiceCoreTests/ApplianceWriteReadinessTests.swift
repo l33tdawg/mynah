@@ -333,4 +333,65 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         XCTAssertEqual(observed?.headline, predicted?.headline)
         XCTAssertEqual(observed?.headline, "Mynah can't remember anything yet.")
     }
+
+    // MARK: - What applying the remedy also does
+
+    /// The companion profile is mask 15 and bit 1 is `ReadAllDomains`, so
+    /// following our advice lifts the discovery filters as well as enabling
+    /// writes. The Memories page goes from empty to a slice of what nineteen
+    /// other agents have stored.
+    ///
+    /// That is a privacy consequence of an action this product actively tells
+    /// somebody to take. Leaving it unsaid is the same failure as every other
+    /// one this week: a true sentence that stopped being the whole truth
+    /// because something else changed.
+    func testTheRemedyNamesTheReadingItAlsoTurnsOn() {
+        let remedy = readiness(mask: 30).remedy ?? ""
+        XCTAssertTrue(
+            remedy.contains("read across subjects it wasn't given"),
+            "applying our advice opens reading and we do not say so"
+        )
+        XCTAssertTrue(
+            remedy.contains("Memories page"),
+            "does not say where the owner will actually notice the change"
+        )
+    }
+
+    /// Named because it is real and because it is what makes this calm rather
+    /// than alarming: reading lifts only to the agent's own clearance, so
+    /// anything classified above stays invisible.
+    func testTheDisclosureCarriesTheClearanceBound() {
+        XCTAssertTrue(readiness(mask: 30).remedy?.contains("up to its own clearance") == true)
+    }
+
+    /// Stated evenly. The remedy is correct and the owner should apply it —
+    /// wording that made the fix sound risky would discourage the right action
+    /// in order to look careful, which is its own dishonesty.
+    func testTheDisclosureIsNotWordedAsAWarning() {
+        let remedy = (readiness(mask: 30).remedy ?? "").lowercased()
+        for alarm in ["careful", "warning", "caution", "beware", "risk", "danger", "be aware"] {
+            XCTAssertFalse(
+                remedy.contains(alarm),
+                "\"\(alarm)\" makes a correct remedy sound like a hazard"
+            )
+        }
+    }
+
+    /// It belongs to "here is what changes when you do this", not to "here is
+    /// how things are" — so it stays off the one-line version, which fires at
+    /// boot when the owner is waiting rather than reading, and off `reasons`,
+    /// which describe today.
+    func testTheDisclosureStaysOnTheRemedyAndNowhereElse() {
+        let state = readiness(mask: 30)
+        XCTAssertFalse(state.shortRemedy?.contains("read across") == true)
+        for reason in state.reasons {
+            XCTAssertFalse(reason.contains("read across"), "a consequence leaked into a present-tense fact")
+        }
+    }
+
+    /// And it says nothing at all when there is nothing to apply.
+    func testAWorkingApplianceIsToldNoneOfThis() {
+        XCTAssertNil(readiness(mask: 15).remedy)
+        XCTAssertNil(readiness(mask: 0).remedy)
+    }
 }
