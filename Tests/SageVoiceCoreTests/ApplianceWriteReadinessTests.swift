@@ -128,6 +128,27 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         XCTAssertTrue(readiness(mask: 30).remedy?.contains(SageRitual.memoryDomain) == true)
     }
 
+    /// One verb across every owner-facing sentence.
+    ///
+    /// Added because changing `headline` from "save" to "remember" left
+    /// `shortRemedy` behind, and `shortRemedy` is the one the Ready screen
+    /// renders — so for a while the screen said "can't remember" in its title
+    /// and "can't save" in its banner. A one-word change that leaves references
+    /// behind is how a codebase ends up with two vocabularies, which is what
+    /// collapsing "subject" versus "domain" was about.
+    func testEveryOwnerFacingSentenceUsesTheSameVerb() {
+        let state = readiness(mask: 30)
+        for sentence in [state.headline, state.remedy, state.shortRemedy].compactMap({ $0 }) {
+            XCTAssertFalse(
+                sentence.lowercased().contains("save"),
+                "\(sentence) still says save; the product's word to owners is remember"
+            )
+        }
+        XCTAssertTrue(state.headline?.contains("remember") == true)
+        XCTAssertTrue(state.shortRemedy?.contains("remember") == true)
+        XCTAssertTrue(state.remedy?.contains("remember") == true)
+    }
+
     /// Owner-facing strings say "subject". SAGE's word is "domain" and the code
     /// keeps it, but no owner-facing string in this app says it.
     func testOwnerFacingStringsNeverSayDomain() {

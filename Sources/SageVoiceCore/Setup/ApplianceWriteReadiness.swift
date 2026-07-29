@@ -232,8 +232,12 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     /// everywhere else should say the fact and point there.
     public var shortRemedy: String? {
         guard needsTheOwner else { return nil }
-        return "Mynah can't save anything yet — SAGE restricted its key when it registered "
-            + "itself. The Agents page explains what to change."
+        // Same verb as `headline`, and a test pins that. Changing one of these
+        // and not the other is how a screen ends up saying "can't remember" in
+        // its title and "can't save" in its banner — one mechanism, two words,
+        // which is the thing we collapsed "subject" versus "domain" to avoid.
+        return "Mynah can't remember anything yet — SAGE restricted its key when it "
+            + "registered itself. The Agents page explains what to change."
     }
 
     /// One line for a log, so this is discoverable from a terminal too.
