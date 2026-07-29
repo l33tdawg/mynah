@@ -112,6 +112,18 @@ public enum APIKeyOnboarding {
         costNote: "Kimi charges per use and needs credit on the account."
     )
 
+    public static let glm = Instructions(
+        providerName: "GLM",
+        keyPageURL: URL(string: "https://open.bigmodel.cn/usercenter/apikeys")!,
+        steps: [
+            "Open the Zhipu console and sign in. GLM is made by Zhipu AI.",
+            "Create an API key.",
+            "Copy it and paste it below."
+        ],
+        looksLikeHint: "It is a long string, usually with a full stop in the middle.",
+        costNote: "GLM charges per use and needs credit on the account."
+    )
+
     /// Every provider `makeBackend` can build must appear here.
     ///
     /// The gap this closes was silent and user-facing: `deepseek` was a working
@@ -132,13 +144,14 @@ public enum APIKeyOnboarding {
         case "deepseek":         return deepSeek
         case "groq":             return groq
         case "moonshot", "kimi": return moonshot
+        case "glm", "zhipu":     return glm
         default:                 return nil
         }
     }
 
     /// Providers that need a pasted key, and therefore need instructions.
     /// Local backends are absent on purpose: they need nothing pasted.
-    public static let keyedProviders = ["gemini", "openai", "anthropic", "deepseek", "groq", "moonshot"]
+    public static let keyedProviders = ["gemini", "openai", "anthropic", "deepseek", "groq", "moonshot", "glm"]
 
     // MARK: - Shape check
 

@@ -792,7 +792,13 @@ public actor VoiceBridgeDaemon {
             await reply(CallInvitation.invitation(url: url), to: recipient)
         } catch {
             log("[daemon] could not start a call: \(error)")
-            await reply(CallInvitation.Refusal.couldNotStart("\(error)").sentence, to: recipient)
+            // The log above keeps the path and the exit status; the owner gets
+            // an authored sentence. `"\(error)"` used to go straight to his
+            // phone, which meant a missing relay secret arrived as a file path
+            // inside his own home directory. See `CallHost.Failure.ownerSentence`.
+            let reason = (error as? CallHost.Failure)?.ownerSentence
+                ?? "something went wrong setting it up. Try again in a moment."
+            await reply(CallInvitation.Refusal.couldNotStart(reason).sentence, to: recipient)
         }
     }
 

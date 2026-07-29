@@ -270,6 +270,7 @@ public enum APIKeyProvider: String, Sendable, Codable, CaseIterable, Comparable 
     case deepSeek
     case moonshot
     case groq
+    case glm
 
     /// Environment variables that would let this provider be used without the
     /// owner typing anything.
@@ -281,6 +282,7 @@ public enum APIKeyProvider: String, Sendable, Codable, CaseIterable, Comparable 
         case .deepSeek:  return ["DEEPSEEK_API_KEY"]
         case .moonshot:  return ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
         case .groq:      return ["GROQ_API_KEY"]
+        case .glm:       return ["GLM_API_KEY", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY"]
         }
     }
 
@@ -292,6 +294,7 @@ public enum APIKeyProvider: String, Sendable, Codable, CaseIterable, Comparable 
         case .deepSeek:  return "DeepSeek"
         case .moonshot:  return "Moonshot (Kimi)"
         case .groq:      return "Groq"
+        case .glm:       return "GLM (Zhipu)"
         }
     }
 
@@ -313,6 +316,7 @@ public enum APIKeyProvider: String, Sendable, Codable, CaseIterable, Comparable 
         case .google:    return "gemini"
         case .deepSeek:  return "deepseek"
         case .moonshot:  return "moonshot"
+        case .glm:       return "glm"
         case .groq:      return "groq"
         }
     }

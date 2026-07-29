@@ -299,20 +299,41 @@ final class BrainSetupPlannerTests: XCTestCase {
 
     // MARK: - Catalog membership
 
-    /// The product intent is to show what this machine actually has, not a menu
-    /// of vendors the owner has never heard of.
-    func testNicheProvidersAppearOnlyWhenTheirKeyIsAlreadySet() {
+    /// **This asserted the opposite until the owner noticed.**
+    ///
+    /// The rule was that niche providers appeared only if their key was already
+    /// exported, on the reasoning that a menu of unknown vendors is worse than a
+    /// short list. That reasoning was sound and the rule it produced was
+    /// self-fulfilling: you cannot choose a provider you are never shown, so
+    /// nobody without a key could ever acquire one — and the three shown were
+    /// Anthropic, OpenAI and Google.
+    ///
+    /// His words: *"there is no deepseek, kimi, glm — a bit biased towards US
+    /// aren't we"*. The test was pinning the bias in place, which is why it had
+    /// to be rewritten rather than deleted.
+    ///
+    /// What survives is the useful half: evidence still counts, for **ordering**
+    /// rather than existence. A provider whose key is already exported needs
+    /// nothing pasted, so it ranks ahead on friction.
+    func testEveryProviderIsOfferableAndEvidenceOnlyChangesTheFriction() {
         let bare = planner.plan(for: .machine())
-        XCTAssertNil(bare.option(withID: .moonshotAPIKey))
-        XCTAssertNil(bare.option(withID: .groqAPIKey))
-        XCTAssertNil(bare.option(withID: .deepSeekAPIKey))
+        for id in [BrainSetupOptionID.moonshotAPIKey, .groqAPIKey, .deepSeekAPIKey, .glmAPIKey] {
+            XCTAssertNotNil(
+                bare.option(withID: id),
+                "\(id) is unreachable for anyone who has not already exported its key"
+            )
+            XCTAssertEqual(bare.option(withID: id)?.requirement, BrainSetupRequirement.apiKey)
+        }
 
         let withKey = planner.plan(for: .machine(
             ambientKeys: AmbientAPIKeyReport(providers: [.moonshot], variableNames: ["MOONSHOT_API_KEY"])
         ))
-        XCTAssertNotNil(withKey.option(withID: .moonshotAPIKey))
-        XCTAssertEqual(withKey.option(withID: .moonshotAPIKey)?.requirement, BrainSetupRequirement.nothing)
-        XCTAssertNil(withKey.option(withID: .groqAPIKey), "Only the provider with evidence should appear")
+        XCTAssertEqual(
+            withKey.option(withID: .moonshotAPIKey)?.requirement,
+            BrainSetupRequirement.nothing,
+            "an already-exported key should cost nothing to pick"
+        )
+        XCTAssertNotNil(withKey.option(withID: .groqAPIKey), "the others must not vanish because one has evidence")
     }
 
     /// The three mainstream providers stay in the catalog even with no evidence,
@@ -433,11 +454,27 @@ final class BrainSetupPlannerTests: XCTestCase {
         )
     }
 
-    func testSelectRefusesAnOptionThatIsNotInTheCatalog() {
+    /// **This test asserted a state that no longer exists, so it now asserts the
+    /// guarantee that replaced it.**
+    ///
+    /// It used Groq as an example of an option absent from the catalogue. Every
+    /// option is offerable now — the whole point of removing the always-offered
+    /// allowlist — so there is no longer any id the planner omits, and a test
+    /// looking for one could only be satisfied by re-hiding something.
+    ///
+    /// Refusing a *selection* is still guarded and still tested: see
+    /// `testSelectRefusesAnOptionThisMachineCannotRun`, which is the real rule —
+    /// availability, not membership. What is worth pinning here instead is that
+    /// every id survives planning, because the failure this replaces was an
+    /// owner never being shown a choice he had decided to make.
+    func testEveryOptionIsOfferableSoNoChoiceIsHiddenFromTheOwner() {
         let choices = planner.plan(for: .machine())
-
-        XCTAssertNil(choices.option(withID: .groqAPIKey))
-        XCTAssertNil(choices.select(.groqAPIKey))
+        for id in BrainSetupOptionID.allCases {
+            XCTAssertNotNil(
+                choices.option(withID: id),
+                "\(id) is missing from the catalogue — an owner cannot pick what he is never shown"
+            )
+        }
     }
 
     func testSelectReturnsExactlyTheNamedOption() throws {

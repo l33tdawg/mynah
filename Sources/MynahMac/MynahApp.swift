@@ -406,8 +406,30 @@ final class AppModel {
     /// and is reached — the branch is invisible from the outside precisely
     /// because its correct behaviour is to do nothing.
     func answeringIntent() -> AnsweringIntent {
+        // **Not a `stop`, and the owner proved why.**
+        //
+        // He opened "Change where your words go" to take a screenshot of the
+        // provider list, and every one of those screenshots cost him his phone
+        // bridge: `restartSetup()` drops this flag, this branch called it a
+        // decision, and `disable` deleted both LaunchAgents. **Looking at your
+        // options took your phone away.**
+        //
+        // The old reasoning — a re-run may invalidate the configuration — is
+        // defensible in the abstract and wrong about the moment. He has not
+        // chosen anything yet. The configuration that was answering a second
+        // ago is still on disk and still valid, and nothing about opening a
+        // picker invalidates it.
+        //
+        // So this is the third case: *I cannot currently tell what the
+        // configuration should be* — and `cannotTell` changes nothing. Same
+        // principle as `enable` being idempotent: **do not tear down a correct
+        // system on the way to deciding whether to change it.**
+        //
+        // Safe on a genuine first run too, where there is nothing installed for
+        // "change nothing" to preserve. `completeSetup()` reconciles when he
+        // actually finishes, which is the moment a change becomes real.
         guard hasCompletedSetup else {
-            return .stop(reason: "setup has not finished")
+            return .cannotTell(reason: "setup is in progress, so the last configuration stands")
         }
         guard keepsAnsweringWhenClosed else {
             return .stop(reason: "the owner turned off answering from the phone")

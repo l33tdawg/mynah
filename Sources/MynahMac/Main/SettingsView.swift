@@ -739,6 +739,7 @@ struct SettingsView: View {
     @State private var isLinkingPhone = false
     @State private var isPastingKey = false
     @State private var isChangingModel = false
+    @State private var isChangingProvider = false
 
     /// Seeded from disk rather than defaulted, so the switch shows what the
     /// daemon will actually do rather than what this app assumes.
@@ -806,6 +807,46 @@ struct SettingsView: View {
             } onClose: {
                 model.refresh()
                 isLinkingPhone = false
+            }
+        }
+        .sheet(isPresented: $isChangingProvider) {
+            if let probe = model.probe {
+                BrainProviderSheet(
+                    choices: BrainSetupPlanner().plan(for: probe),
+                    current: model.brainOption
+                ) { outcome in
+                    isChangingProvider = false
+                    switch outcome {
+                    case .cancelled:
+                        break
+                    case .chose(let option):
+                        BrainSelectionStore.save(option)
+                        model.refresh()
+                        // Both consumers, same as the model picker. The window
+                        // builds its own engine and the appliance reads the
+                        // choice at launch, so changing one and not the other
+                        // is how the phone and the window end up on different
+                        // brains.
+                        Task {
+                            await conversation.reconnect()
+                            await app.reconcileAnsweringService()
+                        }
+                    case .needsAKeyFirst(let option):
+                        // Saved first so the key sheet knows which provider it
+                        // is collecting for, and because the sheet has already
+                        // established this is a deliberate choice. The brain is
+                        // unusable until the key lands, which the key sheet is
+                        // the thing that fixes.
+                        BrainSelectionStore.save(option)
+                        model.refresh()
+                        isPastingKey = true
+                    }
+                }
+            } else {
+                // The probe is what lists the options. Without it there is
+                // nothing to choose between, and a sheet of nothing is worse
+                // than the button having done nothing.
+                ProbeUnavailableSheet { isChangingProvider = false }
             }
         }
         .sheet(isPresented: $isChangingModel) {
@@ -1064,12 +1105,26 @@ struct SettingsView: View {
             MynahDivider()
             applianceRow
             MynahDivider()
+            // **A sheet, not the whole of setup**, on the owner's report:
+            // *"changing the model shouldn't redo the whole setup."*
+            //
+            // This called `restartSetup()`, which drops `hasCompletedSetup` and
+            // sends a Mac that was configured hours ago back to Welcome. Worse
+            // than the annoyance: `hasCompletedSetup == false` is a `stop`
+            // intent, so entering that flow **removed both LaunchAgents** and
+            // his phone stopped being answered until he finished or backed out.
+            // Opening it out of curiosity cost him the appliance.
+            //
+            // Same shape as the Calls row that used to send him to onboarding
+            // to change a model — a small reversible change routed through the
+            // largest irreversible flow in the product.
             SettingsRow(
                 "Change where your words go",
-                detail: "Runs setup again so you can pick somewhere else. "
-                    + "What Mynah already remembers stays where it is."
+                detail: "Pick somewhere else for Mynah to think. It is asked a real question "
+                    + "before the change is kept, and what Mynah already remembers stays "
+                    + "where it is."
             ) {
-                MynahButton("Change", kind: .secondary) { app.restartSetup() }
+                MynahButton("Change", kind: .secondary) { isChangingProvider = true }
             }
             MynahDivider()
             modelRow
@@ -1101,7 +1156,10 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     appliance.destination,
-                    tone: appliance.keepsWordsOnDevice ? .good : .caution
+                    // Neutral, not caution: the pill already names the
+                    // company, and a name is a more specific signal than a
+                    // colour that also means paused. See `Palette.state`.
+                    tone: appliance.keepsWordsOnDevice ? .good : .neutral
                 )
             }
         } else {
@@ -1126,7 +1184,7 @@ struct SettingsView: View {
 
     private func destinationTone(_ brain: BrainChoice) -> MynahTone {
         guard conversation.trouble == nil else { return .caution }
-        return brain.keepsWordsOnDevice ? .good : .caution
+        return brain.keepsWordsOnDevice ? .good : .neutral
     }
 
     /// Changing which model does the thinking.
@@ -1443,14 +1501,30 @@ struct SettingsView: View {
 
     private var phoneSection: some View {
         SettingsGroup(SettingsGroupTitle.phone) {
+            // **The number came out of the value slot, and that is most of the
+            // fix.**
+            //
+            // It was a bare number, right-aligned in mono where a *value* goes,
+            // directly above a row about calling. Everything about that
+            // placement says "this is the number you ring" — the owner read it
+            // that way and he was reading the layout correctly. The words never
+            // claimed it; the position did.
+            //
+            // So the number moves into a sentence, where it can be given a job,
+            // and the value slot gets a status instead. `thread`'s wording, and
+            // "Nothing dials this number" is the clause doing the work — the
+            // rest is the sentence it needed to sit in. It also keeps the
+            // allowlist fact, which was in the old detail and is worth not
+            // losing.
             SettingsRow(
-                "Mynah answers",
-                detail: model.phone.linkedNumber == nil
-                    ? "Mynah hasn't been told which phone to answer."
-                    : "Only this phone. Voice notes from anyone else are ignored."
+                "Your Signal account",
+                detail: model.phone.linkedNumber.map {
+                    "Mynah listens to the thread you send yourself, on \($0). Nothing dials "
+                        + "this number — and messages from anyone else are ignored."
+                } ?? "Mynah hasn't been told which Signal account to listen on."
             ) {
-                if let number = model.phone.linkedNumber {
-                    Text(number).mynahFont(.mono).foregroundStyle(Palette.ink.secondary)
+                if model.phone.linkedNumber != nil {
+                    StatusPill("Linked", tone: .good)
                 } else {
                     StatusPill("Not set", tone: .caution)
                 }
@@ -1469,10 +1543,22 @@ struct SettingsView: View {
             // be refused, and the refusal is not a bug they can act on.
             SettingsRow(
                 "You can also call it",
+                // **Two barriers, not one.** The model refusal fires first and
+                // hid the other: `CallHost` also needs a relay secret, which
+                // does not exist on the owner's Mac — verified — so calling has
+                // never been possible here for two reasons and this row named
+                // one. An owner who switched to an API model on `thread`'s word
+                // would have been refused again, for a reason nothing had
+                // mentioned.
+                //
+                // The last sentence is checked rather than hoped:
+                // `handleCallRequest` wraps `calls.start()` in a `catch` and
+                // replies, so a failure does reach him as a message.
                 detail: "Send \(CallInvitation.command) to yourself in Signal and tap the link "
                     + "it sends back — you talk out loud and can interrupt it mid-sentence. It "
                     + "needs a brain that answers fast, so it is turned down on a model that "
-                    + "runs on this Mac."
+                    + "runs on this Mac, and this Mac has to be set up for calls. If it can't, "
+                    + "it tells you when you ask."
             ) { EmptyView() }
             MynahDivider()
 
@@ -1529,7 +1615,7 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     model.brain?.destination ?? "Not chosen",
-                    tone: model.brain.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
+                    tone: model.brain.map { $0.keepsWordsOnDevice ? .good : .neutral } ?? .neutral
                 )
             }
             MynahDivider()

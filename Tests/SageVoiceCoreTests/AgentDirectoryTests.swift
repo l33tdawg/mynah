@@ -831,3 +831,60 @@ final class FederationHelpTests: XCTestCase {
         }
     }
 }
+
+/// Whether there is anybody on the other end.
+///
+/// The owner caught this: *"that they are on the chain doesn't mean they're
+/// online and doesn't mean we can send them a message bro."* Measured on his
+/// node — **all twenty rows report `status: active`**, including three last
+/// seen 36, 88 and 89 days ago and two never run. `active` is a registration.
+final class AgentActivityTests: XCTestCase {
+
+    private func agent(lastSeen: Date?) -> NodeAgent {
+        NodeAgent(
+            id: "x", name: "x", role: "member", clearance: 1, memoryCount: 0,
+            isActive: true, lastSeen: lastSeen, capabilities: 0, isThisAppliance: false
+        )
+    }
+
+    /// **The case the type exists for.** Every fixture here is `isActive: true`,
+    /// because on his node they all are — so a reading that consulted `status`
+    /// would call an agent last seen in April a live correspondent.
+    func testRegistrationStatusIsNotLiveness() {
+        let months = agent(lastSeen: Date(timeIntervalSinceNow: -89 * 86_400))
+
+        XCTAssertTrue(months.isActive, "the fixture no longer reproduces the node's own data")
+        XCTAssertFalse(
+            months.activity.wouldBeRead,
+            "an agent last seen 89 days ago is being treated as somebody who will read this"
+        )
+    }
+
+    func testAnAgentSeenTodayIsALiveCorrespondent() {
+        XCTAssertTrue(agent(lastSeen: Date(timeIntervalSinceNow: -3_600)).activity.wouldBeRead)
+    }
+
+    /// **Never seen is not a very old dormant.** It is an agent that registered
+    /// and has not run once — a different thing to tell somebody, and folding
+    /// it into the oldest bucket would be an absence rendered as a measurement.
+    func testNeverSeenIsItsOwnAnswer() {
+        XCTAssertEqual(agent(lastSeen: nil).activity, .neverSeen)
+        XCTAssertNotEqual(agent(lastSeen: nil).activity, .dormant(daysAgo: 0))
+    }
+
+    /// The boundary is deliberately generous — calling something dormant that
+    /// he used on Monday is the error that costs more.
+    func testAWeekOldAgentIsStillCountedAsWorking() {
+        XCTAssertTrue(agent(lastSeen: Date(timeIntervalSinceNow: -6 * 86_400)).activity.wouldBeRead)
+        XCTAssertFalse(agent(lastSeen: Date(timeIntervalSinceNow: -30 * 86_400)).activity.wouldBeRead)
+    }
+
+    /// A clock skew that puts `last_seen` slightly in the future must not
+    /// produce a negative age the copy would render as "-1 days ago".
+    func testAFutureTimestampDoesNotProduceNegativeDays() {
+        guard case .active(let days) = agent(lastSeen: Date(timeIntervalSinceNow: 600)).activity else {
+            return XCTFail("a just-seen agent is not being counted as working")
+        }
+        XCTAssertGreaterThanOrEqual(days, 0)
+    }
+}

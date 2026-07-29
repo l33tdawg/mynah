@@ -43,6 +43,7 @@ public struct ProviderKeyStore: Sendable {
         case "deepseek":          return "DEEPSEEK_API_KEY"
         case "groq":              return "GROQ_API_KEY"
         case "moonshot", "kimi":  return "MOONSHOT_API_KEY"
+        case "glm", "zhipu":      return "GLM_API_KEY"
         default:                  return nil
         }
     }

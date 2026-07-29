@@ -252,7 +252,8 @@ struct ReadyStage: View {
                         StatusLine(
                             "Where your words go",
                             value: destination,
-                            tone: model.selectedOption?.keepsWordsOnDevice == true ? .good : .caution
+                            // A destination is not a fault — see `Palette.state`.
+                            tone: model.selectedOption?.keepsWordsOnDevice == true ? .good : .neutral
                         )
                         MynahDivider()
                         StatusLine(

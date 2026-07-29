@@ -161,6 +161,30 @@ enum Palette {
     /// A colour that means four things is read as its most alarming meaning,
     /// and the owner will sometimes be right, which is what makes the habit
     /// expensive rather than merely untidy.
+    ///
+    /// ## A destination is not a fault
+    ///
+    /// The second collision, and the narrower one. These tokens were designed
+    /// as a **privacy** axis — the comment above says it: green means your
+    /// words stay here, yellow means MYNAH is doing something — and `caution`
+    /// was simultaneously carrying the **fault** axis. So the owner saw the
+    /// same amber on *"goes to Anthropic"*, which is a true and permanent
+    /// consequence of a choice he made on purpose, and on *"Paused"*, which is
+    /// a temporary state he has to act on.
+    ///
+    /// **Only one side of the privacy axis was overloaded.** `good` is
+    /// single-purpose — it means "stays on this Mac", or an unambiguously
+    /// working state, and nothing uses it for a fault. So green stays and the
+    /// *leaving* side moves off `caution`.
+    ///
+    /// What replaces it is not a colour. A destination pill already **names the
+    /// company**, and a company's name is a far more specific signal than a
+    /// hue: "Anthropic" tells him where his words went, and amber only told him
+    /// to worry. This is `voice`'s reading and it is right — the brain picker
+    /// solved the same problem without ink, using grouped headings and
+    /// sentences, and it is the best thing in the product on this question.
+    ///
+    /// So: **the fault axis keeps caution. The privacy axis is words.**
     enum state {
         static let good = Color.mynah(light: .mynahHex(0x1D8A4E), dark: .mynahHex(0x3FD07E))
         static let caution = Color.mynah(light: .mynahHex(0x9C5F00), dark: .mynahHex(0xF0A73B))

@@ -229,3 +229,47 @@ private actor StubMessaging: AgentMessaging {
         return waiting
     }
 }
+
+/// What a failed call is allowed to say to the owner.
+final class CallFailureCopyTests: XCTestCase {
+
+    /// **The defect this exists for.** `handleCallRequest` used to reply with
+    /// `"\(error)"`, and `CallHost.Failure.description` is machinery — so
+    /// asking for a call on a Mac with no relay secret texted the owner a path
+    /// inside his own home directory. Verified on that machine: the file
+    /// genuinely is absent, so it was the live message for anyone who switched
+    /// to a fast model and tried it.
+    func testNothingSentToTheOwnerCarriesAFilePath() {
+        let failures: [CallHost.Failure] = [
+            .noEndpointBinary("/Applications/Mynah.app/Contents/MacOS/sage-voice-webrtc"),
+            .noSharedSecret("/Users/someone/.sage/call-relay.secret"),
+            .endpointExited(9),
+            .relayNeverAnswered("https://relay.example/call/abc")
+        ]
+
+        for failure in failures {
+            let sentence = failure.ownerSentence
+            XCTAssertFalse(sentence.contains("/"), "a path reached the owner: \(sentence)")
+            XCTAssertFalse(sentence.contains("status"), "an exit status reached the owner")
+            XCTAssertFalse(sentence.contains("http"), "a URL reached the owner")
+        }
+    }
+
+    /// The paths stay where they are useful. A log with no path is a diagnosis
+    /// nobody can make, and this was never a case of the information being
+    /// wrong — only of it arriving on a phone.
+    func testTheLogKeepsWhatTheOwnerDoesNotSee() {
+        let failure = CallHost.Failure.noSharedSecret("/Users/someone/.sage/call-relay.secret")
+
+        XCTAssertTrue(failure.description.contains("/Users/someone"))
+        XCTAssertFalse(failure.ownerSentence.contains("/Users/someone"))
+    }
+
+    /// Each case says what he can do, and the two that are nobody's fault say
+    /// so rather than inventing an action.
+    func testEachFailureNamesSomethingOrAdmitsThereIsNothing() {
+        XCTAssertTrue(CallHost.Failure.noEndpointBinary("x").ownerSentence.contains("Reinstall"))
+        XCTAssertTrue(CallHost.Failure.noSharedSecret("x").ownerSentence.contains("set up"))
+        XCTAssertTrue(CallHost.Failure.endpointExited(1).ownerSentence.contains("Try again"))
+    }
+}

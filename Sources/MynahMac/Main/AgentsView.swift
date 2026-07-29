@@ -85,6 +85,55 @@ struct NodeAgent: Identifiable, Equatable, Sendable {
     /// The RBAC facts as one line: what it is in the org, and how much it is
     /// cleared to see.
     var standingLine: String { "\(role) · clearance \(clearance)" }
+
+    /// Whether there is anybody on the other end.
+    ///
+    /// **`status: active` is a registration, not a heartbeat**, and building on
+    /// it was the mistake the owner caught: *"that they are on the chain
+    /// doesn't mean they're online and doesn't mean we can send them a message
+    /// bro."* Checked against his node — **all twenty rows report `active`**,
+    /// including three last seen 36, 88 and 89 days ago and two never seen at
+    /// all. The field says enrolled and nothing else.
+    ///
+    /// `last_seen` is the field that means what `active` looks like it means,
+    /// and it is already in the payload — this costs a reading, not a call.
+    ///
+    /// **Why it matters more than it looks.** `sage_pipe` queues into an inbox;
+    /// SAGE's own words are that the target sees it *"on their next `sage_turn`
+    /// or `sage_inbox` call"*. So a message to an agent last seen in April is
+    /// accepted, delivered, and never read. Delivery is not receipt, and an
+    /// interface that offers "Send a message" identically to both is promising
+    /// a conversation with a gravestone.
+    var activity: Activity {
+        guard let lastSeen else { return .neverSeen }
+        let days = Calendar.current.dateComponents([.day], from: lastSeen, to: .now).day ?? 0
+        // **Seven days, and it is a judgement about his week rather than a
+        // round number.** He works with several of these daily — three were
+        // seen today on the node this was written against — so an agent absent
+        // for longer than a working week has dropped out of what he is doing,
+        // whatever it is still registered as. The boundary is deliberately
+        // generous: calling something dormant that he used on Monday would be
+        // the error that costs more.
+        return days <= 7 ? .active(daysAgo: max(0, days)) : .dormant(daysAgo: days)
+    }
+
+    /// Deliberately three cases rather than a `Bool`.
+    ///
+    /// "Never seen" is not a very old "dormant" — it is an agent that
+    /// registered and has not run once, which is a different thing to tell
+    /// somebody, and collapsing it into the oldest bucket would be an absence
+    /// rendered as a measurement.
+    enum Activity: Equatable, Sendable {
+        case active(daysAgo: Int)
+        case dormant(daysAgo: Int)
+        case neverSeen
+
+        /// Whether a message sent now has somebody who will read it.
+        var wouldBeRead: Bool {
+            if case .active = self { return true }
+            return false
+        }
+    }
 }
 
 // MARK: - What an agent can actually do

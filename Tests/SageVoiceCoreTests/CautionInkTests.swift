@@ -79,6 +79,31 @@ final class CautionInkTests: XCTestCase {
         )
     }
 
+    /// **A destination is not a fault.**
+    ///
+    /// These tokens were designed as a privacy axis — green "stays here",
+    /// yellow "leaving" — and `caution` was simultaneously the fault colour. So
+    /// the owner saw identical amber on *"goes to Anthropic"*, a permanent
+    /// consequence of a choice he made deliberately, and on *"Paused"*, which
+    /// he has to act on.
+    ///
+    /// Only one side was overloaded. `good` means "stays on this Mac" or an
+    /// unambiguously working state and is never a fault, so green stayed; the
+    /// leaving side came off `caution`. What replaces it is the company's own
+    /// name, which is a more specific signal than a hue ever was.
+    func testWhereWordsGoIsNotDrawnAsSomethingWrong() throws {
+        for path in [
+            "Sources/MynahMac/Main/SettingsView.swift",
+            "Sources/MynahMac/RootView.swift"
+        ] {
+            let source = try read(path)
+            XCTAssertFalse(
+                source.contains("keepsWordsOnDevice ? .good : .caution"),
+                "a destination is being drawn in the colour that means paused, in \(path)"
+            )
+        }
+    }
+
     private func read(_ path: String) throws -> String {
         try String(
             contentsOf: URL(fileURLWithPath: #filePath)

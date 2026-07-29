@@ -19,6 +19,7 @@ public enum BrainSetupOptionID: String, Sendable, Codable, CaseIterable {
     case deepSeekAPIKey = "key.deepseek"
     case moonshotAPIKey = "key.moonshot"
     case groqAPIKey = "key.groq"
+    case glmAPIKey = "key.glm"
     case fullyLocal = "local.ollama"
 }
 
@@ -59,6 +60,7 @@ public extension BrainSetupOptionID {
         case .deepSeekAPIKey:  return .openAICompatible(.deepSeek)
         case .moonshotAPIKey:  return .openAICompatible(.moonshot)
         case .groqAPIKey:      return .openAICompatible(.groq)
+        case .glmAPIKey:       return .openAICompatible(.glm)
         // Both agent CLIs would have to be driven as subprocesses speaking their
         // own protocols, and consumer Google sign-in routes to Code Assist,
         // which is a different wire format from the Gemini API entirely. None of
@@ -355,9 +357,32 @@ public struct BrainSetupPlanner: Sendable {
     /// pick the app's own sparkle-marked recommendation, finish setup, and the
     /// first question answers "Mynah can't use that brain any more", with the
     /// only offer being a wizard that recommends it again.
+    /// Leads with the detection, because the owner concluded the opposite.
+    ///
+    /// He read the greyed row as *"this Mac does not have it"* and said so:
+    /// *"we have codex and claude installed clearly; i'm using you right — yet
+    /// it thinks we don't"*. Detection was working the whole time; the sentence
+    /// naming the real reason was losing to the visual state, because grey means
+    /// "not found here" to everybody. So the first clause is now the fact he
+    /// doubted.
+    ///
+    /// **"yet" is gone, and that is deliberate.** It promised a backend that is
+    /// not coming in this shape. `claude -p` is not a model endpoint — it is an
+    /// agent with its own system prompt, its own tools and its own
+    /// `--mcp-config`, so it does not emit tool calls for `ToolLoop` to run, it
+    /// runs its own. Measured on the owner's Mac: 4.4 s and ~26,000 tokens of
+    /// context to answer "ok". Driving it would nest an agent inside an agent
+    /// and bypass the allowlist, the reply style and the turn budget that make
+    /// this an appliance.
+    ///
+    /// Handing whole conversations to it is a real and possibly good idea. It is
+    /// a different product decision, not this option, and saying "yet" would go
+    /// on quietly promising the version that cannot work.
     private func cliUnsupportedReason(_ kind: AgentCLIKind) -> String {
-        "Mynah can't think through \(kind.displayName) yet. Pick another way for now — "
-            + "you can switch to this later."
+        "Mynah can see \(kind.displayName) on this Mac, and can't think through it. "
+            + "\(kind.displayName) is an assistant in its own right rather than a model "
+            + "Mynah can drive — it brings its own tools and its own memory. Pick another "
+            + "way for now."
     }
 
     private func cliOption(_ report: AgentCLIReport) -> BrainSetupOption {
@@ -464,7 +489,29 @@ public struct BrainSetupPlanner: Sendable {
     /// Anthropic, OpenAI and Google are always in the catalog: they are the
     /// providers a non-technical owner has plausibly heard of and might hold a
     /// key for.
-    private static let alwaysOfferedKeyProviders: [APIKeyProvider] = [.anthropic, .openAI, .google]
+    /// Deliberately absent: an allowlist of "providers a non-technical owner has
+    /// plausibly heard of".
+    ///
+    /// It held `[.anthropic, .openAI, .google]`, and everything else entered the
+    /// catalogue only if its key was already in the environment. The reasoning
+    /// was sound — do not show somebody a menu of things they may not have — and
+    /// the rule it produced was **self-fulfilling**: you cannot choose a
+    /// provider you are never shown, so an owner without a key already exported
+    /// could never acquire one.
+    ///
+    /// What it actually encoded was an assumption about who the owner is, and
+    /// the owner spotted it from the outside: *"there is no deepseek, kimi, glm
+    /// — a bit biased towards US aren't we"*. He runs a security conference in
+    /// Kuala Lumpur. He has heard of DeepSeek.
+    ///
+    /// The original insight survives without the exclusion: **evidence still
+    /// counts, for ordering rather than for existence.** An ambient key makes a
+    /// provider cheaper to pick, and `BrainSetupPlanner` already ranks on
+    /// friction, so a provider whose key is already exported still rises. What
+    /// no longer happens is a choice being hidden from the person deciding.
+    ///
+    /// The structural guard below is a different thing and must survive: an
+    /// option whose key we cannot explain how to obtain is not offerable at all.
 
     private func apiKeyOptions(_ keys: AmbientAPIKeyReport) -> [BrainSetupOption] {
         APIKeyProvider.allCases.compactMap { provider in
@@ -482,9 +529,7 @@ public struct BrainSetupPlanner: Sendable {
             // exactly the "menu of things you may not have" the install screen
             // exists to avoid; but if their key is right there in the
             // environment, hiding it would be the wrong call too.
-            guard hasAmbientKey || Self.alwaysOfferedKeyProviders.contains(provider) else {
-                return nil
-            }
+
             return BrainSetupOption(
                 id: keyOptionID(for: provider),
                 label: hasAmbientKey
@@ -513,6 +558,7 @@ public struct BrainSetupPlanner: Sendable {
         case .deepSeek:  return .deepSeekAPIKey
         case .moonshot:  return .moonshotAPIKey
         case .groq:      return .groqAPIKey
+        case .glm:       return .glmAPIKey
         }
     }
 

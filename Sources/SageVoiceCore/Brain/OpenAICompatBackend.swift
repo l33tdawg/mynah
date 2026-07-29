@@ -65,6 +65,14 @@ public struct OpenAICompatProvider: Sendable, Equatable {
         baseURL: URL(string: "https://api.groq.com/openai/v1")!
     )
 
+    /// Zhipu's GLM. The owner asked for it by that name; the vendor is Zhipu AI
+    /// and the console is `open.bigmodel.cn`, so both appear where they help.
+    public static let glm = OpenAICompatProvider(
+        identifier: "glm",
+        displayName: "GLM",
+        baseURL: URL(string: "https://open.bigmodel.cn/api/paas/v4")!
+    )
+
     /// Google's OpenAI-compatibility layer.
     ///
     /// This is the *API-key* path, and it is the only one this backend serves.

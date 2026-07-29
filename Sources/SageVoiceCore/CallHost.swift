@@ -30,6 +30,7 @@ public actor CallHost {
         case endpointExited(Int32)
         case relayNeverAnswered(String)
 
+        /// For the log. Paths and exit statuses belong here and only here.
         public var description: String {
             switch self {
             case .noEndpointBinary(let path):
@@ -40,6 +41,42 @@ public actor CallHost {
                 return "the call endpoint stopped immediately (status \(status))"
             case .relayNeverAnswered(let url):
                 return "the relay never listed this call at \(url)"
+            }
+        }
+
+        /// For the owner, whose phone this arrives on.
+        ///
+        /// **`description` used to be what he got.** `handleCallRequest` caught
+        /// this error and sent `"\(error)"` back over Signal, so asking for a
+        /// call on a Mac with no relay secret replied:
+        ///
+        ///     I couldn't start the call: this Mac has no relay secret at
+        ///     /Users/<him>/.sage/call-relay.secret
+        ///
+        /// A path inside his own home directory, texted to his phone. Verified
+        /// on this machine — the file genuinely is absent, so that is the live
+        /// message today for anyone who switches to a fast model and tries it.
+        ///
+        /// Nothing that reaches the owner comes from an exception string. These
+        /// are authored per case, the way `Exchange.Failure` and
+        /// `ApplianceWriteReadiness` already do it, and they say what he can do
+        /// rather than what the process found.
+        public var ownerSentence: String {
+            switch self {
+            case .noEndpointBinary:
+                // Actionable, and the action is not his to take at a terminal:
+                // the endpoint ships inside the app, so a missing one means the
+                // install is wrong rather than something he forgot.
+                return "the part of Mynah that handles calls isn't installed. Reinstalling "
+                    + "Mynah should put it back."
+            case .noSharedSecret:
+                // The one setup step that is genuinely outside the app. Named
+                // without a path, because a path he has never seen is not a
+                // next step — it is a puzzle.
+                return "this Mac hasn't been set up for calls yet."
+            case .endpointExited, .relayNeverAnswered:
+                // Nothing for him to change. A transient, said as one.
+                return "something went wrong setting it up. Try again in a moment."
             }
         }
     }
