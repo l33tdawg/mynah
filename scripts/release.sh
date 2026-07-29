@@ -11,8 +11,12 @@
 #                          a signing key
 #   build before package — package-app.sh copies binaries, it does not make them
 #   package before dmg   — create-dmg.sh refuses an unsigned bundle
-#   notarize the DMG     — that is what Apple staples, and what the owner
-#                          actually downloads
+#   notarize before dmg  — the ticket staples to the .app; an image built before
+#                          that carries an unstapled bundle and needs the network
+#                          on first launch. Notarizing the image instead does not
+#                          work at all: notarize.sh takes a bundle, not a file.
+#   dmg last             — so the image is built around a stapled bundle and its
+#                          .sha256 describes the bytes that actually ship
 #   verify after staple  — the only check that answers "will this launch on a Mac
 #                          that has never seen it"
 set -euo pipefail
@@ -54,16 +58,34 @@ bash scripts/provision-signal-cli.sh
 step "package + sign"
 bash scripts/package-app.sh
 
+# Notarize BEFORE the disk image, not after.
+#
+# This used to run create-dmg.sh first and then hand the .dmg to notarize.sh,
+# which fails outright: notarize.sh guards with `[[ -d "$APP" ]]` and a disk
+# image is a file, so every notarized run died on "No app at …/Mynah.dmg". The
+# one-command path in this script's own header had therefore never once
+# produced a notarized release; every real one was assembled by hand.
+#
+# Two more things went wrong in that order even after the argument was right:
+#
+#   * Stapling the app does not staple a disk image built before it, so the
+#     image shipped an unstapled bundle and first launch needed the network —
+#     the exact thing the old comment here claimed to be preventing.
+#   * create-dmg.sh writes the .sha256 as it builds. Attaching a ticket
+#     afterwards rewrites the image, so the recorded checksum described a file
+#     that no longer existed and verify-dmg.sh failed on its first check.
+#
+# Notarizing the bundle first settles all three: the ticket is stapled to the
+# app, the image is then built around an already-stapled bundle, and the
+# checksum is written last, over the bytes that actually ship.
+if [[ "$NOTARIZE" == "1" || "$NOTARIZE" == "true" ]]; then
+  step "notarize + staple"
+  bash scripts/notarize.sh "$ROOT/dist/Mynah.app"
+fi
+
 step "disk image"
 DMG="$(bash scripts/create-dmg.sh | head -1)"
 [[ -f "$DMG" ]] || die "create-dmg.sh did not produce an image"
-
-if [[ "$NOTARIZE" == "1" || "$NOTARIZE" == "true" ]]; then
-  step "notarize + staple"
-  # The DMG, not the app: it is the artifact that gets downloaded, and stapling
-  # it means first launch works with no network.
-  bash scripts/notarize.sh "$DMG"
-fi
 
 step "verify"
 if ! bash scripts/verify-dmg.sh "$DMG"; then
