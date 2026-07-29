@@ -547,11 +547,20 @@ final class StandingFactTests: XCTestCase {
     /// Bit 1 is the only bit that grants. Under the Companion profile the
     /// appliance reads across subjects it was never granted, bounded by its
     /// clearance — nineteen other agents' subjects on the owner's node.
+    /// The scope and its bound, on the row.
+    ///
+    /// **"Whose memories" deliberately moved and did not vanish.** This used to
+    /// require the row to say "other agents", and it no longer does — that fact
+    /// is now carried once by `FederationHelp.howWideThatReachIs` under the
+    /// roster, where it belongs: it is a property of the page rather than of
+    /// any one agent, and repeating it on twenty rows is the noise the list
+    /// framing exists to remove. `RosterFramingTests.testTheReachIsStatedWithItsBound`
+    /// is what holds it now, so this may relax without the fact going missing.
     func testTheCompanionProfileSaysItCanReadAcrossSubjects() {
-        let line = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion).readingLine
+        let line = AgentPermissions(mask: ApplianceWriteReadiness.Capability.companion)
+            .readingLine.lowercased()
 
-        XCTAssertTrue(line.contains("every subject"))
-        XCTAssertTrue(line.contains("other agents"), "the widening was stated without saying whose")
+        XCTAssertTrue(line.contains("every subject"), "the widening was narrowed")
         XCTAssertTrue(line.contains("clearance"), "the bound was dropped")
     }
 

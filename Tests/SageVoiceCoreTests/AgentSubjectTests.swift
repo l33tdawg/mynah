@@ -115,10 +115,14 @@ final class RosterFramingTests: XCTestCase {
     func testTheLineCarriesBothHalvesOfTheAsymmetry() throws {
         let line = FederationHelp.whatMynahMayDoWithTheseAgents
 
-        let reads = try XCTUnwrap(line.range(of: "read"), "the half Mynah can do went missing")
-        let writes = try XCTUnwrap(line.range(of: "write"), "the half it cannot do went missing")
+        // The restriction is found by "can't" rather than by a verb. `thread`
+        // writes "save", not "write", because that is the owner's word for it —
+        // and pinning a verb they chose is how the last version of this test
+        // ended up defending a sentence instead of a fact.
+        let reads = try XCTUnwrap(line.range(of: "can read"), "the half Mynah can do went missing")
+        let cannot = try XCTUnwrap(line.range(of: "can't"), "the half it cannot do went missing")
         XCTAssertTrue(
-            reads.lowerBound < writes.lowerBound,
+            reads.lowerBound < cannot.lowerBound,
             "the line leads with what Mynah cannot do, which reads as an apology"
         )
     }
@@ -132,6 +136,36 @@ final class RosterFramingTests: XCTestCase {
         for claim in ["can't read", "cannot read", "isn't allowed to read"] {
             XCTAssertFalse(line.contains(claim), "the false read claim is back: \(claim)")
         }
+    }
+
+    /// **The other direction, which team-lead asked for and which forbidding
+    /// the false phrasing does not cover.**
+    ///
+    /// A line saying nothing at all about reading passes every prohibition
+    /// above. So the next tidy-up drops the half that says Mynah *can* read —
+    /// in the name of brevity, entirely reasonably — and the page is back to
+    /// implying a limit by omission. The claim has to be present, not merely
+    /// un-contradicted.
+    func testSomethingOnThePageSaysMynahCanRead() {
+        XCTAssertTrue(
+            FederationHelp.whatMynahMayDoWithTheseAgents.lowercased().contains("can read"),
+            "the page no longer says Mynah can read, so a limit is implied by silence"
+        )
+    }
+
+    /// The breadth is the part an owner would not infer, so it has to be stated
+    /// rather than left to the row-level reading lines.
+    ///
+    /// Pinned including the uncomfortable clause. `thread` chose "bounded by
+    /// its clearance and nothing else" deliberately, and a later edit that
+    /// keeps the scope but drops the bound would read as reassurance nobody
+    /// wrote.
+    func testTheReachIsStatedWithItsBound() {
+        let reach = FederationHelp.howWideThatReachIs.lowercased()
+
+        XCTAssertTrue(reach.contains("every subject on this mac"), "the scope was narrowed")
+        XCTAssertTrue(reach.contains("other agents"), "whose memories went unsaid")
+        XCTAssertTrue(reach.contains("clearance and nothing else"), "the bound was softened")
     }
 
     /// "subject", never "domain" — the owner-facing word for this everywhere in

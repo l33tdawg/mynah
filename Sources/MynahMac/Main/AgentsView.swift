@@ -192,10 +192,22 @@ struct AgentPermissions: Equatable, Sendable {
     /// The owner disproved the old wording in one message: he asked Mynah what
     /// it had stored and it listed his subjects back, while this line said it
     /// could not see them.
+    /// `thread`'s wording, and the change is which side of the line reading
+    /// sits on.
+    ///
+    /// Both branches now describe *reach*, not permission. The earlier pair
+    /// differed in kind — one said "every subject", the other "only what it has
+    /// been given access to" — which made a grant look like the thing that
+    /// makes reading possible. It is not. Bit 1 lifts discovery filters; its
+    /// absence leaves the ordinary rules, and the ordinary rule for a `member`
+    /// is that it reads what other active local members own.
+    ///
+    /// This branch renders on **every row**, which is why it was the worst
+    /// instance of the false claim and the last one found.
     var readingLine: String {
         mask & Capability.readAcrossSubjects != 0
-            ? "Across every subject on this node, including other agents', up to its clearance."
-            : "Whatever it has been given access to, up to its clearance — CEREBRUM shows the list."
+            ? "Every subject on this node, up to its clearance."
+            : "What other agents on this Mac remember, up to its clearance."
     }
 
     /// **What is deliberately not here: the sentences.**
@@ -699,8 +711,25 @@ enum FederationHelp {
     /// asymmetry is real and runs the other way: it reads freely and cannot
     /// write a word.
     static let whatMynahMayDoWithTheseAgents =
-        "Mynah can send any of these a message, and read what they remember. "
-            + "What it can't do is write anything of its own — not yet."
+        "Mynah can read what these agents remember, right across this Mac. "
+            + "What it can't do is save anything of its own — that limit is on its own key."
+
+    /// The breadth, said out loud rather than left to be inferred.
+    ///
+    /// It belongs to the page rather than to any row, which is why it sits
+    /// under the line above instead of in the list. The owner raised the
+    /// cross-subject reading as a *capability* and he is right — but a voice
+    /// appliance reachable from his phone can read what nineteen other agents
+    /// have stored, and that is worth him seeing in a sentence rather than
+    /// working out.
+    ///
+    /// "bounded by its clearance and nothing else" is `thread`'s clause and the
+    /// least comfortable one in the product. Kept exactly as written: it is not
+    /// a sentence he should later feel was softened for him.
+    static let howWideThatReachIs =
+        "That means the appliance answering your phone can read every subject on this Mac, "
+            + "including what your other agents have remembered. It is bounded by its "
+            + "clearance and nothing else."
 
     /// The domain the appliance writes everything to.
     ///
@@ -808,8 +837,8 @@ enum FederationHelp {
     /// are node-operator/admin only — they are not per-agent grants, and no MCP
     /// tool exposes those at all. So this is an operator view, like the task
     /// board, and it says so in the same words.
-    static let grantsAreNotReadableHere = "The list of who can reach what is an operator view, "
-        + "so it isn't shown here. CEREBRUM has it in full."
+    static let grantsAreNotReadableHere = "Mynah can't read the grant list itself — that view "
+        + "is operator-only. CEREBRUM shows it in full."
 
     /// The remedy is deliberately NOT defined here.
     ///
@@ -1106,12 +1135,29 @@ struct AgentsView: View {
             // — the caution dot and the caution-ink count. A row that matches
             // the line above says nothing extra, which is what stops the list
             // becoming twenty repetitions of one sentence.
-            Text(FederationHelp.whatMynahMayDoWithTheseAgents)
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, s6)
-                .padding(.bottom, s5)
+            VStack(alignment: .leading, spacing: s3) {
+                Text(FederationHelp.whatMynahMayDoWithTheseAgents)
+                    .foregroundStyle(Palette.ink.secondary)
+                // Same ink as the line above, deliberately.
+                //
+                // It was one step lighter and the render showed what that
+                // costs: the sentence telling the owner his phone can read
+                // every subject on this Mac came out as the faintest text in
+                // the column. Hierarchy is worth having, but not paid for out
+                // of the one fact he would not otherwise infer — team-lead
+                // asked for this prominent and tertiary ink is the opposite.
+                // The paragraph break carries the separation on its own.
+                //
+                // Not a caution colour either: this is a true description of a
+                // working appliance, and amber would say something is wrong
+                // when what is happening is the product doing its job.
+                Text(FederationHelp.howWideThatReachIs)
+                    .foregroundStyle(Palette.ink.secondary)
+            }
+            .mynahFont(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, s6)
+            .padding(.bottom, s5)
             ScrollView {
                 // Spacing between rows rather than none. Rows that touch read as
                 // a table; rows with air between them read as a list of things,
