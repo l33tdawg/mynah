@@ -1143,11 +1143,30 @@ struct SettingsView: View {
     /// he can change, and the two fail in related ways — a model name the
     /// provider does not serve and a key it will not accept produce the same
     /// silence at the same moment.
+    /// Sits under both destination rows on purpose.
+    ///
+    /// This is the owner's *choice*, and the two rows above are the two places
+    /// that choice has to land — this window, which picks it up at once, and
+    /// the appliance, which reads its model from launch flags and therefore
+    /// only learns about it when it next starts. They normally agree, because
+    /// changing the model here rewrites the appliance's job as well.
+    ///
+    /// **They can drift, and one of the ways is new.** A reconcile that cannot
+    /// read the configuration now deliberately changes nothing rather than
+    /// tearing the appliance down — which is right, and it means a model change
+    /// made in that window updates the store while the running appliance keeps
+    /// the model it was started with. So this row must not say "the model
+    /// Mynah uses" as though there were one place to look. The appliance row
+    /// above reports what the phone is *actually* running, and if the two ever
+    /// disagree the owner can see it rather than being told a number that is
+    /// true of only half the product.
     private var modelRow: some View {
         SettingsRow(
             "The model it thinks with",
-            detail: model.brain?.modelName.map { "Currently \($0)." }
-                ?? "Mynah is using whatever this provider gives it by default."
+            detail: (model.brain?.modelName.map { "Currently \($0)." }
+                ?? "Mynah is using whatever this provider gives it by default.")
+                + " This window changes over straight away. Your phone picks it up "
+                + "the next time the appliance starts."
         ) {
             MynahButton("Change", kind: .secondary) { isChangingModel = true }
         }

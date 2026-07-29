@@ -169,13 +169,18 @@ final class PrivacyClaimTests: XCTestCase {
     /// **The defect this pair of claims exists to prevent.**
     ///
     /// The page first read the window's recorded brain choice for both
-    /// surfaces. On the machine it was written on that was wrong: the appliance
-    /// was launched with `--provider ollama` while the window was set to an API
-    /// brain, so one row would have told the owner their phone's words stayed on
-    /// this Mac when they were going to a company, or the reverse. The daemon
-    /// publishes its own status precisely because it does not consult the
-    /// window's choice, and these two claims must never be sourced from one
-    /// value.
+    /// surfaces. Worth recording precisely, because the first version of this
+    /// comment overstated it: I asserted the two stores *were* disagreeing on
+    /// this machine, having checked only one of them. They are not — both say
+    /// `ollama` / `qwen3.5:4b`.
+    ///
+    /// The claims must still never share a source, because nothing makes them
+    /// agree: the daemon builds its backend from its launch flags and never
+    /// reads `BrainSelectionStore`, and since the reconcile stopped tearing down
+    /// an appliance it cannot read the configuration for, a model changed in the
+    /// window can outrun the running appliance until the next successful
+    /// reconcile. One row sourced from one store would then state the wrong
+    /// destination as fact for whoever is holding the phone.
     func testThePhoneAndTheWindowAreAllowedToDisagree() {
         let phone = PrivacyClaim.thinkingOnThePhone(model: "qwen3.5:4b", staysOnDevice: true)
         let window = PrivacyClaim.thinkingInThisWindow(

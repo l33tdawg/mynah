@@ -18,19 +18,31 @@ import SwiftUI
 /// separate decision made on purpose rather than a side effect of moving them.
 extension PrivacyClaim {
 
-    /// **Two surfaces, two answers, and they can genuinely differ.**
+    /// **Two surfaces, two answers, and they can drift apart.**
     ///
-    /// This started as one row reading the app's recorded brain choice, which
-    /// was wrong on the machine it was written on. `launchctl` on this Mac shows
-    /// the appliance running `--provider ollama --model qwen3.5:4b` while the
-    /// window is set to an API brain: the daemon builds its backend from its
-    /// own launch flags and never consults what the window recorded.
-    /// `SettingsView` already knew this — "the appliance answering the phone
-    /// builds its own backend from its launch flags" — and a privacy page
-    /// naming the wrong destination is the worst error available on it.
+    /// This started as one row reading the window's recorded brain choice for
+    /// both. The correction is structural rather than a bug sighting, and the
+    /// distinction is worth keeping straight because I first wrote it down the
+    /// other way round: I read `launchctl`, saw the appliance on
+    /// `--provider ollama --model qwen3.5:4b`, and asserted the window was on an
+    /// API brain without looking. `chrome` checked the plist —
+    /// `mynah.brain.selectedOption` is `local.ollama`, the same model — so on
+    /// this Mac the two agree and the single row would have told the truth.
+    ///
+    /// The reason for two rows is that nothing *makes* them agree. The daemon
+    /// builds its backend from its launch flags and never consults
+    /// `BrainSelectionStore`; `SettingsView` says so in as many words. And the
+    /// gap widened today: a reconcile that cannot read its configuration now
+    /// deliberately changes nothing rather than tearing the appliance down,
+    /// which was the right call — it was uninstalling the owner's phone bridge —
+    /// but it means a model changed in this window updates the store while the
+    /// running appliance keeps the model it was started with until the next
+    /// successful reconcile.
     ///
     /// So the phone is asked about the appliance's published status, the window
     /// is asked about the window's own choice, and neither speaks for the other.
+    /// A privacy page naming the wrong destination is the worst error available
+    /// on it, and it costs one extra row to make that unreachable.
     static func thinkingOnThePhone(model: String?, staysOnDevice: Bool) -> String {
         guard let model else {
             return "Mynah hasn't answered your phone yet, so it hasn't said which brain it uses."

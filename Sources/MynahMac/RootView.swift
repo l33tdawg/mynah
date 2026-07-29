@@ -621,7 +621,21 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .home: return "What's on your plate"
-        case .agents: return "Who Mynah can ask"
+        // Not "Who Mynah can ask", which was the previous line and carried the
+        // exact false promise the owner objected to on the page itself: "ask"
+        // says Mynah can query these agents' memories, and it cannot — reading
+        // another agent's subjects needs a grant, and none has been given.
+        // Sending, which it *can* do, is not asking.
+        //
+        // This claims presence and nothing about capability, which leaves the
+        // asymmetry to be stated once above the roster where there is room to
+        // state both halves of it. Deliberately not "Others on your network":
+        // the page has a section by almost that name for a genuinely different
+        // set — other machines — and the roster underneath is the local half.
+        // `thread`'s call, and their reasoning: it undersells the post-scan
+        // case, and underselling is recoverable where overclaiming is what put
+        // us here.
+        case .agents: return "Who else is on this Mac"
         case .memories: return "What Mynah remembers"
         case .privacy: return "What leaves this Mac"
         case .settings: return "How Mynah is set up"

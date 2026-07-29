@@ -40,6 +40,12 @@ final class AgentsRenderHarness: XCTestCase {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("ON THIS MAC").mynahFont(.eyebrow).foregroundStyle(Palette.ink.secondary)
                         .padding(.horizontal, s6).padding(.top, s6).padding(.bottom, s4)
+                    // The framing line, drawn from the real string so the
+                    // render cannot flatter a shorter one than ships.
+                    Text(FederationHelp.whatMynahMayDoWithTheseAgents)
+                        .mynahFont(.callout).foregroundStyle(Palette.ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, s6).padding(.bottom, s5)
                     // The real `AgentListRow` renders as a yellow placeholder:
                     // it carries `.pointingHandCursor()`, which is an
                     // `NSViewRepresentable`, and `ImageRenderer` refuses

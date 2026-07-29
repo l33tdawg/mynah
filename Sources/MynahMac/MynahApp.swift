@@ -377,6 +377,22 @@ final class AppModel {
     /// The rule, and it is worth keeping: **uncertainty must never destroy.**
     /// A decision the owner made is acted on. A question the app failed to
     /// answer changes nothing and says so.
+    ///
+    /// **The general form, which this codebase found four times in one day:
+    /// when an action is irreversible, prove the precondition — never infer it
+    /// from an absence.** A configuration that could not be built became "he
+    /// turned it off". A closed port became "the process is gone". A key the
+    /// node did not recognise returned no memories, which read as "there are
+    /// none". A write that was refused returned success. Every one of them is a
+    /// branch whose real condition is *not knowing something*, dressed as a
+    /// confident negative.
+    ///
+    /// So the corollary, and the reason this type has three cases rather than a
+    /// `Bool`: **"I could not tell" deserves its own branch, and that branch
+    /// does nothing.** If you are ever tempted to collapse `cannotTell` into
+    /// `stop` because both mean "not running right now" — they do not. One is
+    /// what the owner asked for and the other is what the app failed to find
+    /// out, and only one of them justifies deleting their phone bridge.
     enum AnsweringIntent: Sendable, Equatable {
         /// The owner wants it answering, and everything it needs resolved.
         case run(SignalServiceConfiguration)

@@ -647,6 +647,24 @@ enum FederationHelp {
         let meaning: String
     }
 
+    /// The one line above the roster, carrying both halves of the asymmetry.
+    ///
+    /// **Checked rather than assumed, which is the reason it can be this
+    /// definite.** Sending needs no grant at all — a restricted key still has
+    /// the local inbox, because mask bit 16 denies *federated* discovery and
+    /// delivery and leaves local messaging untouched. Reading another agent's
+    /// memories needs an explicit grant on its subjects, and org membership
+    /// does not imply one. On this node no such grant exists, for any agent.
+    ///
+    /// Order matters: what Mynah *can* do comes first, so the line reads as a
+    /// description rather than an apology. And it is written so the day a grant
+    /// is finally made, the sentence stops being absolute rather than becoming
+    /// false — "none has been given" is a fact about today that will read as
+    /// stale rather than as a lie.
+    static let whatMynahMayDoWithTheseAgents =
+        "Mynah can send any of these a message. It can't read what they remember — "
+            + "that needs access to their subjects, and none has been given."
+
     /// The domain the appliance writes everything to.
     ///
     /// Taken from `SageRitual.memoryDomain` rather than spelled out again, so
@@ -819,15 +837,37 @@ final class AgentsModel {
     private(set) var roster = AgentRoster.empty
     private(set) var scan: ScanPhase = .idle
 
+    /// Subjects per agent, for the agents a node has actually answered about.
+    ///
+    /// Absent from this dictionary means "not answered", which is the ordinary
+    /// case today and draws nothing. See `AgentSubjectSource`.
+    private(set) var subjects: [String: [String]] = [:]
+
     private let source: any AgentDirectorySource
     private let federation: any FederationScanning
+    private let subjectSource: any AgentSubjectSource
 
     init(
         source: any AgentDirectorySource = NodeAgentDirectory(),
-        federation: any FederationScanning = SageFederationScan.shared
+        federation: any FederationScanning = SageFederationScan.shared,
+        subjectSource: any AgentSubjectSource = UnaskableSubjects()
     ) {
         self.source = source
         self.federation = federation
+        self.subjectSource = subjectSource
+    }
+
+    /// Asked for one agent at a time, when the owner selects it.
+    ///
+    /// Not fetched for the whole roster on load: twenty agents is twenty
+    /// requests for something nineteen of them are not being looked at, and on
+    /// every node shipping today all twenty would return nothing. The page is
+    /// already drawn by the time this runs, so a slow or absent answer costs
+    /// the owner nothing.
+    func loadSubjects(forAgent id: String) async {
+        guard subjects[id] == nil else { return }
+        guard let found = await subjectSource.subjects(forAgent: id) else { return }
+        subjects[id] = found
     }
 
     func load() async {
@@ -915,6 +955,14 @@ struct AgentsView: View {
             .onChange(of: model.roster) { _, roster in
                 if selectedID == nil { selectedID = roster.appliance?.id ?? roster.agents.first?.id }
             }
+            // Asked per selection rather than for the whole roster, and after
+            // the pane is already drawn. On every node shipping today this
+            // returns nothing and draws nothing, so it must not be on the path
+            // to seeing anything else.
+            .task(id: selectedAgent?.id) {
+                guard let id = selectedAgent?.id else { return }
+                await model.loadSubjects(forAgent: id)
+            }
     }
 
     @ViewBuilder
@@ -992,6 +1040,26 @@ struct AgentsView: View {
     private var rosterColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             columnHeader("On this Mac", count: model.roster.agents.count)
+            // Said once, above the list, rather than on twenty rows.
+            //
+            // The owner's objection was that this list "promises more than it
+            // means" — and when we checked the facts rather than filtering on
+            // them, the list turned out to be correct and the *verb* wrong.
+            // Filtering to what Mynah can read would empty the page; filtering
+            // to what it can send to would change nothing, because it can send
+            // to all of them. So every row stays and the asymmetry gets stated
+            // where it applies: to all of them, once.
+            //
+            // Per-row marks are therefore only for rows that *depart* from this
+            // — the caution dot and the caution-ink count. A row that matches
+            // the line above says nothing extra, which is what stops the list
+            // becoming twenty repetitions of one sentence.
+            Text(FederationHelp.whatMynahMayDoWithTheseAgents)
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, s6)
+                .padding(.bottom, s5)
             ScrollView {
                 // Spacing between rows rather than none. Rows that touch read as
                 // a table; rows with air between them read as a list of things,
@@ -1053,6 +1121,7 @@ struct AgentsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: s6) {
                     detailHeading(agent)
+                    subjectPills(agent)
                     StandingFacts(agent: agent)
                     if agent.isThisAppliance {
                         ApplianceStanding(agent: agent)
@@ -1072,6 +1141,40 @@ struct AgentsView: View {
             // Only reachable in the instant between the roster arriving and the
             // default selection landing.
             Color.clear
+        }
+    }
+
+    /// The subjects this agent can reach, when the node has said.
+    ///
+    /// **Nothing at all when it has not**, which is every node shipping today.
+    /// No placeholder, no "unknown", no spinner — see `AgentSubjectSource` for
+    /// why those are three ways of drawing a fact the app does not have. The
+    /// section simply is not there, and the pane above and below it closes up.
+    @ViewBuilder
+    private func subjectPills(_ agent: NodeAgent) -> some View {
+        if let subjects = model.subjects[agent.id], !subjects.isEmpty {
+            VStack(alignment: .leading, spacing: s3) {
+                Text("Can reach")
+                    .mynahFont(.eyebrow)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                // Wraps rather than scrolls: an agent with many subjects should
+                // get taller, not hide the rest behind a gesture nobody knows
+                // is available.
+                FlowLayout(spacing: s2) {
+                    ForEach(subjects, id: \.self) { subject in
+                        Text(subject)
+                            .mynahFont(.label)
+                            .foregroundStyle(Palette.ink.primary)
+                            .padding(.horizontal, s3)
+                            .padding(.vertical, 3)
+                            .background(Palette.surface.well, in: RoundedRectangle.mynah(r.chip))
+                            .mynahBorder(r.chip)
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Can reach \(subjects.joined(separator: ", "))")
         }
     }
 
