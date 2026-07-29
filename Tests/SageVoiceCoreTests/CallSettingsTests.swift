@@ -204,3 +204,120 @@ final class CallSettingsTests: XCTestCase {
         XCTAssertTrue(saved.transcript)
     }
 }
+
+// MARK: - Two barriers, one message
+
+private final class RefusalStubBackend: BrainBackend, @unchecked Sendable {
+    let identifier = "stub"
+    let modelName: String
+    let isLocal: Bool
+
+    init(modelName: String, isLocal: Bool) {
+        self.modelName = modelName
+        self.isLocal = isLocal
+    }
+
+    func isAvailable() async -> Bool { true }
+    func complete(_ request: BrainRequest) async throws -> BrainReply {
+        throw BrainBackendError.unreachable("not used")
+    }
+}
+
+/// Calling has **two** preconditions — a brain fast enough to hold a line, and a
+/// relay secret on this Mac — and the refusal used to name only the first.
+///
+/// On the owner's machine `~/.sage/call-relay.secret` does not exist, so the
+/// message he got told him to switch to an API model and try again; doing
+/// exactly that would have landed him on "this Mac hasn't been set up for calls
+/// yet". A refusal that names one of two blockers is not a smaller truth, it is
+/// a wrong instruction — it costs a trip.
+final class CallRefusalTests: XCTestCase {
+
+    private let localBrain = RefusalStubBackend(modelName: "qwen3.5:4b", isLocal: true)
+    private let cloudBrain = RefusalStubBackend(modelName: "claude-haiku-4-5", isLocal: false)
+
+    /// The exact case the owner is in, and the regression this guards.
+    func testASlowBrainOnAMacWithNoSecretSaysBothInOneMessage() throws {
+        let refusal = try XCTUnwrap(
+            CallInvitation.refusal(forBackend: localBrain, isSetUpForCalls: false)
+        )
+        guard case .backendTooSlow(_, let alsoNeedsSetup) = refusal else {
+            return XCTFail("expected backendTooSlow, got \(refusal)")
+        }
+        XCTAssertTrue(alsoNeedsSetup)
+
+        let sentence = refusal.sentence
+        XCTAssertTrue(sentence.contains("qwen3.5:4b"), "must still name the model: \(sentence)")
+        XCTAssertTrue(
+            sentence.contains("set up for calls"),
+            "must not hide the second barrier behind the first: \(sentence)"
+        )
+        XCTAssertTrue(
+            sentence.contains("won't be enough"),
+            "must say that switching brains alone does not fix it: \(sentence)"
+        )
+    }
+
+    /// With the secret in place, the model advice is correct again and the extra
+    /// clause would be noise — so it must not appear.
+    func testASlowBrainOnAReadyMacAdvisesOnlyTheModel() throws {
+        let refusal = try XCTUnwrap(
+            CallInvitation.refusal(forBackend: localBrain, isSetUpForCalls: true)
+        )
+        XCTAssertEqual(refusal, .backendTooSlow(model: "qwen3.5:4b", alsoNeedsSetup: false))
+        XCTAssertFalse(refusal.sentence.contains("set up for calls"))
+        XCTAssertTrue(refusal.sentence.contains("Switch to an API model"))
+    }
+
+    /// The case that was previously invisible: nothing wrong with the brain, and
+    /// calling still cannot happen. This used to return `nil` — no refusal at
+    /// all — and the owner discovered it only by asking for a call and watching
+    /// it fail.
+    func testAFastBrainOnAMacWithNoSecretStillRefuses() {
+        XCTAssertEqual(
+            CallInvitation.refusal(forBackend: cloudBrain, isSetUpForCalls: false),
+            .notSetUpForCalls
+        )
+    }
+
+    func testAFastBrainOnAReadyMacDoesNotRefuse() {
+        XCTAssertNil(CallInvitation.refusal(forBackend: cloudBrain, isSetUpForCalls: true))
+    }
+
+    /// No refusal reaches the owner carrying a path from his own home directory.
+    /// `CallHost.Failure` learned this the hard way — it texted
+    /// `/Users/<him>/.sage/call-relay.secret` to his phone.
+    func testNoRefusalLeaksAFilesystemPath() {
+        let refusals: [CallInvitation.Refusal] = [
+            .backendTooSlow(model: "qwen3.5:4b", alsoNeedsSetup: true),
+            .backendTooSlow(model: "qwen3.5:4b", alsoNeedsSetup: false),
+            .notSetUpForCalls
+        ]
+        for refusal in refusals {
+            XCTAssertFalse(refusal.sentence.contains("/"), "path leaked: \(refusal.sentence)")
+            XCTAssertFalse(refusal.sentence.contains(".secret"), "path leaked: \(refusal.sentence)")
+        }
+    }
+
+    /// `//help` must describe the same barriers the refusal would, because it is
+    /// read *before* the attempt. It used to re-author the reason from a Bool
+    /// and could only ever name the model one.
+    func testHelpDescribesTheRealBarrierRatherThanAssumingTheModel() {
+        let help = CallInvitation.help(
+            callRefusal: CallInvitation.refusal(forBackend: cloudBrain, isSetUpForCalls: false)
+        )
+        XCTAssertTrue(help.contains("set up for calls"), help)
+        XCTAssertFalse(
+            help.contains("Switch to an API model"),
+            "the brain is already fast — telling him to change it is the old bug"
+        )
+    }
+
+    func testHelpOffersCallingWhenBothBarriersAreClear() {
+        let help = CallInvitation.help(
+            callRefusal: CallInvitation.refusal(forBackend: cloudBrain, isSetUpForCalls: true)
+        )
+        XCTAssertTrue(help.contains("I set up a voice call"), help)
+        XCTAssertFalse(help.contains("Not yet"), help)
+    }
+}

@@ -909,7 +909,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             // says so rather than pretending.
             calls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath)),
             // Decided once, from the backend that will actually answer.
-            callRefusal: CallInvitation.refusal(forBackend: backend),
+            callRefusal: CallInvitation.refusal(
+                forBackend: backend,
+                isSetUpForCalls: CallHost.isSetUpForCalls()
+            ),
             // //call is several seconds of warning. Spent warming the model,
             // SAGE, the voice and recognition — and building the opening — so
             // the caller arrives to something ready rather than to a pause.

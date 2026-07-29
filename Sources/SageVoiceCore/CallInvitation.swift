@@ -36,11 +36,19 @@ public enum CallInvitation {
     /// Describes what calling needs as part of the list rather than as a
     /// footnote, so an owner on a local model learns why //call will refuse
     /// before they try it and are told no.
-    public static func help(callingAvailable: Bool, model: String) -> String {
-        let calling = callingAvailable
-            ? "//call — I set up a voice call and send you a link. Tap it and talk; you can interrupt me any time."
-            : "//call — a voice call. Not available on \(model), which runs on this Mac and takes the best part "
-                + "of a minute to answer. Switch to an API model in Mynah and it will work. Voice notes work either way."
+    ///
+    /// **Takes the refusal, not a Bool and not a model name.** A Bool could only
+    /// say *whether* calling works, so this branch had to re-author *why* — and
+    /// it authored the model reason, because that was the only barrier the Bool
+    /// knew about. On a Mac with no relay secret it therefore promised "switch
+    /// to an API model in Mynah and it will work" to an owner for whom that is
+    /// false. The `model` argument went with it: the caller was digging the name
+    /// back out of the refusal to hand it to a function that already had the
+    /// refusal. One source for the reason means the help text cannot drift from
+    /// the refusal it describes.
+    public static func help(callRefusal: Refusal?) -> String {
+        let calling = callRefusal.map { "//call — a voice call. Not yet: \($0.sentence)" }
+            ?? "//call — I set up a voice call and send you a link. Tap it and talk; you can interrupt me any time."
 
         return """
             Things you can say:
@@ -55,20 +63,50 @@ public enum CallInvitation {
     }
 
     /// Why a call cannot happen, in words the owner can act on.
+    ///
+    /// **There are two barriers, and this used to name only the first.** The
+    /// model check ran alone, so an owner on a local brain was told *"switch to
+    /// an API model and try again"* — and on this Mac, where
+    /// `~/.sage/call-relay.secret` does not exist, doing exactly that lands him
+    /// on "this Mac hasn't been set up for calls yet". We sent him to change his
+    /// brain to fix a problem changing his brain does not fix.
+    ///
+    /// A refusal that names one of two blockers is not a smaller truth, it is a
+    /// wrong instruction. So the model barrier now carries whether the other one
+    /// is also standing, and says so in the same breath.
     public enum Refusal: Sendable, Equatable {
-        case backendTooSlow(model: String)
+        /// `alsoNeedsSetup` when the relay secret is missing too, so switching
+        /// brains alone would not get him a call.
+        case backendTooSlow(model: String, alsoNeedsSetup: Bool)
+        /// The brain is fast enough; this Mac has never been set up for calls.
+        case notSetUpForCalls
         case couldNotStart(String)
 
         public var sentence: String {
             switch self {
-            case .backendTooSlow(let model):
+            case .backendTooSlow(let model, let alsoNeedsSetup):
                 // Not a limitation to hide. A local 4B takes 40-60 seconds to
                 // produce a first token on this hardware; in a message that is
                 // a wait, and in a call it is a dead line. Saying which model
                 // and what to do about it beats "calling is unavailable".
-                return "Calling needs a fast model, and \(model) runs on this Mac — it takes "
+                let head = "Calling needs a fast model, and \(model) runs on this Mac — it takes "
                     + "the best part of a minute to answer, which works in messages and not in a "
-                    + "call. Switch to an API model and try again. Voice notes still work either way."
+                    + "call."
+                guard alsoNeedsSetup else {
+                    return head + " Switch to an API model and try again. Voice notes still "
+                        + "work either way."
+                }
+                // Both, in one message. Told separately these become two trips:
+                // switch the brain, try again, get refused for a different
+                // reason he was never warned about.
+                return head + " This Mac also hasn't been set up for calls yet, so that needs "
+                    + "doing as well — switching to an API model on its own won't be enough. "
+                    + "Voice notes still work either way."
+            case .notSetUpForCalls:
+                // No path, deliberately. `CallHost.Failure.noSharedSecret` says
+                // it the same way and for the same reason: a file he has never
+                // seen is not a next step, it is a puzzle.
+                return "This Mac hasn't been set up for calls yet. Voice notes still work."
             case .couldNotStart(let reason):
                 return "I couldn't start the call: \(reason)"
             }
@@ -86,8 +124,19 @@ public enum CallInvitation {
     /// A local model that got fast enough would need this revisited — the
     /// property that matters is time to first token, and `isLocal` is a proxy
     /// for it that happens to be exactly right on this hardware today.
-    public static func refusal(forBackend backend: BrainBackend) -> Refusal? {
-        backend.isLocal ? .backendTooSlow(model: backend.modelName) : nil
+    ///
+    /// `isSetUpForCalls` is the second barrier and must be passed rather than
+    /// assumed. It defaults to nothing, because a default would be a guess about
+    /// the owner's filesystem made inside a pure function — and guessing `true`
+    /// is precisely the bug: it is what let the model check answer for both.
+    public static func refusal(
+        forBackend backend: BrainBackend,
+        isSetUpForCalls: Bool
+    ) -> Refusal? {
+        guard backend.isLocal else {
+            return isSetUpForCalls ? nil : .notSetUpForCalls
+        }
+        return .backendTooSlow(model: backend.modelName, alsoNeedsSetup: !isSetUpForCalls)
     }
 
     /// An unguessable path segment.

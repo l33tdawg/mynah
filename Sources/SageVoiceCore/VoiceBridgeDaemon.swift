@@ -505,13 +505,7 @@ public actor VoiceBridgeDaemon {
         // supports gets a confident guess, which is worse than no answer.
         if CallInvitation.isHelpRequest(transcript) {
             await reply(
-                CallInvitation.help(
-                    callingAvailable: callRefusal == nil,
-                    model: callRefusal.map { refusal in
-                        if case .backendTooSlow(let model) = refusal { return model }
-                        return "this model"
-                    } ?? ""
-                ),
+                CallInvitation.help(callRefusal: callRefusal),
                 to: recipient,
                 allowSpeaking: false
             )

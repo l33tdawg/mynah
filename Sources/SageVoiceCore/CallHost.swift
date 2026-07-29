@@ -104,6 +104,17 @@ public actor CallHost {
         homeDirectory.appendingPathComponent(".sage/call-relay.secret")
     }
 
+    /// Whether this Mac has ever been set up for calls.
+    ///
+    /// Exists so the refusal can be decided *before* a call is attempted rather
+    /// than discovered as a failure during one. The same fact was always
+    /// available — `start()` reads this file and throws `noSharedSecret` — but
+    /// only after the owner had asked for a call and been told to change his
+    /// brain first, which is the wrong order to learn it in.
+    public static func isSetUpForCalls(secretURL: URL = CallHost.defaultSecret()) -> Bool {
+        FileManager.default.fileExists(atPath: secretURL.path)
+    }
+
     /// Starts an endpoint and returns the link to send.
     ///
     /// Any previous call is stopped first — not merely because two endpoints
