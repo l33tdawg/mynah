@@ -124,14 +124,27 @@ final class SignalBackgroundServicesTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "mynah.setupComplete")
         defaults.set(true, forKey: "mynah.keepAnsweringWhenClosed")
-        defaults.set(false, forKey: "mynah.paused")
+
+        // Pause comes from the marker file, not from `UserDefaults` — the two
+        // stores disagreeing is the bug that removed the defaults copy. This
+        // used to set "mynah.paused" and pass, which was luck: with no marker
+        // injected, `AppModel` reads the real one in the *developer's own*
+        // Application Support, so the test enabled or disabled the jobs
+        // depending on whether whoever ran it happened to have Mynah paused.
+        // A temporary directory with no marker in it is an appliance that is
+        // answering, on any machine.
+        let pauseRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pause-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: pauseRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: pauseRoot) }
 
         let services = RecordingBackgroundServices()
         let configuration = fixture()
         let app = AppModel(
             defaults: defaults,
             backgroundServices: services,
-            serviceConfiguration: { configuration }
+            serviceConfiguration: { configuration },
+            pauseState: PauseState(fileURL: pauseRoot.appendingPathComponent("paused"))
         )
 
         await app.reconcileAnsweringService()

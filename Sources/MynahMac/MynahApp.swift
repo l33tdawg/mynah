@@ -475,6 +475,22 @@ public struct MynahApp: App {
             RootView(appDelegate: appDelegate)
                 .environment(app)
                 .mynahTextSize(app.textSize)
+                // The pause marker is shared with the daemon and survives a
+                // reinstall, so the window's copy of it can be stale by the time
+                // anyone looks at the window. Re-reading whenever the app comes
+                // forward is the cheapest place to catch that: it is one
+                // `fileExists`, and coming forward is exactly when the owner is
+                // about to trust what the dot says.
+                //
+                // Not a timer. The only reader that must be live per message is
+                // the daemon, and it already reads the file on every message.
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: NSApplication.didBecomeActiveNotification
+                    )
+                ) { _ in
+                    app.refreshPauseState()
+                }
         }
         .defaultSize(width: 1180, height: 820)
         // `.contentMinSize` rather than `.contentSize`: the owner can make the

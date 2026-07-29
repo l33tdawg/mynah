@@ -151,8 +151,22 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     public var canSave: Bool { !needsTheOwner }
 
     /// The one-line headline, or nil when there is nothing wrong.
+    /// "remember", not "save".
+    ///
+    /// "Save" was chosen to protect a distinction: the restriction blocks
+    /// storing, not recalling, and *remember* covers both. But the state this
+    /// sentence renders in is the untouched self-registration mask, which the
+    /// agent has carried since it registered — so it has never stored anything,
+    /// so there is nothing to recall either, and both readings are true. The
+    /// ambiguity is unreachable here rather than merely unlikely.
+    ///
+    /// Against that, remember is the product's word and not narrowly: the pane
+    /// is titled "What Mynah remembers", Welcome says "you can read everything
+    /// it remembers", and this type's own remedy ends "it won't remember
+    /// anything". Save appeared once, in this line, at the highest-stakes
+    /// moment in the product.
     public var headline: String? {
-        needsTheOwner ? "Mynah can't save anything yet." : nil
+        needsTheOwner ? "Mynah can't remember anything yet." : nil
     }
 
     /// The consequences, in the owner's terms, worst first.

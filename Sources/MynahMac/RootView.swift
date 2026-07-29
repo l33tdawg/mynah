@@ -209,9 +209,24 @@ struct ReadyStage: View {
     /// administrator assigns *keeps* all three write denials, so anything keyed
     /// on "is it restricted" would warn forever at an owner who had done
     /// everything right. `needsTheOwner` is true for exactly one mask — the
-    /// untouched self-registration default, which means nobody has looked at it.
-    /// Asking that question here rather than answering it again is the whole
-    /// point of the property existing.
+    /// untouched self-registration default. Asking that question here rather
+    /// than answering it again is the whole point of the property existing.
+    ///
+    /// **Known limitation, and it is narrow: this can be wrong for a
+    /// half-applied remedy.** The mask and subject ownership are two separate
+    /// transactions, so an administrator who assigns Mynah a subject but never
+    /// assigns it the Companion profile leaves an agent still on the default
+    /// mask that *can* write — bit 8 only denies writing a subject the agent
+    /// does **not** own. That agent has saved things and this screen would still
+    /// say it cannot. It is precisely the state produced by following our own
+    /// remedy and stopping one step early. `voice` found it; narrowing the
+    /// condition is theirs, and the constraint on any narrowing is that it must
+    /// not be able to make the warning go *silent* rather than wrong — an
+    /// administrator taking a subject back leaves the same mask on an appliance
+    /// that is mute again, and a false silence is the failure nobody ever
+    /// reports. The observed signal, `SageRitual.writeDenial`, is what covers
+    /// that case, and this screen should render it beside this one once it is
+    /// exposed.
     private var cannotRemember: Bool { writeReadiness?.needsTheOwner == true }
 
     var body: some View {

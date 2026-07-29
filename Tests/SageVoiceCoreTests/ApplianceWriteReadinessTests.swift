@@ -18,11 +18,14 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// 30 is `DefaultSelfRegisteredAgentCapabilities` — what consensus assigns
     /// to any key self-registering after app-v22, and what the appliance on the
     /// author's node carries.
-    func testTheRealMaskIsReportedAsUnableToSave() {
+    func testTheRealMaskIsReportedAsUnableToRemember() {
         let state = readiness(mask: 30)
         XCTAssertTrue(state.needsTheOwner)
         XCTAssertFalse(state.canSave)
-        XCTAssertEqual(state.headline, "Mynah can't save anything yet.")
+        // "remember", not "save" — see the note on `headline`. The distinction
+        // save was protecting cannot arise in this state, and remember is the
+        // word the rest of the product uses to the owner.
+        XCTAssertEqual(state.headline, "Mynah can't remember anything yet.")
     }
 
     /// Reading is never what the mask takes away, and saying otherwise would
