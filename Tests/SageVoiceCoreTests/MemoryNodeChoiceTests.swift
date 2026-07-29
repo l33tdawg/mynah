@@ -140,4 +140,64 @@ final class MemoryNodeChoiceTests: XCTestCase {
         XCTAssertTrue(said.contains("still there"))
         XCTAssertTrue(said.contains("unlock"))
     }
+
+    // MARK: Who the screen signs as
+
+    /// The appliance's key, and not the vestigial one beside it.
+    ///
+    /// This screen spent its life querying as `17641c48…` — the id `agent.key`
+    /// derives to, which is not registered on the node at all — because it
+    /// resolved through `MynahIdentity.resolvedKeyPath()`. The appliance is
+    /// `74140c2d…`, from `appliance-agent.key`.
+    ///
+    /// Asserted on the *environment the store actually spawns with* rather than
+    /// on a constant, because the bug was never in a constant: two functions in
+    /// `MynahIdentity` return the vestigial key, both have names that sound like
+    /// the right one, and between them they have now caught four surfaces
+    /// including one where the fix was a move from one to the other.
+    func testTheStoreSpawnsWithTheApplianceKeyAndNotTheVestigialOne() throws {
+        let spawned = SageMemoryStore.identityEnvironment
+        let keyPath = try XCTUnwrap(
+            spawned[MynahIdentity.environmentVariable],
+            "the memories store spawns without pinning an identity at all"
+        )
+
+        XCTAssertTrue(
+            keyPath.hasSuffix("appliance-agent.key"),
+            "the memories screen signs with \((keyPath as NSString).lastPathComponent), "
+                + "not the appliance's key"
+        )
+        XCTAssertFalse(
+            keyPath.hasSuffix("/agent.key"),
+            "the memories screen is back on the vestigial key"
+        )
+    }
+
+    /// **The assertion that would have caught the original bug.**
+    ///
+    /// Every cheaper check passes with a ghost key: the child spawns, the call
+    /// returns, and the list comes back empty — which is indistinguishable from
+    /// a new install that genuinely has nothing. An unregistered agent is
+    /// *answered*, not refused. So the property worth testing is not "the browse
+    /// worked" but "the agent it signed as is one the node has heard of".
+    ///
+    /// Live-node only, for the same reason `thread`'s equivalent is: the roster
+    /// is the only thing that can answer it.
+    func testTheStoreSignsAsAnAgentTheNodeKnows() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MYNAH_LIVE_NODE_TESTS"] == "1",
+            "set MYNAH_LIVE_NODE_TESTS=1 to run against the SAGE on this machine"
+        )
+
+        let keyPath = try XCTUnwrap(SageMemoryStore.identityEnvironment[MynahIdentity.environmentVariable])
+        let signingAs = try XCTUnwrap(SageAgentIdentity.agentID(ofKeyAt: URL(fileURLWithPath: keyPath)))
+        let roster = try await NodeAgentDirectory().roster()
+
+        XCTAssertEqual(signingAs, SageAgentIdentity.applianceAgentID())
+        XCTAssertTrue(
+            roster.agents.contains { $0.id == signingAs },
+            "Memories signs as \(signingAs.prefix(8))…, which is not registered on this node — "
+                + "every browse will come back empty and look like a fresh install"
+        )
+    }
 }

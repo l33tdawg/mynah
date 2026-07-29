@@ -128,18 +128,6 @@ struct AgentPermissions: Equatable, Sendable {
     /// owner's node have: no mask, no restrictions.
     var isRestricted: Bool { mask != 0 }
 
-    /// The untouched self-registration default — SAGE's own "pending review"
-    /// state, and the only one that means nobody has looked at this agent.
-    ///
-    /// Distinct from `writesAreRestricted` on purpose, and the distinction is
-    /// `voice`'s, arrived at from the other end of the product: the Companion
-    /// profile *also* carries all three write denials, so anything keyed on
-    /// "has write denials" would keep warning after an administrator had done
-    /// everything correctly — forever, because neither surface can see domain
-    /// ownership. The signal is "has anybody looked at it", not "is it
-    /// restricted".
-    var isPendingReview: Bool { mask == Capability.pendingReview }
-
     /// The named profile for a co-located voice appliance. Not a promise that
     /// writes now succeed — that additionally needs an owned subject, which no
     /// unsigned caller can see.
@@ -161,9 +149,6 @@ struct AgentPermissions: Equatable, Sendable {
         mask & Capability.denyOwningASubject != 0 && mask & Capability.denyForeignWrite != 0
     }
 
-    var canReachOtherSages: Bool { mask & Capability.denyOtherSages == 0 }
-    var readsAcrossSubjects: Bool { mask & Capability.readAcrossSubjects != 0 }
-
     /// The headline answer about saving, in the owner's words.
     var writingLine: String {
         guard writesAreRestricted else { return "Can save what you tell it." }
@@ -172,38 +157,15 @@ struct AgentPermissions: Equatable, Sendable {
             : "Can only save to a subject that belongs to it."
     }
 
-    /// Why, one plain sentence per restriction. Never a bit, never a constant
-    /// name — every line names a thing the agent cannot do, in the words the
-    /// owner would use for it.
-    var reasons: [String] {
-        var reasons: [String] = []
-        if mask & Capability.denySharedWrite != 0 {
-            reasons.append("It can't write to shared subjects like \"general\".")
-        }
-        if mask & Capability.denyOwningASubject != 0 {
-            reasons.append("It can't claim a subject of its own — one has to be assigned to it.")
-        }
-        if mask & Capability.denyForeignWrite != 0 {
-            reasons.append(
-                "It can't write to a subject that belongs to another agent. Being granted access "
-                    + "to one doesn't change that — the restriction is checked first."
-            )
-        }
-        if mask & Capability.denyOtherSages != 0 {
-            reasons.append(
-                "It can't hand work to agents on other SAGEs. Agents on this Mac are unaffected."
-            )
-        }
-        return reasons
-    }
-
-    /// What it *can* do that an unrestricted agent cannot, so a profile that
-    /// grants something is not described purely as a set of refusals.
-    var additions: [String] {
-        readsAcrossSubjects
-            ? ["It can read across every subject, up to its clearance."]
-            : []
-    }
+    /// **What is deliberately not here: the sentences.**
+    ///
+    /// This type used to carry its own `reasons` and `additions`, and they were
+    /// good enough that `voice` took the best of them into the shared string.
+    /// Keeping my copies afterwards would have left two sets of explanations for
+    /// one mask, drifting apart the first time either was reworded — the exact
+    /// thing the `typealias` above exists to prevent, one level up. What the
+    /// page renders now is `ApplianceWriteReadiness.reasons`; what survives here
+    /// is only what a *row* needs, which is the one-line effective answer.
 }
 
 /// Everyone on this node, and the appliance's own row among them.
@@ -777,7 +739,9 @@ enum FederationHelp {
     /// The one place a number appears, and it is a detail line rather than a
     /// control: an operator typing this into CEREBRUM needs the preset's real
     /// name, and "the companion profile" alone would leave them guessing.
-    static let companionPresetDetail = "companion profile · mask 15 · subject owned, not granted"
+    static var companionPresetDetail: String {
+        "companion profile · mask 15 · owner of “\(SageRitual.memoryDomain)”, not a grant"
+    }
 
     /// The state the owner actually hit: a row that looks completely ordinary
     /// and can do nothing.

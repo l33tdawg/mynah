@@ -200,7 +200,17 @@ actor SageMemoryStore: MemoryStoring {
     /// leftover. `applianceEnvironment()` is the single answer, it is what
     /// `ConversationModel` and `sage-voiced` already spawn with, and it carries
     /// the key migration those two depend on.
-    private static var identityEnvironment: [String: String] {
+    ///
+    /// Not `private`, and that is the one concession this type makes to its
+    /// tests. `MemoryNodeChoiceTests` reads the key path back out, derives the
+    /// agent id from it and checks that agent is on the node's roster — because
+    /// nothing else can. **A ghost key is answered emptily rather than refused**,
+    /// so every other check passes: the child spawns, the call returns, the list
+    /// comes back empty, and "empty" is exactly what a new install looks like.
+    /// That is how this shipped and went unnoticed. `thread` hit the same
+    /// silent-success problem on the federation scan and arrived at the same
+    /// shape independently, which is the argument for it.
+    static var identityEnvironment: [String: String] {
         MynahIdentity.applianceEnvironment()
     }
 

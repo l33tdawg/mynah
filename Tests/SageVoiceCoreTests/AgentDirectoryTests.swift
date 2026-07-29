@@ -368,18 +368,19 @@ final class AgentPermissionsTests: XCTestCase {
         )
     }
 
-    func testTheSelfRegisteredMaskAlsoClosesOtherSages() {
-        XCTAssertFalse(selfRegistered.canReachOtherSages)
-        XCTAssertFalse(selfRegistered.readsAcrossSubjects)
-    }
-
-    /// The companion preset is not simply "fewer denials": it *adds* reading
-    /// across subjects and reopens federated routing, and the screen should say
-    /// what it grants rather than describing it purely as refusals.
-    func testTheCompanionPresetReadsWidelyAndReachesOtherSages() {
-        XCTAssertTrue(companion.readsAcrossSubjects)
-        XCTAssertTrue(companion.canReachOtherSages)
-        XCTAssertFalse(companion.additions.isEmpty)
+    /// The two presets are told apart by identity, not by counting denials —
+    /// the distinction that stops the page warning forever after an
+    /// administrator has done everything right.
+    func testTheTwoPresetsAreDistinguishedFromEachOther() {
+        XCTAssertFalse(selfRegistered.hasCompanionProfile)
+        XCTAssertTrue(companion.hasCompanionProfile)
+        XCTAssertTrue(
+            ApplianceWriteReadiness(agentID: "x", standing: .registered(mask: 30)).needsTheOwner
+        )
+        XCTAssertFalse(
+            ApplianceWriteReadiness(agentID: "x", standing: .registered(mask: 15)).needsTheOwner,
+            "an assigned profile would have kept warning forever"
+        )
     }
 
     /// And it still cannot claim a subject — which is why ownership has to be
@@ -395,32 +396,45 @@ final class AgentPermissionsTests: XCTestCase {
     func testNoMaskMeansNoRestrictions() {
         XCTAssertFalse(unrestricted.isRestricted)
         XCTAssertFalse(unrestricted.writesAreRestricted)
-        XCTAssertTrue(unrestricted.reasons.isEmpty)
         XCTAssertEqual(unrestricted.writingLine, "Can save what you tell it.")
     }
 
     /// The direction SAGE's own team asked for: the effective result and the
     /// reason, in plain words. A bit number in a sentence is a fact about a
     /// codebase the owner will never read.
-    func testNoReasonEverShowsABitNumberOrAConstantName() {
-        for mask in [UInt32(30), 15, 2, 4, 8, 16, 1, 31] {
-            for line in AgentPermissions(mask: mask).reasons + AgentPermissions(mask: mask).additions {
-                XCTAssertFalse(line.contains("bit "), "a reason exposed a bit: \(line)")
-                XCTAssertFalse(line.contains("Deny"), "a reason exposed a constant name: \(line)")
-                XCTAssertFalse(line.contains("mask"), "a reason exposed the mask: \(line)")
+    ///
+    /// Aimed at what the page actually renders, which since `voice` merged the
+    /// two vocabularies is `ApplianceWriteReadiness`'s strings plus this type's
+    /// one-line answer. Testing my own deleted copies would have been testing
+    /// something nobody reads.
+    func testNothingTheOwnerReadsShowsABitNumberOrAConstantName() {
+        for mask in [UInt32(30), 15, 2, 4, 8, 16, 1, 31, 0] {
+            let readiness = ApplianceWriteReadiness(agentID: "x", standing: .registered(mask: mask))
+            let lines = readiness.reasons + [readiness.headline, readiness.remedy]
+                .compactMap { $0 } + [AgentPermissions(mask: mask).writingLine]
+            for line in lines {
+                XCTAssertFalse(line.contains("bit "), "a sentence exposed a bit: \(line)")
+                XCTAssertFalse(line.contains("Deny"), "a sentence exposed a constant name: \(line)")
+                XCTAssertFalse(line.lowercased().contains("mask"), "a sentence exposed the mask: \(line)")
+                XCTAssertFalse(line.lowercased().contains("capabilit"), "a sentence exposed the mechanism: \(line)")
             }
         }
     }
 
-    /// Each denial names the thing that cannot happen, and the foreign-write one
-    /// carries the fact that makes the obvious fix useless.
-    func testEachRestrictionIsExplainedAsSomethingItCannotDo() {
-        let reasons = selfRegistered.reasons.joined(separator: " ")
+    /// The owner's word, settled with `voice` against the app's own usage:
+    /// `MemoriesView` says "subject" and no owner-facing string in the product
+    /// says "domain". The shared strings are the ones that would drift.
+    func testTheOwnerFacingStringsSayySubjectAndNeverDomain() {
+        let readiness = ApplianceWriteReadiness(
+            agentID: "x",
+            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        )
+        let lines = readiness.reasons + [readiness.headline, readiness.remedy].compactMap { $0 }
+            + [FederationHelp.companionPresetDetail, FederationHelp.grantsAreNotReadableHere]
 
-        XCTAssertTrue(reasons.contains("shared subjects"))
-        XCTAssertTrue(reasons.contains("can't claim a subject of its own"))
-        XCTAssertTrue(reasons.contains("Being granted access"))
-        XCTAssertTrue(reasons.contains("other SAGEs"))
+        for line in lines {
+            XCTAssertFalse(line.lowercased().contains("domain"), "an owner-facing string says domain: \(line)")
+        }
     }
 
     /// A mask carrying only the read capability restricts nothing about writing,
@@ -431,7 +445,6 @@ final class AgentPermissionsTests: XCTestCase {
         XCTAssertTrue(readAll.isRestricted, "the mask is not zero, so the row is not ordinary")
         XCTAssertFalse(readAll.writesAreRestricted)
         XCTAssertEqual(readAll.writingLine, "Can save what you tell it.")
-        XCTAssertTrue(readAll.reasons.isEmpty)
     }
 
     /// The mask is read off the public roster — no signature, no unlock.
@@ -562,6 +575,10 @@ final class FederationHelpTests: XCTestCase {
         XCTAssertTrue(FederationHelp.cannotFixItself.contains("can't lift this itself"))
         XCTAssertTrue(FederationHelp.looksOrdinaryButIsMuted.contains("limit is on the key itself"))
         XCTAssertTrue(FederationHelp.companionPresetDetail.contains("mask 15"))
+        // Names the subject to assign, from the constant — so a rename of the
+        // thing the appliance writes cannot leave this pointing at the old one.
+        // It has already moved once, `voice-appliance` to `voice-interface`.
+        XCTAssertTrue(FederationHelp.companionPresetDetail.contains(SageRitual.memoryDomain))
     }
 
     /// The claim that Mynah is the administrator of a sole install is gone, and
