@@ -763,11 +763,23 @@ enum FederationHelp {
 
     /// For the person who has to relay it to whoever administers the node.
     ///
-    /// The one place a number appears, and it is a detail line rather than a
-    /// control: an operator typing this into CEREBRUM needs the preset's real
-    /// name, and "the companion profile" alone would leave them guessing.
+    /// **The one place in the owner-facing product where a mask number appears,
+    /// and `chrome` was right to ask whether it belongs.** The rule it looks
+    /// like it breaks is narrower than it sounds: no bit numbers *in sentences*,
+    /// because "DenyDomainClaim (bit 4)" is a fact about a codebase nobody here
+    /// will read. This is not a sentence and not a reason — it is SAGE's own
+    /// identifier for the preset, quoted. Their reference calls it "the
+    /// co-located voice/companion preset is mask 15", so somebody relaying this
+    /// can match it against the platform's own words however that platform
+    /// happens to present it. Naming the profile without its value would leave
+    /// them guessing at exactly the moment they are acting on our say-so.
+    ///
+    /// It lost ", not a grant" after a render showed it wrapping to two lines
+    /// inside the prose cap. The clause is made twice above it already — in the
+    /// remedy and in the deny-foreign reason — so it was the cheapest thing to
+    /// drop.
     static var companionPresetDetail: String {
-        "companion profile · mask 15 · owner of “\(SageRitual.memoryDomain)”, not a grant"
+        "companion profile · mask 15 · owns “\(SageRitual.memoryDomain)”"
     }
 
     /// The state the owner actually hit: a row that looks completely ordinary
@@ -1415,8 +1427,12 @@ struct ApplianceStanding: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                reasons
+                // Directly under the remedy, because it finishes it: the remedy
+                // says "someone with administrator access", and this says who
+                // that is on this Mac. Three paragraphs apart, the owner had to
+                // hold the first sentence in their head to use the second.
                 whoToAsk
+                reasons
                 footnotes
             } else if agent.permissions.hasCompanionProfile {
                 // Somebody has looked at this agent and assigned it the right
@@ -1495,8 +1511,12 @@ struct ApplianceStanding: View {
 
     private var footnotes: some View {
         VStack(alignment: .leading, spacing: s3) {
-            note(FederationHelp.looksOrdinaryButIsMuted)
-            note(FederationHelp.cannotFixItself)
+            // Two facts, one paragraph. They stay separate constants because
+            // each is independently true and independently testable, but the
+            // screen had four stacked asides under the bullets and `chrome`
+            // was right that it read as a wall. Joined here rather than merged
+            // at the source, so neither sentence loses its own test.
+            note("\(FederationHelp.looksOrdinaryButIsMuted) \(FederationHelp.cannotFixItself)")
             // The only number on the screen, and it is here because the person
             // who has to act on this is typing it into another product.
             Text(FederationHelp.companionPresetDetail)

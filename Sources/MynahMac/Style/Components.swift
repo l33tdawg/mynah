@@ -573,24 +573,86 @@ struct MynahTabBar<Tab: Hashable & Identifiable>: View {
     }
 
     var body: some View {
-        Picker("", selection: $selection) {
+        HStack(spacing: s1) {
             ForEach(tabs) { tab in
-                Text(title(tab)).tag(tab)
+                MynahTab(
+                    title: title(tab),
+                    isSelected: tab == selection
+                ) { selection = tab }
             }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
         // Its own width, not the column's.
         //
+        // Kept from the segmented version, where it was hard-won:
         // `.frame(maxWidth: .infinity)` looked like the obvious thing and was
-        // wrong twice: a segmented control does not stretch to fill an infinite
-        // frame, it *centres* in one — measured at 340pt sitting in the middle
-        // of a 640pt column, which put the strip's left edge 150pt right of the
-        // title above it. Five short words also do not want stretching; five
-        // segments of dead space is what a web page's tab bar looks like. At its
-        // natural size it starts where the title starts.
+        // wrong twice — a strip does not stretch to fill an infinite frame, it
+        // *centres* in one, measured at 340pt sitting in the middle of a 640pt
+        // column, which put its left edge 150pt right of the title above it.
+        // Short words do not want stretching either; segments of dead space is
+        // what a web page's tab bar looks like. At its natural size it starts
+        // where the title starts.
         .fixedSize()
         .mynahAnimation(Motion.fade, value: selection)
+    }
+}
+
+/// One tab.
+///
+/// **Deliberately not `.pickerStyle(.segmented)`, which is what this was.** The
+/// stock control draws a saturated blue fill inside a grey trough with divider
+/// pips between the segments, and three separate things were wrong with it here:
+/// the blue competed with the sidebar's selected row, so two blue-filled
+/// selections meant two different things on one screen; the trough drew a box
+/// around something that needed no box; and the pips are the tell — no current
+/// Mac app has them.
+///
+/// The selection is an elevated capsule instead: `surface.raised` on the canvas
+/// with a hairline, which is how macOS marks an inline switch of this kind now.
+/// It borrows nothing from `Palette.accent`, which means "the one live thing" —
+/// a tab is where you are, not something happening.
+///
+/// **No `pointingHandCursor`, and that is correct rather than a compromise.**
+/// A pointing hand over a tab is a web convention; macOS keeps the arrow over
+/// its own segmented controls. It happens to also make this renderable — the
+/// cursor layer is an `NSViewRepresentable` and `ImageRenderer` will not draw
+/// one — which is why this strip could finally be looked at rather than argued
+/// about.
+private struct MynahTab: View {
+    let title: String
+    let isSelected: Bool
+    let select: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: select) {
+            Text(title)
+                .mynahFont(.bodyEmphasis)
+                .foregroundStyle(isSelected ? Palette.ink.primary : Palette.ink.secondary)
+                .padding(.horizontal, s4)
+                .padding(.vertical, 5)
+                .background(background, in: RoundedRectangle.mynah(r.chip))
+                .overlay {
+                    // Only the selected tab is outlined. A border on hover would
+                    // make an unselected tab look chosen for as long as the
+                    // pointer rested on it.
+                    if isSelected {
+                        RoundedRectangle.mynah(r.chip)
+                            .strokeBorder(Palette.line.hairline, lineWidth: 1)
+                    }
+                }
+                .contentShape(RoundedRectangle.mynah(r.chip))
+                .contentShape(.focusEffect, RoundedRectangle.mynah(r.chip))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .mynahAnimation(Motion.fade, value: isHovering)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var background: Color {
+        if isSelected { return Palette.surface.raised }
+        return isHovering ? Palette.surface.well : .clear
     }
 }
 
