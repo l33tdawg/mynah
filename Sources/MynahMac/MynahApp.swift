@@ -76,7 +76,14 @@ final class AppModel {
 
     private enum Key {
         static let setupComplete = "mynah.setupComplete"
-        static let paused = "mynah.paused"
+        // Deliberately absent: `paused`.
+        //
+        // It was a `UserDefaults` mirror of the `paused` marker file, and the
+        // two disagreeing is the bug documented on `isPaused`. The marker is
+        // the store the daemon obeys and the one that survives a reinstall, so
+        // there is nothing a defaults copy can be right about that it is not.
+        // A stale key left behind by an older build is harmless — nothing reads
+        // it now.
         static let keepAnswering = "mynah.keepAnsweringWhenClosed"
         static let textSize = "mynah.textSize"
         static let deferredSteps = "mynah.deferredSetupSteps"
@@ -87,17 +94,44 @@ final class AppModel {
     /// restarted app has not started answering anything yet.
     var presence: Presence = .sleeping
 
+    /// Whether the appliance is answering.
+    ///
+    /// **One store, and it is the file.** This used to be written to both
+    /// `UserDefaults` and `PauseState`, and the two could disagree — which they
+    /// did, on the owner's machine, twice in an hour, each time swallowing a
+    /// message he was waiting on. `bridge.log`:
+    ///
+    ///     [daemon] paused — ignoring: are you online ??
+    ///
+    /// The window said Online throughout. Two mechanisms produced that:
+    ///
+    /// 1. `didSet` does not fire for an assignment in an initializer, so the
+    ///    launch path wrote `UserDefaults` into this property and never wrote
+    ///    the file. The two could differ from the first frame.
+    /// 2. `UserDefaults` lives in the app container and the `paused` marker
+    ///    lives in Application Support, which **survives a reinstall**. So a
+    ///    fresh build came up believing it was running while a stale marker
+    ///    from a previous install was still on disk telling the daemon to
+    ///    ignore everything. Toggling Pause and Resume fired `didSet` twice and
+    ///    rewrote the file, which is the ritual the owner discovered for
+    ///    himself and reported as "I need to click pause and resume".
+    ///
+    /// So the file is the only store now. It is the one the daemon actually
+    /// obeys, it is the one that survives, and a second copy that is
+    /// authoritative-except-when-it-is-not is what produced the bug. Do not
+    /// reintroduce a `UserDefaults` mirror; there is nothing for it to be right
+    /// about that the file is not already right about.
     var isPaused: Bool {
         didSet {
-            defaults.set(isPaused, forKey: Key.paused)
-            // UserDefaults is this app's own store, and the thing that answers
-            // the owner's phone is a different process that has never read it.
-            // Until this line existed, Pause stopped nothing: the copy said "It
-            // won't answer your phone", every reader of `isPaused` was view
-            // code, and the appliance kept answering through the meeting the
-            // owner had paused it for.
+            // A no-op assignment must stay a no-op. Rewriting the marker with
+            // the same value would move its modification date, and that date is
+            // what `PauseState.pausedAt()` reports as "paused since 14:32".
+            guard oldValue != isPaused else { return }
+            // Set while adopting the file's own state — the file is already
+            // correct and writing it back would be the same mtime bug.
+            guard !isAdoptingPauseStateFromDisk else { return }
             do {
-                try PauseState().setPaused(isPaused)
+                try pauseState.setPaused(isPaused)
             } catch {
                 // Surfaced rather than swallowed: a Pause that silently failed
                 // to take is the exact bug being fixed.
@@ -105,6 +139,40 @@ final class AppModel {
             }
             Task { await reconcileAnsweringService() }
         }
+    }
+
+    /// The pause marker this app reads and writes.
+    ///
+    /// Injected so a test can point at a temporary file. Without that, every
+    /// test constructing an `AppModel` would read the *developer's own*
+    /// `~/Library/Application Support/SAGE Voice Bridge/paused` and pass or
+    /// fail depending on whether they happened to have Mynah paused — which is
+    /// precisely the class of hidden shared state this whole change is about.
+    private let pauseState: PauseState
+
+    /// Suppresses the `didSet` writer while state is being adopted *from* the
+    /// file rather than written *to* it.
+    private var isAdoptingPauseStateFromDisk = false
+
+    /// Re-reads the marker and adopts it.
+    ///
+    /// The window caches this state to drive its own UI, and the daemon reads
+    /// the file per message — so the window is the half that can go stale. It
+    /// goes stale for real reasons, not theoretical ones: the marker is
+    /// process-shared state like `CallPreferences`, so a second window, the
+    /// daemon, a future `//pause` command, or the owner deleting the file by
+    /// hand all change it underneath a running app.
+    ///
+    /// Called on launch and whenever the app becomes active, which covers every
+    /// way the owner can see the window again after something else moved it.
+    func refreshPauseState() {
+        let onDisk = pauseState.isPaused()
+        guard onDisk != isPaused else { return }
+        isAdoptingPauseStateFromDisk = true
+        isPaused = onDisk
+        isAdoptingPauseStateFromDisk = false
+        Self.log.info("adopted pause state from disk: \(onDisk ? "paused" : "answering", privacy: .public)")
+        Task { await reconcileAnsweringService() }
     }
 
     private static let log = Logger(subsystem: "local.sage.voicebridge", category: "pause")
@@ -177,14 +245,21 @@ final class AppModel {
     init(
         defaults: UserDefaults = .standard,
         backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared,
-        serviceConfiguration: (() -> SignalServiceConfiguration?)? = nil
+        serviceConfiguration: (() -> SignalServiceConfiguration?)? = nil,
+        pauseState: PauseState = PauseState()
     ) {
         self.defaults = defaults
         self.backgroundServices = backgroundServices
         self.serviceConfiguration = serviceConfiguration
             ?? { SignalServiceConfiguration.current(defaults: defaults) }
         self.hasCompletedSetup = defaults.bool(forKey: Key.setupComplete)
-        self.isPaused = defaults.bool(forKey: Key.paused)
+        self.pauseState = pauseState
+        // The file, not `UserDefaults`. An assignment in an initializer does
+        // not fire `didSet`, so whatever is read here is simply believed — and
+        // believing the wrong store is what let the window say Online while the
+        // daemon dropped the owner's messages. Reading the file means the
+        // belief and the fact are the same thing at launch.
+        self.isPaused = pauseState.isPaused()
         // Absent means "not yet asked", and the appliance is useless if it stops
         // when the window closes, so the default is on.
         self.keepsAnsweringWhenClosed = defaults.object(forKey: Key.keepAnswering) as? Bool ?? true

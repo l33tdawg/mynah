@@ -72,6 +72,32 @@ final class ReadyStagePromiseTests: XCTestCase {
         XCTAssertNil(unregistered.shortRemedy)
     }
 
+    /// **The number, pinned against a live observation.**
+    ///
+    /// `GET /v1/agents` on the owner's own node reports capability mask **30**
+    /// for the appliance today, and `needsTheOwner` is an equality test — so if
+    /// this constant ever drifts from what SAGE actually stamps on a
+    /// self-registered key, the warning does not become wrong, it becomes
+    /// *silent*. That is the same failure shape as the ghost identity and the
+    /// scoped backlog: everything keeps working, nothing throws, and the screen
+    /// quietly goes back to promising something it cannot deliver.
+    ///
+    /// 30 = deny shared write (2) · deny owning a subject (4) · deny foreign
+    /// write (8) · deny other SAGEs (16).
+    func testTheSelfRegistrationMaskIsStillTheNumberTheNodeStamps() {
+        XCTAssertEqual(ApplianceWriteReadiness.Capability.pendingReview, 30)
+        XCTAssertTrue(readiness(mask: 30).needsTheOwner, "the live mask no longer trips the warning")
+    }
+
+    /// Companion must stay a different number, or the trap closes: the screen
+    /// would either warn forever or never.
+    func testCompanionIsDistinctFromPendingReview() {
+        XCTAssertNotEqual(
+            ApplianceWriteReadiness.Capability.companion,
+            ApplianceWriteReadiness.Capability.pendingReview
+        )
+    }
+
     // MARK: What it says
 
     /// One remedy in the product. The Ready banner renders `shortRemedy`
