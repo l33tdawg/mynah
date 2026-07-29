@@ -162,25 +162,22 @@ struct OnboardingFlow: View {
             BrainStage(titles: stageTitles, model: model)
         case .key:
             ConnectKeyView(titles: stageTitles, model: model, app: app)
-        case .phone:
-            SignalLinkStage(
-                titles: stageTitles,
-                currentIndex: SetupModel.Stage.phone.rawValue,
-                app: app,
-                onBack: { model.goBack() },
-                onFinished: { model.advance() }
-            )
         case .ready:
             ReadyStage(titles: stageTitles, model: model, app: app, onFinished: onFinished)
         }
     }
 }
 
-// Stages 1 to 4 live in `Setup/WelcomeView.swift`, `Setup/BrainPickerView.swift`,
-// `Setup/ConnectKeyView.swift` and `Setup/SignalLinkView.swift`. They keep the
-// initialiser shapes this file switches on — `init(titles:model:)`, and
-// `init(titles:model:app:)` where a stage has something to hand back to Settings
-// — and nothing else about them is this file's business.
+// Stages 1 to 3 live in `Setup/WelcomeView.swift`, `Setup/BrainPickerView.swift`
+// and `Setup/ConnectKeyView.swift`. They keep the initialiser shapes this file
+// switches on — `init(titles:model:)`, and `init(titles:model:app:)` where a
+// stage has something to hand back to Settings — and nothing else about them is
+// this file's business.
+//
+// `Setup/SignalLinkView.swift` is no longer among them. `SignalLinkStage` still
+// exists and is unchanged; it is simply not on the way in any more. The Ready
+// screen offers it, and Settings keeps it — see `SetupModel.Stage` for why an
+// optional add-on stopped being the fourth of five screens.
 
 /// Stage 5. Restates what the owner just decided, in their words, and hands over.
 ///
@@ -194,6 +191,8 @@ struct ReadyStage: View {
     @Bindable var model: SetupModel
     let app: AppModel
     let onFinished: () -> Void
+
+    @State private var isLinkingPhone = false
 
     private var unfinished: [AppModel.DeferredStep] { app.deferredSetupSteps }
 
@@ -229,6 +228,7 @@ struct ReadyStage: View {
                         }
                     }
                 }
+                phoneOffer
             }
             .frame(maxWidth: MynahWidth.stageColumn)
         } actions: {
@@ -245,6 +245,42 @@ struct ReadyStage: View {
                 }
             }
         }
+        .sheet(isPresented: $isLinkingPhone) {
+            // The same flow, in the same sheet Settings uses. Nothing about
+            // linking changed — only when it is asked for.
+            ReadyPhoneLinkSheet { isLinkingPhone = false }
+        }
+    }
+
+    /// The phone, offered rather than demanded.
+    ///
+    /// This used to be the fourth of five screens, and an owner who could not
+    /// scan a QR code could not finish setting up a Mac app. It is an add-on:
+    /// Mynah has a conversation, a board and a memory in this window without it.
+    /// So it is a card at the end that says what it would add and lets the owner
+    /// take it or leave it — and the primary button beside it is still "Start
+    /// using Mynah", because that is what they came to do.
+    @ViewBuilder
+    private var phoneOffer: some View {
+        if unfinished.isEmpty {
+            MynahCard {
+                HStack(alignment: .top, spacing: s5) {
+                    VStack(alignment: .leading, spacing: s2) {
+                        Text("Talk to it from your phone as well")
+                            .mynahFont(.title3)
+                            .foregroundStyle(Palette.ink.primary)
+                        Text("Link Signal and you can send Mynah a voice note from anywhere and "
+                             + "it answers out loud. You don't need it to use Mynah here, and "
+                             + "it's in Settings whenever you want it.")
+                            .mynahFont(.callout)
+                            .foregroundStyle(Palette.ink.secondary)
+                            .mynahProse()
+                    }
+                    Spacer(minLength: s4)
+                    MynahButton("Link my phone", kind: .secondary) { isLinkingPhone = true }
+                }
+            }
+        }
     }
 
     private var subtitle: String {
@@ -252,10 +288,13 @@ struct ReadyStage: View {
             return "Mynah will answer as soon as you finish it — and it's waiting in Settings "
                 + "whenever you're ready."
         }
-        // No figure. Twenty seconds was measured against a local model on a Mac
-        // mini; an API answers in three to nine, and a number in an interface is
-        // a promise that goes stale the moment the owner changes their brain.
-        return "Send it a voice note and it will answer out loud. The first answer takes "
+        // Names the window first, because the window is what the owner has in
+        // front of them and what they can use the moment they press the button.
+        // It used to open with "send it a voice note", which described a phone
+        // they had just been made to link — and once linking became optional
+        // that sentence was instructions for a thing most people will not have
+        // set up yet.
+        return "Ask it something in the window and it will answer. The first answer takes "
             + "a moment longer than the rest."
     }
 
@@ -263,6 +302,54 @@ struct ReadyStage: View {
         guard let option = model.selectedOption else { return "Not chosen yet" }
         if option.keepsWordsOnDevice { return "This Mac" }
         return MynahCopy.company(forBackend: option.backendIdentifier) ?? "A company"
+    }
+}
+
+/// `SignalLinkView` in a sheet, for the offer on the Ready screen.
+///
+/// Deliberately a near-twin of `PhoneLinkSheet` in Settings rather than a shared
+/// type: that one resolves a deferred step and reconciles the answering service
+/// on the way out, and this one is on a screen where setup has not finished and
+/// neither of those exists yet. Merging them would mean one sheet carrying two
+/// sets of conditional side effects.
+private struct ReadyPhoneLinkSheet: View {
+    let onClose: () -> Void
+
+    @State private var model = SignalLinkModel()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Link your phone")
+                .mynahFont(.title1)
+                .foregroundStyle(Palette.ink.primary)
+                .accessibilityAddTraits(.isHeader)
+
+            ScrollView {
+                SignalLinkView(model: model)
+                    .padding(.vertical, s6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+
+            ActionRow {
+                MynahButton(model.phase.isLinked ? "Done" : "Close", isDefault: true) {
+                    model.stop()
+                    onClose()
+                }
+            }
+            .padding(.top, s5)
+        }
+        .padding(s8)
+        .frame(width: 620, height: 700)
+        .background(Palette.surface.overlay)
+        .task { model.refresh() }
+        .onDisappear { model.stop() }
+        // Escape closes it. A modal with no keyboard way out is a trap, and
+        // this one has nothing to confirm.
+        .onExitCommand {
+            model.stop()
+            onClose()
+        }
     }
 }
 
@@ -286,9 +373,6 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// A sidebar row is the one place in this app where `Label(_:systemImage:)`
-    /// is correct — macOS sidebars use it, so removing it would look wrong.
-    ///
     /// `person.2` for agents rather than a network or a node graph. The owner's
     /// own words for this are "ask Perplexity to look it up"; they are asking
     /// somebody, and a topology diagram is the operator's picture, not theirs.
@@ -298,6 +382,22 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         case .agents: return "person.2"
         case .memories: return "text.append"
         case .settings: return "gearshape"
+        }
+    }
+
+    /// One line saying what the destination is for.
+    ///
+    /// Four rows of bare nouns make the owner click each one to find out what it
+    /// is, and then remember. A window this wide can afford to answer the
+    /// question in the place it is asked — which is the only reason this text
+    /// exists. Each line is a plain statement of the pane's subject, in the same
+    /// words the pane itself uses when it has a heading.
+    var summary: String {
+        switch self {
+        case .home: return "What's on your plate"
+        case .agents: return "Who Mynah can ask"
+        case .memories: return "What Mynah remembers"
+        case .settings: return "How Mynah is set up"
         }
     }
 }
@@ -312,10 +412,22 @@ struct MainShell: View {
     @Environment(AppModel.self) private var app
     @State private var selection: MainSection? = .home
 
+    /// Held rather than left to SwiftUI, and seeded to `.all`.
+    ///
+    /// Left alone, the split view restores whatever state it was last in, and a
+    /// window that opens with the sidebar collapsed makes every destination two
+    /// clicks away — reveal the sidebar, then pick. Owning the value means the
+    /// window always opens showing where you can go, and the toggle still slides
+    /// it away for anyone who wants the width back.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             Sidebar(selection: $selection)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+                // Primary navigation, not a settings list. Four destinations,
+                // each naming itself and saying what it is for, need the width
+                // to do that on two lines without wrapping mid-phrase.
+                .navigationSplitViewColumnWidth(min: 248, ideal: 284, max: 340)
         } detail: {
             // The `GeometryReader` is a clamp, not a measurement.
             //
@@ -384,22 +496,45 @@ struct Sidebar: View {
         // still listed all three sections.
         List(selection: $selection) {
             ForEach(MainSection.allCases) { section in
-                // The one place `Label(_:systemImage:)` is correct in this app —
-                // macOS sidebars use it, and removing it would look wrong.
-                Label(section.title, systemImage: section.glyph)
-                    .tag(section)
+                row(section).tag(section)
             }
         }
         .listStyle(.sidebar)
-        // A sidebar row is as tall as its label unless it is told otherwise,
-        // which for a 13pt `Label` is about 24pt — noticeably tighter than Mail,
-        // Notes and System Settings, and the single thing that most made this
-        // column read as a web page's nav bar rather than a Mac sidebar. Three
-        // rows at 30pt also stop the selection capsule looking like a highlight
-        // dragged across a paragraph.
-        .environment(\.defaultMinListRowHeight, 30)
         .safeAreaInset(edge: .top, spacing: 0) { identity }
         .safeAreaInset(edge: .bottom, spacing: 0) { status }
+    }
+
+    /// A destination: glyph, name, and what it is for.
+    ///
+    /// **Nothing here sets a text colour, and that is load-bearing.** A selected
+    /// sidebar row is filled with the accent the owner chose in System Settings,
+    /// and macOS inverts the row's labels to stay legible on it — but only for
+    /// labels it is allowed to style. Pinning `Palette.ink.primary` on the title
+    /// would survive review and then render dark-on-dark for anyone whose accent
+    /// is not blue. The system's own `.secondary` is used for the second line for
+    /// the same reason: `Palette.ink.secondary` is fixed and would not invert.
+    /// This is the platform-chrome exception `Palette.accent` describes.
+    private func row(_ section: MainSection) -> some View {
+        HStack(alignment: .top, spacing: s4) {
+            Image(systemName: section.glyph)
+                .mynahIcon(.card)
+                // A fixed column so four glyphs of different widths still leave
+                // their titles on one vertical line.
+                .frame(width: 24, alignment: .center)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(section.title).mynahFont(.title3)
+                Text(section.summary)
+                    .mynahFont(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, s3)
+        // Two `Text`s and a glyph read as three stops in VoiceOver, which turns
+        // four destinations into twelve. One stop, one sentence.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(section.title). \(section.summary)")
     }
 
     /// The mark and the wordmark, where every recent Mac app that has an

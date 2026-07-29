@@ -8,10 +8,18 @@ import XCTest
 /// columns are the node's own workflow statuses, the cards carry only fields the
 /// node publishes, and where the node cannot answer the board says so rather
 /// than drawing an empty column that reads as "none".
+///
+/// **These tests were rewritten when the board changed feeds, and the reason is
+/// worth keeping.** It used to read `sage_backlog`, which returns open tasks
+/// *assigned to the signed agent* — so on a node holding 6 planned, 7 in
+/// progress and 21 done it returned nothing, and the board rendered two empty
+/// columns and a sentence blaming the node for not publishing finished work.
+/// Several tests below passed happily against that, because they asserted the
+/// decoder matched the tool rather than that the board matched the owner's life.
+/// The fixtures here are now the shape `GET /v1/dashboard/tasks?all=true`
+/// actually returns, taken from `web/handler.go:handleGetTasks`.
 final class TaskBoardReadingTests: XCTestCase {
 
-    /// The shape `sage_backlog` documents: tasks grouped by domain, each row
-    /// carrying its workflow status and who is holding it.
     private func payload(_ json: String) -> JSONValue {
         guard let value = JSONValue.parse(json) else {
             XCTFail("the fixture itself is not JSON")
@@ -20,196 +28,271 @@ final class TaskBoardReadingTests: XCTestCase {
         return value
     }
 
-    private let backlog = """
+    /// One row of every status, shaped exactly as `handleGetTasks` writes it.
+    private let feed = """
     {
-      "tasks_by_domain": {
-        "house": [
-          {
-            "memory_id": "mem-1",
-            "content": "[TASK] Get a written quote from the roofer",
-            "task_status": "planned",
-            "confidence": 0.8,
-            "created_at": "2026-07-27T09:12:00.123Z",
-            "assignee": "mynah",
-            "assigned_to_you": true
-          },
-          {
-            "memory_id": "mem-2",
-            "content": "[TASK] Find three plumbers who work Saturdays",
-            "task_status": "in_progress",
-            "created_at": "2026-07-28T08:00:00Z",
-            "assignee": "mynah",
-            "assigned_to_you": true,
-            "task_picked_up_by": "kimi-cli/errands"
-          }
-        ],
-        "general": [
-          {
-            "memory_id": "mem-3",
-            "content": "[TASK] Call your sister back",
-            "task_status": "planned",
-            "created_at": "2026-07-26T18:30:00Z",
-            "assignee": "mynah",
-            "assigned_to_you": true
-          }
-        ]
-      },
-      "total_open": 3,
-      "message": "3 open tasks"
+      "tasks": [
+        {
+          "memory_id": "mem-1",
+          "content": "[TASK] Get a written quote from the roofer",
+          "domain_tag": "house",
+          "task_status": "planned",
+          "confidence_score": 0.8,
+          "created_at": "2026-07-27T09:12:00Z",
+          "provider": "",
+          "submitting_agent": "",
+          "assignee": "",
+          "task_picked_up_by": ""
+        },
+        {
+          "memory_id": "mem-2",
+          "content": "[TASK] Find three plumbers who work Saturdays",
+          "domain_tag": "house",
+          "task_status": "in_progress",
+          "created_at": "2026-07-28T08:00:00Z",
+          "provider": "claude-code",
+          "assignee": "mynah",
+          "task_picked_up_by": "kimi-cli/errands"
+        },
+        {
+          "memory_id": "mem-3",
+          "content": "[TASK] Book the car in for its service",
+          "domain_tag": "house",
+          "task_status": "done",
+          "created_at": "2026-07-01T10:00:00Z",
+          "assignee": "claude-code/sage",
+          "task_status_updated_at": "2026-07-28T12:00:00Z"
+        },
+        {
+          "memory_id": "mem-4",
+          "content": "[TASK] Move the broadband to the other provider",
+          "domain_tag": "house",
+          "task_status": "dropped",
+          "created_at": "2026-07-02T10:00:00Z",
+          "assignee": "claude-code/sage",
+          "task_status_updated_at": "2026-07-27T12:00:00Z"
+        }
+      ],
+      "total": 4
     }
     """
 
     // MARK: The columns are the node's statuses
 
-    func testOpenTasksLandInTheColumnTheirStatusNames() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
+    /// All four. An earlier board showed three and dropped abandoned work on
+    /// the grounds that nobody wants a monument; CEREBRUM shows four over the
+    /// same node, and an owner comparing them must not find work in one that is
+    /// missing from the other.
+    func testEveryStatusTheNodePublishesGetsAColumn() throws {
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
 
-        XCTAssertEqual(board.planned.map(\.id), ["mem-1", "mem-3"])
+        XCTAssertEqual(board.planned.map(\.id), ["mem-1"])
         XCTAssertEqual(board.inProgress.map(\.id), ["mem-2"])
-    }
-
-    /// Newest first, so a task the owner just asked for is where they will look
-    /// for it.
-    func testAColumnIsOrderedNewestFirst() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
-
-        XCTAssertEqual(
-            board.planned.map(\.title),
-            ["Get a written quote from the roofer", "Call your sister back"]
-        )
+        XCTAssertEqual(board.done.map(\.id), ["mem-3"])
+        XCTAssertEqual(board.dropped.map(\.id), ["mem-4"])
     }
 
     /// `[TASK] ` is how the node files a task. It is not something the owner
     /// wrote and has no business being the first word on every card.
     func testTheFilingPrefixIsNotShownToTheOwner() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
 
         XCTAssertEqual(board.planned.first?.title, "Get a written quote from the roofer")
         XCTAssertFalse(board.planned.contains { $0.title.contains("[TASK]") })
     }
 
     func testTheDomainTheTaskWasFiledUnderSurvives() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
-
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
         XCTAssertEqual(board.planned.first?.domain, "house")
-        XCTAssertEqual(board.planned.last?.domain, "general")
     }
 
     /// Which agent is holding a task is a property of the task, never a column.
     func testAnotherAgentHoldingATaskIsShownOnTheCard() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
-
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
         XCTAssertEqual(board.inProgress.first?.carrier, .pickedUpBy("kimi-cli/errands"))
     }
 
-    /// The ordinary case is silent: every row the backlog returns is this
-    /// appliance's own, and naming it on every card would be noise.
-    func testTheApplianceHoldingItsOwnWorkIsNotAnnounced() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
-
+    /// A task nobody was assigned says nothing about who holds it. Every row on
+    /// this feed is the whole board rather than one agent's slice, so "assigned
+    /// to nobody" is the ordinary case and not worth a line on the card.
+    func testAnUnassignedTaskNamesNobody() throws {
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
         XCTAssertNil(board.planned.first?.carrier)
     }
 
-    func testTaskAssignedElsewhereNamesTheAgent() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload("""
-        {"tasks_by_domain": {"general": [
-          {"memory_id": "m", "content": "[TASK] chase the invoice", "task_status": "planned",
-           "assignee": "other-agent", "assigned_to_you": false}
-        ]}}
-        """)))
+    /// The node keeps the assignee on a finished task purely as attribution, and
+    /// its own words for that are "Completed by" and "Dropped by". Rendering
+    /// those as "Assigned to" would say somebody is still working on it.
+    func testFinishedWorkNamesWhoFinishedItRatherThanWhoHoldsIt() throws {
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(feed)))
 
-        XCTAssertEqual(board.planned.first?.carrier, .assignedTo("other-agent"))
+        XCTAssertEqual(board.done.first?.carrier, .completedBy("claude-code/sage"))
+        XCTAssertEqual(board.dropped.first?.carrier, .droppedBy("claude-code/sage"))
     }
 
-    // MARK: What is not shown
+    // MARK: Work the node will not classify
 
-    /// Finished work is `nil`, not `[]`. `sage_backlog` returns open tasks only,
-    /// so nothing here knows whether anything is done — and a column reading
-    /// "none" would be a claim nobody made.
-    func testFinishedWorkIsUnknownRatherThanEmpty() throws {
-        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(backlog)))
-
-        XCTAssertNil(board.done, "the board claimed to know about finished work")
-    }
-
-    /// Abandoned work gets no column, and if the node ever hands one over it is
-    /// dropped rather than filed under a heading it does not belong to.
-    func testADroppedTaskIsNotShownAnywhere() throws {
+    /// **The one that matters most.** Rows written by an older version come back
+    /// with an empty status because SAGE deliberately does not guess whether
+    /// unknown work is planned or finished. Neither does this. Filing them into
+    /// Planned would put finished work back on the owner's plate.
+    func testAnEmptyStatusIsNeverGuessedIntoAColumn() throws {
         let board = try XCTUnwrap(TaskBoardReading.board(from: payload("""
-        {"tasks_by_domain": {"general": [
-          {"memory_id": "m1", "content": "[TASK] abandoned", "task_status": "dropped"},
-          {"memory_id": "m2", "content": "[TASK] still open", "task_status": "planned"}
-        ]}}
+        {"tasks": [
+          {"memory_id": "m1", "content": "[TASK] something old", "task_status": ""},
+          {"memory_id": "m2", "content": "[TASK] no status key at all"}
+        ]}
         """)))
 
-        XCTAssertEqual(board.planned.map(\.id), ["m2"])
-        XCTAssertEqual(board.inProgress.count, 0)
-        XCTAssertNil(board.done)
+        XCTAssertEqual(board.planned.count, 0, "an unlabelled task was filed under Planned")
+        XCTAssertEqual(board.done.count, 0)
+        XCTAssertEqual(board.unclassified.map(\.id), ["m1", "m2"])
     }
 
-    /// A status this app has never heard of is a later node version, not a
-    /// column to guess at.
-    func testAnUnknownStatusIsDroppedRatherThanGuessedAt() throws {
+    /// A status this app has never heard of is a later node version. Held in the
+    /// same place as the unlabelled ones — counted, and not guessed at. Dropping
+    /// it silently would lose the owner's work rather than merely fail to file
+    /// it.
+    func testAnUnknownStatusIsHeldRatherThanGuessedOrDiscarded() throws {
         let board = try XCTUnwrap(TaskBoardReading.board(from: payload("""
-        {"tasks_by_domain": {"general": [
-          {"memory_id": "m1", "content": "[TASK] blocked on someone", "task_status": "waiting"}
-        ]}}
+        {"tasks": [{"memory_id": "m1", "content": "[TASK] blocked", "task_status": "waiting"}]}
         """)))
 
-        XCTAssertTrue(board.isEmpty)
+        XCTAssertEqual(board.unclassified.map(\.id), ["m1"])
+        XCTAssertFalse(board.isEmpty, "a task the board could not file vanished entirely")
     }
 
     func testARowWithNoIdOrNoWordsIsNotACard() throws {
         let board = try XCTUnwrap(TaskBoardReading.board(from: payload("""
-        {"tasks_by_domain": {"general": [
+        {"tasks": [
           {"content": "[TASK] no id", "task_status": "planned"},
           {"memory_id": "m2", "content": "[TASK]   ", "task_status": "planned"},
           {"memory_id": "m3", "content": "[TASK] a real one", "task_status": "planned"}
-        ]}}
+        ]}
         """)))
 
         XCTAssertEqual(board.planned.map(\.id), ["m3"])
     }
 
+    // MARK: The seven-day window
+
+    /// Measured from the terminal transition and not from `created_at`, which is
+    /// the whole reason the node publishes `task_status_updated_at`. A task
+    /// written in March and finished yesterday is one the owner still wants to
+    /// see; measured from creation it would already be gone.
+    func testTheWindowIsMeasuredFromWhenWorkStoppedNotWhenItStarted() {
+        let now = Date()
+        let finishedYesterdayStartedInMarch = BoardTask(
+            id: "1",
+            title: "long one",
+            progress: .done,
+            createdAt: now.addingTimeInterval(-120 * 24 * 3600),
+            statusChangedAt: now.addingTimeInterval(-24 * 3600)
+        )
+        let board = TaskBoard(done: [finishedYesterdayStartedInMarch])
+
+        XCTAssertEqual(
+            board.recent(board.done, showingAll: false, now: now).count,
+            1,
+            "a card finished yesterday was hidden because it was written months ago"
+        )
+        XCTAssertEqual(board.olderThanWindow(now: now), 0)
+    }
+
+    func testWorkFinishedMoreThanAWeekAgoLeavesTheBoardUntilAskedFor() {
+        let now = Date()
+        let old = BoardTask(
+            id: "1", title: "old", progress: .done,
+            statusChangedAt: now.addingTimeInterval(-8 * 24 * 3600)
+        )
+        let fresh = BoardTask(
+            id: "2", title: "fresh", progress: .done,
+            statusChangedAt: now.addingTimeInterval(-2 * 24 * 3600)
+        )
+        let board = TaskBoard(done: [old, fresh])
+
+        XCTAssertEqual(board.recent(board.done, showingAll: false, now: now).map(\.id), ["2"])
+        XCTAssertEqual(board.recent(board.done, showingAll: true, now: now).map(\.id), ["1", "2"])
+        XCTAssertEqual(board.olderThanWindow(now: now), 1)
+    }
+
+    /// Abandoned work ages out on the same clock as finished work.
+    func testDroppedWorkAgesOutTheSameWay() {
+        let now = Date()
+        let board = TaskBoard(dropped: [
+            BoardTask(id: "1", title: "old", progress: .dropped,
+                      statusChangedAt: now.addingTimeInterval(-30 * 24 * 3600))
+        ])
+        XCTAssertEqual(board.recent(board.dropped, showingAll: false, now: now).count, 0)
+        XCTAssertEqual(board.olderThanWindow(now: now), 1)
+    }
+
+    /// A blank timestamp means the node could not say when it finished. Kept:
+    /// disappearing a card because a field was empty is losing work on a
+    /// technicality.
+    func testACardWithNoTerminalTimestampIsKeptRatherThanHidden() {
+        let board = TaskBoard(done: [BoardTask(id: "1", title: "no stamp", progress: .done)])
+        XCTAssertEqual(board.recent(board.done, showingAll: false, now: Date()).count, 1)
+    }
+
     // MARK: Robustness
 
-    /// The node prepends a plain-text banner addressed to an AI agent on the
-    /// first call of a session. The board has to read straight past it.
-    func testAReplyWrappedInTheNodesBannerStillReads() throws {
-        let text = """
-        Welcome back. You have 3 open tasks and 12 memories.
-
-        ---
-
-        {"tasks_by_domain": {"general": [
-          {"memory_id": "m1", "content": "[TASK] the real one", "task_status": "planned"}
-        ]}, "total_open": 1}
-        """
-
-        let board = try XCTUnwrap(TaskBoardReading.board(fromToolText: text))
-        XCTAssertEqual(board.planned.map(\.title), ["the real one"])
-    }
-
-    /// An empty plate is a readable answer, and a different thing from a broken
-    /// one — see the model tests below.
-    func testAnEmptyBacklogIsAnEmptyBoardNotAFailure() throws {
-        let board = try XCTUnwrap(
-            TaskBoardReading.board(from: payload("""
-            {"tasks_by_domain": {}, "total_open": 0, "message": "no open tasks"}
-            """))
-        )
-
+    func testAnEmptyFeedIsAnEmptyBoardNotAFailure() throws {
+        let board = try XCTUnwrap(TaskBoardReading.board(from: payload(#"{"tasks": [], "total": 0}"#)))
         XCTAssertTrue(board.isEmpty)
-        XCTAssertEqual(board.planned.count, 0)
     }
 
-    /// Anything that is not the documented shape — an error object, a tool that
+    /// Anything that is not the documented shape — an error object, a feed that
     /// changed underneath us — reads as "could not be read", never as an empty
     /// plate.
     func testAReplyWithoutTheDocumentedShapeIsNotAnEmptyBoard() {
-        XCTAssertNil(TaskBoardReading.board(from: payload(#"{"error": "no such tool"}"#)))
-        XCTAssertNil(TaskBoardReading.board(fromToolText: "the node fell over"))
-        XCTAssertNil(TaskBoardReading.board(fromToolText: ""))
+        XCTAssertNil(TaskBoardReading.board(from: payload(#"{"error": "unauthorized"}"#)))
+        XCTAssertNil(TaskBoardReading.board(fromResponse: Data("the node fell over".utf8)))
+        XCTAssertNil(TaskBoardReading.board(fromResponse: Data()))
+    }
+
+    func testTheFeedIsReadStraightFromTheResponseBody() throws {
+        let board = try XCTUnwrap(TaskBoardReading.board(fromResponse: Data(feed.utf8)))
+        XCTAssertEqual(board.planned.count, 1)
+    }
+}
+
+// MARK: - Where the board reads from
+
+final class CerebrumTaskSourceTests: XCTestCase {
+
+    /// The shipped REST default.
+    func testTheDefaultEndpointIsTheLocalNodesTaskFeed() {
+        let url = CerebrumTaskSource.defaultEndpoint(environment: [:])
+        XCTAssertEqual(url.absoluteString, "http://127.0.0.1:8080/v1/dashboard/tasks")
+    }
+
+    func testAnOverrideIsHonouredWhenItPointsAtThisMachine() {
+        let url = CerebrumTaskSource.defaultEndpoint(environment: ["SAGE_API_URL": "http://localhost:9999"])
+        XCTAssertEqual(url.absoluteString, "http://localhost:9999/v1/dashboard/tasks")
+    }
+
+    /// A task board fetched from somewhere else on the network would be another
+    /// person's life rendered as the owner's. The override is ignored rather
+    /// than obeyed, and the tricks that beat a naive host check — a lookalike
+    /// subdomain, an embedded credential, the integer form — are all rejected by
+    /// `LoopbackSecurity`.
+    func testAnOverridePointingOffThisMachineIsIgnored() {
+        for hostile in ["http://192.168.1.9:8080", "http://127.0.0.1.evil.com",
+                        "http://127.0.0.1@evil.com", "http://2130706433", "https://example.com"] {
+            let url = CerebrumTaskSource.defaultEndpoint(environment: ["SAGE_API_URL": hostile])
+            XCTAssertEqual(
+                url.absoluteString,
+                "http://127.0.0.1:8080/v1/dashboard/tasks",
+                "\(hostile) was accepted as the task feed"
+            )
+        }
+    }
+
+    /// The backend clamps anything larger, so asking for more would be a number
+    /// in the source that the node quietly disagrees with.
+    func testTheCardLimitIsTheBackendsOwnMaximum() {
+        XCTAssertEqual(CerebrumTaskSource.maximumCards, 500)
     }
 }
 
@@ -249,7 +332,7 @@ final class TaskBoardModelTests: XCTestCase {
     }
 
     /// And with nothing ever read, there is no board to show — so the screen
-    /// must say why rather than draw three empty columns.
+    /// must say why rather than draw four empty columns.
     func testAFailureWithNothingReadYetLeavesNoBoardToMisread() async {
         let source = ScriptedTaskSource(results: [.failure(TaskSourceFailure.unreachable)])
         let model = TaskBoardModel(source: source)
@@ -258,6 +341,31 @@ final class TaskBoardModelTests: XCTestCase {
 
         XCTAssertNil(model.board)
         XCTAssertEqual(model.trouble, TaskBoardTrouble.cannotReach)
+    }
+
+    /// An encrypted node answers an unsigned local read with `401
+    /// {"login_required":true}` — verified against the owner's own node, which
+    /// holds 34 tasks. If this ever resolves to an empty board rather than a
+    /// locked one, the app tells somebody with a full plate that their life is
+    /// empty because a vault is shut.
+    func testALockedNodeIsALockedNodeAndNeverAnEmptyPlate() async {
+        let model = TaskBoardModel(source: ScriptedTaskSource(results: [.failure(TaskSourceFailure.locked)]))
+
+        await model.refresh()
+
+        XCTAssertNil(model.board, "a locked node produced a board")
+        XCTAssertEqual(model.trouble, TaskBoardTrouble.locked)
+    }
+
+    /// And the words have to hold the line too. "Nothing planned" is what the
+    /// columns say; the locked sentence must contradict it, not echo it.
+    func testTheLockedSentenceSaysTheTasksAreStillThere() {
+        let said = (TaskBoardTrouble.locked.headline + " " + TaskBoardTrouble.locked.explanation)
+        XCTAssertTrue(said.lowercased().contains("still there"))
+        XCTAssertTrue(TaskBoardTrouble.locked.canRetry, "a node the owner can unlock offers no retry")
+        for lie in ["no tasks", "nothing on", "empty", "you have none"] {
+            XCTAssertFalse(said.lowercased().contains(lie), "the locked sentence says \"\(lie)\"")
+        }
     }
 
     /// An empty plate is not a failure and must carry no trouble with it.
@@ -286,17 +394,35 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(model.board?.planned.count, 1)
     }
 
-    /// A missing node is a different sentence from a node that will not answer:
-    /// one of them tells the owner to reinstall, the other to wait a moment.
+    /// A missing node is a different sentence from a node that will not answer,
+    /// and both are different from one that is merely locked: they send the
+    /// owner to reinstall, to wait, and to their passphrase respectively.
     func testEachFailureKeepsItsOwnSentence() async {
         for (failure, expected) in [
             (TaskSourceFailure.notInstalled, TaskBoardTrouble.notInstalled),
             (TaskSourceFailure.unreadable, TaskBoardTrouble.cannotRead),
-            (TaskSourceFailure.unreachable, TaskBoardTrouble.cannotReach)
+            (TaskSourceFailure.unreachable, TaskBoardTrouble.cannotReach),
+            (TaskSourceFailure.locked, TaskBoardTrouble.locked),
+            (TaskSourceFailure.refused, TaskBoardTrouble.refused)
         ] {
             let model = TaskBoardModel(source: ScriptedTaskSource(results: [.failure(failure)]))
             await model.refresh()
             XCTAssertEqual(model.trouble, expected)
+        }
+    }
+
+    /// Every failure sentence, held to the same standard as the locked one: none
+    /// of them may leave an owner thinking their tasks are gone.
+    func testNoFailureSentenceClaimsTheWorkIsGone() {
+        let all = [
+            TaskBoardTrouble.locked, TaskBoardTrouble.cannotReach, TaskBoardTrouble.cannotRead,
+            TaskBoardTrouble.refused, TaskBoardTrouble.notInstalled
+        ]
+        for trouble in all {
+            let said = (trouble.headline + " " + trouble.explanation).lowercased()
+            for lie in ["no tasks", "you have none", "nothing left", "list is empty"] {
+                XCTAssertFalse(said.contains(lie), "\"\(trouble.headline)\" says \"\(lie)\"")
+            }
         }
     }
 

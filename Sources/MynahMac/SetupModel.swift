@@ -19,11 +19,19 @@ final class SetupModel {
     /// so a brand-new user's opening screen is a demand to install a consensus
     /// node. Readiness here only decides whether a stage can be skipped, never
     /// which stage comes first.
+    ///
+    /// **There is no phone stage, and its removal is the point.** Linking a
+    /// phone was the fourth of five screens, which made an optional add-on look
+    /// like a step of installing the product — and it is the step most likely to
+    /// fail, because it needs a second device, a working camera and a QR code
+    /// that expires. Gating a Mac app that has a working conversation, a board
+    /// and a memory on a phone scan is asking someone to prove they own a phone
+    /// before they may use their computer. It is offered on the Ready screen and
+    /// lives in Settings, where anything optional belongs.
     enum Stage: Int, CaseIterable {
         case welcome
         case brain
         case key
-        case phone
         case ready
 
         var title: String {
@@ -31,7 +39,6 @@ final class SetupModel {
             case .welcome: return "Welcome"
             case .brain: return "Brain"
             case .key: return "Connect"
-            case .phone: return "Phone"
             case .ready: return "Ready"
             }
         }
@@ -165,11 +172,6 @@ final class SetupModel {
                 && localBrainPhase?.isFinished != false
         case .key:
             return !keyState.isBlocking
-        case .phone:
-            // The phone is optional by design, so this stage never blocks. Which
-            // button ends it — "Not now" or a completed link — is
-            // `SignalLinkStage`'s business, and both call `advance()`.
-            return true
         case .ready:
             return false
         }
@@ -198,10 +200,8 @@ final class SetupModel {
             // no screen that could satisfy either.
             guard option.requirement == .nothing else { return }
             keyState = .notNeeded
-            stage = .phone
+            stage = .ready
         case .key:
-            stage = .phone
-        case .phone:
             stage = .ready
         case .ready:
             break
@@ -254,7 +254,7 @@ final class SetupModel {
     /// button called it and did nothing.
     func skipKey() {
         guard stage == .key else { return }
-        stage = .phone
+        stage = .ready
     }
 
     // MARK: Key

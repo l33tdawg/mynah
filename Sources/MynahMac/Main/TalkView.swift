@@ -141,7 +141,6 @@ struct TalkView: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
             Spacer(minLength: s5)
-            if canClear { clearControl }
         }
         .padding(.horizontal, s8)
         .padding(.vertical, s5)
@@ -152,11 +151,18 @@ struct TalkView: View {
 
     /// The button, and the one thing the owner needs to know before pressing it.
     ///
-    /// Said here rather than in a confirmation sheet. What is on screen looks
-    /// exactly like their phone's conversation, so "clear" invites precisely the
-    /// fear it should answer — and an app that could delete a person's chat
-    /// history because they tidied a window would deserve it. This one cannot:
-    /// it empties its own record and never writes to the messages.
+    /// **It used to sit in the health line at the top of the window, above the
+    /// board, and say "Clear this window".** Both halves were wrong once the
+    /// board arrived. From up there it read as the control for the board
+    /// underneath it — the owner said so — and "this window" named the one thing
+    /// on screen it does not touch. It now sits on the conversation it clears,
+    /// and says which of the two things it is.
+    ///
+    /// The reassurance stays. What is on screen looks exactly like their phone's
+    /// conversation, so "clear" invites precisely the fear it should answer —
+    /// and an app that could delete a person's chat history because they tidied
+    /// a window would deserve it. This one cannot: it empties its own record and
+    /// never writes to the messages.
     ///
     /// The sentence is dropped, not truncated, when the window is too narrow for
     /// it. Half a promise is worse than none, and the hint below keeps it for
@@ -178,9 +184,12 @@ struct TalkView: View {
             .lineLimit(1)
     }
 
+    /// Names the thing it clears. "This window" was ambiguous the moment the
+    /// window held two things.
     private var clearButton: some View {
-        MynahButton("Clear this window", kind: .quiet) { clearWindow() }
-            .accessibilityHint("Clears this window only. Your phone keeps the conversation.")
+        MynahButton("Clear the conversation", kind: .quiet) { clearWindow() }
+            .accessibilityHint("Clears the conversation shown here. "
+                + "Your phone keeps it, and your tasks are untouched.")
     }
 
     /// Both halves of what is on screen: the turns typed here, and the window's
@@ -213,7 +222,24 @@ struct TalkView: View {
         if mirror.messages.isEmpty && model.exchanges.isEmpty {
             emptyState
         } else {
-            transcript
+            VStack(spacing: 0) {
+                // The conversation's own heading, and the home of its Clear.
+                // Two things share this window now, and the only way an owner
+                // can tell which control belongs to which is for the control to
+                // sit on it and say its name.
+                HStack(spacing: s3) {
+                    Text("Conversation")
+                        .mynahFont(.title3)
+                        .foregroundStyle(Palette.ink.primary)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: s5)
+                    if canClear { clearControl }
+                }
+                .padding(.horizontal, s8)
+                .padding(.top, s4)
+                .padding(.bottom, s2)
+                transcript
+            }
         }
     }
 
@@ -980,10 +1006,35 @@ private enum TalkPreviewFixtures {
                         progress: .inProgress,
                         domain: "house",
                         carrier: .pickedUpBy("kimi-cli/errands"),
+                        author: "claude-code",
                         createdAt: Date(timeIntervalSinceNow: -3_600)
                     )
                 ],
-                done: nil
+                // Finished and abandoned work, both inside the seven-day window
+                // so the preview shows the board an owner actually has rather
+                // than the one that survives the cut.
+                done: [
+                    BoardTask(
+                        id: "4",
+                        title: "Book the car in for its service",
+                        progress: .done,
+                        domain: "house",
+                        carrier: .completedBy("claude-code/sage"),
+                        createdAt: Date(timeIntervalSinceNow: -400_000),
+                        statusChangedAt: Date(timeIntervalSinceNow: -172_800)
+                    )
+                ],
+                dropped: [
+                    BoardTask(
+                        id: "5",
+                        title: "Look into moving the broadband to the other provider",
+                        progress: .dropped,
+                        domain: "house",
+                        carrier: .droppedBy("claude-code/sage"),
+                        createdAt: Date(timeIntervalSinceNow: -500_000),
+                        statusChangedAt: Date(timeIntervalSinceNow: -259_200)
+                    )
+                ]
             )
         )
     }

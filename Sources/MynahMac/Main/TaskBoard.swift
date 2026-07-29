@@ -10,7 +10,7 @@ private let boardLog = Logger(subsystem: "com.sage.mynah", category: "board")
 /// One task, as the board draws it.
 ///
 /// Every field here is something the node actually publishes. There is no
-/// priority, no due date and no estimate, because `sage_backlog` returns none of
+/// priority, no due date and no estimate, because the task feed returns none of
 /// those and a board that invents them is a board nobody can trust twice.
 struct BoardTask: Identifiable, Equatable, Sendable {
 
@@ -21,10 +21,18 @@ struct BoardTask: Identifiable, Equatable, Sendable {
         case pickedUpBy(String)
         /// The node says this is not this appliance's work at all.
         case assignedTo(String)
+        /// The agent that carried it to `done`. Terminal transitions keep the
+        /// assignee as attribution rather than clearing it, which is what makes
+        /// "Completed by" a fact rather than a guess.
+        case completedBy(String)
+        /// The same, for work that was abandoned.
+        case droppedBy(String)
 
         var agent: String {
             switch self {
-            case .pickedUpBy(let agent), .assignedTo(let agent): return agent
+            case .pickedUpBy(let agent), .assignedTo(let agent),
+                 .completedBy(let agent), .droppedBy(let agent):
+                return agent
             }
         }
     }
@@ -32,81 +40,129 @@ struct BoardTask: Identifiable, Equatable, Sendable {
     /// The workflow the node really runs.
     ///
     /// Not a shape invented for the screen: tasks carry `planned`,
-    /// `in_progress`, `done` and `dropped`, new ones enter as `planned`, and a
-    /// task only reaches `in_progress` once it has an owner. Three of those are
-    /// columns. `dropped` is not — see `TaskBoard`.
-    enum Progress: Equatable, Sendable {
+    /// `in_progress`, `done` and `dropped`. All four are columns — an earlier
+    /// version of this file dropped abandoned work on the grounds that "a column
+    /// of things the owner gave up on is a monument", which was a reasonable
+    /// opinion about a board and the wrong call about *this* board. CEREBRUM
+    /// shows four, this shows the same four, and an owner comparing the two must
+    /// not find work in one that is missing from the other.
+    enum Progress: String, Equatable, Sendable, CaseIterable {
         case planned
         case inProgress
         case done
+        case dropped
 
+        /// `nil` for anything the node did not label, which is a real case and
+        /// not an error: rows written by older versions come back with an
+        /// **empty** status because SAGE deliberately does not guess whether
+        /// unknown work is planned or finished. Neither does this. They go to
+        /// `TaskBoard.unclassified` and are counted, never quietly filed under
+        /// Planned to make the board look tidy.
         init?(nodeStatus: String) {
             switch nodeStatus {
             case "planned": self = .planned
             case "in_progress": self = .inProgress
             case "done": self = .done
-            // `dropped`, and anything a later node version invents, is dropped
-            // rather than guessed at. A task filed under the wrong heading is
-            // worse than a task the board admits it did not show.
+            case "dropped": self = .dropped
             default: return nil
             }
         }
+
+        /// Work that has stopped moving, and is therefore subject to the
+        /// seven-day window.
+        var isTerminal: Bool { self == .done || self == .dropped }
     }
 
     /// The task's memory id, which is stable across reads.
     let id: String
     var title: String
-    var progress: Progress
+    /// `nil` when the node returned no status. See `Progress.init(nodeStatus:)`.
+    var progress: Progress?
     /// The domain the task was filed under. Shown because it is the only
     /// grouping the owner themselves chose.
     var domain: String?
-    /// Who is holding this, when that is not simply the appliance itself.
-    ///
-    /// The distinction the board must not lose: *which agent* is doing a thing
-    /// is a property of the task, not a column. A column of "sent to other
-    /// agents" would be a heading with nothing to populate it, since the node
-    /// hands this appliance only the work assigned to it.
+    /// Who is holding this, when that is worth saying.
     var carrier: Carrier?
+    /// Who wrote it down. Empty for a task the owner created themselves, which
+    /// is why the card says nothing rather than "unknown".
+    var author: String?
     var createdAt: Date?
+    /// When the task last changed status — *not* when it was written.
+    ///
+    /// The board's seven-day window for finished work is measured from this and
+    /// nothing else. A task created in March and finished yesterday is a card
+    /// the owner still wants to see; measured from `createdAt` it would already
+    /// be gone.
+    var statusChangedAt: Date?
+
+    /// The timestamp worth showing on the card: when it stopped, if it has
+    /// stopped, and otherwise when it started.
+    var shownAt: Date? {
+        (progress?.isTerminal == true ? statusChangedAt : nil) ?? createdAt
+    }
 }
 
-/// The three columns, and an honest hole where the fourth answer should be.
+/// The four columns, plus whatever the node could not label.
 struct TaskBoard: Equatable, Sendable {
     var planned: [BoardTask] = []
     var inProgress: [BoardTask] = []
+    var done: [BoardTask] = []
+    var dropped: [BoardTask] = []
 
-    /// Finished work — `nil` when nobody can say, which is not the same as `[]`.
+    /// Rows the node returned with no status at all.
     ///
-    /// It is `nil` today for a reason worth writing down rather than papering
-    /// over: `sage_backlog` returns *open* tasks only (planned and in-progress),
-    /// and the other tool that can list memories, `sage_list`, publishes a
-    /// memory's own status — proposed, committed, deprecated — and not the task
-    /// workflow status, so nothing it returns can tell a finished task from an
-    /// open one. Until something publishes them, the column says it cannot see
-    /// them. It never says there are none.
-    var done: [BoardTask]?
+    /// Not a column. These are historical rows whose writer never persisted a
+    /// status, and the node hands them over unlabelled precisely so that a human
+    /// can decide. Mynah cannot decide for them and does not try; the board says
+    /// how many there are and leaves it there.
+    var unclassified: [BoardTask] = []
+
+    /// How long a finished or abandoned card stays on the board.
+    ///
+    /// Seven days from the terminal transition, which is what CEREBRUM does with
+    /// the same field. Matching it is the point: two boards over the same node
+    /// showing different amounts of finished work is how an owner stops
+    /// believing either.
+    static let terminalWindow: TimeInterval = 7 * 24 * 60 * 60
 
     var isEmpty: Bool {
-        planned.isEmpty && inProgress.isEmpty && (done?.isEmpty ?? true)
+        planned.isEmpty && inProgress.isEmpty && done.isEmpty
+            && dropped.isEmpty && unclassified.isEmpty
+    }
+
+    /// Terminal cards from the last seven days, or all of them.
+    func recent(_ tasks: [BoardTask], showingAll: Bool, now: Date = Date()) -> [BoardTask] {
+        guard !showingAll else { return tasks }
+        return tasks.filter { task in
+            // No timestamp means the node could not say when it finished. Kept
+            // rather than hidden: disappearing a card because a field was blank
+            // is the board losing work on a technicality.
+            guard let changed = task.statusChangedAt else { return true }
+            return now.timeIntervalSince(changed) <= Self.terminalWindow
+        }
+    }
+
+    /// How many finished cards the window is currently holding back, so "Show
+    /// all" can say what it would reveal instead of being a mystery switch.
+    func olderThanWindow(now: Date = Date()) -> Int {
+        let terminal = done + dropped
+        return terminal.count - recent(terminal, showingAll: false, now: now).count
     }
 
     /// Splits what the node returned into columns.
-    ///
-    /// `dropped` tasks never arrive here — the backlog is open work — and if one
-    /// ever did, `Progress` drops it. That is the decision: abandoned work is
-    /// not shown at all rather than given a column of its own. A column of
-    /// things the owner gave up on is a monument, and nobody asked for one.
     static func from(rows: [BoardTask]) -> TaskBoard {
-        // Newest first, so a task the owner just asked for is at the top of the
-        // column where they will look for it. The node returns no ordering of
-        // its own beyond the domain grouping.
+        // Newest first within a column. For open work that is when it was
+        // asked for; for finished work it is when it finished, which is the
+        // order somebody scanning "what got done" actually wants.
         let ordered = rows.sorted { first, second in
-            (first.createdAt ?? .distantPast) > (second.createdAt ?? .distantPast)
+            (first.shownAt ?? .distantPast) > (second.shownAt ?? .distantPast)
         }
         return TaskBoard(
             planned: ordered.filter { $0.progress == .planned },
             inProgress: ordered.filter { $0.progress == .inProgress },
-            done: nil
+            done: ordered.filter { $0.progress == .done },
+            dropped: ordered.filter { $0.progress == .dropped },
+            unclassified: ordered.filter { $0.progress == nil }
         )
     }
 }
@@ -129,6 +185,19 @@ protocol TaskSource: Sendable {
 /// failures the conversation has.
 enum TaskBoardTrouble {
 
+    /// The one that must never be mistaken for an empty plate.
+    ///
+    /// An encrypted node answers an unsigned local read with `401
+    /// {"login_required":true}` — verified against the owner's own node. Every
+    /// word of this is chosen so that a person with thirty-four open tasks and a
+    /// locked vault cannot read it as "you have nothing on".
+    static let locked = Exchange.Failure(
+        headline: "Your SAGE node is locked.",
+        explanation: "Your tasks are all still there — Mynah just can't read them until the "
+            + "node is unlocked. Unlock it in CEREBRUM and this fills in.",
+        canRetry: true
+    )
+
     static let cannotReach = Exchange.Failure(
         headline: "Mynah can't reach your list.",
         explanation: "It couldn't get to what keeps your tasks. Try again in a moment — "
@@ -142,89 +211,131 @@ enum TaskBoardTrouble {
         canRetry: true
     )
 
+    /// The node answered and refused. In practice this means the request was
+    /// signed, which this reader deliberately never does — see
+    /// `CerebrumTaskSource`.
+    static let refused = Exchange.Failure(
+        headline: "Your node wouldn't show Mynah the board.",
+        explanation: "Your tasks are unaffected. Quit Mynah and open it again; if it keeps "
+            + "happening, the board is still in CEREBRUM.",
+        canRetry: true
+    )
+
+    /// **No reinstall suggestion, and that is deliberate.**
+    ///
+    /// A reinstall is the instinctive fix and it is the one thing that cannot
+    /// work: the appliance's key lives in Application Support, which macOS does
+    /// not remove when an app is trashed, so the same identity comes back with
+    /// the same registration and the same capability mask. Telling somebody to
+    /// reinstall would send them through the whole ritual to arrive exactly
+    /// where they started, and conclude the product is broken beyond fixing.
     static let notInstalled = Exchange.Failure(
         headline: "Mynah can't find what it remembers.",
-        explanation: "Quit Mynah and open it again. If that doesn't help, install it once more.",
+        explanation: "Quit Mynah and open it again. If your list is still missing after that, "
+            + "send the diagnostics from Settings — this one needs a look rather than a retry.",
         isSevere: true
     )
 }
 
-/// Reads the owner's open tasks from the memory node bundled in this app.
+/// Reads the same board CEREBRUM draws.
 ///
-/// The same shape as `SageMemoryStore` and for the same reasons: one long-lived
-/// `MCPClient`, because the child process runs a handshake that takes seconds,
-/// and `MynahIdentity` for the signature, because the backlog is *per agent* —
-/// signing as anything else would return a different appliance's plate.
+/// **Why this is HTTP and not the MCP tool it used to be.** The previous version
+/// called `sage_backlog`, which returns "open tasks *explicitly assigned to the
+/// signed agent ID*" — so it could only ever return work assigned to Mynah
+/// itself. Nothing was, which is why a node holding 6 planned, 7 in progress and
+/// 21 done rendered as two empty columns and a sentence blaming the node for not
+/// publishing finished work. The node published all of it; the tool was the
+/// wrong question. `GET /v1/dashboard/tasks?all=true` is the feed CEREBRUM reads
+/// and it returns all four statuses.
 ///
-/// Read-only, deliberately and for now. `sage_task` can move a task between
-/// statuses, which is a write into consensus on the owner's own node; a board
-/// that could be dragged would be doing that on a mis-click. Until that is
-/// somebody's considered decision, this type has no method that writes.
-actor SageTaskSource: TaskSource {
+/// **This request is deliberately unsigned.** The full board is gated on being a
+/// local CEREBRUM read; a signed agent identity is answered `403` and told to
+/// use the scoped backlog. So attaching Mynah's identity here would not get more
+/// access, it would get less. On an unencrypted node the unsigned local read
+/// passes; on an encrypted one it is answered `401 {"login_required":true}`,
+/// which becomes `TaskBoardTrouble.locked` and never an empty board.
+///
+/// Read-only, and not merely "for now": every mutation on this surface —
+/// reorder, assign, change status — requires operator authority this process
+/// does not have and cannot obtain by asking nicely. A card that could be
+/// dragged would be a control that fails, which is worse than no control.
+actor CerebrumTaskSource: TaskSource {
 
-    static let shared = SageTaskSource()
+    static let shared = CerebrumTaskSource()
 
-    private var client: MCPClient?
+    /// The backend's own maximum. Asking for more is silently clamped, so this
+    /// is the honest number rather than an optimistic one.
+    static let maximumCards = 500
 
-    private static var executableURL: URL? {
-        EnvironmentProbe.defaultSageBundleExecutables.first {
-            FileManager.default.isExecutableFile(atPath: $0.path)
-        }
+    private let endpoint: URL
+    private let session: URLSession
+
+    init(endpoint: URL? = nil, timeout: TimeInterval = 15) {
+        self.endpoint = endpoint ?? Self.defaultEndpoint()
+        // The shared loopback session: no cookies, no credentials, no caching,
+        // and a hard refusal to follow a redirect off the loopback interface.
+        self.session = LoopbackSecurity.makeSession(timeout: timeout)
     }
 
-    private func connection() throws -> MCPClient {
-        if let client { return client }
-        guard let executable = Self.executableURL else { throw TaskSourceFailure.notInstalled }
-        // The same identity every other spawn site uses. Signing as anything
-        // else returns a different agent's backlog — which would look like a
-        // working board and be somebody else's work.
-        let environment = ["SAGE_IDENTITY_PATH": MynahIdentity.resolvedKeyPath()]
-        // 30s, matching the memories screen. A list that has not answered in
-        // half a minute has failed, and the board owes the owner a sentence
-        // rather than another minute of nothing.
-        let made = MCPClient(
-            executableURL: executable,
-            arguments: ["mcp"],
-            environment: environment,
-            requestTimeoutSeconds: 30
-        )
-        client = made
-        return made
+    /// `127.0.0.1:8080` is the shipped REST default. `SAGE_API_URL` overrides it
+    /// for anyone running the node somewhere else, and is ignored unless it
+    /// points at this machine — a task board fetched from a stranger's node
+    /// would be somebody else's life rendered as the owner's.
+    static func defaultEndpoint(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        let fallback = URL(string: "http://127.0.0.1:8080")!
+        let configured = environment["SAGE_API_URL"].flatMap(URL.init(string:))
+        let base = LoopbackSecurity.isLoopback(configured) ? (configured ?? fallback) : fallback
+        return base.appendingPathComponent("v1/dashboard/tasks")
     }
 
-    /// Drops a dead child so the next attempt starts a fresh one. A retained
-    /// dead client answers every later request with the same failure forever.
-    private func reset() {
-        client?.stop()
-        client = nil
+    private var request: URLRequest {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "all", value: "true"),
+            URLQueryItem(name: "limit", value: String(Self.maximumCards))
+        ]
+        var request = URLRequest(url: components?.url ?? endpoint)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
     }
 
     func board() async throws -> TaskBoard {
-        let client = try connection()
-        let text: String
+        let request = self.request
+        guard let url = request.url else { throw TaskSourceFailure.unreachable }
         do {
-            // No arguments: `domain` would filter, and the whole point of this
-            // screen is everything on the plate at once.
-            text = try await client.call(name: "sage_backlog", arguments: [:])
-        } catch let error as MCPClientError {
-            boardLog.error("sage_backlog failed: \(String(describing: error), privacy: .public)")
-            switch error {
-            case .missingExecutable:
-                throw TaskSourceFailure.notInstalled
-            case .toolFailed, .rpcError, .malformedResponse:
-                throw TaskSourceFailure.unreadable
-            case .launchFailed, .notStarted, .serverExited, .timedOut:
-                reset()
-                throw TaskSourceFailure.unreachable
-            }
+            try LoopbackSecurity.requireLoopback(url)
         } catch {
-            boardLog.error("sage_backlog failed: \(String(describing: error), privacy: .public)")
-            reset()
+            boardLog.error("task board endpoint is not loopback")
             throw TaskSourceFailure.unreachable
         }
 
-        guard let board = TaskBoardReading.board(fromToolText: text) else {
-            boardLog.error("sage_backlog returned text with no readable payload")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            boardLog.error("task board fetch failed: \(String(describing: error), privacy: .public)")
+            throw TaskSourceFailure.unreachable
+        }
+
+        guard let http = response as? HTTPURLResponse else { throw TaskSourceFailure.unreadable }
+        switch http.statusCode {
+        case 200:
+            break
+        case 401:
+            throw TaskSourceFailure.locked
+        case 403:
+            throw TaskSourceFailure.refused
+        default:
+            boardLog.error("task board returned \(http.statusCode, privacy: .public)")
+            throw TaskSourceFailure.unreachable
+        }
+
+        guard let board = TaskBoardReading.board(fromResponse: data) else {
+            boardLog.error("task board returned a body with no readable tasks array")
             throw TaskSourceFailure.unreadable
         }
         return board
@@ -235,66 +346,68 @@ enum TaskSourceFailure: Error, Equatable {
     case notInstalled
     case unreachable
     case unreadable
+    case locked
+    case refused
 
     var failure: Exchange.Failure {
         switch self {
         case .notInstalled: return TaskBoardTrouble.notInstalled
         case .unreachable: return TaskBoardTrouble.cannotReach
         case .unreadable: return TaskBoardTrouble.cannotRead
+        case .locked: return TaskBoardTrouble.locked
+        case .refused: return TaskBoardTrouble.refused
         }
     }
 }
 
 // MARK: - Reading what the node said
 
-/// Turning `sage_backlog`'s reply into columns.
+/// Turning the task feed's reply into columns.
 ///
 /// Its own type so it can be tested against real payloads without a node: this
 /// is the seam where a change at the other end becomes a wrong board, and it is
 /// much easier to be sure of here than through a screenshot.
 enum TaskBoardReading {
 
-    /// The node's reply, which is not always bare JSON — a first call in a
-    /// session carries a plain-text banner meant for an AI agent. The brace
-    /// matcher that survives it already exists on the memories screen and is
-    /// reused rather than written twice.
-    static func board(fromToolText text: String) -> TaskBoard? {
-        guard let payload = SageMemoryStore.embeddedObject(in: text) else { return nil }
+    /// `{"tasks":[…],"total":N}`, as `handleGetTasks` writes it.
+    static func board(fromResponse data: Data) -> TaskBoard? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        guard let payload = JSONValue.parse(text) ?? SageMemoryStore.embeddedObject(in: text) else {
+            return nil
+        }
         return board(from: payload)
     }
 
     static func board(from payload: JSONValue) -> TaskBoard? {
-        // `tasks_by_domain` is the documented shape. Its absence means something
-        // other than an empty plate — an error object, or a tool that changed —
-        // and the board must say it could not read rather than draw nothing.
-        guard let byDomain = payload["tasks_by_domain"]?.objectValue else { return nil }
-
-        var rows: [BoardTask] = []
-        for (domain, entries) in byDomain {
-            for entry in entries.arrayValue ?? [] {
-                guard let task = self.task(from: entry, domain: domain) else { continue }
-                rows.append(task)
-            }
-        }
-        return TaskBoard.from(rows: rows)
+        // The absence of the array means something other than an empty plate —
+        // an error object, or a feed that changed — and the board must say it
+        // could not read rather than draw nothing.
+        guard let entries = payload["tasks"]?.arrayValue else { return nil }
+        return TaskBoard.from(rows: entries.compactMap(task(from:)))
     }
 
-    static func task(from entry: JSONValue, domain: String?) -> BoardTask? {
+    static func task(from entry: JSONValue) -> BoardTask? {
         guard let id = entry["memory_id"]?.stringValue, !id.isEmpty,
-              let content = entry["content"]?.stringValue,
-              let status = entry["task_status"]?.stringValue,
-              let progress = BoardTask.Progress(nodeStatus: status) else { return nil }
+              let content = entry["content"]?.stringValue else { return nil }
 
         let title = strippingTaskMarker(content)
         guard !title.isEmpty else { return nil }
+
+        // A missing or empty `task_status` is the unclassified case and stays
+        // `nil` all the way to the board. Defaulting it here would be the guess
+        // the node refused to make.
+        let progress = (entry["task_status"]?.stringValue).flatMap(BoardTask.Progress.init(nodeStatus:))
+        let domain = entry["domain_tag"]?.stringValue
 
         return BoardTask(
             id: id,
             title: title,
             progress: progress,
             domain: (domain?.isEmpty == false) ? domain : nil,
-            carrier: carrier(in: entry),
-            createdAt: SageMemoryStore.date(from: entry["created_at"]?.stringValue)
+            carrier: carrier(in: entry, progress: progress),
+            author: author(in: entry),
+            createdAt: SageMemoryStore.date(from: entry["created_at"]?.stringValue),
+            statusChangedAt: SageMemoryStore.date(from: entry["task_status_updated_at"]?.stringValue)
         )
     }
 
@@ -313,19 +426,35 @@ enum TaskBoardReading {
 
     /// Whose hands the task is in, when that is worth saying.
     ///
-    /// Silent in the ordinary case. Every row the backlog returns is assigned to
-    /// this appliance, so naming it on every card would be noise; what is worth
-    /// showing is the exception — another agent has picked the work up, or the
-    /// node says it is not this appliance's after all.
-    static func carrier(in entry: JSONValue) -> BoardTask.Carrier? {
+    /// Terminal cards read differently from open ones, and the node's own words
+    /// for that are "Completed by" and "Dropped by": a finished task keeps its
+    /// assignee purely as attribution, so naming them is reporting rather than
+    /// implying anyone is still working on it.
+    static func carrier(in entry: JSONValue, progress: BoardTask.Progress?) -> BoardTask.Carrier? {
         let assignee = entry["assignee"]?.stringValue
-        if let pickedUpBy = entry["task_picked_up_by"]?.stringValue,
-           !pickedUpBy.isEmpty,
-           pickedUpBy != assignee {
+        let pickedUpBy = entry["task_picked_up_by"]?.stringValue
+
+        if progress?.isTerminal == true {
+            guard let who = [assignee, pickedUpBy].compactMap({ $0 }).first(where: { !$0.isEmpty }) else {
+                return nil
+            }
+            return progress == .done ? .completedBy(who) : .droppedBy(who)
+        }
+        if let pickedUpBy, !pickedUpBy.isEmpty, pickedUpBy != assignee {
             return .pickedUpBy(pickedUpBy)
         }
-        if entry["assigned_to_you"]?.boolValue == false, let assignee, !assignee.isEmpty {
+        if let assignee, !assignee.isEmpty {
             return .assignedTo(assignee)
+        }
+        return nil
+    }
+
+    /// Who wrote the task down. Human-created tasks carry an empty provider, and
+    /// that absence is the signal — a card with no author is one the owner made,
+    /// and saying "you" on it would be noise.
+    static func author(in entry: JSONValue) -> String? {
+        for key in ["provider", "submitting_agent"] {
+            if let value = entry[key]?.stringValue, !value.isEmpty { return value }
         }
         return nil
     }
@@ -344,8 +473,8 @@ enum TaskBoardReading {
 final class TaskBoardModel {
 
     /// One per app, like the conversation and the mirror: the pane is destroyed
-    /// and rebuilt as the owner moves around, and the node connection behind
-    /// this must not be.
+    /// and rebuilt as the owner moves around, and the connection behind this
+    /// must not be.
     static let shared = TaskBoardModel()
 
     /// How often the plate is re-read while it is on screen.
@@ -360,9 +489,17 @@ final class TaskBoardModel {
     private(set) var board: TaskBoard?
     /// The most recent failure, or `nil` when the last read worked.
     private(set) var trouble: Exchange.Failure?
+
+    /// Whether finished work older than the seven-day window is on screen.
+    ///
+    /// View state, not a setting: it lasts as long as the owner is looking and
+    /// resets when they come back, which is the behaviour of a "show me the rest"
+    /// control rather than a preference they have to remember they changed.
+    var showsOlderFinished = false
+
     private let source: any TaskSource
 
-    init(source: any TaskSource = SageTaskSource.shared) {
+    init(source: any TaskSource = CerebrumTaskSource.shared) {
         self.source = source
     }
 

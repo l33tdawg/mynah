@@ -74,11 +74,40 @@ final class StageIllustrationTests: XCTestCase {
     /// The drawings are a story told across the setup flow, so a stage added to
     /// the flow without one leaves a hole in the middle of it — and the hole is
     /// a mark column that renders nothing.
-    func testThereIsOneDrawingForEverySetupStage() {
-        XCTAssertEqual(
+    ///
+    /// **This used to assert the two counts were equal, and they no longer are.**
+    /// Linking a phone came off the onboarding gate — it is an optional add-on
+    /// and it was the fourth of five screens — so the flow has four stages while
+    /// the drawings still number five. The fifth is not orphaned: `phone` is
+    /// what `SignalLinkStage` draws, and that screen still exists for anyone who
+    /// chooses it from Ready or from Settings. Equality was a proxy for "every
+    /// stage has a mark", and the proxy stopped being true before the thing it
+    /// stood for did.
+    func testEveryStageStillHasADrawingToStandIn() {
+        XCTAssertGreaterThanOrEqual(
             StageIllustration.Subject.allCases.count,
             SetupModel.Stage.allCases.count,
-            "the setup flow and the illustrations have drifted apart"
+            "there are fewer drawings than stages, so a stage renders an empty mark column"
+        )
+    }
+
+    /// The one that outlived the gate. If this ever goes, `SignalLinkStage`
+    /// renders `Image(systemName: "stage:phone")` — a blank column — and nobody
+    /// notices until they open the sheet.
+    func testThePhoneDrawingSurvivesComingOffTheGate() {
+        XCTAssertNotNil(StageIllustration.subject(named: StageIllustration.mark(.phone)))
+    }
+
+    /// Every drawing is still reachable from something. A subject nobody asks
+    /// for is dead weight that the next person has to work out the status of.
+    func testNoDrawingIsOrphaned() {
+        // `connect` is the `key` stage's mark — the names differ, which is
+        // exactly why this cannot be derived from `Stage` and is written out.
+        let claimed: Set<StageIllustration.Subject> = [.welcome, .brain, .connect, .ready, .phone]
+        XCTAssertEqual(
+            claimed,
+            Set(StageIllustration.Subject.allCases),
+            "a drawing exists that no screen asks for, or one is asked for and missing"
         )
     }
 }

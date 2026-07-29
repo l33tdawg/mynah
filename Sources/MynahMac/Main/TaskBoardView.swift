@@ -24,6 +24,9 @@ struct TaskBoardView: View {
             if let board = model.board {
                 if let trouble = model.trouble { staleNote(trouble) }
                 columns(board)
+                footnotes(board)
+                    .padding(.horizontal, s6)
+                    .padding(.bottom, s5)
             } else if let trouble = model.trouble {
                 // No board *and* a failure: the only state where the owner is
                 // told nothing about their tasks, so it has to say why rather
@@ -41,10 +44,23 @@ struct TaskBoardView: View {
 
     // MARK: Columns
 
+    /// Four columns, matching the four the node publishes and CEREBRUM draws.
+    ///
+    /// Each header is a glyph, a name and a count, and the glyph is where the
+    /// colour lives: `circle` for work not started, a filled ring for the thing
+    /// happening now, a tick for finished, a cross for abandoned. Colour is on
+    /// the mark rather than behind the column because a board is mostly cards,
+    /// and four tinted panels behind them would leave nowhere quiet to read.
+    ///
+    /// Only In progress takes the accent. `Palette.accent` reserves it for "the
+    /// one live thing", which on a board is exactly this column, and it is what
+    /// makes the eye land there rather than on finished work.
     private func columns(_ board: TaskBoard) -> some View {
         HStack(alignment: .top, spacing: 0) {
             BoardColumnView(
                 title: "Planned",
+                glyph: "circle",
+                tone: .neutral,
                 count: board.planned.count,
                 tasks: board.planned,
                 emptyLine: "Nothing planned."
@@ -52,6 +68,8 @@ struct TaskBoardView: View {
             columnRule
             BoardColumnView(
                 title: "In progress",
+                glyph: "circle.inset.filled",
+                tone: .accent,
                 count: board.inProgress.count,
                 tasks: board.inProgress,
                 emptyLine: "Nothing under way."
@@ -59,24 +77,71 @@ struct TaskBoardView: View {
             columnRule
             BoardColumnView(
                 title: "Done",
-                // No count when nothing can be counted. A "0" here would be the
-                // single most misleading character on the screen.
-                count: board.done?.count,
-                tasks: board.done ?? [],
-                emptyLine: doneLine(board),
+                glyph: "checkmark.circle",
+                tone: .good,
+                count: board.done.count,
+                tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
+                emptyLine: "Nothing finished yet.",
+                isHistory: true
+            )
+            columnRule
+            BoardColumnView(
+                title: "Dropped",
+                // A cross, not a warning triangle. Abandoning a task is a
+                // decision the owner made, not a fault, and this column should
+                // read as closed rather than as something needing attention —
+                // which is why it is `neutral` and not `critical`.
+                glyph: "xmark.circle",
+                tone: .neutral,
+                count: board.dropped.count,
+                tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
+                emptyLine: "Nothing dropped.",
                 isHistory: true
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// The two sentences this column has to keep apart. "Mynah cannot see them"
-    /// and "you have finished none" are different facts and only one of them is
-    /// true today.
-    private func doneLine(_ board: TaskBoard) -> String {
-        board.done == nil
-            ? "Mynah can't see finished tasks yet — it is only told about open ones."
-            : "Nothing finished yet."
+    /// The two lines under the board, and both are conditional.
+    ///
+    /// Finished and abandoned cards leave the board seven days after they stop
+    /// moving, which is what CEREBRUM does with the same timestamp. That is a
+    /// quiet, automatic thing, and it only needs saying at the moment it has
+    /// actually hidden something.
+    @ViewBuilder
+    private func footnotes(_ board: TaskBoard) -> some View {
+        let hidden = board.olderThanWindow()
+        if hidden > 0 || model.showsOlderFinished {
+            HStack(spacing: s4) {
+                MynahButton(
+                    model.showsOlderFinished ? "Show the last week only" : "Show all finished work",
+                    kind: .quiet
+                ) {
+                    model.showsOlderFinished.toggle()
+                }
+                if !model.showsOlderFinished {
+                    Text(hidden == 1
+                         ? "1 finished card is older than a week."
+                         : "\(hidden) finished cards are older than a week.")
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        if !board.unclassified.isEmpty {
+            // The node hands these over unlabelled on purpose — it will not
+            // guess whether old work is planned or finished, and neither will
+            // this. Naming the count is everything Mynah honestly can do; the
+            // deciding happens where the operator is.
+            Text(board.unclassified.count == 1
+                 ? "1 older task has no status recorded, so it isn't in a column. CEREBRUM can set it."
+                 : "\(board.unclassified.count) older tasks have no status recorded, so they aren't "
+                    + "in a column. CEREBRUM can set them.")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var columnRule: some View {
@@ -140,6 +205,10 @@ struct TaskBoardView: View {
 
 private struct BoardColumnView: View {
     let title: String
+    /// The column's mark, and the only coloured thing in its header.
+    let glyph: String
+    /// What this column means, in the app's existing state vocabulary.
+    var tone: MynahTone = .neutral
     /// `nil` when the column cannot be counted, which is not zero.
     let count: Int?
     let tasks: [BoardTask]
@@ -177,12 +246,17 @@ private struct BoardColumnView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: s3) {
+        HStack(alignment: .center, spacing: s3) {
+            Image(systemName: glyph)
+                .mynahIcon(.row)
+                .foregroundStyle(tone.ink)
             Text(title)
-                .mynahFont(.eyebrow)
-                .foregroundStyle(Palette.ink.secondary)
-                .accessibilityAddTraits(.isHeader)
+                .mynahFont(.title3)
+                .foregroundStyle(Palette.ink.primary)
             if let count {
+                // Grey, and outside the coloured mark. A number in the column's
+                // own colour reads as part of the state rather than as how many
+                // things are in it.
                 Text("\(count)")
                     .mynahFont(.mono)
                     .monospacedDigit()
@@ -190,6 +264,9 @@ private struct BoardColumnView: View {
             }
             Spacer(minLength: 0)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -222,44 +299,83 @@ private struct TaskCard: View {
         .accessibilityLabel(spokenLabel)
     }
 
-    private var hasFootnote: Bool { task.domain != nil || task.carrier != nil }
+    private var hasFootnote: Bool {
+        task.domain != nil || task.carrier != nil || task.author != nil || task.shownAt != nil
+    }
 
+    /// The tag, then who and when.
+    ///
+    /// **The domain tag is deliberately not colour-coded**, which is the one
+    /// place this board departs from CEREBRUM. In this app colour carries
+    /// meaning — `Palette.accent` is "the one live thing", `state.good` is "your
+    /// words stay here" — and a dozen domains each claiming a hue would leave
+    /// those two signals indistinguishable from filing. The tag earns its
+    /// separation from the shape it sits in instead.
     private var footnote: some View {
-        HStack(alignment: .firstTextBaseline, spacing: s3) {
-            if let domain = task.domain {
-                Text(domain)
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.secondary)
-            }
-            if let carrier = task.carrier {
-                if task.domain != nil {
-                    Text("·")
+        VStack(alignment: .leading, spacing: s2) {
+            HStack(spacing: s3) {
+                if let domain = task.domain {
+                    Text(domain)
                         .mynahFont(.label)
-                        .foregroundStyle(Palette.ink.quaternary)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, s3)
+                        .padding(.vertical, 1)
+                        .background(Palette.surface.well, in: RoundedRectangle.mynah(r.chip))
                 }
-                // The agent's own id, unprettified. There is no display-name
-                // mapping to be had from here, and a made-up friendly name for
-                // another agent would be worse than the true one.
-                Text(carrierLine(carrier))
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                if let when = task.shownAt {
+                    Text(when.formatted(.relative(presentation: .named)))
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .lineLimit(1)
+                }
+            }
+            if let line = attribution {
+                HStack(spacing: s2) {
+                    Image(systemName: "person.crop.circle")
+                        .mynahIcon(.inline)
+                        .foregroundStyle(Palette.ink.tertiary)
+                    // The agent's own id, unprettified. There is no display-name
+                    // mapping to be had from here, and a made-up friendly name
+                    // for another agent would be worse than the true one.
+                    Text(line)
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         }
+    }
+
+    /// Who is holding this, or — on a finished card — who finished it.
+    ///
+    /// Falls back to the author, because a card nobody was assigned still came
+    /// from somewhere. A card with neither says nothing: an empty author is how
+    /// the node reports a task the owner wrote themselves, and "created by you"
+    /// on every one of their own tasks is noise.
+    private var attribution: String? {
+        if let carrier = task.carrier { return carrierLine(carrier) }
+        return task.author.map { "From \($0)" }
     }
 
     private func carrierLine(_ carrier: BoardTask.Carrier) -> String {
         switch carrier {
         case .pickedUpBy(let agent): return "Picked up by \(agent)"
         case .assignedTo(let agent): return "Assigned to \(agent)"
+        // The node's own words for terminal attribution. It keeps the assignee
+        // on a finished task precisely so this can be said, and says it
+        // read-only — nobody is still working on this one.
+        case .completedBy(let agent): return "Completed by \(agent)"
+        case .droppedBy(let agent): return "Dropped by \(agent)"
         }
     }
 
     private var spokenLabel: String {
         var parts = [task.title]
         if let domain = task.domain { parts.append(domain) }
-        if let carrier = task.carrier { parts.append(carrierLine(carrier)) }
+        if let line = attribution { parts.append(line) }
         return parts.joined(separator: ". ")
     }
 }

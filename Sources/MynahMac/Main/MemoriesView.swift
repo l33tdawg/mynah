@@ -90,6 +90,9 @@ enum MemoryTrouble: Error, Equatable, Sendable {
     case unreachable
     /// It answered, and refused.
     case refused
+    /// The store is there and shut. Distinct from `refused` because the owner
+    /// can do something about this one and the fix is not "quit and reopen".
+    case locked
     /// It answered with something this app could not read.
     case unreadable
 
@@ -98,11 +101,13 @@ enum MemoryTrouble: Error, Equatable, Sendable {
         case .notSetUp: return "Mynah hasn't got a memory on this Mac yet."
         case .unreachable: return "Mynah can't get to what it remembers."
         case .refused: return "Mynah wouldn't open its memory."
+        case .locked: return "Your SAGE node is locked."
         case .unreadable: return "Mynah's memory answered with something unexpected."
         }
     }
 
-    /// Every one of these names a verb the owner can perform.
+    /// Every one of these names a verb the owner can perform, and none of them
+    /// says the memories are gone.
     var explanation: String {
         switch self {
         case .notSetUp:
@@ -111,10 +116,33 @@ enum MemoryTrouble: Error, Equatable, Sendable {
         case .unreachable:
             return "It may still be starting up. Give it a moment and try again."
         case .refused:
-            return "Quit Mynah and open it again. If that doesn't help, set it up again."
+            // Not "set it up again", and not "reinstall". The appliance's key
+            // survives both — it lives in Application Support, which macOS keeps
+            // when an app is trashed — so the same identity comes back with the
+            // same registration. Sending somebody round that loop costs them an
+            // afternoon and leaves them exactly where they started.
+            return "Quit Mynah and open it again. If it still won't open, send the diagnostics "
+                + "from Settings — nothing you have told it is affected."
+        case .locked:
+            return "Everything Mynah remembers is still there — it just can't read any of it "
+                + "until the node is unlocked. Unlock it in CEREBRUM and this fills in."
         case .unreadable:
             return "Try again. If it keeps happening, quit Mynah and open it again."
         }
+    }
+
+    /// Which refusal this is, read from the node's own words.
+    ///
+    /// The MCP transport hands back one error for "the tool said no" regardless
+    /// of why, so the only signal available is the message. A locked vault says
+    /// so; everything else keeps `refused`, which is the safe direction — an
+    /// owner told to quit and reopen when the real problem was a passphrase
+    /// tries the wrong fix once, whereas an owner told to unlock a node that is
+    /// not locked is sent looking for a passphrase that does not exist.
+    static func reading(refusal detail: String?) -> MemoryTrouble {
+        let said = (detail ?? "").lowercased()
+        let locked = ["login_required", "unlock", "locked", "vault is sealed", "sealed"]
+        return locked.contains(where: said.contains) ? .locked : .refused
     }
 }
 
@@ -153,28 +181,47 @@ actor SageMemoryStore: MemoryStoring {
 
     private var client: MCPClient?
 
-    /// The identity this screen signs as.
+    /// The identity this screen signs as — the appliance's, and nobody else's.
     ///
-    /// It used to resolve to `$SAGE_HOME/agent.key` — the *node operator* key —
-    /// because pinning was needed (a GUI app's working directory is `/`, so the
-    /// node's per-directory rule mints an identity with none of the owner's
-    /// memories in it) and the operator key was the only one that could see
-    /// anything. Correct diagnosis, wrong key: it made every browse sign with
-    /// the highest privilege on the machine.
+    /// **This screen spent its whole life querying the node as an agent that
+    /// does not exist, and it is worth writing down exactly how.** It resolved
+    /// through `MynahIdentity.resolvedKeyPath()`, which returns `keyURL()` →
+    /// `agent.key`. That file derives to agent `17641c48…`, and `17641c48` is
+    /// not on the node's roster at all. The appliance is `74140c2d…`, which
+    /// comes from `applianceKeyURL()` → `appliance-agent.key`. So every browse
+    /// asked "what does this ghost remember?", the honest answer was "nothing",
+    /// and the screen drew an empty list — an independent second cause of the
+    /// empty Memories screen, on top of the capability mask.
     ///
-    /// `MynahIdentity` is now the single answer for the whole app, and it
-    /// refuses to be the operator. See its doc comment for what that costs.
-    private static var identityPath: String? {
-        MynahIdentity.resolvedKeyPath()
+    /// The comment that used to sit here said `MynahIdentity` was "the single
+    /// answer for the whole app". That belief is what caused this: there are two
+    /// key files in the appliance's support directory, and since "one appliance
+    /// is one agent" the window signs as the appliance while `agent.key` is a
+    /// leftover. `applianceEnvironment()` is the single answer, it is what
+    /// `ConversationModel` and `sage-voiced` already spawn with, and it carries
+    /// the key migration those two depend on.
+    private static var identityEnvironment: [String: String] {
+        MynahIdentity.applianceEnvironment()
     }
 
-    /// The node bundled in this app first, then the machine-wide installs — the
-    /// same order the setup probe uses, so the app and the screen can never
-    /// disagree about which node is "the" node.
+    /// The node already installed on this Mac, and only otherwise the one
+    /// vendored in this app.
+    ///
+    /// **This used to be `EnvironmentProbe.defaultSageBundleExecutables`, which
+    /// is the exact opposite ordering, and the two resolvers in this codebase
+    /// contradict each other on purpose.** The probe puts the vendored copy
+    /// first because its job is finding *a runnable node on a bare machine*, and
+    /// for that it is right. It is the wrong answer to the different question
+    /// this screen asks, which is "which binary should operate the store that
+    /// already holds the owner's memories" — and using it meant that on a Mac
+    /// with SAGE installed, browsing memories spawned the copy we happened to
+    /// vendor to drive somebody's existing `~/.sage`. One store, two binaries,
+    /// whatever versions they happened to be. `SageNodeChoice` is the rule the
+    /// owner actually asked for — "if a SAGE node is already installed, Mynah
+    /// uses it and changes nothing about it" — and it is what `sage-voiced`
+    /// already resolves with, so the daemon and this screen now agree.
     private static var executableURL: URL? {
-        EnvironmentProbe.defaultSageBundleExecutables.first {
-            FileManager.default.isExecutableFile(atPath: $0.path)
-        }
+        SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable
     }
 
     private func connection() throws -> MCPClient {
@@ -182,17 +229,13 @@ actor SageMemoryStore: MemoryStoring {
         guard let executable = Self.executableURL else {
             throw MemoryTrouble.notSetUp
         }
-        var environment: [String: String] = [:]
-        if let identityPath = Self.identityPath {
-            environment["SAGE_IDENTITY_PATH"] = identityPath
-        }
         // 30s rather than the 90s default. A browse that has not answered in
         // half a minute has failed, and the screen owes the owner a sentence
         // rather than another minute of dots.
         let made = MCPClient(
             executableURL: executable,
             arguments: ["mcp"],
-            environment: environment.isEmpty ? nil : environment,
+            environment: Self.identityEnvironment,
             requestTimeoutSeconds: 30
         )
         client = made
@@ -264,8 +307,14 @@ actor SageMemoryStore: MemoryStoring {
             switch error {
             case .missingExecutable:
                 throw MemoryTrouble.notSetUp
-            case .toolFailed, .rpcError:
-                throw MemoryTrouble.refused
+            case .toolFailed(_, let detail), .rpcError(_, let detail):
+                // A shut vault and a genuine refusal both arrive here, and they
+                // send the owner to two different places: one to their
+                // passphrase, the other to quitting and reopening. The node's
+                // own wording is the only thing that tells them apart from this
+                // side, so it is matched rather than guessed at — and anything
+                // that does not match keeps the older, vaguer sentence.
+                throw MemoryTrouble.reading(refusal: detail)
             case .launchFailed, .notStarted, .serverExited, .timedOut:
                 // These all mean the child is gone or wedged; the next attempt
                 // must not reuse it.
@@ -757,20 +806,34 @@ struct MemoriesView: View {
                 action: { model.topic = nil }
             )
         } else {
-            // Careful with this sentence. It used to read "No memories yet —
-            // Mynah will start remembering once you talk to it", which was true
-            // only while the screen browsed as the node operator and could
-            // therefore see everything on the machine. Mynah now signs as
-            // itself (`MynahIdentity`), so an empty list means "nothing this
-            // agent can see", which is not the same claim as "nothing is
-            // there" — the owner may have hundreds of memories belonging to
-            // other agents. Saying the node is empty when it is not is the kind
-            // of small lie that costs an afternoon of debugging.
+            // Careful with this sentence, which has now been wrong twice.
+            //
+            // It first read "No memories yet — Mynah will start remembering once
+            // you talk to it", which was true only while the screen browsed as
+            // the node operator and could see everything on the machine. Mynah
+            // signs as itself (`MynahIdentity`), so an empty list means "nothing
+            // this agent can see" and not "nothing is there".
+            //
+            // The replacement then said "This fills up as you talk to it", and
+            // on the machine this was written for that was a false promise: the
+            // appliance had stored zero memories against 13,357 on the node,
+            // because every failed write was being swallowed by a log sink that
+            // defaulted to doing nothing. The screen had no way to know — and
+            // still has none. An empty list is consistent with three different
+            // situations and this view can only distinguish one of them.
+            //
+            // So it states the fact it can verify and stops. No promise about
+            // what happens next, and an explicit acknowledgement that silence
+            // here can also mean something is wrong, because an owner who has
+            // been talking to Mynah for a week and sees this needs to suspect a
+            // fault rather than conclude they have not said enough yet.
             EmptyState(
                 glyph: "text.append",
-                title: "Nothing here yet",
-                message: "Mynah keeps its own memories, separate from the other agents on your "
-                    + "SAGE node. This fills up as you talk to it."
+                title: "Mynah hasn't kept anything yet",
+                message: "It keeps its own memories, separate from the other agents on your SAGE "
+                    + "node, so this stays empty until it saves one. If you have been talking to "
+                    + "it for a while and this is still empty, something is stopping it — the "
+                    + "diagnostics in Settings are the thing to send."
             )
         }
     }

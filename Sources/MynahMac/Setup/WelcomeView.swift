@@ -102,12 +102,17 @@ private struct WelcomePoint: Identifiable {
     static let all: [WelcomePoint] = [
         WelcomePoint(
             id: "signal",
-            title: "You talk to it in Signal",
-            // Signal is named here, not later. It is the one thing the owner has
-            // to already have — or install — for any of the rest to be true.
-            body: "Signal is a free messaging app. You record a voice note, send it, "
-                + "and Mynah answers out loud — the same as messaging a friend. If "
-                + "Signal isn't on your phone yet, install it before you start."
+            title: "You talk to it here, or from your phone",
+            // Signal used to be named as a prerequisite — "install it before you
+            // start" — because linking a phone was the fourth of five setup
+            // screens. It is not any more, and this copy had to stop demanding
+            // it: telling somebody to go and install a messaging app before a
+            // Mac app will work, when the Mac app works perfectly without one,
+            // loses the people who do not want the phone half at all. It is
+            // still named, still first, and now stated as the option it is.
+            body: "Type or talk in this window and Mynah answers. If you also link Signal — "
+                + "a free messaging app — you can send it a voice note from anywhere and it "
+                + "answers out loud. That part is optional and you can add it later."
         ),
         // Two verbs, one card. Owners were being told separately that it
         // remembers and that it answers questions, which reads as two features;
@@ -238,11 +243,12 @@ private struct ExplainerSection: Identifiable {
         ),
         ExplainerSection(
             id: "signal",
-            title: "You talk to it in Signal",
-            body: "Signal is a free messaging app you install on your phone. Send Mynah "
-                + "a voice note the way you'd send one to a friend and it answers out "
-                + "loud. There's nothing else to install, and no separate Mynah app for "
-                + "your phone."
+            title: "Your phone is optional",
+            body: "Everything Mynah does works in this window. If you want it on your phone "
+                + "too, link Signal — a free messaging app — and you can send Mynah a voice "
+                + "note the way you'd send one to a friend and it answers out loud. There's "
+                + "nothing else to install, no separate Mynah app for your phone, and you can "
+                + "set it up whenever you like from Settings."
         ),
         ExplainerSection(
             id: "memory",
