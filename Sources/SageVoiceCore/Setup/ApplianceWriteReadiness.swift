@@ -91,7 +91,14 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
         self.standing = standing
     }
 
-    private var mask: UInt32? {
+    /// The raw mask, when the node has one for this agent.
+    ///
+    /// Public so a caller can assert on the *cause* rather than only on the
+    /// sentences — a test that pins "Companion still carries write denials"
+    /// is what stops someone re-introducing the warn-on-any-denial bug that a
+    /// test caught here once already. Not for owner-facing display: nothing a
+    /// person reads should contain this number.
+    public var mask: UInt32? {
         if case .registered(let mask) = standing { return mask }
         return nil
     }

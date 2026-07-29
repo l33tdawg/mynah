@@ -70,35 +70,36 @@ public enum MynahIdentity {
         return sageHome.appendingPathComponent("agent.key", isDirectory: false)
     }
 
-    /// The path to sign as.
-    ///
-    /// An explicit `SAGE_IDENTITY_PATH` or `SAGE_AGENT_KEY` in the environment
-    /// still wins — that is how someone drives the app as a specific agent for
-    /// testing — with one exception, which is the whole point of this type: an
-    /// override naming the node operator's key is refused rather than honoured.
-    /// Making the old behaviour unrepresentable beats deleting it and trusting
-    /// nobody writes it again.
-    public static func resolvedKeyPath(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        log: (String) -> Void = { _ in }
-    ) -> String {
-        let ours = keyURL(homeDirectory: homeDirectory).path
-
-        for name in [environmentVariable, "SAGE_AGENT_KEY"] {
-            guard let raw = environment[name], !raw.isEmpty else { continue }
-            let expanded = NSString(string: raw).expandingTildeInPath
-            guard isSafeToAdopt(expanded, environment: environment, homeDirectory: homeDirectory) else {
-                // Refused rather than obeyed, and said out loud. A silent refusal
-                // means the app signs as a different agent than the environment
-                // asked for and nobody finds out until the memories look wrong.
-                log("[identity] ignoring \(name)=\(expanded): Mynah signs only as itself")
-                continue
-            }
-            return expanded
-        }
-        return ours
-    }
+    // MARK: - Deliberately absent: resolvedKeyPath() and childEnvironment()
+    //
+    // They returned `keyURL()` — `agent.key`, the app window's identity from
+    // before "One appliance is one agent". Nothing registers that key any more,
+    // so anything signing with it signs as an agent the node has never heard
+    // of. That fails *silently*: the REST layer answers a caller-filtered query
+    // for an unknown agent with an empty result, not an error, so the screen
+    // shows nothing and looks merely new.
+    //
+    // Four surfaces were caught by these two functions in a single session —
+    // the Memories screen, the appliance row on the Agents screen, the
+    // federation scan, and the agents connection. That is a trap, not four
+    // mistakes, and the trap was the names:
+    //
+    //   * `childEnvironment()` is precisely what you reach for when wiring a
+    //     child process. It is right by its name and wrong in fact.
+    //   * It was literally `[environmentVariable: resolvedKeyPath(...)]`, so
+    //     "fixing" a call from one to the other reads like a correction,
+    //     compiles, and changes nothing. That move was made, with a comment
+    //     claiming it pinned the appliance key, by someone who had diagnosed
+    //     this exact trap an hour earlier.
+    //
+    // So they are gone rather than renamed. A correctly named function that
+    // nobody calls is still something the next person can pick out of
+    // autocomplete. `applianceEnvironment()` is the only way to build a child's
+    // identity now, and it is what every call site already uses.
+    //
+    // The override-safety logic below was the good part and is kept — it now
+    // guards `applianceEnvironment()`, which previously had a weaker check of
+    // its own. See `isSafeToAdopt`.
 
     /// Whether an override may be adopted.
     ///
@@ -115,6 +116,13 @@ public enum MynahIdentity {
     /// hooks export one — so honouring an arbitrary override lets Mynah silently
     /// become an existing agent and write, forget and rename as it. An override
     /// is for pointing Mynah at a *Mynah* key, so that is all it may point at.
+    ///
+    /// This used to guard only the deleted `resolvedKeyPath()`, while
+    /// `applianceEnvironment()` — the function everything actually calls — did
+    /// its own weaker check: a plain string comparison against the operator
+    /// key's path, with no symlink resolution, no case folding, and no
+    /// restriction to Mynah's own directory. So the careful version guarded the
+    /// path nobody took. It guards the real one now.
     static func isSafeToAdopt(
         _ path: String,
         environment: [String: String],
@@ -127,6 +135,9 @@ public enum MynahIdentity {
             return false
         }
 
+        // Mynah's own directory. Both `agent.key` and `appliance-agent.key`
+        // live here, so an override may still name either — what it may not do
+        // is name somebody else's identity.
         let ourDirectory = keyURL(homeDirectory: homeDirectory)
             .deletingLastPathComponent().standardizedFileURL.path
         return candidate.deletingLastPathComponent().path
@@ -142,17 +153,6 @@ public enum MynahIdentity {
             return false
         }
         return idA.isEqual(idB)
-    }
-
-    /// Environment for a spawned `sage-gui mcp`.
-    ///
-    /// Every spawn site must use this. Two call sites building their own
-    /// environment is exactly how the app ended up with two identities.
-    public static func childEnvironment(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> [String: String] {
-        [environmentVariable: resolvedKeyPath(environment: environment, homeDirectory: homeDirectory)]
     }
 
     /// Makes a spawned SAGE node use the local semantic model that Mynah has
@@ -327,20 +327,30 @@ public enum MynahIdentity {
     /// stops moving without ever having changed.
     public static func applianceEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) -> [String: String] {
-        let operatorKey = nodeOperatorKeyURL(environment: environment, homeDirectory: homeDirectory)
-            .standardizedFileURL.path
         for name in [environmentVariable, "SAGE_AGENT_KEY"] {
             guard let raw = environment[name], !raw.isEmpty else { continue }
             let expanded = NSString(string: raw).expandingTildeInPath
-            guard URL(fileURLWithPath: expanded).standardizedFileURL.path != operatorKey else { continue }
+            // Was a bare string comparison against the operator key's path,
+            // which a symlink or a differently-cased `~/.SAGE/agent.key` walked
+            // straight past on a case-insensitive volume — and which permitted
+            // an override naming any *other* agent's key outright.
+            guard isSafeToAdopt(expanded, environment: environment, homeDirectory: homeDirectory) else {
+                // Refused rather than obeyed, and said out loud. A silent
+                // refusal means the appliance signs as a different agent than
+                // the environment asked for, and nobody finds out until the
+                // memories look wrong.
+                log("[identity] ignoring \(name)=\(expanded): Mynah signs only as itself")
+                continue
+            }
             return [environmentVariable: expanded]
         }
         migrateApplianceKeyIfNeeded(
             environment: environment,
             homeDirectory: homeDirectory,
-            log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+            log: log
         )
         return [environmentVariable: applianceKeyURL(homeDirectory: homeDirectory).path]
     }

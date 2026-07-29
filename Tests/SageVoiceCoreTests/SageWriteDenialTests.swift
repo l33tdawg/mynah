@@ -128,4 +128,56 @@ final class SageWriteDenialTests: XCTestCase {
         XCTAssertTrue(SageRitual.bootBio.contains(SageRitual.memoryDomain))
         XCTAssertFalse(SageRitual.bootBio.contains("Auto-registered"))
     }
+
+    // MARK: - The typed channel (SAGE v11.14.2+)
+
+    /// SAGE shipped stable reason codes after we reported that one remedy
+    /// string could not be right for every cause. Reading the code beats
+    /// inferring the cause — and inferring it from the mask is now explicitly
+    /// wrong: "a non-zero capability mask does not by itself invalidate a
+    /// grant: only the matching effective restriction produces its reason
+    /// code."
+    func testATypedDenialIsReadFromTheReasonCode() {
+        let message = """
+        tool failed: {"store_error":{"type":"https://sage.dev/errors/domain-write-denied",        "reason_code":"domain_claim_restricted","retryable":false,        "remedy":"Submit to a domain this agent already owns, or ask a local administrator         to assign or reassign a non-shared domain; this profile cannot claim an unowned domain."}}
+        """
+        let denial = SageRitual.permanentDenial(in: message)
+        XCTAssertEqual(denial?.reasonCode, "domain_claim_restricted")
+        XCTAssertTrue(denial?.remedy?.contains("cannot claim an unowned domain") == true)
+    }
+
+    /// Each of the seven, so a reworded server sentence cannot quietly drop one
+    /// back onto the legacy prose path.
+    func testEveryStableReasonCodeIsRecognised() {
+        for code in SageRitual.knownReasonCodes {
+            let denial = SageRitual.permanentDenial(in: "{\"reason_code\":\"\(code)\"}")
+            XCTAssertEqual(denial?.reasonCode, code, "\(code) fell through to the legacy matcher")
+        }
+    }
+
+    /// A code we do not know must reach the compatibility path rather than be
+    /// reported as a cause we cannot explain.
+    func testAnUnknownReasonCodeFallsBackRatherThanGuessing() {
+        XCTAssertNil(SageRitual.permanentDenial(in: "{\"reason_code\":\"something_new\"}"))
+        // ...but still latches if the prose says it is a denial.
+        let both = SageRitual.permanentDenial(
+            in: "{\"reason_code\":\"something_new\"} access denied: agent x cannot write shared domain self"
+        )
+        XCTAssertNotNil(both)
+        XCTAssertNil(both?.reasonCode, "an unrecognised code must not be reported as if understood")
+    }
+
+    /// A v11.14.2 node deliberately withholds the domain — the typed denial
+    /// "does not disclose the agent ID, requested domain, owner ID, raw
+    /// capability mask, or raw consensus log" — so the only party that knows
+    /// which subject was refused is us.
+    func testATypedDenialFallsBackToTheDomainWeAskedFor() {
+        let denial = SageRitual.permanentDenial(in: "{\"reason_code\":\"no_owned_home_domain\"}")
+        XCTAssertEqual(denial?.domain, SageRitual.memoryDomain)
+    }
+
+    func testAMessageWithNoJSONStillParsesNothing() {
+        XCTAssertNil(SageRitual.jsonString(forKey: "reason_code", in: "connection refused"))
+        XCTAssertNil(SageRitual.jsonString(forKey: "remedy", in: "{\"remedy\":}"))
+    }
 }

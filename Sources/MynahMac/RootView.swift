@@ -194,21 +194,36 @@ struct ReadyStage: View {
 
     @State private var isLinkingPhone = false
 
+    /// What the node says about the appliance's own key, or nothing yet.
+    ///
+    /// `nil` until the first check answers, and the screen says nothing while it
+    /// is `nil` — a warning that flickers on half a second after the owner has
+    /// read "Mynah is ready" is worse than one that arrives with the screen.
+    @State private var writeReadiness: ApplianceWriteReadiness?
+
     private var unfinished: [AppModel.DeferredStep] { app.deferredSetupSteps }
+
+    /// Read from `voice`'s type and never re-derived.
+    ///
+    /// The condition is subtler than it looks: the Companion profile an
+    /// administrator assigns *keeps* all three write denials, so anything keyed
+    /// on "is it restricted" would warn forever at an owner who had done
+    /// everything right. `needsTheOwner` is true for exactly one mask — the
+    /// untouched self-registration default, which means nobody has looked at it.
+    /// Asking that question here rather than answering it again is the whole
+    /// point of the property existing.
+    private var cannotRemember: Bool { writeReadiness?.needsTheOwner == true }
 
     var body: some View {
         StageShell(
             stageTitles: titles,
             currentIndex: SetupModel.Stage.ready.rawValue,
-            // The drawing is the end of the setup story — a machine settled and
-            // listening — and it is only true when there is nothing left to do.
-            // The unfinished branch keeps a plain glyph because "one thing left"
-            // is not that ending.
-            glyph: unfinished.isEmpty ? StageIllustration.mark(.ready) : "iphone.gen3",
-            title: unfinished.isEmpty ? "Mynah is ready." : "One thing left.",
+            glyph: markName,
+            title: title,
             subtitle: subtitle
         ) {
             VStack(alignment: .leading, spacing: s4) {
+                writeWarning
                 MynahCard(density: .hero) {
                     VStack(spacing: 0) {
                         StatusLine(
@@ -250,6 +265,66 @@ struct ReadyStage: View {
             // linking changed — only when it is asked for.
             ReadyPhoneLinkSheet { isLinkingPhone = false }
         }
+        // Asked here rather than trusted from earlier in the flow: the mask is
+        // stamped by consensus when the key registers, which may only just have
+        // happened. Unauthenticated and on loopback, so it costs nothing and
+        // works before any identity has been established.
+        .task { writeReadiness = await ApplianceWriteReadinessCheck().check() }
+    }
+
+    // MARK: The promise this screen makes
+
+    /// **The one thing this screen must not do is say "ready" when it isn't.**
+    ///
+    /// Ready is where trust is established: it is the moment an owner is told
+    /// the thing is set up and works. On a node where the appliance still
+    /// carries the untouched self-registration mask, "Mynah is ready." is a
+    /// promise it cannot keep — it will answer them warmly and remember nothing,
+    /// and they will find out a week later, if ever. That is the same
+    /// false-confidence failure that was in the memories empty state and the
+    /// task board, arriving at the highest-stakes moment in the product.
+    private var title: String {
+        if !unfinished.isEmpty { return "One thing left." }
+        // Not a softened "almost ready". It can answer — that part is true and
+        // worth saying — and it cannot remember, which is the fact the banner
+        // below then explains.
+        return cannotRemember ? "Mynah can answer, but not remember yet." : "Mynah is ready."
+    }
+
+    /// The drawing is the end of the setup story — a machine settled and
+    /// listening — and it is only true when there is nothing left to do.
+    ///
+    /// The unfinished branch used to draw `iphone.gen3`, which was right when
+    /// the only step anyone could defer was linking a phone. Linking came off
+    /// the gate, so the one deferrable step left is the API key — and the flow
+    /// already has a drawing of a key held inside the machine that keeps it.
+    /// A phone here would now illustrate the wrong problem entirely.
+    private var markName: String {
+        if !unfinished.isEmpty { return StageIllustration.mark(.connect) }
+        // Points where the sentence points.
+        return cannotRemember ? "person.2" : StageIllustration.mark(.ready)
+    }
+
+    /// `voice`'s sentence, rendered rather than rewritten.
+    ///
+    /// `shortRemedy` and not `remedy`: this is a moment when somebody is waiting
+    /// to press a button, not reading a settings page, and the full mechanism
+    /// lives on the one page they go to when they want it. There is exactly one
+    /// remedy in the product and a test asserting the surfaces agree — a third
+    /// phrasing invented here would quietly undo that.
+    ///
+    /// No reinstall, and not because I remembered: the string comes from
+    /// `SageVoiceCore` and cannot acquire one here. The identity survives
+    /// deleting the app and comes back with the same mask, so a reinstall is
+    /// the instinctive fix that provably cannot work.
+    @ViewBuilder
+    private var writeWarning: some View {
+        if let readiness = writeReadiness,
+           let headline = readiness.headline,
+           let remedy = readiness.shortRemedy {
+            InlineBanner(tone: .caution, headline: headline, explanation: remedy)
+                .frame(maxWidth: MynahWidth.stageColumn)
+        }
     }
 
     /// The phone, offered rather than demanded.
@@ -283,11 +358,16 @@ struct ReadyStage: View {
         }
     }
 
-    private var subtitle: String {
+    private var subtitle: String? {
         guard unfinished.isEmpty else {
             return "Mynah will answer as soon as you finish it — and it's waiting in Settings "
                 + "whenever you're ready."
         }
+        // Nothing, when the banner below is about to say the thing that matters.
+        // A cheerful line about first-answer latency sitting above a warning
+        // that nothing will be remembered is the screen talking over itself, and
+        // any sentence written here would be a second remedy in different words.
+        guard !cannotRemember else { return nil }
         // Names the window first, because the window is what the owner has in
         // front of them and what they can use the moment they press the button.
         // It used to open with "send it a voice note", which described a phone

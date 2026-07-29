@@ -38,9 +38,35 @@ public actor SageRitual {
     public struct WriteDenial: Sendable, Equatable {
         /// The domain the appliance was trying to write. Named so the owner is
         /// told what to grant rather than that "something" was refused.
+        ///
+        /// Usually the domain we asked for rather than one the server named. A
+        /// v11.14.2+ node deliberately withholds it — the typed denial "does
+        /// not disclose the agent ID, requested domain, owner ID, raw
+        /// capability mask, or raw consensus log" — so the only party that
+        /// knows which domain was refused is the caller, which is us.
         public let domain: String
         /// What the node said, for the log and for the settings row.
         public let detail: String
+        /// SAGE's stable reason code, when the server sent one.
+        ///
+        /// The thing to branch on. Seven exist; `nil` means an older server
+        /// that only produced prose, which is the fallback path below.
+        public let reasonCode: String?
+        /// The server's own operator remedy, when it sent one.
+        ///
+        /// Authoritative and preferred over anything we would write: it is
+        /// per-cause and maintained by the people who own the rule. We reported
+        /// the old single remedy string as wrong precisely because one sentence
+        /// could not be right for every cause; having asked for that, using
+        /// ours in preference to theirs would be perverse.
+        public let remedy: String?
+
+        public init(domain: String, detail: String, reasonCode: String? = nil, remedy: String? = nil) {
+            self.domain = domain
+            self.detail = detail
+            self.reasonCode = reasonCode
+            self.remedy = remedy
+        }
     }
 
     /// SAGE's own tool names. Not in the voice allowlist on purpose: the model
@@ -463,10 +489,15 @@ public actor SageRitual {
         // Loud, once, and naming the domain. This is the sentence someone reads
         // in a log six months from now while wondering why an appliance that
         // has answered thousands of questions remembers none of them.
+        // Prefers SAGE's own remedy when it sent one — it is per-cause and
+        // maintained by the people who own the rule. Ours is the fallback for a
+        // server too old to have an opinion.
+        let remedy = denial.remedy
+            ?? "The owner has to assign this agent a companion profile and a subject it owns, in CEREBRUM."
         log(
-            "[sage] PERMANENTLY REFUSED: this agent cannot write the domain "
-                + "\"\(denial.domain)\", so nothing said to Mynah is being stored. "
-                + "The owner has to grant it in CEREBRUM. Not retrying. Node said: \(denial.detail)"
+            "[sage] PERMANENTLY REFUSED (\(denial.reasonCode ?? "no reason code")): this agent cannot "
+                + "write \"\(denial.domain)\", so nothing said to Mynah is being stored. "
+                + "\(remedy) Not retrying. Node said: \(denial.detail)"
         )
     }
 
@@ -491,6 +522,21 @@ public actor SageRitual {
     /// misses is logged as an ordinary failure and retried next turn, which is
     /// the safe direction to be wrong in: noisy, not silent.
     static func permanentDenial(in message: String) -> WriteDenial? {
+        // The typed channel first. SAGE v11.14.2 returns a stable `reason_code`
+        // with `retryable:false` and a per-cause `remedy`, which is exactly what
+        // this function had to reconstruct from prose before it existed.
+        if let code = jsonString(forKey: "reason_code", in: message), knownReasonCodes.contains(code) {
+            return WriteDenial(
+                domain: domain(in: message) ?? memoryDomain,
+                detail: condense(message, to: 300),
+                reasonCode: code,
+                remedy: jsonString(forKey: "remedy", in: message)
+            )
+        }
+
+        // Older servers, and only older servers. The reference is explicit that
+        // "generic denials from older servers retain the bounded compatibility
+        // recovery path", so this stays rather than being replaced.
         let lowered = message.lowercased()
         let isDenial = lowered.contains(domainWriteDeniedProblemType)
             || lowered.contains("cannot write shared domain")
@@ -500,6 +546,58 @@ public actor SageRitual {
             || lowered.contains("does not have write access")
         guard isDenial else { return nil }
         return WriteDenial(domain: domain(in: message) ?? memoryDomain, detail: condense(message, to: 300))
+    }
+
+    /// The seven stable codes, from SAGE's REST reference.
+    ///
+    /// Matched against a known set rather than accepted as-is, because the
+    /// reference says unknown structured codes fall back to the compatibility
+    /// path — so a code we do not recognise must reach the prose matcher below
+    /// rather than be reported as a cause we cannot explain.
+    ///
+    /// Note the spellings. These are the ones in `rest-api.md`; a summary I was
+    /// given quoted `deny_domain_claim`, `pending_unapproved` and
+    /// `missing_level_2_grant`, none of which appear in the reference. Checked
+    /// rather than trusted, because a code that never matches would silently
+    /// downgrade every typed denial to the legacy path.
+    static let knownReasonCodes: Set<String> = [
+        "missing_write_grant",
+        "foreign_write_restricted",
+        "shared_write_restricted",
+        "domain_claim_restricted",
+        "principal_pending_review",
+        "no_owned_home_domain",
+        "manager_scope_denied"
+    ]
+
+    /// Pulls a string value out of whatever JSON is embedded in the message.
+    ///
+    /// Deliberately tolerant. The denial reaches us as the text of a thrown
+    /// error, which may be bare JSON, JSON wrapped in a sentence, or the
+    /// problem document nested under `store_error` — and the shape differs
+    /// between the tool that failed and the transport that carried it. Scanning
+    /// for the key is stable across all of those, where a decode against one
+    /// assumed shape would silently return nothing for the other two.
+    static func jsonString(forKey key: String, in message: String) -> String? {
+        guard let keyRange = message.range(of: "\"\(key)\"") else { return nil }
+        let rest = message[keyRange.upperBound...]
+        guard let colon = rest.firstIndex(of: ":") else { return nil }
+        var remainder = rest[rest.index(after: colon)...].drop { $0 == " " }
+        guard remainder.first == "\"" else { return nil }
+        remainder = remainder.dropFirst()
+        var value = ""
+        var escaped = false
+        for character in remainder {
+            if escaped {
+                value.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\" { escaped = true; continue }
+            if character == "\"" { break }
+            value.append(character)
+        }
+        return value.isEmpty ? nil : value
     }
 
     /// Pulls the domain out of the node's sentence, so the owner is told which

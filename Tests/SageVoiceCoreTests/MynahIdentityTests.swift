@@ -25,35 +25,66 @@ final class MynahIdentityTests: XCTestCase {
         "/Users/tester/.sage/agent.key"
     }
 
+
+    /// The path the appliance signs as, for a given environment.
+    ///
+    /// These tests used to call `MynahIdentity.resolvedKeyPath`, which is gone:
+    /// it returned the window's vestigial `agent.key` and so signed as an agent
+    /// the node has never heard of, silently, on four separate surfaces.
+    ///
+    /// The override-safety rules the tests below cover did NOT go with it. They
+    /// moved onto `applianceEnvironment`, which is now the only way to build a
+    /// child's identity — and which previously had a weaker check of its own,
+    /// so these cases were guarding a path nobody took.
+    private func identityPath(
+        environment: [String: String],
+        homeDirectory: URL,
+        log: @escaping (String) -> Void = { _ in }
+    ) -> String {
+        MynahIdentity.applianceEnvironment(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            log: log
+        )[MynahIdentity.environmentVariable] ?? ""
+    }
+
     // MARK: The bug
 
     /// The exact fallback that shipped.
     func testTheDefaultIdentityIsNotTheNodeOperatorKey() {
-        let resolved = MynahIdentity.resolvedKeyPath(environment: [:], homeDirectory: home)
+        let resolved = identityPath(environment: [:], homeDirectory: home)
         XCTAssertNotEqual(resolved, operatorKey, "Mynah is still signing as the node operator")
         XCTAssertTrue(
-            resolved.hasSuffix("SAGE Voice Bridge/agent.key"),
-            "expected Mynah's own key, got \(resolved)"
+            resolved.hasSuffix("SAGE Voice Bridge/appliance-agent.key"),
+            "expected the appliance's own key, got \(resolved)"
         )
     }
 
-    /// Both spawn sites have to agree, or the app has two identities again and
+    /// Every spawn site has to agree, or the app has two identities again and
     /// only one of them can ever be granted anything.
-    func testEverySpawnSiteGetsTheSameIdentity() {
-        let environment = MynahIdentity.childEnvironment(environment: [:], homeDirectory: home)
-        XCTAssertEqual(
-            environment[MynahIdentity.environmentVariable],
-            MynahIdentity.resolvedKeyPath(environment: [:], homeDirectory: home)
+    ///
+    /// There is now exactly one builder to agree on. `childEnvironment()` was
+    /// the other one, and it was the trap: named for precisely what a caller
+    /// wants when wiring a child process, and returning the wrong key.
+    func testThereIsOneWayToBuildAChildIdentity() {
+        let environment = MynahIdentity.applianceEnvironment(
+            environment: [:],
+            homeDirectory: home,
+            log: { _ in }
         )
         XCTAssertEqual(environment.count, 1, "the child environment gained something unreviewed")
+        XCTAssertEqual(
+            environment[MynahIdentity.environmentVariable],
+            identityPath(environment: [:], homeDirectory: home)
+        )
     }
 
     /// An identity is only useful as a grant target if the node can tell it
     /// apart from every other agent, which means one stable path — not one
     /// derived from a working directory that differs per launch.
     func testTheIdentityDoesNotDependOnTheWorkingDirectory() {
-        let first = MynahIdentity.resolvedKeyPath(environment: [:], homeDirectory: home)
-        let second = MynahIdentity.resolvedKeyPath(environment: [:], homeDirectory: home)
+        let first = identityPath(environment: [:], homeDirectory: home)
+        let second = identityPath(environment: [:], homeDirectory: home)
         XCTAssertEqual(first, second)
         XCTAssertTrue(first.hasPrefix(home.path), "the key escaped the owner's home directory")
     }
@@ -66,7 +97,7 @@ final class MynahIdentityTests: XCTestCase {
     /// environment variable.
     func testAnOverrideNamingTheOperatorKeyIsRefused() {
         for variable in ["SAGE_IDENTITY_PATH", "SAGE_AGENT_KEY"] {
-            let resolved = MynahIdentity.resolvedKeyPath(
+            let resolved = identityPath(
                 environment: [variable: operatorKey],
                 homeDirectory: home
             )
@@ -82,7 +113,7 @@ final class MynahIdentityTests: XCTestCase {
             "/Users/tester/.sage//agent.key"
         ] {
             XCTAssertNotEqual(
-                MynahIdentity.resolvedKeyPath(
+                identityPath(
                     environment: ["SAGE_IDENTITY_PATH": spelling],
                     homeDirectory: home
                 ),
@@ -104,7 +135,7 @@ final class MynahIdentityTests: XCTestCase {
             "/opt/sage-data/agent.key"
         )
         XCTAssertNotEqual(
-            MynahIdentity.resolvedKeyPath(environment: environment, homeDirectory: home),
+            identityPath(environment: environment, homeDirectory: home),
             "/opt/sage-data/agent.key",
             "a relocated operator key was honoured"
         )
@@ -122,12 +153,12 @@ final class MynahIdentityTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("test-agent.key").path
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(environment: ["SAGE_IDENTITY_PATH": ours], homeDirectory: home),
+            identityPath(environment: ["SAGE_IDENTITY_PATH": ours], homeDirectory: home),
             ours,
             "a key in Mynah's own directory was refused"
         )
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(environment: ["SAGE_AGENT_KEY": ours], homeDirectory: home),
+            identityPath(environment: ["SAGE_AGENT_KEY": ours], homeDirectory: home),
             ours,
             "the backward-compatible variable stopped working"
         )
@@ -137,7 +168,7 @@ final class MynahIdentityTests: XCTestCase {
             "/tmp/somebody-elses.key"
         ] {
             XCTAssertNotEqual(
-                MynahIdentity.resolvedKeyPath(
+                identityPath(
                     environment: ["SAGE_IDENTITY_PATH": foreign],
                     homeDirectory: home
                 ),
@@ -156,7 +187,7 @@ final class MynahIdentityTests: XCTestCase {
             "/Users/tester/.Sage/Agent.key"
         ] {
             XCTAssertNotEqual(
-                MynahIdentity.resolvedKeyPath(
+                identityPath(
                     environment: ["SAGE_IDENTITY_PATH": spelling],
                     homeDirectory: home
                 ),
@@ -171,7 +202,7 @@ final class MynahIdentityTests: XCTestCase {
     /// wrong.
     func testARefusedOverrideIsReported() {
         var lines: [String] = []
-        _ = MynahIdentity.resolvedKeyPath(
+        _ = identityPath(
             environment: ["SAGE_IDENTITY_PATH": operatorKey],
             homeDirectory: home,
             log: { lines.append($0) }
@@ -190,7 +221,7 @@ final class MynahIdentityTests: XCTestCase {
         let preferred = directory.appendingPathComponent("preferred.key").path
         let legacy = directory.appendingPathComponent("legacy.key").path
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(
+            identityPath(
                 environment: [
                     "SAGE_IDENTITY_PATH": preferred,
                     "SAGE_AGENT_KEY": legacy
@@ -202,13 +233,18 @@ final class MynahIdentityTests: XCTestCase {
     }
 
     /// An empty variable is not an instruction.
+    ///
+    /// The fallback is the *appliance* key now, not `keyURL()`. That is the
+    /// whole point of the change: `keyURL()` is the window's old identity,
+    /// which nothing registers, so falling back to it meant falling back to an
+    /// agent the node has never heard of.
     func testAnEmptyOverrideFallsThroughRatherThanBreaking() {
         XCTAssertEqual(
-            MynahIdentity.resolvedKeyPath(
+            identityPath(
                 environment: ["SAGE_IDENTITY_PATH": ""],
                 homeDirectory: home
             ),
-            MynahIdentity.keyURL(homeDirectory: home).path
+            MynahIdentity.applianceKeyURL(homeDirectory: home).path
         )
     }
 
