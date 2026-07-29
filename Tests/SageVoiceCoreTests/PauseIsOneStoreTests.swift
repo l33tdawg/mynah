@@ -42,8 +42,32 @@ final class PauseIsOneStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Injects **both** shared dependencies, not just the one this file is about.
+    ///
+    /// The pause marker was injected from the start, for the reason on
+    /// `AppModel.pauseState`. `backgroundServices` was not, and that turned out
+    /// to matter far more: it defaults to the real `SignalBackgroundServiceManager`
+    /// aimed at the real home directory, and setting `isPaused` here fired a
+    /// reconcile that — with a fresh defaults suite and therefore no stored
+    /// brain — took a branch that **deleted the appliance's launchd plists off
+    /// the developer's own Mac**. These tests uninstalled the owner's Signal
+    /// appliance every time they ran, silently, without failing.
+    ///
+    /// `chrome` found it and the manager now refuses to touch launchd when a
+    /// test reaches the real home. This injection is belt and braces on top of
+    /// that guard, and belt and braces is the right posture when the failure
+    /// mode is destructive and silent: a test should not depend on a safety
+    /// check elsewhere being correct in order to be harmless.
+    ///
+    /// The lesson generalises past launchd. Any default that points at the real
+    /// machine is shared state, and a test that does not name it is a test
+    /// whose result — or whose damage — depends on whose Mac it ran on.
     private func makeApp() -> AppModel {
-        AppModel(defaults: defaults, pauseState: PauseState(fileURL: marker))
+        AppModel(
+            defaults: defaults,
+            backgroundServices: InertBackgroundServices(),
+            pauseState: PauseState(fileURL: marker)
+        )
     }
 
     private func markerExists() -> Bool {
@@ -166,4 +190,17 @@ final class PauseIsOneStoreTests: XCTestCase {
         XCTAssertTrue(PauseState(fileURL: marker).isPaused())
         XCTAssertTrue(makeApp().isPaused)
     }
+}
+
+/// Does nothing to this Mac.
+///
+/// These tests are about which store pause lives in. Whether launchd jobs get
+/// installed is a different subject, and letting it be a live dependency is how
+/// tests about a marker file came to uninstall an appliance.
+private actor InertBackgroundServices: SignalBackgroundServicing {
+    private(set) var enabledCount = 0
+    private(set) var disableCount = 0
+
+    func enable(_ configuration: SignalServiceConfiguration) async throws { enabledCount += 1 }
+    func disable() async { disableCount += 1 }
 }

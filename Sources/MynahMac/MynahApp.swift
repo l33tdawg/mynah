@@ -310,26 +310,97 @@ final class AppModel {
         Task { await reconcileAnsweringService() }
     }
 
+    /// What the app can honestly conclude the appliance should be doing.
+    ///
+    /// **Three answers, not two**, and the third is the whole point. This used
+    /// to be one `guard` with four conditions falling through to `disable()`,
+    /// which meant "the owner turned answering off" and "I could not work out
+    /// what to run" took the same branch — and that branch does not stop the
+    /// appliance, it *removes* it: `disable()` deletes both LaunchAgent plists
+    /// so they cannot come back at the next login.
+    ///
+    /// So any momentary failure to read a file uninstalled the owner's phone
+    /// bridge permanently. It happened: on 29 July the plists were deleted at
+    /// 11:40 and Signal stopped answering for half an hour while the window
+    /// carried on working, because the window does not go through the bridge.
+    /// Nothing recorded why, which is the other half of the fix.
+    ///
+    /// The rule, and it is worth keeping: **uncertainty must never destroy.**
+    /// A decision the owner made is acted on. A question the app failed to
+    /// answer changes nothing and says so.
+    enum AnsweringIntent: Sendable, Equatable {
+        /// The owner wants it answering, and everything it needs resolved.
+        case run(SignalServiceConfiguration)
+        /// The owner wants it off. A decision, so it is carried out.
+        case stop(reason: String)
+        /// Something could not be read. Not a decision, so nothing happens.
+        case cannotTell(reason: String)
+    }
+
+    /// Internal rather than private so a test can assert the third case exists
+    /// and is reached — the branch is invisible from the outside precisely
+    /// because its correct behaviour is to do nothing.
+    func answeringIntent() -> AnsweringIntent {
+        guard hasCompletedSetup else {
+            return .stop(reason: "setup has not finished")
+        }
+        guard keepsAnsweringWhenClosed else {
+            return .stop(reason: "the owner turned off answering from the phone")
+        }
+        guard !isPaused else {
+            return .stop(reason: "the owner paused answering")
+        }
+        guard let configuration = serviceConfiguration() else {
+            // The three inputs are the linked Signal account, the signal-cli
+            // binary and the stored brain choice. Each is a file read, and a
+            // file read can fail for reasons that have nothing to do with what
+            // the owner wants.
+            return .cannotTell(reason: "the appliance configuration could not be read")
+        }
+        return .run(configuration)
+    }
+
     /// Makes the persisted owner choices and the two launchd jobs agree.
     ///
     /// Called after setup, after a QR link in Settings, on app launch, and by
-    /// both answering switches. It is safe to call repeatedly; the manager
-    /// replaces the jobs atomically from the same source-of-truth values.
+    /// both answering switches. Safe to call repeatedly: the manager compares
+    /// what it would write against what is already loaded and does nothing when
+    /// they match, so an unnecessary call no longer costs the owner a restart
+    /// of signal-cli.
     func reconcileAnsweringService() async {
-        guard hasCompletedSetup, keepsAnsweringWhenClosed, !isPaused,
-              let configuration = serviceConfiguration() else {
+        switch answeringIntent() {
+        case .run(let configuration):
+            do {
+                try await backgroundServices.enable(configuration)
+                answeringServiceError = nil
+            } catch {
+                answeringServiceError = error.localizedDescription
+                presence = .needsOwner
+            }
+        case .stop(let reason):
+            // At error level on purpose. `.info` and `.debug` are not persisted
+            // by default, so the one line that explains a dead phone bridge
+            // would be gone by the time anybody went looking for it — which is
+            // exactly what happened on 29 July.
+            Self.appliance.error(
+                "removing the phone bridge: \(reason, privacy: .public)"
+            )
             await backgroundServices.disable()
             answeringServiceError = nil
-            return
-        }
-        do {
-            try await backgroundServices.enable(configuration)
-            answeringServiceError = nil
-        } catch {
-            answeringServiceError = error.localizedDescription
-            presence = .needsOwner
+        case .cannotTell(let reason):
+            Self.appliance.error(
+                "leaving the phone bridge as it is: \(reason, privacy: .public)"
+            )
+            // `answeringServiceError` is deliberately untouched. This is
+            // neither a success nor a failure of what the owner asked for, and
+            // clearing a real error here would hide a fault behind a shrug.
         }
     }
+
+    private static let appliance = Logger(
+        subsystem: "local.sage.voicebridge",
+        category: "appliance"
+    )
 
     /// Used by "Change where your words go" in Settings, and by the previews.
     func restartSetup() {
@@ -358,6 +429,15 @@ final class AppModel {
         guard canCancelSetupRestart else { return }
         hasCompletedSetup = true
         defaults.set(true, forKey: Key.setupComplete)
+        // Backing out has to put the appliance back.
+        //
+        // `hasCompletedSetup` being false is a `stop` intent, so any reconcile
+        // during a restart removes both LaunchAgents. Restoring the flag
+        // without reconciling left an owner who opened "Change where your words
+        // go" out of curiosity, then cancelled, with a window that says it is
+        // answering and a phone that is not — recoverable only by quitting and
+        // relaunching, because nothing else reconciles.
+        Task { await reconcileAnsweringService() }
     }
 
     func deferSetupStep(_ step: DeferredStep) {

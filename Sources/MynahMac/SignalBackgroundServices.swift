@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SageVoiceCore
 
 /// Everything launchd needs after Signal has confirmed the QR scan.
@@ -104,7 +105,41 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         self.userID = userID
     }
 
+    /// Whether this manager is about to rearrange the launchd of the machine it
+    /// is being tested on.
+    ///
+    /// **This is what took the owner's Signal down twice on 29 July**, and it is
+    /// worth writing out because nothing about it is visible from either side.
+    ///
+    /// `AppModel.init` defaults `backgroundServices` to `shared`, so every test
+    /// that builds an `AppModel` without injecting one gets the real manager
+    /// pointed at the real home directory. Several do — they are testing pause,
+    /// or the home split, and have no reason to think about launchd at all. But
+    /// setting `isPaused` fires a `didSet` that reconciles, and a reconcile that
+    /// decides the appliance should be off calls `disable()`, which deletes both
+    /// LaunchAgent plists out of `~/Library/LaunchAgents`.
+    ///
+    /// So `swift test` uninstalled the developer's own phone bridge. The
+    /// directory mtime pinned it exactly: 11:40 and again at 11:56, both the
+    /// minute a test run finished. From the owner's side Signal simply stopped
+    /// answering while the window kept working, because the window does not go
+    /// through the bridge — which is why this looked like a product regression
+    /// for an hour and was never anywhere near the product.
+    ///
+    /// The condition is deliberately narrow: a test that injects a scratch home
+    /// is exercising this type on purpose and must keep working. A test that
+    /// reaches the *real* home has not decided to do anything to this machine,
+    /// and this is the only place that can tell the difference.
+    private var isTestReachingTheRealMachine: Bool {
+        guard NSClassFromString("XCTestCase") != nil else { return false }
+        return homeDirectory == FileManager.default.homeDirectoryForCurrentUser
+    }
+
     func enable(_ configuration: SignalServiceConfiguration) async throws {
+        guard !isTestReachingTheRealMachine else {
+            Self.log.error("a test reached the real launchd; refusing to install anything")
+            return
+        }
         for executable in [configuration.signalCLI, configuration.bridge, configuration.sage] {
             guard fileManager.isExecutableFile(atPath: executable.path) else {
                 throw Failure.missingExecutable(executable.path)
@@ -118,13 +153,44 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
 
         let signalURL = launchAgents.appendingPathComponent("\(Self.signalLabel).plist")
         let bridgeURL = launchAgents.appendingPathComponent("\(Self.bridgeLabel).plist")
-        try Self.plistData(Self.signalPlist(configuration, logs: logs, home: homeDirectory))
-            .write(to: signalURL, options: .atomic)
-        try Self.plistData(Self.bridgePlist(configuration, logs: logs, home: homeDirectory))
-            .write(to: bridgeURL, options: .atomic)
+        let signalData = try Self.plistData(
+            Self.signalPlist(configuration, logs: logs, home: homeDirectory)
+        )
+        let bridgeData = try Self.plistData(
+            Self.bridgePlist(configuration, logs: logs, home: homeDirectory)
+        )
 
-        // Reconciliation is deliberately idempotent. bootout returns non-zero
-        // on a first install; that only means there was nothing stale to stop.
+        // Nothing to do is a real answer, and it used to be the one answer this
+        // could not give.
+        //
+        // Every caller — launch, the phone-link sheet, the model picker, the
+        // reply-style switch — went straight to bootout, which SIGTERMs
+        // signal-cli and drops the socket the daemon is holding. `signal.log`
+        // on 29 July has twelve shutdown/restart pairs in an afternoon, and any
+        // message the owner sent inside one of those gaps was never seen. The
+        // gap is seconds long, and a man testing his appliance spends a lot of
+        // his afternoon inside seconds-long gaps.
+        //
+        // If the plists on disk are byte-identical to the ones we would write
+        // and launchd is already running both jobs, then the world is already
+        // what this method exists to produce. A wrong answer here is not
+        // dangerous in either direction: a false "no" is exactly today's
+        // behaviour, and a false "yes" needs launchd to have reported a job
+        // loaded that is not.
+        if await isAlreadyReconciled(
+            signal: signalData, at: signalURL,
+            bridge: bridgeData, at: bridgeURL
+        ) {
+            return
+        }
+
+        try signalData.write(to: signalURL, options: .atomic)
+        try bridgeData.write(to: bridgeURL, options: .atomic)
+
+        Self.log.notice("restarting the phone bridge to apply a changed configuration")
+
+        // bootout returns non-zero on a first install; that only means there
+        // was nothing stale to stop.
         _ = await bootout(Self.bridgeLabel)
         let stoppedManagedSignal = await bootout(Self.signalLabel)
         if stoppedManagedSignal {
@@ -134,7 +200,44 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         try await bootstrap(bridgeURL, label: Self.bridgeLabel)
     }
 
+    /// Whether launchd is already running exactly what `enable` would install.
+    ///
+    /// Both halves are needed. The plists alone say what Mynah last *wrote*,
+    /// which is the same mistake `state()` exists to avoid; launchd alone would
+    /// keep a job running under a stale configuration after the owner changed
+    /// their model.
+    private func isAlreadyReconciled(
+        signal: Data, at signalURL: URL,
+        bridge: Data, at bridgeURL: URL
+    ) async -> Bool {
+        guard (try? Data(contentsOf: signalURL)) == signal,
+              (try? Data(contentsOf: bridgeURL)) == bridge else {
+            return false
+        }
+        // `true` specifically, not "not false". `isLoaded` returns nil when
+        // launchctl could not be asked at all, and an unanswered question is
+        // not a yes — here the safe reading is to go on and install, because
+        // the owner has asked for this to be running and bootstrapping
+        // something already bootstrapped is recoverable. That is the opposite
+        // reading to `disable`, and deliberately: uncertainty may rebuild, but
+        // uncertainty must never destroy.
+        // Sequential rather than `&&`: the short-circuit operators take an
+        // autoclosure, which cannot be `await`ed.
+        guard await isLoaded(Self.signalLabel) == true else { return false }
+        return await isLoaded(Self.bridgeLabel) == true
+    }
+
     func disable() async {
+        guard !isTestReachingTheRealMachine else {
+            Self.log.error("a test reached the real launchd; refusing to remove anything")
+            return
+        }
+        // The one action in this file that takes the owner's phone away, and
+        // until 29 July it happened without a word anywhere. At notice level so
+        // it survives in the unified log: `.info` and `.debug` are dropped
+        // unless something has opted the subsystem in, and the whole value of
+        // this line is being readable hours later.
+        Self.log.notice("removing both LaunchAgents; the phone will stop being answered")
         _ = await bootout(Self.bridgeLabel)
         _ = await bootout(Self.signalLabel)
 
@@ -167,19 +270,35 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             .appendingPathComponent("\(Self.bridgeLabel).plist")
         let installed = fileManager.fileExists(atPath: plist.path)
 
-        let result = await runner.run(
-            executable: URL(fileURLWithPath: "/bin/launchctl"),
-            arguments: ["print", "\(domain)/\(Self.bridgeLabel)"],
-            timeout: 10
-        )
-        guard let result else {
+        guard let loaded = await isLoaded(Self.bridgeLabel) else {
             // launchctl did not answer at all. Reporting "off" here would be a
             // guess, and the guess that costs the owner most.
             return installed ? .unknown : .absent
         }
-        if result.succeeded { return .running }
+        if loaded { return .running }
         return installed ? .installedButNotRunning : .absent
     }
+
+    /// Whether launchd has this job, or `nil` when launchctl could not be asked.
+    ///
+    /// The optional is the point, and it is the same distinction
+    /// `BackgroundHelperState.unknown` draws: a question that went unanswered
+    /// is not a no, and every caller here has to decide for itself which way to
+    /// read that.
+    private func isLoaded(_ label: String) async -> Bool? {
+        let result = await runner.run(
+            executable: URL(fileURLWithPath: "/bin/launchctl"),
+            arguments: ["print", "\(domain)/\(label)"],
+            timeout: 10
+        )
+        guard let result else { return nil }
+        return result.succeeded
+    }
+
+    private static let log = Logger(
+        subsystem: "local.sage.voicebridge",
+        category: "appliance"
+    )
 
     private func bootout(_ label: String) async -> Bool {
         let result = await runner.run(
