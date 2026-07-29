@@ -186,25 +186,109 @@ public enum BrainPrompts {
     /// server's `tools/list`, and an unrecognised server falls back to its full
     /// catalogue (see `ToolLoop.availableTools()`).
     ///
-    /// It exists because catalogue size, not prompt wording, turned out to be
-    /// the dominant factor in routing accuracy for a 4B model. Measured on
-    /// qwen3.5:4b against a fixed 12-utterance set, temperature 0:
+    /// It exists because a large catalogue costs something real on every model
+    /// measured — but **what** it costs differs by model, and the two costs look
+    /// nothing alike. Curating helps both. The single-sentence version of this
+    /// comment kept being wrong because there is no single sentence.
     ///
-    ///   * all 27 SAGE tools (~19 KB of schema): 5–6/12 correct, ~10–14 s/turn
-    ///   * this 14-tool subset (~9 KB):         12/12 correct, ~10 s/turn
+    /// ## What it used to say, and why nobody could check it
     ///
-    /// Governance, scope and registration tools are the ones dropped: they are
-    /// not things anyone asks for by voice, and their presence was pulling the
-    /// model towards generic browse-style tools for every question.
+    /// > all 27 SAGE tools (~19 KB of schema): 5–6/12 correct, ~10–14 s/turn
+    /// > this 14-tool subset (~9 KB): 12/12 correct, ~10 s/turn
     ///
-    /// The three note tools take this to 18. Spot-checked on the appliance at
-    /// that size: 6/6 correct — `write_note`, `list_notes`, `web_search`,
-    /// `sage_recall`, `sage_backlog`, and "thanks bro that's all" correctly
-    /// calling nothing. That is a spot check, not the 12-utterance set the
-    /// numbers above come from, so it rules out a collapse rather than proving
-    /// no cost.
+    /// The 12-utterance set behind those numbers was never written down. It was
+    /// quoted all week — it is why the agent-roster tool was declined at 18→19 —
+    /// and it could not be re-run by anyone, including the person who ran it.
+    /// **A measurement whose inputs were never recorded is not a measurement,
+    /// it is a memory.** That is the durable finding here, and the fix is that
+    /// the set is now a file: `Tests/…/VoiceRoutingUtterances.swift`, driven by
+    /// `scripts/measure-tool-routing.py`.
     ///
-    /// Their schemas are written short regardless. If routing does regress,
+    /// ## What re-measuring found — 2026-07-29, temperature 0
+    ///
+    /// Real schemas from SAGE's MCP server, name-only scoring, 12 utterances of
+    /// which 3 must call nothing:
+    ///
+    /// ```
+    ///                14 tools (11,899 B)      27 tools (21,428 B)
+    /// qwen3.5:4b     9/12   5.9 s/turn        9/12   9.3 s/turn
+    /// gemma4:26b     9/12   8.7 s/turn        4/12   8.3 s/turn
+    /// ```
+    ///
+    /// **The two models fail in opposite directions, and either one alone gives
+    /// the wrong answer.**
+    ///
+    /// On **4B**, accuracy does not move — the three misses are byte-identical
+    /// in both runs — and latency rises 58%. On **26B**, accuracy collapses from
+    /// 9/12 to 4/12 and latency does not move at all.
+    ///
+    /// A first pass measured only 4B and concluded "curation buys latency, not
+    /// accuracy". That conclusion was one model wide, and 26B falsifies it.
+    ///
+    /// ## The mechanism — and the wrong one, recorded because it was persuasive
+    ///
+    /// **Latency (4B):** the tool catalogue is in the prompt on *every* turn, so
+    /// 14→27 adds ~9.5 KB the model reads before emitting a token whether or not
+    /// the turn uses a tool. It is not a cost paid by tool-calling turns; it is
+    /// a per-turn tax on every "yeah bro" and every acknowledgement.
+    ///
+    /// **Accuracy (26B):** the tempting explanation for 4B's flat accuracy was
+    /// that the extra schema is *input the model reads and discards* — more
+    /// irrelevant tools cannot make it worse at picking among the relevant ones.
+    /// **The 26B run disproves that.** The extra tools are not discarded, they
+    /// compete: at 27 tools it answers "thanks bro, that's all" with `sage_turn`
+    /// and "good morning" with `sage_inception`. All three no-tool utterances
+    /// pass at 14 and fail at 27.
+    ///
+    /// High-generality tools (`sage_turn`, `sage_inception`, `sage_list`) act as
+    /// attractors — a tool plausible for *any* input wins whenever nothing else
+    /// is a strong match. That is exactly what the original comment described:
+    /// *"their presence was pulling the model towards generic browse-style tools
+    /// for every question."* The observation was right. Only the number attached
+    /// to it, and the claim that 4B was where it showed, failed to reproduce.
+    ///
+    /// ## Three caveats. Do not drop them when quoting the numbers
+    ///
+    /// 1. **This is not their set** — theirs never existed, so this is a
+    ///    comparable set, not a reproduction. The honest claim is that the
+    ///    effect does not appear on the model they named at the sizes they
+    ///    named, measured the obvious way. Not that their number was invented.
+    /// 2. **System prompt differs.** The appliance's real voice prompt is
+    ///    ~7.2 KB; the harness default is 109 characters. Total context is what
+    ///    the model routes against, so an effect needing a large prompt *and* a
+    ///    large catalogue together would be invisible here. Re-run with
+    ///    `SYSTEM_PROMPT_FILE` before treating this as settled.
+    /// 3. **One run per condition.** Temperature 0 helps, but 9/12→4/12 is a
+    ///    large enough swing to deserve repeat sampling before anyone builds on
+    ///    the exact figure.
+    ///
+    /// A fourth, learned the hard way: **do not generalise from one model.**
+    /// The first pass measured 4B only and reached a confident conclusion that
+    /// the second model reversed.
+    ///
+    /// ## What follows, and what does not
+    ///
+    /// Keep this list as it is. That is a narrower claim than "this list is
+    /// justified": the measurement shows curation pays on both models tested —
+    /// ~3.4 s/turn on 4B, five of twelve utterances on 26B — and says nothing
+    /// about whether **18**, the product's actual size once the note tools and
+    /// web search are added, is the right number. The trade is now legible,
+    /// which makes the size reviewable; it does not make it reviewed.
+    ///
+    /// Governance, scope and registration tools are the ones dropped: nobody
+    /// asks for them by voice. That reasoning is unaffected by any of the above,
+    /// and the 26B result strengthens it — `sage_turn` and `sage_inception`,
+    /// two of the worst attractors observed, are exactly the sort of
+    /// high-generality tool no one asks for out loud.
+    ///
+    /// On the roster tool: 18→19 was declined on the unreproducible number, so
+    /// the decline needs revisiting — but *not* on a claim of "no accuracy
+    /// cost", which held on 4B and did not hold on 26B. A roster tool is
+    /// agent-shaped and reasonably specific, so it is unlikely to be an
+    /// attractor; the way to know is to add it to the set and re-run, which is
+    /// now a twenty-minute job rather than an argument.
+    ///
+    /// Note schemas are written short regardless. If routing does regress,
     /// collapsing `read_note` and `list_notes` into one tool that lists when
     /// given no title is the cheapest thing to try before dropping the feature.
     public static let voiceToolAllowlist: Set<String> = Set<String>([

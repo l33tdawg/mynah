@@ -24,20 +24,33 @@ import XCTest
 /// number that cannot be reproduced, against one that was written down with its
 /// conditions.
 ///
-/// ## The most likely reconciliation, and why it is now urgent
+/// ## Answered — 2026-07-29, and the hypothesis was backwards
 ///
-/// The two runs used different brains. `BrainPrompts` says *"measured on
-/// qwen3.5:4b"* — a 4B model running locally. The Mac mini figures do not name
-/// a model, but 91% at 22 tools is not 4B behaviour.
+/// The guess written here was that tool-count sensitivity is a *small-model*
+/// property, so the allowlist would be load-bearing for the local option and
+/// pointless for cloud. Run on two local brains with everything else fixed:
 ///
-/// If tool-count sensitivity is a small-model property, both measurements are
-/// true and neither generalises: the allowlist is load-bearing for the **fully
-/// local** option and pointless for every cloud provider. That question has
-/// just become live, because every provider now offered in setup is a cloud one
-/// — so the curation may be protecting a brain almost nobody is running while
-/// costing capability for everybody else.
+/// ```
+///                14 tools (11,899 B)      27 tools (21,428 B)
+/// qwen3.5:4b     9/12   5.9 s/turn        9/12   9.3 s/turn
+/// gemma4:26b     9/12   8.7 s/turn        4/12   8.3 s/turn
+/// ```
 ///
-/// **Do not resolve this by argument.** Run the set on both.
+/// **The 4B is the one that shrugs it off.** The 26B collapses — and it does so
+/// by over-triggering on exactly the utterances that should call nothing:
+/// "thanks bro, that's all" → `sage_turn`, "good morning" → `sage_inception`.
+/// All three negative cases pass at 14 tools and fail at 27.
+///
+/// So the effect is real, it is not a small-model artefact, and the direction
+/// is the opposite of what was assumed here. High-generality tools act as
+/// attractors: a tool plausible for *any* input wins whenever nothing else is a
+/// strong match. `BrainPrompts.voiceToolAllowlist` carries the full write-up.
+///
+/// Two things this does not settle. The original 5–6/12 figure still does not
+/// reproduce on the model it names. And 4B and 26B are different families —
+/// `gemma3:12b` would have made it a clean same-family sweep, but it cannot do
+/// tool calling at all (`HTTP 400: does not support tools`), so the family
+/// confound cannot be removed on this machine.
 ///
 /// ## Running it
 ///
@@ -58,7 +71,7 @@ import XCTest
 /// with those three facts. A score without them is how we got here.
 enum VoiceRoutingUtterances {
 
-    struct Case: Sendable {
+    struct Case: Sendable, Decodable {
         /// What the owner says, verbatim.
         let utterance: String
         /// The tool that must be called, or `nil` when the right answer is to
@@ -68,82 +81,30 @@ enum VoiceRoutingUtterances {
         let rationale: String
     }
 
-    /// Twelve, deliberately: this is the size the quoted numbers refer to, so a
-    /// re-run is comparable to them rather than a fresh measurement that cannot
-    /// settle the disagreement.
+    /// Decoded from `Tests/Fixtures/voice-routing-utterances.json`, which
+    /// `scripts/measure-tool-routing.py` reads too.
     ///
-    /// Composition is not accidental. Nine cases expect a specific tool across
-    /// the distinct families a voice turn actually reaches — memory, tasks,
-    /// notes, search, agents. Three expect **no tool at all**, because the
-    /// failure mode that curation was introduced to fix was over-triggering:
-    /// the model reaching for a generic browse-style tool for every question.
-    /// A set of twelve tool-calling utterances would score 12/12 on a model that
-    /// calls a tool for "thanks, that's all", which is precisely the broken
-    /// behaviour.
-    static let all: [Case] = [
-        Case(
-            utterance: "What did we decide about the DMG signing thing?",
-            expected: "sage_recall",
-            rationale: "Recall by topic. The commonest voice turn there is."
-        ),
-        Case(
-            utterance: "Remember that the Apple account for this is l33tdawg at hackinthebox dot org.",
-            expected: "sage_remember",
-            rationale: "Storing a fact. Must not be confused with recall."
-        ),
-        Case(
-            utterance: "What's on my plate?",
-            expected: "sage_backlog",
-            rationale: "Idiomatic, not literal — no word here matches a tool name."
-        ),
-        Case(
-            utterance: "Add a task to measure time to first token on DeepSeek.",
-            expected: "sage_task",
-            rationale: "Creating work, adjacent to backlog and easily confused with it."
-        ),
-        Case(
-            utterance: "What have I been working on this week?",
-            expected: "sage_timeline",
-            rationale: "Time-scoped. The classic pull towards a generic browse tool."
-        ),
-        Case(
-            utterance: "Make a note called shopping list — milk, bread, coffee.",
-            expected: "write_note",
-            rationale: "A note is not a memory. These two collapse into each other under pressure."
-        ),
-        Case(
-            utterance: "What notes do I have?",
-            expected: "list_notes",
-            rationale: "Distinguishes listing from reading, the pair flagged as collapsible."
-        ),
-        Case(
-            utterance: "What's the weather in Kuala Lumpur tomorrow?",
-            expected: "web_search",
-            rationale: "Outside SAGE entirely. Reaching for a SAGE tool here is the failure."
-        ),
-        Case(
-            utterance: "Is anything waiting for me from the other agents?",
-            expected: "sage_inbox",
-            rationale: "Agent-to-agent. Sits near find_agent and federation."
-        ),
+    /// **One file, deliberately.** These cases were briefly declared twice —
+    /// here and in the harness — and the two copies had already drifted apart
+    /// before anyone noticed, so the numbers in `BrainPrompts` described a set
+    /// that was not the set checked in beside them. That is the same defect as
+    /// `deepseek-chat` surviving in `BrainFactory` under a comment claiming it
+    /// matched the daemon, and it would have quietly recreated the exact problem
+    /// this whole exercise exists to fix: a measurement whose inputs are not the
+    /// ones recorded.
+    static let all: [Case] = {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // SageVoiceCoreTests
+            .deletingLastPathComponent()   // Tests
+            .appendingPathComponent("Fixtures/voice-routing-utterances.json")
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(Fixture.self, from: data) else {
+            return []
+        }
+        return decoded.cases
+    }()
 
-        // The three that must call nothing.
-        Case(
-            utterance: "Thanks bro, that's all.",
-            expected: nil,
-            rationale: "Sign-off. A tool call here is pure over-trigger."
-        ),
-        Case(
-            utterance: "How are you doing today?",
-            expected: nil,
-            rationale: "Pleasantry. Tempting for a status tool, and wrong."
-        ),
-        Case(
-            utterance: "Can you say that again but shorter?",
-            expected: nil,
-            rationale: "Refers to the reply just given. Needs conversation, not retrieval."
-        )
-    ]
+    private struct Fixture: Decodable { let cases: [Case] }
 }
 
 /// Properties of the set itself, so the fixture cannot rot unnoticed.

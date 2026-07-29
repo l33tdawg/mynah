@@ -30,7 +30,7 @@ fixed: same MCP schemas, same utterances, same temperature, same host.
 Scores NAME ONLY. This measures routing, not argument quality; conflating the
 two is how a 12/12 stops being reproducible.
 """
-import json, sys, time, urllib.request
+import json, pathlib, sys, time, urllib.request
 
 OLLAMA = "http://127.0.0.1:11434/api/chat"
 
@@ -49,20 +49,15 @@ ALLOWLIST = {
 # Three negatives, because the failure curation exists to fix is OVER-triggering
 # and twelve tool-calling utterances score 12/12 on a model that calls a tool
 # for "thanks bro that's all".
-CASES = [
-    ("What did we decide about the DMG signing thing?",              "sage_recall"),
-    ("Remember that the Apple account for this is l33tdawg at hackinthebox dot org.", "sage_remember"),
-    ("What's on my plate?",                                          "sage_backlog"),
-    ("Add a task to measure time to first token on DeepSeek.",       "sage_task"),
-    ("What have I been working on this week?",                       "sage_timeline"),
-    ("Is anything waiting for me from the other agents?",            "sage_inbox"),
-    ("Forget what I told you about the old relay address.",          "sage_forget"),
-    ("Which agent is handling the Chrome work?",                     "sage_find_agent"),
-    ("Is the SAGE node healthy?",                                    "sage_status"),
-    ("Thanks bro, that's all.",                                      None),
-    ("Can you say that again but shorter?",                          None),
-    ("Good morning.",                                                None),
-]
+# The set lives in ONE file, read by this script and by the Swift fixture test.
+# Two copies under a comment saying they agree is how `deepseek-chat` survived
+# in this repo for weeks; the same mistake here would silently decouple the
+# numbers from the set they were measured against, which is the entire failure
+# this harness exists to end.
+_FIXTURE = (pathlib.Path(__file__).resolve().parent.parent
+            / "Tests/Fixtures/voice-routing-utterances.json")
+CASES = [(c["utterance"], c["expected"])
+         for c in json.loads(_FIXTURE.read_text())["cases"]]
 
 # The appliance's real voice system prompt is ~7.2 KB. A 109-character stand-in
 # is not a smaller version of it — total context is what the model routes
