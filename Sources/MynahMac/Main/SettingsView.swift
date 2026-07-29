@@ -1500,10 +1500,10 @@ struct SettingsView: View {
             // The one that needed saying. macOS has stopped it, Mynah cannot
             // start it, and until now nothing told the owner either fact.
             return "macOS has it switched off, so nothing is answering your phone right now. "
-                + "Turn Mynah back on in System Settings, under General → Login Items."
+                + "Turn Mynah back on in System Settings, under General → Login Items & Extensions."
         case .absent:
             return "Mynah installs a small background helper when the switch above is on. "
-                + "It appears in System Settings, under General → Login Items."
+                + "It appears in System Settings, under General → Login Items & Extensions."
         case .unknown, .none:
             return "Mynah is checking whether macOS is running it."
         }

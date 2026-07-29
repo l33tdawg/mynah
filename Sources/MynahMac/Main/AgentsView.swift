@@ -1233,7 +1233,7 @@ struct AgentsView: View {
 /// and the caution-ink memory count. Those are the *only* visible difference
 /// between an agent that works and one that is silently muted, and a density
 /// pass that quietly ate them would have removed the reason this screen exists.
-struct AgentListRow: View {
+private struct AgentListRow: View {
     let agent: NodeAgent
     let isSelected: Bool
 
@@ -1315,6 +1315,14 @@ struct AgentListRow: View {
 // MARK: - What an agent can read and write
 
 /// The standing facts, for whichever agent is selected.
+///
+/// Internal rather than private, and deliberately: this and `ApplianceStanding`
+/// are pure SwiftUI, so a throwaway `ImageRenderer` harness can compose them and
+/// draw the real thing rather than a lookalike. That is how the roster's
+/// truncated name and the hyphenated "Restrict / ed" pill were found — neither
+/// was visible in the code, and both were obvious in a PNG. `AgentListRow` stays
+/// private because it carries `.pointingHandCursor()`, which is AppKit-backed
+/// and refuses to render either way.
 ///
 /// Always present, never in alarm ink, and unchanged by whether anything is
 /// wrong. The warning below can clear; these cannot, because "what can it read"

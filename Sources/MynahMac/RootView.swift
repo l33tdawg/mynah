@@ -406,7 +406,7 @@ struct ReadyStage: View {
                 headline: "Your Mac will say Mynah added a background item.",
                 explanation: "That is this: a small helper that answers your phone while the "
                     + "window is closed. It appears in System Settings under General → Login "
-                    + "Items, and switching it off there stops Mynah answering."
+                    + "Items & Extensions, and switching it off there stops Mynah answering."
             )
         }
     }
