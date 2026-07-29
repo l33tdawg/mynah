@@ -454,6 +454,17 @@ struct ReadyStage: View {
 
     private var subtitle: String? {
         guard unfinished.isEmpty else {
+            // The fourth case, and the same shape as the title's: "Mynah will
+            // answer as soon as you finish it" is a promise about what happens
+            // after the deferred step, and it is false while a pause marker is
+            // on disk — finishing the step changes nothing until the appliance
+            // is started again. The title above stays "One thing left.", which
+            // is understated rather than untrue; this sentence was the one that
+            // actually made a claim it could not keep.
+            if app.isPaused {
+                return "Finish it and start Mynah answering — both are waiting in Settings "
+                    + "whenever you're ready."
+            }
             return "Mynah will answer as soon as you finish it — and it's waiting in Settings "
                 + "whenever you're ready."
         }

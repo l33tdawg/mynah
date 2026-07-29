@@ -391,7 +391,12 @@ final class ConversationModel {
     /// `MainShell` switches its detail pane with a `switch`, which destroys the
     /// previous branch — so a model owned by the view would erase what Mynah
     /// just said the moment the owner glanced at Settings.
-    static let shared = ConversationModel()
+    /// The one conversation.
+    ///
+    /// `voice:` is nil on a Mac with no local recogniser, which is what keeps
+    /// `canHoldToTalk` false and the hold-to-talk control absent rather than
+    /// present-and-failing. See `MicrophoneVoiceCapture.ifAvailable`.
+    static let shared = ConversationModel(voice: MicrophoneVoiceCapture.ifAvailable())
 
     /// Matches the appliance. Each turn re-sends the whole history plus every
     /// tool schema, and prefill is the dominant cost, so history is the most

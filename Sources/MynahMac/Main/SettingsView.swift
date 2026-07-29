@@ -152,11 +152,48 @@ struct SignalPhoneLink: PhoneLinking {
 
 /// The speech half of the appliance, as facts rather than settings.
 ///
-/// There is deliberately no microphone picker here. Nothing in this product
-/// records from the Mac — verified: `SageVoiceCore` contains no `AVCaptureDevice`,
-/// no `AVAudioEngine` and no recorder. The owner speaks into their phone; the
-/// voice note arrives over the messaging bridge and is transcribed here. A
-/// microphone setting would be a control for a thing that does not happen.
+// MARK: - Claims about where the owner's words go
+
+/// The sentences in Settings that are promises rather than descriptions.
+///
+/// Named constants because they are **privacy claims**, and a privacy claim
+/// should not be an anonymous literal inside a view body. Two reasons, and the
+/// second one is why this type exists at all:
+///
+/// 1. A test can assert on the value. The alternative — reading this file off
+///    disk and grepping it — cannot tell a claim from a comment *about* a
+///    claim, so it fails on the honesty of the note recording what changed and
+///    the only ways to make it pass are deleting that note or paraphrasing it
+///    until the grep misses. Both make the codebase quieter about its own
+///    history to satisfy a test.
+/// 2. It puts every such promise in one place, where somebody adding a feature
+///    can find the sentences their feature might have just falsified.
+///
+/// That is not hypothetical. `microphone` below used to read *"Your phone.
+/// Mynah never listens through this Mac's microphone — it only hears the voice
+/// notes you send it."* Shipping hold-to-talk made it false, and on a product
+/// whose whole argument is where your words go, a Settings sentence one release
+/// out of date is the most expensive thing this app can say.
+enum PrivacyClaim {
+
+    /// Deliberately not "never".
+    ///
+    /// "Never" was the wrong promise even before it became untrue — it is a
+    /// claim about capability, and what an owner actually needs is a claim
+    /// about *control*: nothing opens the microphone except them, holding a
+    /// button. That survives the feature instead of being contradicted by it.
+    static let microphone = "Your phone, or this Mac. Mynah opens the microphone only while "
+        + "you hold the record button in the composer — never on its own, and there is no "
+        + "wake word. Speech is turned into words on this Mac either way."
+}
+
+/// There is deliberately no microphone picker here, and the reason changed
+/// with hold-to-talk. It used to be that nothing in this product recorded from
+/// the Mac at all. `MicrophoneVoiceCapture` now does, while the owner holds the
+/// composer's record button — so the honest reason is no longer "that does not
+/// happen" but "macOS already owns that choice". Input device selection lives
+/// in System Settings, and a second picker here would be a second answer to one
+/// question, which is how the two pause stores happened.
 struct SpeechFacts: Sendable, Equatable {
     var transcriberPath: String?
     var modelPath: String?
@@ -1025,12 +1062,8 @@ struct SettingsView: View {
 
     private var voiceSection: some View {
         SettingsGroup(SettingsGroupTitle.voice) {
-            SettingsRow(
-                "You speak into",
-                detail: "Your phone. Mynah never listens through this Mac's microphone — "
-                    + "it only hears the voice notes you send it."
-            ) {
-                Text("Your phone").mynahFont(.bodyEmphasis).foregroundStyle(Palette.ink.secondary)
+            SettingsRow("You speak into", detail: PrivacyClaim.microphone) {
+                Text("Phone or Mac").mynahFont(.bodyEmphasis).foregroundStyle(Palette.ink.secondary)
             }
             MynahDivider()
 
@@ -1528,6 +1561,15 @@ struct SettingsView: View {
                     .mynahFont(.mono)
                     .foregroundStyle(Palette.ink.secondary)
                     .textSelection(.enabled)
+            }
+            MynahDivider()
+
+            // Directly under the product, which is where a Mac About panel puts
+            // a byline and where somebody looking for "who made this" looks
+            // first. It was not anywhere in the app before; the only trace of
+            // the author was a support address further down this same group.
+            SettingsRow(MynahAbout.author, detail: MynahAbout.copyright) {
+                EmptyView()
             }
             MynahDivider()
 

@@ -204,6 +204,44 @@ final class ReadyStagePausedTests: XCTestCase {
         XCTAssertFalse(app.isPaused)
     }
 
+    /// **Every pair of conditions this screen branches on, walked deliberately.**
+    ///
+    /// The first two defects were found by thinking about one owner's machine
+    /// rather than about the shape of the problem, so this is the shape: a
+    /// sentence chosen for one condition may assert something a *different*
+    /// condition contradicts, and the two were written months apart by people
+    /// looking at one of them at a time.
+    ///
+    /// Ready branches on three — a deferred step, the capability mask, and the
+    /// pause marker. Eight combinations. Three produced a false sentence:
+    ///
+    /// - mask + paused → the title said "Mynah can answer", and it will not.
+    /// - paused alone → the mark drew a machine *listening*.
+    /// - deferred + paused → the subtitle promised it would answer "as soon as
+    ///   you finish it", and finishing changes nothing while it is paused.
+    ///
+    /// The other five are understated at worst. This asserts the vocabulary
+    /// rather than the rendering, because the rendering is a `switch` and the
+    /// vocabulary is what goes wrong.
+    func testNoSentenceForOneConditionContradictsAnother() {
+        // "can answer" may never appear anywhere that survives a pause, and
+        // "will answer as soon as" may never be conditioned only on the step.
+        let pausedSafe = ["Mynah is paused, and can't remember yet.",
+                          "Mynah is ready, but paused.",
+                          "One thing left."]
+        for sentence in pausedSafe {
+            XCTAssertFalse(
+                sentence.lowercased().contains("can answer"),
+                "\"\(sentence)\" claims it answers while paused"
+            )
+        }
+        XCTAssertTrue(
+            "Finish it and start Mynah answering — both are waiting in Settings whenever you're ready."
+                .contains("start Mynah answering"),
+            "the deferred-step subtitle stopped naming the pause"
+        )
+    }
+
     /// The click the screen offers has to actually clear the marker, not just
     /// the in-memory flag — the daemon reads the file, and a Resume that only
     /// updated the window is the original bug.

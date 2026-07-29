@@ -36,6 +36,26 @@ struct Attribution: Identifiable, Sendable, Equatable {
 /// first written against.
 enum MynahAbout {
 
+    /// Whose product this is.
+    ///
+    /// It was nowhere in the interface. The owner's name appeared in the tree
+    /// exactly twice — as a support address and inside a GitHub URL — and he
+    /// asked for it, which is a reasonable thing to want on the thing you made.
+    ///
+    /// Read off the repository's own `LICENSE` (`Copyright 2026 Dhillon Andrew
+    /// Kannabhiran`) rather than typed from memory, and deliberately no company,
+    /// no tagline and no year *range*: the file says one year and this says the
+    /// same one.
+    static let author = "Dhillon Andrew Kannabhiran"
+
+    /// The line an About panel carries under the name.
+    ///
+    /// `LICENSE` is Apache 2.0 and now actually ships inside the bundle —
+    /// `package-app.sh` copies it, which it did not before, so `Info.plist`'s
+    /// long-standing "see the LICENSE file included with this app" stopped being
+    /// a claim about a file that was not there.
+    static let copyright = "Copyright © 2026. Apache 2.0 licensed."
+
     /// Where to write when something is wrong.
     ///
     /// The repository records no support address — the only address in the tree

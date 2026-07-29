@@ -314,6 +314,28 @@ cp "$ICON_SOURCE" "$APP/Contents/Resources/Mynah.icns"
 DECLARED_ICON="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")"
 [[ -f "$APP/Contents/Resources/${DECLARED_ICON%.icns}.icns" ]] || die "CFBundleIconFile is '$DECLARED_ICON' but no such icns was staged."
 
+# Licences, and this is an obligation rather than tidiness.
+#
+# signal-cli is GPL 3.0 and ships inside this bundle. GPL-3.0 section 4 requires
+# a copy of the licence to be conveyed with the program, and `resources/licences`
+# exists for exactly that — but nothing copied it, so every build shipped a
+# copyleft binary with no licence text anywhere near it. `Info.plist` also told
+# the owner to "see the LICENSE file included with this app", which was a claim
+# about a file no build had ever contained.
+#
+# Both are the same one-line omission. The app's own Apache licence goes in
+# beside them, which is what makes that Info.plist string true.
+[[ -f "$ROOT/LICENSE" ]] || die "LICENSE is missing from the repository; the bundle would ship without one."
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+if [[ -d "$ROOT/resources/licences" ]]; then
+  mkdir -p "$APP/Contents/Resources/licences"
+  cp "$ROOT/resources/licences/"* "$APP/Contents/Resources/licences/"
+fi
+# The GPL component is the one with a legal requirement attached, so its absence
+# is fatal rather than a warning.
+[[ -f "$APP/Contents/Resources/licences/GPL-3.0.txt" ]] \
+  || die "signal-cli is GPL 3.0 and ships in this bundle, but its licence text was not staged."
+
 if [[ "$BUNDLE_SAGE" != "0" && "$BUNDLE_SAGE" != "false" ]]; then
   [[ -d "$SAGE_APP_SOURCE" ]] || die "SAGE.app not vendored at $SAGE_APP_SOURCE — run scripts/vendor-sage.sh first."
   require_sage_app "$SAGE_APP_SOURCE"

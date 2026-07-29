@@ -91,8 +91,12 @@
   <key>NSSupportsAutomaticTermination</key>
   <false/>
 
+  <!-- The system's own About box and Finder's Get Info read this, which makes
+       it the ordinary place a Mac app names its author. It named nobody, and
+       pointed at a LICENSE file that package-app.sh was not copying into the
+       bundle — both fixed: the name is here and the file now really ships. -->
   <key>NSHumanReadableCopyright</key>
-  <string>Apache 2.0 licensed. See the LICENSE file included with this app.</string>
+  <string>Copyright © 2026 Dhillon Andrew Kannabhiran. Apache 2.0 licensed; see LICENSE inside this app.</string>
 
   <!-- Set by scripts/package-app.sh; read back by scripts/notarize.sh to name
        the archive. Empty means a plain release. -->

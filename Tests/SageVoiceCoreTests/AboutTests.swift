@@ -9,6 +9,88 @@ import XCTest
 /// the shape of the list is asserted here rather than trusted to review.
 final class AboutTests: XCTestCase {
 
+    // MARK: Whose product this is
+
+    /// It was nowhere in the interface. The author's name appeared in the whole
+    /// tree exactly twice — as a support address and inside a GitHub URL — and
+    /// he had to ask for it.
+    func testTheAuthorIsNamed() {
+        XCTAssertEqual(MynahAbout.author, "Dhillon Andrew Kannabhiran")
+    }
+
+    /// Read off the repository's own `LICENSE`, which says `Copyright 2026
+    /// Dhillon Andrew Kannabhiran` and is Apache 2.0. No company, no tagline,
+    /// and one year rather than a range — the file says one year.
+    func testTheCopyrightLineMatchesTheLicenceFile() throws {
+        let licence = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()  // SageVoiceCoreTests
+                .deletingLastPathComponent()  // Tests
+                .deletingLastPathComponent()  // repo root
+                .appendingPathComponent("LICENSE"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            licence.contains("Copyright 2026 \(MynahAbout.author)"),
+            "the About panel names an author or year the LICENSE does not"
+        )
+        XCTAssertTrue(licence.contains("Apache License"))
+        XCTAssertTrue(MynahAbout.copyright.contains("2026"))
+        XCTAssertTrue(MynahAbout.copyright.contains("Apache 2.0"))
+    }
+
+    /// The bundle tells the owner to "see the LICENSE file included with this
+    /// app", and for the whole life of the product no build contained one —
+    /// `package-app.sh` copied the icon and the models and never the licences.
+    ///
+    /// It is not only a broken cross-reference: **signal-cli is GPL 3.0 and
+    /// ships inside the bundle**, and GPL-3.0 section 4 requires a copy of the
+    /// licence to be conveyed with the program. `resources/licences` exists for
+    /// exactly that. This asserts the packaging step that now stages them is
+    /// still there, because it is one line and its absence is invisible until
+    /// somebody asks for source.
+    func testThePackagingStepStagesTheLicencesItIsObligedTo() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: root.appendingPathComponent("LICENSE").path),
+            "the repository has no LICENSE to ship"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("resources/licences/GPL-3.0.txt").path
+            ),
+            "the GPL text signal-cli obliges us to convey is not in the repository"
+        )
+
+        let script = try String(
+            contentsOf: root.appendingPathComponent("scripts/package-app.sh"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            script.contains("Contents/Resources/LICENSE"),
+            "package-app.sh no longer stages LICENSE, so Info.plist points at a file that is absent"
+        )
+        XCTAssertTrue(
+            script.contains("Contents/Resources/licences"),
+            "package-app.sh no longer stages the licences a GPL component obliges us to ship"
+        )
+    }
+
+    /// Every copyleft credit already carries a source offer; this checks the
+    /// component that creates the obligation is still the one we think it is.
+    func testTheGPLComponentIsStillTheOneWeShipLicenceTextFor() {
+        let copyleft = MynahAbout.components.filter { $0.licence.contains("GPL") }
+        XCTAssertFalse(copyleft.isEmpty, "no GPL component — the staged GPL text may now be unnecessary")
+        for item in copyleft {
+            XCTAssertNotNil(item.sourceOffer, "\(item.name) is copyleft and makes no source offer")
+        }
+    }
+
     // MARK: The list itself
 
     /// A blank licence renders as a blank column and reads as "no licence",
