@@ -71,6 +71,28 @@ REQUIRE_ASR_ASSETS="${SAGE_VOICE_REQUIRE_ASR_ASSETS:-1}"
 BUNDLE_WHISPER_CPP="${SAGE_VOICE_BUNDLE_WHISPER_CPP:-0}"
 SIGNAL_CLI_SOURCE="${SAGE_VOICE_SIGNAL_CLI:-$ROOT/vendor/signal/bin/signal-cli}"
 
+# The native voice: ONNX Runtime for the graph, espeak-ng for the front end.
+#
+# Both are release inputs like the ASR engines above, and both must be staged
+# before the signing pass — a helper added afterwards notarizes as "no Developer
+# ID, no secure timestamp, no hardened runtime", which this script has already
+# paid for once with the call endpoint.
+#
+# The 325 MB model itself is deliberately NOT here. It is downloaded when Signal
+# is linked, because model weights are data and data has no Gatekeeper problem,
+# whereas these two are executables and would be quarantined if fetched.
+ORT_ROOT="${SAGE_VOICE_ORT_ROOT:-$ROOT/vendor/onnxruntime}"
+ORT_DYLIB_SOURCE="${SAGE_VOICE_ORT_DYLIB:-$ORT_ROOT/lib/libonnxruntime.dylib}"
+ESPEAK_ROOT="${SAGE_VOICE_ESPEAK_ROOT:-$ROOT/vendor/espeak-ng}"
+ESPEAK_BIN_SOURCE="${SAGE_VOICE_ESPEAK_BIN:-$ESPEAK_ROOT/bin/espeak-ng}"
+ESPEAK_DATA_SOURCE="${SAGE_VOICE_ESPEAK_DATA:-$ESPEAK_ROOT/share/espeak-ng-data}"
+
+# Required by default, because a build without them ships an appliance that
+# answers in the robotic `say` voice — which looks like a regression rather than
+# a missing provisioning step, and is exactly the kind of silent downgrade that
+# reaches an owner.
+REQUIRE_NATIVE_VOICE="${SAGE_VOICE_REQUIRE_NATIVE_VOICE:-1}"
+
 # The call endpoint. Built rather than vendored, because it links a static
 # libopus and so has to be compiled for the architecture it will run on —
 # scripts/build-endpoint.sh does that and refuses to hand over the wrong one.
@@ -271,6 +293,61 @@ elif [[ "$REQUIRE_WEBRTC_ENDPOINT" == "1" || "$REQUIRE_WEBRTC_ENDPOINT" == "true
 Build it with: webrtc/scripts/build-endpoint.sh"
 fi
 
+# --- the native voice ------------------------------------------------------
+#
+# `Contents/Frameworks` is not a free choice: Package.swift links with
+# `-rpath @executable_path/../Frameworks`, so this is the one directory where the
+# app will find the dylib. `provision-onnxruntime.sh` has already rewritten its
+# install name to `@rpath/libonnxruntime.dylib`; left alone it would point at the
+# release machine's absolute path and the app would not launch anywhere else.
+if [[ -f "$ORT_DYLIB_SOURCE" ]]; then
+  ORT_ARCH="$(lipo -info "$ORT_DYLIB_SOURCE" 2>/dev/null || echo unknown)"
+  case "$ORT_ARCH" in
+    *arm64*) ;;
+    *) die "Bundled ONNX Runtime is not arm64: $ORT_ARCH" ;;
+  esac
+  mkdir -p "$APP/Contents/Frameworks"
+  cp "$ORT_DYLIB_SOURCE" "$APP/Contents/Frameworks/libonnxruntime.dylib"
+  chmod +x "$APP/Contents/Frameworks/libonnxruntime.dylib"
+elif [[ "$REQUIRE_NATIVE_VOICE" == "1" || "$REQUIRE_NATIVE_VOICE" == "true" ]]; then
+  die "Required ONNX Runtime is missing: $ORT_DYLIB_SOURCE
+Run scripts/provision-onnxruntime.sh before packaging."
+fi
+
+# espeak-ng, and the licence that governs it.
+#
+# It goes in Resources rather than MacOS because it is not one of our helpers —
+# it is a GPLv3 program we ship alongside and invoke as a subprocess. COPYING
+# travels with it so the obligation is discharged by the bundle itself, and the
+# data directory has to come too: the path compiled into the binary points at
+# whichever machine built it, so `EspeakPhonemizer` passes ESPEAK_DATA_PATH and
+# this is what it points at.
+if [[ -x "$ESPEAK_BIN_SOURCE" && -d "$ESPEAK_DATA_SOURCE" ]]; then
+  ESPEAK_ARCH="$(lipo -info "$ESPEAK_BIN_SOURCE" 2>/dev/null || echo unknown)"
+  case "$ESPEAK_ARCH" in
+    *arm64*) ;;
+    *) die "Bundled espeak-ng is not arm64: $ESPEAK_ARCH" ;;
+  esac
+  # A dynamically-linked espeak would need its libespeak-ng.dylib alongside —
+  # and linking that library is the thing GPLv3 forbids us. The provisioning
+  # script builds static for exactly this reason, so a dependency on it here
+  # means the wrong binary got staged.
+  if otool -L "$ESPEAK_BIN_SOURCE" | grep -q 'libespeak'; then
+    die "Bundled espeak-ng links libespeak-ng dynamically.
+Rebuild it with scripts/provision-espeak-ng.sh, which configures --disable-shared."
+  fi
+  mkdir -p "$APP/Contents/Resources/espeak-ng/bin" "$APP/Contents/Resources/espeak-ng/share"
+  cp "$ESPEAK_BIN_SOURCE" "$APP/Contents/Resources/espeak-ng/bin/espeak-ng"
+  chmod +x "$APP/Contents/Resources/espeak-ng/bin/espeak-ng"
+  rm -rf "$APP/Contents/Resources/espeak-ng/share/espeak-ng-data"
+  cp -R "$ESPEAK_DATA_SOURCE" "$APP/Contents/Resources/espeak-ng/share/espeak-ng-data"
+  [[ ! -f "$ESPEAK_ROOT/COPYING" ]] \
+    || cp "$ESPEAK_ROOT/COPYING" "$APP/Contents/Resources/espeak-ng/COPYING"
+elif [[ "$REQUIRE_NATIVE_VOICE" == "1" || "$REQUIRE_NATIVE_VOICE" == "true" ]]; then
+  die "Required espeak-ng is missing: $ESPEAK_BIN_SOURCE
+Run scripts/provision-espeak-ng.sh before packaging."
+fi
+
 if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
   if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
     cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
@@ -377,6 +454,14 @@ fi
 # `codesign --verify` passed locally the whole time, because an ad-hoc signature
 # is a valid signature — it is only Apple that will not accept one.
 [[ ! -f "$APP/Contents/MacOS/sage-voice-webrtc" ]] || sign "$APP/Contents/MacOS/sage-voice-webrtc"
+# The native voice. The dylib is loaded by our own executables and the espeak
+# binary is launched as a subprocess, so both are code and both need a
+# signature — the same lesson the call endpoint above taught, applied before it
+# costs another rejected notarization.
+[[ ! -f "$APP/Contents/Frameworks/libonnxruntime.dylib" ]] \
+  || sign "$APP/Contents/Frameworks/libonnxruntime.dylib"
+[[ ! -f "$APP/Contents/Resources/espeak-ng/bin/espeak-ng" ]] \
+  || sign "$APP/Contents/Resources/espeak-ng/bin/espeak-ng"
 sign "$APP/Contents/MacOS/$CLI_PRODUCT"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
