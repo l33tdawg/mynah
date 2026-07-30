@@ -51,11 +51,17 @@ ln -s /Applications "$STAGING/Applications"
 # Licences travel with the disk image, not only inside the app.
 #
 # Most of what Mynah bundles is satisfied by the credit in its About panel.
-# signal-cli is not: it is GPL 3.0, it ships unmodified inside the app, and
-# whoever receives this disk image is entitled to its source. Mynah runs it as a
-# separate process over a socket, so nothing of Mynah's own becomes copyleft —
-# but the obligation to offer source travels with the copy, and a notice only
+# Two components are not: signal-cli and espeak-ng are both GPL 3.0, both ship
+# unmodified inside the app, and whoever receives this disk image is entitled to
+# the source of each. Mynah runs both as separate processes — signal-cli over a
+# socket, espeak-ng over stdout — so nothing of Mynah's own becomes copyleft, but
+# the obligation to offer source travels with the copy, and a notice only
 # reachable by launching the app is a poor way to discharge it.
+#
+# espeak-ng was added when the voice moved in process. It arrived as a signed
+# binary in Contents/Resources and very nearly arrived with no mention here at
+# all, which would have shipped an image distributing GPL software it did not
+# name.
 LICENCES="$STAGING/Licences"
 mkdir -p "$LICENCES"
 cat > "$LICENCES/README.txt" <<'NOTICE'
@@ -63,11 +69,21 @@ Mynah bundles software written by other people.
 
 Every component and its licence is listed in the app under Settings -> About.
 
-signal-cli (https://github.com/AsamK/signal-cli) is licensed under the GNU
-General Public License version 3 and is included here unmodified. You are
-entitled to its complete corresponding source code. It is available from the
+Two are licensed under the GNU General Public License version 3, ship here
+unmodified, and entitle you to their complete corresponding source code:
+
+  signal-cli    https://github.com/AsamK/signal-cli
+  espeak-ng     https://github.com/espeak-ng/espeak-ng
+
+espeak-ng is built from the tagged 1.52.0 release without patches; the exact
+commit it came from is recorded in Mynah.app/Contents/Resources/espeak-ng/
+alongside its own copy of the licence. Source for either is available from the
 address above, and on request from the contact address shown in Settings ->
 About.
+
+Mynah itself is not GPL software. It speaks to both of these as separate
+programs — signal-cli over a local socket, espeak-ng by reading its output — and
+links neither.
 
 The full text of the GPL version 3 is in GPL-3.0.txt beside this file.
 NOTICE
@@ -76,7 +92,8 @@ if [[ -f "$ROOT/resources/licences/GPL-3.0.txt" ]]; then
   cp "$ROOT/resources/licences/GPL-3.0.txt" "$LICENCES/GPL-3.0.txt"
 else
   die "resources/licences/GPL-3.0.txt is missing.
-A disk image containing signal-cli must carry the GPL text it is distributed under."
+A disk image containing signal-cli and espeak-ng must carry the GPL text they are
+distributed under."
 fi
 
 # The volume carries the explanation too, since for most people the mounted disk

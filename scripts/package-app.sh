@@ -370,8 +370,16 @@ Rebuild it with scripts/provision-espeak-ng.sh, which configures --disable-share
   chmod +x "$APP/Contents/Resources/espeak-ng/bin/espeak-ng"
   rm -rf "$APP/Contents/Resources/espeak-ng/share/espeak-ng-data"
   cp -R "$ESPEAK_DATA_SOURCE" "$APP/Contents/Resources/espeak-ng/share/espeak-ng-data"
+  # The licence, and what it applies to. `VERSION` and `SOURCE_COMMIT` are what
+  # make the corresponding-source offer answerable years later: "espeak-ng
+  # 1.52.0" is ambiguous across rebuilds, an upstream commit hash is not. The
+  # disk image's licence note points at these files, so they have to be here.
   [[ ! -f "$ESPEAK_ROOT/COPYING" ]] \
     || cp "$ESPEAK_ROOT/COPYING" "$APP/Contents/Resources/espeak-ng/COPYING"
+  [[ ! -f "$ESPEAK_ROOT/VERSION" ]] \
+    || cp "$ESPEAK_ROOT/VERSION" "$APP/Contents/Resources/espeak-ng/VERSION"
+  [[ ! -f "$ESPEAK_ROOT/SOURCE_COMMIT" ]] \
+    || cp "$ESPEAK_ROOT/SOURCE_COMMIT" "$APP/Contents/Resources/espeak-ng/SOURCE_COMMIT"
 elif [[ "$REQUIRE_NATIVE_VOICE" == "1" || "$REQUIRE_NATIVE_VOICE" == "true" ]]; then
   die "Required espeak-ng is missing: $ESPEAK_BIN_SOURCE
 Run scripts/provision-espeak-ng.sh before packaging."
