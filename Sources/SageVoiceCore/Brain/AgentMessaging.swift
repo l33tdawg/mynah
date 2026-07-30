@@ -154,9 +154,45 @@ public enum AgentMessagingTrouble: LocalizedError, Equatable {
         case .unreachable(let name, let why):
             return "\(name) is registered but isn't accepting messages right now. \(why)"
         case .refused(let detail):
-            return "Your SAGE node wouldn't send that. \(detail)"
+            return Self.ownerSentence(forRefusal: detail)
         case .nodeUnavailable:
             return "Mynah can't reach your SAGE node, so it can't send anything to your agents."
+        }
+    }
+
+    /// The node's refusal, in the owner's terms.
+    ///
+    /// **This used to append the node's own words verbatim**, which put
+    /// `MCP tool 'sage_inbox' failed: Error: pipeline inbox: Active agent
+    /// required: agent pipeline work is available only to an active ordinary
+    /// agent on this SAGE.` on a page a non-technical owner reads. Every word of
+    /// that is accurate and none of it tells them what to do.
+    ///
+    /// The one refusal that actually happens on a fresh install is the restricted
+    /// appliance, and it has the same cause and the same fix as the warning on the
+    /// Agents page — so it says the same thing, rather than describing one problem
+    /// in two vocabularies. Anything unrecognised gets a plain sentence; the raw
+    /// text is still available through `technicalDetail` for the administrator
+    /// disclosure, which is where a node's internal vocabulary belongs.
+    static func ownerSentence(forRefusal detail: String) -> String {
+        let lowered = detail.lowercased()
+        if lowered.contains("active ordinary agent") || lowered.contains("active agent required") {
+            return "Mynah can't exchange messages with your other agents until it has its own "
+                + "memory. Somebody with administrator access to SAGE has to set that up."
+        }
+        return "Your SAGE node turned that down. Nothing was sent."
+    }
+
+    /// The node's own words, for the administrator disclosure rather than the
+    /// owner. `nil` where there is nothing a node said.
+    public var technicalDetail: String? {
+        switch self {
+        case .refused(let detail):
+            return detail
+        case .unreachable(_, let why):
+            return why
+        case .noSuchAgent, .ambiguousName, .nodeUnavailable:
+            return nil
         }
     }
 }

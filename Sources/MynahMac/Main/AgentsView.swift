@@ -221,6 +221,20 @@ struct AgentPermissions: Equatable, Sendable {
     /// unsigned caller can see.
     var hasCompanionProfile: Bool { mask == Capability.companion }
 
+    /// Whether this agent can send work to another agent at all.
+    ///
+    /// SAGE hands pipeline work only to an unrestricted, active, ordinary agent.
+    /// A restricted key is refused outright — *"agent pipeline work is available
+    /// only to an active ordinary agent on this SAGE"* — so this is what decides
+    /// whether the roster has anybody in it.
+    ///
+    /// Deliberately keyed on the whole mask rather than the one `denyOtherSages`
+    /// bit. That bit governs *federated* discovery and delivery, and the refusal
+    /// the owner actually hit was broader than it: the node turned down a local
+    /// inbox read as well. Reading the narrow bit would have this screen promising
+    /// reach that SAGE has already denied in practice.
+    var canReachOtherAgents: Bool { !isRestricted }
+
     /// Whether anything at all stands between this agent and saving a memory.
     ///
     /// Deliberately not "cannot write". With the three write denials set, one
@@ -325,6 +339,36 @@ struct AgentRoster: Sendable, Equatable {
     /// auto-registered first.
     var others: [NodeAgent] {
         agents.filter { !$0.isThisAppliance }.sorted { $0.memoryCount > $1.memoryCount }
+    }
+
+    /// The agents Mynah can actually reach — which is the only set worth listing.
+    ///
+    /// **This page used to show the whole directory.** Twenty rows, sorted by
+    /// size, regardless of whether Mynah could say a word to any of them. The
+    /// owner's instruction was blunt and correct: *"the list should not populate
+    /// based on ALL AGENTS IN THE DIRECTORY - only those that mynah can see AND
+    /// talk to."* A list of names the appliance cannot reach is not a roster, it
+    /// is a directory listing pretending to be one.
+    ///
+    /// **The gate is Mynah's own key, not each row's.** SAGE gives pipeline work
+    /// only to an unrestricted, active, ordinary agent — the node's own words when
+    /// it refuses are *"agent pipeline work is available only to an active
+    /// ordinary agent on this SAGE"* — so a restricted appliance reaches nobody
+    /// and the honest list is empty. It is not empty per-row for a different
+    /// reason each time; one fact decides all of them.
+    ///
+    /// **Why not ask SAGE who is reachable:** `sage_find_agent` is the
+    /// caller-scoped tool that would answer this properly, and on the owner's
+    /// node it returns nothing at all — zero matches for `claude` with six
+    /// `claude-code/*` agents registered, and zero for `mynah`, which is the
+    /// example SAGE's own reference uses. Until that works, this derives what it
+    /// can from the capability mask the roster already carries rather than
+    /// inventing a reachability it cannot check.
+    func reachable(fromAppliance appliance: NodeAgent?) -> [NodeAgent] {
+        guard let appliance, appliance.permissions.canReachOtherAgents else { return [] }
+        // Dormant is still reachable — a queued message is legitimate and the
+        // agent reads it when it next runs. Only "never connected" is not.
+        return others.filter { $0.isActive }
     }
 }
 
@@ -1336,39 +1380,27 @@ struct AgentsView: View {
 
     // MARK: The roster
 
+    /// Only what Mynah can reach. See `AgentRoster.reachable`.
+    private var reachableAgents: [NodeAgent] {
+        model.roster.reachable(fromAppliance: model.roster.appliance)
+    }
+
     private var rosterColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            columnHeader("On this Mac", count: model.roster.agents.count)
-            // Said once, above the list, rather than on twenty rows.
+            columnHeader("On this Mac", count: reachableAgents.isEmpty ? nil : reachableAgents.count)
+            // **No paragraph here any more.** There were two, and both are gone.
             //
-            // The owner's objection was that this list "promises more than it
-            // means" — and when we checked the facts rather than filtering on
-            // them, the list turned out to be correct and the *verb* wrong.
-            // Filtering to what Mynah can read would empty the page; filtering
-            // to what it can send to would change nothing, because it can send
-            // to all of them. So every row stays and the asymmetry gets stated
-            // where it applies: to all of them, once.
+            // The first explained subject ownership above a list of names, which
+            // is a lecture on another product's permission model delivered to
+            // somebody who opened a screen to see who is on their Mac. The
+            // owner's verdict on this page was that it "says wayyyyyyy too much
+            // nonsense the user doesn't need to know about", and this was the
+            // largest single piece of it.
             //
-            // Per-row marks are therefore only for rows that *depart* from this
-            // — the caution dot and the caution-ink count. A row that matches
-            // the line above says nothing extra, which is what stops the list
-            // becoming twenty repetitions of one sentence.
-            // One paragraph, not two.
-            //
-            // A second one stated the breadth — "can read every subject on this
-            // Mac, including what your other agents have remembered" — and it
-            // was **false**. It is deleted rather than softened: there is no
-            // true version of it that this app can establish, because working
-            // out what Mynah can actually reach needs the grant list, and the
-            // grant list is an operator view. A page saying nothing about reach
-            // is honest; a hedged almost-version would be the same mistake in a
-            // quieter voice.
-            Text(FederationHelp.whatMynahMayDoWithTheseAgents)
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, s6)
-                .padding(.bottom, s5)
+            // What replaced it is not shorter prose but a shorter *list*: the
+            // rows are now only agents Mynah can reach, so the asymmetry the
+            // paragraph existed to explain no longer needs explaining. When the
+            // list cannot be populated, one line says so and offers the fix.
             ScrollView {
                 // Spacing between rows rather than none. Rows that touch read as
                 // a table; rows with air between them read as a list of things,
@@ -1383,9 +1415,10 @@ struct AgentsView: View {
                     if let appliance = model.roster.appliance {
                         row(appliance)
                     }
-                    ForEach(model.roster.others) { agent in
+                    ForEach(reachableAgents) { agent in
                         row(agent)
                     }
+                    if reachableAgents.isEmpty { noReachableAgents }
                 }
                 .padding(.horizontal, s5)
                 .padding(.bottom, s5)
@@ -1395,6 +1428,27 @@ struct AgentsView: View {
             MynahDivider()
             network
         }
+    }
+
+    /// What stands in for the list when Mynah cannot reach anybody.
+    ///
+    /// One sentence and the consequence, in the owner's terms. It names the same
+    /// cause as the warning in the detail pane rather than a second one, because
+    /// there is only one thing wrong and two descriptions of it would read as two
+    /// problems.
+    private var noReachableAgents: some View {
+        VStack(alignment: .leading, spacing: s2) {
+            Text("No other agents yet")
+                .mynahFont(.bodyEmphasis)
+                .foregroundStyle(Palette.ink.primary)
+            Text("Mynah can't reach any of the other agents on this Mac until it has its "
+                + "own memory. They'll appear here once it does.")
+                .mynahFont(.label)
+                .foregroundStyle(Palette.ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s4)
     }
 
     private func row(_ agent: NodeAgent) -> some View {
@@ -1434,7 +1488,6 @@ struct AgentsView: View {
                     StandingFacts(agent: agent)
                     if agent.isThisAppliance {
                         ApplianceStanding(agent: agent)
-                        grantsLine
                     } else {
                         otherAgentStanding(agent)
                         sendRow(agent)
@@ -1591,28 +1644,17 @@ struct AgentsView: View {
     @ViewBuilder
     private func otherAgentStanding(_ agent: NodeAgent) -> some View {
         VStack(alignment: .leading, spacing: s4) {
+            // One short line, and only when there is something to say. The
+            // unrestricted case used to get a sentence about grants and subjects
+            // that told the owner nothing actionable about an agent they do not
+            // administer.
             if agent.permissions.isRestricted {
-                Text("SAGE has restricted this agent's key. That is a decision made on your node, "
-                    + "and only somebody with administrator access to it can change it.")
-                    .mynahFont(.callout)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("Nothing on this agent's key restricts it. What it can reach beyond that is "
-                    + "down to the subjects it has been given access to.")
+                Text("SAGE has restricted this agent. Only an administrator can change that.")
                     .mynahFont(.callout)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            grantsLine
         }
-    }
-
-    private var grantsLine: some View {
-        Text(FederationHelp.grantsAreNotReadableHere)
-            .mynahFont(.callout)
-            .foregroundStyle(Palette.ink.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: The network
@@ -1640,10 +1682,10 @@ struct AgentsView: View {
     private var scanResult: some View {
         switch model.scan {
         case .idle:
-            Text("Asks your node which other SAGEs it can reach. It changes nothing.")
-                .mynahFont(.label)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // Nothing. "Asks your node which other SAGEs it can reach. It
+            // changes nothing." was reassurance for a worry the button does not
+            // create, under a button whose label already says what it does.
+            EmptyView()
 
         case .scanning:
             Text("Asking your node…")
@@ -1970,24 +2012,24 @@ struct ApplianceStanding: View {
     var body: some View {
         VStack(alignment: .leading, spacing: s5) {
             if let status {
-                InlineBanner(headline: status.headline, explanation: status.remedy)
-                // SAGE's own sentence about the refusal, when there has been
-                // one. Never paraphrased, and visibly the node speaking rather
-                // than us.
-                if let detail = status.detail {
-                    Text(detail)
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                // Directly under the remedy, because it finishes it: the remedy
-                // says "someone with administrator access", and this says who
-                // that is on this Mac. Three paragraphs apart, the owner had to
-                // hold the first sentence in their head to use the second.
+                // **Critical tone, because this is not working.** It was drawn in
+                // the same neutral grey as ordinary information, and the owner's
+                // objection was exactly that: *"its not clear things aren't
+                // working atm fully"*. Mynah cannot remember a word in this
+                // state — that is a failure, not a note.
+                InlineBanner(
+                    tone: .critical,
+                    headline: status.headline,
+                    explanation: shortRemedy
+                )
+                // Who has to act, in one line, immediately under it. Everything
+                // else that used to sit here — the "Why" bullets, the note that
+                // its role looks ordinary, the mask, the grant-list aside — is
+                // gone from the front of the screen. It was four sections
+                // explaining a permission model to somebody who needs to know one
+                // thing: what to do, and who does it.
                 whoToAsk
-                reasons
-                footnotes
+                administratorDetail
             } else if agent.permissions.hasCompanionProfile {
                 // Somebody has looked at this agent and assigned it the right
                 // profile. Whether it can actually write additionally depends on
@@ -2018,26 +2060,48 @@ struct ApplianceStanding: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var reasons: some View {
-        VStack(alignment: .leading, spacing: s3) {
-            Text("Why")
-                .mynahFont(.label)
-                .foregroundStyle(Palette.ink.secondary)
-            // Reading is unaffected by every bit in the mask, and saying so is
-            // the difference between "Mynah is broken" and "Mynah can't remember
-            // this yet" — it still answers, and it still knows what it knew.
-            ForEach(["It can still read what it already knows."] + readiness.reasons, id: \.self) { line in
-                HStack(alignment: .firstTextBaseline, spacing: s3) {
-                    Text("·")
-                        .mynahFont(.body)
-                        .foregroundStyle(Palette.ink.quaternary)
-                    Text(line)
+    /// The action, in two sentences, replacing a seven-line paragraph.
+    ///
+    /// The full remedy named CEREBRUM, the companion profile, the subject to
+    /// assign, why an access grant will not do instead, and what changes on the
+    /// Memories page afterwards. Every clause was true and the owner could not use
+    /// any of it: the useful part is *what has to happen* and *that it is not
+    /// something Mynah or this app can do*. The specifics an administrator needs
+    /// are still on the screen, one disclosure away.
+    private var shortRemedy: String {
+        "Mynah needs its own memory before it can remember anything or reach the other "
+            + "agents here. Somebody with administrator access to SAGE has to set that up — "
+            + "Mynah can't do it itself, and neither can this app."
+    }
+
+    /// The exact words for whoever administers the node, closed by default.
+    ///
+    /// **Kept, but moved.** This is the one place a mask number appears in the
+    /// owner-facing product, and it earns its place: the person acting on this is
+    /// typing it into another product, and naming the profile without its value
+    /// leaves them guessing at the moment they act on our say-so. What it must not
+    /// be is the fifth paragraph of a wall the owner has to read past.
+    private var administratorDetail: some View {
+        DisclosureGroup("Details for your administrator") {
+            VStack(alignment: .leading, spacing: s3) {
+                Text(FederationHelp.companionPresetDetail)
+                    .mynahFont(.mono)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .textSelection(.enabled)
+                // SAGE's own sentence about the refusal, when there has been one.
+                // Never paraphrased, and visibly the node speaking rather than us.
+                if let detail = status?.detail {
+                    Text(detail)
                         .mynahFont(.callout)
                         .foregroundStyle(Palette.ink.secondary)
+                        .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .padding(.top, s3)
         }
+        .mynahFont(.label)
+        .foregroundStyle(Palette.ink.secondary)
     }
 
     /// Who has to make the change — the one thing that genuinely differs by how
@@ -2063,22 +2127,6 @@ struct ApplianceStanding: View {
         }
     }
 
-    private var footnotes: some View {
-        VStack(alignment: .leading, spacing: s3) {
-            // Two facts, one paragraph. They stay separate constants because
-            // each is independently true and independently testable, but the
-            // screen had four stacked asides under the bullets and `chrome`
-            // was right that it read as a wall. Joined here rather than merged
-            // at the source, so neither sentence loses its own test.
-            note("\(FederationHelp.looksOrdinaryButIsMuted) \(FederationHelp.cannotFixItself)")
-            // The only number on the screen, and it is here because the person
-            // who has to act on this is typing it into another product.
-            Text(FederationHelp.companionPresetDetail)
-                .mynahFont(.mono)
-                .foregroundStyle(Palette.ink.secondary)
-                .textSelection(.enabled)
-        }
-    }
 }
 
 // MARK: - What a scan found
