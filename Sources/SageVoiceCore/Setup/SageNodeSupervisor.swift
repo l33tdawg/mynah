@@ -96,6 +96,30 @@ public final class SageNodeSupervisor: @unchecked Sendable {
     /// a visible, recoverable problem; an un-bootstrappable node is neither.
     /// Bump this only alongside a `scripts/vendor-sage.sh` run that actually
     /// ships the contract.
+    ///
+    /// ## Why the floor is 11.15.0 and not 11.16, which is the ship target
+    ///
+    /// 11.16 is what Mynah should ship against: it introduces app-v24, and a
+    /// Companion only becomes *ready* once app-v24 has activated and the chain
+    /// has advanced a block. Under 11.15.x the Companion reports ready as soon
+    /// as its app-v23 genesis is in place — measured on a fresh vendored node,
+    /// not inferred.
+    ///
+    /// The floor stays below the ship target deliberately, as a fallback with
+    /// no downside. Confirmed with the SAGE team: a chain created by 11.15.1
+    /// keeps its app-v23/bootstrap-v2 genesis forever and is then carried
+    /// forward on-chain by 11.16's local Root proposing and voting app-v24. It
+    /// is upgradeable, not stranded. So if 11.16 slips, a build vendoring
+    /// 11.15.1 still gives a fresh Mac a node that remembers, and those owners
+    /// are picked up by the next update — strictly better than refusing to
+    /// start and shipping the silent-amnesia gap again.
+    ///
+    /// ## Testing a second node beside a live one
+    ///
+    /// Needs a separate `SAGE_HOME`, `REST_ADDR`, `SAGE_CMT_RPC_ADDR` and
+    /// `SAGE_CMT_P2P_ADDR`, plus `quorum.tls_addr` in config.yaml. Note
+    /// `mcp_port` is discovery/output metadata and does **not** configure that
+    /// listener, and there is no environment override for it yet.
     public static let minimumBootstrapCapableVersion = MynahReleaseVersion(
         major: 11,
         minor: 15,
