@@ -93,6 +93,35 @@ ESPEAK_DATA_SOURCE="${SAGE_VOICE_ESPEAK_DATA:-$ESPEAK_ROOT/share/espeak-ng-data}
 # reaches an owner.
 REQUIRE_NATIVE_VOICE="${SAGE_VOICE_REQUIRE_NATIVE_VOICE:-1}"
 
+# An ad-hoc signature cannot ship the dylib, and the failure is total.
+#
+# The hardened runtime enforces library validation, which requires a loaded
+# dylib to carry the same Team ID as the process loading it. Ad-hoc signatures
+# have no Team ID, so dyld refuses:
+#
+#   Library not loaded: @rpath/libonnxruntime.dylib
+#   … mapping process and mapped file (non-platform) have different Team IDs
+#
+# That is not a degraded voice, it is an executable that does not start —
+# `sage-voiced` dies before printing its usage, so the appliance has no daemon
+# at all. It passed `codesign --verify --deep --strict` the entire time, because
+# an ad-hoc signature is a valid signature; the check below is the only thing
+# between that and a DMG whose daemon cannot launch.
+if [[ -f "$ORT_DYLIB_SOURCE" && "$SIGN_IDENTITY" == "-" ]]; then
+  die "Refusing to package the native voice with an ad-hoc signature.
+
+The hardened runtime will not let a process load a dylib with a different Team
+ID, and ad-hoc has none, so sage-voiced would fail to launch entirely.
+
+Sign it properly:
+  SAGE_VOICE_CODESIGN_IDENTITY=\"Developer ID Application: … (TEAMID)\" \\
+    scripts/package-app.sh
+
+Or, to build a bundle deliberately without the native voice:
+  SAGE_VOICE_REQUIRE_NATIVE_VOICE=0 SAGE_VOICE_ORT_DYLIB=/nonexistent \\
+    scripts/package-app.sh"
+fi
+
 # The call endpoint. Built rather than vendored, because it links a static
 # libopus and so has to be compiled for the architecture it will run on —
 # scripts/build-endpoint.sh does that and refuses to hand over the wrong one.
