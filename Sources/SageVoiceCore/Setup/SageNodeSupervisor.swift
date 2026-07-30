@@ -97,22 +97,36 @@ public final class SageNodeSupervisor: @unchecked Sendable {
     /// Bump this only alongside a `scripts/vendor-sage.sh` run that actually
     /// ships the contract.
     ///
-    /// ## Why the floor is 11.15.0 and not 11.16, which is the ship target
+    /// ## Why the floor is 11.16 even though 11.15.1 bootstraps correctly
     ///
-    /// 11.16 is what Mynah should ship against: it introduces app-v24, and a
-    /// Companion only becomes *ready* once app-v24 has activated and the chain
-    /// has advanced a block. Under 11.15.x the Companion reports ready as soon
-    /// as its app-v23 genesis is in place — measured on a fresh vendored node,
-    /// not inferred.
+    /// 11.15.1 passes every part of this contract that can be checked at
+    /// genesis. Measured on a fresh vendored node, not inferred: it seeds a
+    /// root-bound app-v23 genesis, reports "first-party app-v23 companion
+    /// enrollment is ready" for `voice-interface`, and commits a first memory
+    /// at height 8 with no CEREBRUM step. By the acceptance gate alone it
+    /// passes.
     ///
-    /// The floor stays below the ship target deliberately, as a fallback with
-    /// no downside. Confirmed with the SAGE team: a chain created by 11.15.1
-    /// keeps its app-v23/bootstrap-v2 genesis forever and is then carried
-    /// forward on-chain by 11.16's local Root proposing and voting app-v24. It
-    /// is upgradeable, not stranded. So if 11.16 slips, a build vendoring
-    /// 11.15.1 still gives a fresh Mac a node that remembers, and those owners
-    /// are picked up by the next update — strictly better than refusing to
-    /// start and shipping the silent-amnesia gap again.
+    /// **And it is still not shippable, because recall is broken on it.** On
+    /// that same node every read failed with "Authorization unavailable: Memory
+    /// classification state is unavailable" — at height 8 and again at height
+    /// 13, so it is the defect rather than start-up settling. That is what
+    /// 11.16's "restore local sage_turn recall under app-v23" repairs.
+    ///
+    /// An appliance that stores and cannot recall is the failure this whole
+    /// supervisor exists to kill, wearing a different hat: the owner talks to
+    /// it, it says it remembers, and nothing ever comes back. Shipping that
+    /// deliberately would be worse than shipping no node, because it looks like
+    /// it is working.
+    ///
+    /// The data is not lost either way — the SAGE team confirmed a chain
+    /// created by 11.15.1 keeps its app-v23/bootstrap-v2 genesis forever and is
+    /// carried forward on-chain by 11.16's local Root proposing and voting
+    /// app-v24, so such a node is upgradeable rather than stranded. That makes
+    /// the floor a question of what the owner *experiences* before they update,
+    /// and a node that visibly cannot answer is the wrong answer.
+    ///
+    /// So: 11.16 or nothing. Lower it only if recall is verified working on the
+    /// build in question.
     ///
     /// ## Testing a second node beside a live one
     ///
@@ -122,7 +136,7 @@ public final class SageNodeSupervisor: @unchecked Sendable {
     /// listener, and there is no environment override for it yet.
     public static let minimumBootstrapCapableVersion = MynahReleaseVersion(
         major: 11,
-        minor: 15,
+        minor: 16,
         patch: 0
     )
 

@@ -68,7 +68,7 @@ final class SageNodeSupervisorTests: XCTestCase {
     func testAVendoredNodeIsStartedWithTheBootstrapContract() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("SageNodeSupervisorTests-\(UUID().uuidString)")
-        let executable = try Self.makeBundle(at: root, version: "11.15.0")
+        let executable = try Self.makeBundle(at: root, version: "11.16.0")
         defer { try? FileManager.default.removeItem(at: root) }
 
         let supervisor = SageNodeSupervisor()
@@ -91,10 +91,19 @@ final class SageNodeSupervisorTests: XCTestCase {
         XCTAssertFalse(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.14.1"))
     }
 
+    /// 11.15.1 bootstraps correctly and commits a first memory, and is still
+    /// refused: recall fails on it with "Memory classification state is
+    /// unavailable", measured at two heights on a fresh vendored node. An
+    /// appliance that stores and cannot recall looks like it works, which is
+    /// the failure this supervisor exists to prevent.
+    func testABuildThatBootstrapsButCannotRecallIsRefused() {
+        XCTAssertFalse(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.15.0"))
+        XCTAssertFalse(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.15.1"))
+    }
+
     func testABuildCarryingTheContractIsAccepted() {
-        XCTAssertTrue(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.15.0"))
-        XCTAssertTrue(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.15.1"))
         XCTAssertTrue(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.16.0"))
+        XCTAssertTrue(SageNodeSupervisor.supportsCompanionBootstrap(version: "11.16.1"))
         XCTAssertTrue(SageNodeSupervisor.supportsCompanionBootstrap(version: "12.0.0"))
     }
 
@@ -200,7 +209,7 @@ final class SageNodeSupervisorTests: XCTestCase {
     func testASecondStartWithinTheCooldownIsRefused() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("SageNodeSupervisorTests-\(UUID().uuidString)")
-        let executable = try Self.makeBundle(at: root, version: "11.15.0")
+        let executable = try Self.makeBundle(at: root, version: "11.16.0")
         defer { try? FileManager.default.removeItem(at: root) }
 
         var clock = Date(timeIntervalSince1970: 1_000)
@@ -225,7 +234,7 @@ final class SageNodeSupervisorTests: XCTestCase {
     func testAStartIsAllowedOnceTheCooldownHasPassed() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("SageNodeSupervisorTests-\(UUID().uuidString)")
-        let executable = try Self.makeBundle(at: root, version: "11.15.0")
+        let executable = try Self.makeBundle(at: root, version: "11.16.0")
         defer { try? FileManager.default.removeItem(at: root) }
 
         var clock = Date(timeIntervalSince1970: 1_000)
