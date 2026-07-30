@@ -230,6 +230,14 @@ require_sage_app() {
     [[ "$described" == *"$SAGE_EXPECTED_ARCH"* ]] \
       || die "Bundled SAGE executable does not contain '$SAGE_EXPECTED_ARCH': $executable"
   fi
+
+  # Genuine is not the same as usable. Everything above proves this is really
+  # SAGE; verify-vendored-sage.sh proves it is a SAGE whose Companion can be
+  # enrolled at genesis and can then recall. A bundle below that floor packages
+  # cleanly, signs cleanly, notarizes cleanly, and ships an appliance that
+  # never answers — which is exactly how the last one got out.
+  "$ROOT/scripts/verify-vendored-sage.sh" "$sage_app" \
+    || die "Vendored SAGE failed its capability check; refusing to package."
 }
 
 # ---------------------------------------------------------------- build input
