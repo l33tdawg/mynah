@@ -24,14 +24,8 @@ public struct KokoroHTTPSynthesizer: SpeechSynthesizing {
     /// Default endpoint: the `/api/speech` route on the local voice bridge.
     public static let defaultEndpoint = URL(string: "http://127.0.0.1:8765/api/speech")!
 
-    /// Default Kokoro voice.
-    ///
-    /// Chosen by listening rather than by grade. am_puck is a deliberately
-    /// characterful voice and it reads as irritated on ordinary sentences —
-    /// Dhillon, unprompted: "the voice sounds a bit pissed off most times". An
-    /// appliance that answers questions all day should sound even, not
-    /// expressive, because the expression is not tracking anything real.
-    public static let defaultKokoroVoice = "am_michael"
+    /// Default Kokoro voice, from the one place that declares it.
+    public static let defaultKokoroVoice = KokoroVoices.defaultVoiceName
 
     /// Kokoro emits 24 kHz mono. Declared so callers can size buffers before the
     /// first response arrives; the value actually used is read from the WAV header.

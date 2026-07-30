@@ -88,62 +88,37 @@ enum CallVoiceCatalogue: Equatable {
     case missing
 }
 
-/// Reading the voice list off the local speech bridge.
-enum KokoroVoices {
-
-    /// Three seconds. The row is on screen before this answers, so the cost of
-    /// waiting longer is the owner staring at "looking for the natural voice"
-    /// with no way to tell whether it is stuck.
-    private static let timeout: TimeInterval = 3
-
-    /// `/voices` on whichever bridge serves `/api/speech`.
-    ///
-    /// Derived from the synthesizer's own endpoint rather than typed out again,
-    /// so a bridge moved to another port cannot leave this picker listing the
-    /// voices of a server the calls are not using.
-    static func endpoint(bridge: URL = KokoroHTTPSynthesizer.defaultEndpoint) -> URL {
-        var components = URLComponents(url: bridge, resolvingAgainstBaseURL: false)
-        components?.path = "/voices"
-        components?.query = nil
-        components?.fragment = nil
-        return components?.url ?? bridge
-    }
-
-    private struct Payload: Decodable {
-        let voices: [String]
-    }
+/// The voices the appliance can actually speak in.
+///
+/// **Read out of the voices file, not off a server.** This used to `GET /voices`
+/// on the Python bridge, which meant the Settings picker was empty whenever that
+/// service was not running — and the service is now gone entirely. The names live
+/// in `voices-v1.0.bin`, the same file the synthesizer reads its style rows from,
+/// so the picker and the voice are guaranteed to be talking about the same set.
+///
+/// Named `CallVoiceLibrary` rather than `KokoroVoices` because that name is now
+/// taken by the type in `SageVoiceCore` that does the reading. Two `KokoroVoices`
+/// in one app, one shadowing the other inside this module, is a resolution
+/// somebody would eventually get wrong.
+enum CallVoiceLibrary {
 
     /// Never throws and never reports a reason.
     ///
-    /// Every way this can fail — bridge down, wrong port, a body that is not the
-    /// JSON we expect — lands the owner in the same place: there is no natural
-    /// voice to pick from, and calls will sound robotic. One sentence covers all
-    /// of them, and the alternative is a settings row quoting a connection error.
-    static func load(
-        from url: URL? = nil,
-        session: URLSession? = nil
-    ) async -> CallVoiceCatalogue {
-        let endpoint = url ?? Self.endpoint()
-        // The same refusal the synthesizer makes. A "local" speech bridge that
-        // resolves off-box is not one this app will talk to.
-        guard LoopbackSecurity.isLoopback(endpoint) else { return .missing }
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "GET"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
+    /// Every way this can fail — the model not downloaded yet, a truncated
+    /// file — lands the owner in the same place: there is no natural voice to
+    /// pick from, and calls will sound robotic until the download finishes. One
+    /// sentence covers all of them, and the alternative is a settings row
+    /// quoting a file-format error.
+    static func load(from url: URL? = nil) async -> CallVoiceCatalogue {
+        let location = url ?? KokoroAssets.location(of: KokoroAssets.voices)
+        guard FileManager.default.fileExists(atPath: location.path) else { return .missing }
         do {
-            let session = session ?? LoopbackSecurity.makeSession(timeout: timeout)
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else { return .missing }
-            let names = try JSONDecoder().decode(Payload.self, from: data)
-                .voices
+            let names = try SageVoiceCore.KokoroVoices(contentsOf: location)
+                .names
                 .filter { !$0.isEmpty }
                 .sorted()
-            // A bridge answering with no voices cannot be picked from, and an
-            // empty picker is exactly the broken control this is here to avoid.
+            // A file with no voices in it cannot be picked from, and an empty
+            // picker is exactly the broken control this is here to avoid.
             return names.isEmpty ? .missing : .installed(names)
         } catch {
             return .missing

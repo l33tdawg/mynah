@@ -123,36 +123,53 @@ final class CallSettingsTests: XCTestCase {
 
     // MARK: Where the voice list comes from
 
-    /// Derived from the synthesizer's endpoint rather than typed out again, so a
-    /// bridge on another port cannot leave the picker listing voices from a
-    /// server the calls are not using.
-    func testTheVoiceListIsAskedOfTheSameBridgeThatSpeaks() {
-        XCTAssertEqual(
-            KokoroVoices.endpoint().absoluteString,
-            "http://127.0.0.1:8765/voices"
-        )
-        let moved = URL(string: "http://127.0.0.1:9100/api/speech")!
-        XCTAssertEqual(
-            KokoroVoices.endpoint(bridge: moved).absoluteString,
-            "http://127.0.0.1:9100/voices"
-        )
+    /// **The picker reads the same file the voice does.**
+    ///
+    /// It used to `GET /voices` on the Python bridge, which meant the list was
+    /// empty whenever that service was not running — and that service no longer
+    /// exists. Reading `voices-v1.0.bin` directly makes the picker and the
+    /// synthesizer incapable of disagreeing about which voices there are, since
+    /// the style rows come out of the same file.
+    func testTheVoiceListComesFromTheFileTheSynthesizerReads() async throws {
+        let installed = KokoroAssets.location(of: KokoroAssets.voices)
+        let lab = URL(fileURLWithPath: "/Users/l33tdawg/sage-voice-lab/kokoro/voices-v1.0.bin")
+        guard let location = [installed, lab].first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
+            throw XCTSkip("voices-v1.0.bin is not on this machine")
+        }
+
+        guard case let .installed(names) = await CallVoiceLibrary.load(from: location) else {
+            return XCTFail("the voices file did not yield a catalogue")
+        }
+        // 54 voices ship in this file, and the default has to be among them or
+        // the picker opens with nothing selected.
+        XCTAssertEqual(names.count, 54)
+        XCTAssertTrue(names.contains(SageVoiceCore.KokoroVoices.defaultVoiceName))
+        XCTAssertEqual(names, names.sorted())
     }
 
-    /// The synthesizer refuses to send the owner's words off-box and so does
-    /// this. A "local" bridge that resolves elsewhere is not one to talk to.
-    func testANonLoopbackBridgeIsTreatedAsNoBridgeAtAll() async {
-        let offBox = URL(string: "http://kokoro.example.com/voices")!
-        let result = await KokoroVoices.load(from: offBox)
+    /// The ordinary first-run case: the 28 MB voices file is downloaded when
+    /// Signal is linked, so before that it genuinely is not there. It has to come
+    /// back as a plain absence rather than an error at a settings row.
+    func testAnAbsentVoicesFileReportsAMissingVoiceRatherThanAnError() async {
+        let nowhere = URL(fileURLWithPath: "/nowhere/voices-v1.0.bin")
+        let result = await CallVoiceLibrary.load(from: nowhere)
         XCTAssertEqual(result, .missing)
     }
 
-    /// Nothing listening on the port is the ordinary case — Kokoro is not
-    /// running — and it has to come back as a plain absence rather than throwing
-    /// a connection error at a settings row.
-    func testAnUnreachableBridgeReportsAMissingVoiceRatherThanAnError() async {
-        // Port 1 on loopback: privileged, and nothing in this product binds it.
-        let dead = URL(string: "http://127.0.0.1:1/voices")!
-        let result = await KokoroVoices.load(from: dead)
+    /// A file that exists but is not a voices archive is the same absence, not a
+    /// crash and not a format error shown to the owner.
+    func testATruncatedVoicesFileReportsAMissingVoice() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voices-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let junk = directory.appendingPathComponent("voices-v1.0.bin")
+        try Data("not a zip archive".utf8).write(to: junk)
+
+        let result = await CallVoiceLibrary.load(from: junk)
         XCTAssertEqual(result, .missing)
     }
 
@@ -160,20 +177,20 @@ final class CallSettingsTests: XCTestCase {
 
     /// Fifty-four rows of `af_alloy` is a list of file names, not a choice.
     func testVoiceNamesAreDecodedIntoWordsAnOwnerCanChooseBetween() {
-        XCTAssertEqual(KokoroVoices.displayName("am_michael"), "Michael (American, male)")
-        XCTAssertEqual(KokoroVoices.displayName("af_bella"), "Bella (American, female)")
-        XCTAssertEqual(KokoroVoices.displayName("bf_emma"), "Emma (British, female)")
-        XCTAssertEqual(KokoroVoices.displayName("jm_kumo"), "Kumo (Japanese, male)")
+        XCTAssertEqual(CallVoiceLibrary.displayName("am_michael"), "Michael (American, male)")
+        XCTAssertEqual(CallVoiceLibrary.displayName("af_bella"), "Bella (American, female)")
+        XCTAssertEqual(CallVoiceLibrary.displayName("bf_emma"), "Emma (British, female)")
+        XCTAssertEqual(CallVoiceLibrary.displayName("jm_kumo"), "Kumo (Japanese, male)")
     }
 
     /// A confidently wrong friendly label is worse than an unfriendly true one,
     /// so anything off the known scheme keeps its raw identifier.
     func testAnUnrecognisedNameIsLeftExactlyAsKokoroSpelledIt() {
-        XCTAssertEqual(KokoroVoices.displayName("xq_zzz"), "xq_zzz")
-        XCTAssertEqual(KokoroVoices.displayName("ax_alloy"), "ax_alloy")
-        XCTAssertEqual(KokoroVoices.displayName("custom"), "custom")
-        XCTAssertEqual(KokoroVoices.displayName("aaa_alloy"), "aaa_alloy")
-        XCTAssertEqual(KokoroVoices.displayName("am_"), "am_")
+        XCTAssertEqual(CallVoiceLibrary.displayName("xq_zzz"), "xq_zzz")
+        XCTAssertEqual(CallVoiceLibrary.displayName("ax_alloy"), "ax_alloy")
+        XCTAssertEqual(CallVoiceLibrary.displayName("custom"), "custom")
+        XCTAssertEqual(CallVoiceLibrary.displayName("aaa_alloy"), "aaa_alloy")
+        XCTAssertEqual(CallVoiceLibrary.displayName("am_"), "am_")
     }
 
     // MARK: The screen

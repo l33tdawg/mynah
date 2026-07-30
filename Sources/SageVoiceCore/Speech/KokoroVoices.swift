@@ -50,6 +50,20 @@ public struct KokoroVoices: Sendable {
     /// Floats per row — the model's `style` input is `[1, 256]`.
     public static let styleWidth = 256
 
+    /// The voice the appliance speaks in, in one place.
+    ///
+    /// Chosen by listening rather than by grade. `am_puck` is deliberately
+    /// characterful and reads as irritated on ordinary sentences — Dhillon,
+    /// unprompted: *"the voice sounds a bit pissed off most times"*. Something
+    /// that answers questions all day should sound even, because the expression
+    /// is not tracking anything real.
+    ///
+    /// **Declared here because three places need it** — the native synthesizer,
+    /// the HTTP one it replaced, and the Settings screen — and a default voice
+    /// that disagrees between the daemon and the picker is a setting that appears
+    /// not to take effect.
+    public static let defaultVoiceName = "am_michael"
+
     private let url: URL
     /// Voice name to the file offset of its array data, past the `.npy` header.
     private let offsets: [String: UInt64]

@@ -404,15 +404,15 @@ final class SettingsModel {
     /// come back here. The previous answer stays on screen while this runs, so
     /// re-asking never flickers the row back to "looking".
     func loadCallVoices() async {
-        let found = await KokoroVoices.load()
+        let found = await CallVoiceLibrary.load()
         callVoices = found
         guard case .installed(let names) = found, !names.contains(callVoice) else { return }
         // The stored voice is no longer served — a changed voice pack, or a
         // different bridge. Left alone it would leave the picker showing nothing
         // selected, which reports no preference at all. Falling back to the name
         // the daemon itself falls back to keeps the row and the call agreeing.
-        setCallVoice(names.contains(KokoroHTTPSynthesizer.defaultKokoroVoice)
-            ? KokoroHTTPSynthesizer.defaultKokoroVoice
+        setCallVoice(names.contains(SageVoiceCore.KokoroVoices.defaultVoiceName)
+            ? SageVoiceCore.KokoroVoices.defaultVoiceName
             : names[0])
     }
 
@@ -1484,7 +1484,7 @@ struct SettingsView: View {
                             set: { model.setCallVoice($0) }
                         )) {
                             ForEach(names, id: \.self) { name in
-                                Text(KokoroVoices.displayName(name)).tag(name)
+                                Text(CallVoiceLibrary.displayName(name)).tag(name)
                             }
                         }
                         .labelsHidden()

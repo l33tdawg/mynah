@@ -1,5 +1,28 @@
 import Foundation
 import SageVoiceCore
+#if canImport(KokoroEngine)
+import KokoroEngine
+#endif
+
+/// Kokoro in this process, or `nil` if it cannot run yet.
+///
+/// **One function rather than the same `#if` at both call sites.** Voice notes
+/// and calls each need this, and the two used to build their own synthesizer
+/// independently — which is how the daemon ended up probing a voice backend
+/// twice on every startup and reporting one answer while using another.
+///
+/// `nil` is an ordinary outcome, not a failure: the 325 MB model is fetched when
+/// Signal is linked rather than shipped in the bundle, so on a first run it is
+/// genuinely absent and the caller falls back to the system voice for that
+/// session. It is also `nil` on a checkout with no `vendor/onnxruntime`, where
+/// `KokoroEngine` is not compiled in at all.
+func nativeKokoro(named voice: String) -> (any SpeechSynthesizing)? {
+    #if canImport(KokoroEngine)
+    return KokoroSpeechSynthesizer.ifReady(voice: voice)
+    #else
+    return nil
+    #endif
+}
 
 // Smoke harness for the subsystems, one subcommand each. Not the daemon —
 // the daemon (Signal transport wired to ASR -> brain -> TTS) lands on top of
@@ -748,7 +771,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     let callPreferences = CallPreferences.load()
     let callVoiceName = flags["call-voice"]
         ?? callPreferences.voice
-        ?? KokoroHTTPSynthesizer.defaultKokoroVoice
+        ?? KokoroVoices.defaultVoiceName
     let callSpeed = flags["call-speed"].flatMap(Double.init) ?? callPreferences.clampedSpeed
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
@@ -831,9 +854,8 @@ func runDaemon(_ arguments: [String]) -> Never {
         let synthesizer: SpeechSynthesizing?
         if style.usesVoiceNotes {
             _ = VoiceNote.discardStale()
-            let kokoro = KokoroHTTPSynthesizer()
-            if await kokoro.isAvailable() {
-                synthesizer = kokoro
+            if let native = nativeKokoro(named: KokoroVoices.defaultVoiceName) {
+                synthesizer = native
             } else {
                 let system = SystemSpeechSynthesizer()
                 synthesizer = await system.isAvailable() ? system : nil
@@ -872,13 +894,14 @@ func runDaemon(_ arguments: [String]) -> Never {
         // Qwen3-TTS sounds better still and takes nine seconds a sentence,
         // which is a dead line rather than a voice.
         //
-        // The fallback matters: a call must not stop working because a Python
-        // service did. A robotic voice is a complaint, silence is a fault.
-        let kokoro = KokoroHTTPSynthesizer(voice: callVoiceName)
+        // The fallback matters: a call must not stop working because the model
+        // has not been downloaded yet. A robotic voice is a complaint, silence
+        // is a fault.
         var systemVoice = SystemSpeechSynthesizer()
         systemVoice.sampleRate = 48_000
-        let callVoice: any SpeechSynthesizing = await kokoro.isAvailable() ? kokoro : systemVoice
-        note("[call] voice: \(await kokoro.isAvailable() ? "kokoro \(callVoiceName)" : "say (kokoro unreachable)")")
+        let nativeCallVoice = nativeKokoro(named: callVoiceName)
+        let callVoice: any SpeechSynthesizing = nativeCallVoice ?? systemVoice
+        note("[call] voice: \(nativeCallVoice == nil ? "say (kokoro model not installed)" : "kokoro \(callVoiceName), in process")")
         // A call is answered in the spoken style regardless of the owner's voice
         // note setting, because the medium is not a choice here — it is being
         // read aloud down a phone line. The written style is right for a screen

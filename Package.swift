@@ -62,7 +62,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "sage-voiced",
-            dependencies: ["SageVoiceCore"]
+            // `KokoroEngine` only where its runtime is staged, so the call sites
+            // are guarded with `#if canImport(KokoroEngine)` and a fresh clone
+            // still builds and still speaks — through the system voice.
+            dependencies: ["SageVoiceCore"] + (hasOnnxRuntime ? ["KokoroEngine"] : []),
+            linkerSettings: hasOnnxRuntime ? onnxLinkerSettings : []
         ),
         // The app a non-technical owner actually sees. The CLI above stays as
         // the debugging surface — every screen here drives the same

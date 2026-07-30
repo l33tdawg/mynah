@@ -413,9 +413,13 @@ Stated plainly, because "builds and has tests" is not the same as "works":
   SAGE.app, and nothing in the release path puts it there. On a bundle built by
   these scripts, `//call` reports that the endpoint is not installed rather than
   pretending. Build it and place it there by hand until this is fixed.
-- **Kokoro is installed separately.** `scripts/kokoro_server.py` is the server;
-  its model weights are not in this repository and nothing fetches them or starts
-  it. Without it, replies are spoken by macOS `say`.
+- **Kokoro's model weights are downloaded, not bundled.** The voice now runs in
+  process — there is no server, no port and no launchd job — but the 325 MB model
+  and 28 MB voice file are fetched when Signal is linked rather than shipped in
+  the DMG. Until that download finishes, replies are spoken by macOS `say`.
+  Release machines need `scripts/provision-onnxruntime.sh` and
+  `scripts/provision-espeak-ng.sh` before packaging; `package-app.sh` refuses to
+  build without them rather than quietly shipping the robotic voice.
 - **The relay and the TURN server have no deployment tooling** — no unit file, no
   deploy script. What they need is documented in their own package comments.
 - **The Go tests are not run by CI.** The release script runs `swift test` only.
