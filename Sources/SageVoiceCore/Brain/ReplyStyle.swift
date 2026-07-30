@@ -26,13 +26,32 @@ public enum ReplyStyle: String, Sendable, Codable, CaseIterable {
     /// for a list of shops with links has silently dropped what they asked for.
     public static let `default` = ReplyStyle.written
 
+    /// **Spoken replies are built, tested, and deliberately not shipped.**
+    ///
+    /// Mynah answering by voice note works — the synthesizer, the segmenter and
+    /// the attachment path are all in place and covered. It is switched off
+    /// because the owner judged it a step past what people will actually use:
+    /// *"we already have user sends voice notes (great), and calling working —
+    /// the agent replies not in text but in voice might be a step too far"*.
+    /// Having the capability is not a reason to turn it on for everybody.
+    ///
+    /// This is the switch, and it is one line. Nothing was deleted, the tests
+    /// still exercise `.spoken`, and turning it back on is flipping this to
+    /// `true` and restoring the Settings row.
+    ///
+    /// **Gated here rather than by hiding the toggle**, because hiding a control
+    /// does not change a preference somebody already saved. An owner who turned
+    /// spoken replies on yesterday would otherwise be stuck with them and no
+    /// way back — the setting removed, the behaviour left running.
+    public static let spokenRepliesAreAvailable = false
+
     /// Whether replies are spoken back as voice notes.
     ///
     /// The setting the owner actually sees is "answer with voice notes", not
     /// "reply style" — they are choosing a medium, and the style follows from
     /// it. This keeps that mapping in one place.
     public init(voiceNotes: Bool) {
-        self = voiceNotes ? .spoken : .written
+        self = (voiceNotes && Self.spokenRepliesAreAvailable) ? .spoken : .written
     }
 
     public var usesVoiceNotes: Bool { self == .spoken }

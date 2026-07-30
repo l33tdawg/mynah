@@ -1354,31 +1354,18 @@ struct SettingsView: View {
             // resolveReplyStyle), so saving also reconciles the supervised
             // service. The switch and the running appliance then tell the same
             // truth immediately.
-            SettingsRow(
-                "Answer with voice notes",
-                detail: (voiceNotes
-                    ? "Mynah speaks its answers, so it keeps them short — a couple of sentences, "
-                        + "no lists. Long answers are unlistenable."
-                    : "Mynah writes its answers, so it gives you the whole thing — a line per "
-                        + "item, and links you can tap.")
-                    + " This applies to new answers immediately."
-            ) {
-                Toggle("", isOn: $voiceNotes)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .onChange(of: voiceNotes) { _, isOn in
-                        do {
-                            try ReplyPreferences().save(voiceNotes: isOn)
-                        } catch {
-                            // Revert rather than show a switch that lies about
-                            // what the daemon will do.
-                            Self.log.error("could not save reply preference: \(error)")
-                            voiceNotes = !isOn
-                            return
-                        }
-                        Task { await app.reconcileAnsweringService() }
-                    }
-            }
+            // **The "Answer with voice notes" switch is deliberately absent.**
+            //
+            // Mynah speaking its replies is built and tested; it is not offered.
+            // The owner's call: sending voice notes and calling both earn their
+            // place, but an assistant answering aloud when you typed at it is a
+            // step past what people will use. Shipping a capability is not the
+            // same decision as enabling it.
+            //
+            // The switch that matters is `ReplyStyle.spokenRepliesAreAvailable`,
+            // not this row. Gating the behaviour rather than hiding the control
+            // is what stops an owner who turned it on yesterday being stranded
+            // with a spoken appliance and no way to turn it off.
         }
     }
 

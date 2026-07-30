@@ -35,19 +35,61 @@ final class ReplyStyleTests: XCTestCase {
         XCTAssertEqual(preferences.style(), .written, "no saved preference did not fall back to the default")
     }
 
-    func testTheOwnersChoiceSurvivesToTheDaemon() throws {
+    /// **Spoken replies are gated off, and this is the gate.**
+    ///
+    /// Mynah answering by voice note is built and covered; it is not shipped,
+    /// because the owner judged it past what people will use — sending voice
+    /// notes and calling both earn their place, an assistant talking back at you
+    /// when you typed does not. Shipping a capability is a different decision
+    /// from enabling it.
+    ///
+    /// Asserted rather than left implicit so that re-enabling is one visible
+    /// flip with a test that changes with it, instead of a behaviour that
+    /// quietly returns.
+    func testSpokenRepliesAreGatedOffRegardlessOfThePreference() throws {
+        XCTAssertFalse(
+            ReplyStyle.spokenRepliesAreAvailable,
+            "spoken replies are being shipped — was that decided?"
+        )
+        XCTAssertEqual(ReplyStyle(voiceNotes: true), .written)
+        XCTAssertEqual(ReplyStyle(voiceNotes: false), .written)
+    }
+
+    /// **The gate is on the behaviour, not on the control.**
+    ///
+    /// An owner who turned spoken replies on before this shipped has `true` in
+    /// their preferences file and no switch left to change it. Hiding the row
+    /// alone would leave them with a spoken appliance and no way back, so what
+    /// the daemon reads has to be `written` even when the saved answer says
+    /// otherwise.
+    func testAPreviouslySavedPreferenceCannotStrandAnOwner() throws {
         try preferences.save(voiceNotes: true)
         // A separate instance is what the daemon process gets.
         let asRead = ReplyPreferences(fileURL: directory.appendingPathComponent("reply-preferences.json"))
-        XCTAssertEqual(asRead.style(), .spoken)
+        XCTAssertEqual(
+            asRead.style(), .written,
+            "an owner who enabled spoken replies is stuck with them"
+        )
 
         try preferences.save(voiceNotes: false)
         XCTAssertEqual(asRead.style(), .written)
     }
 
-    func testTheOwnerPicksAMediumNotAStyle() {
-        XCTAssertEqual(ReplyStyle(voiceNotes: true), .spoken)
-        XCTAssertEqual(ReplyStyle(voiceNotes: false), .written)
+    /// Nothing was deleted — the writer still writes, so restoring the feature is
+    /// the flag and the Settings row rather than a migration.
+    ///
+    /// Asserted against the file rather than a property, because `ReplyPreferences`
+    /// exposes only `style()` and widening its API to prove a point about a
+    /// disabled feature would be the tail wagging the dog.
+    func testTheOwnersSavedAnswerIsOverriddenRatherThanDiscarded() throws {
+        try preferences.save(voiceNotes: true)
+        let saved = try String(
+            contentsOf: directory.appendingPathComponent("reply-preferences.json"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            saved.contains("true"),
+            "the owner's answer was thrown away rather than overridden: \(saved)"
+        )
     }
 
     /// A preferences file that will not parse should cost the owner their
