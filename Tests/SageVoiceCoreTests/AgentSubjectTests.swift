@@ -190,16 +190,29 @@ final class RosterFramingTests: XCTestCase {
         )
     }
 
-    /// The sidebar must not promise Mynah can query these agents. "Ask" is the
-    /// exact word the owner objected to on the page, and leaving it in the
-    /// sidebar would have kept the false promise one click earlier.
-    func testTheSidebarClaimsPresenceRatherThanCapability() {
-        let summary = MainSection.agents.summary
+    /// **There is no Agents section, and that is the point.**
+    ///
+    /// This used to assert that the sidebar entry did not overpromise. The entry
+    /// is gone: agent viewing, management and permissions are CEREBRUM's job and
+    /// it already does them properly, so a second, worse copy inside a voice
+    /// appliance was a surface with no purpose. The owner's test was the right
+    /// one — *does this control need to be there* — and the answer was no.
+    ///
+    /// Mynah keeps the capability: it can ask another agent for a status update
+    /// and read what other agents have shared, both without a screen. What it
+    /// does not do is present a directory, a permission model, or an RBAC editor.
+    ///
+    /// Asserted rather than left to a diff, because re-adding a nav entry is a
+    /// one-line change and the reasoning against it is not obvious from the code.
+    func testThereIsNoAgentDirectorySection() {
+        let names = MainSection.allCases.map { $0.rawValue.lowercased() }
         XCTAssertFalse(
-            summary.lowercased().contains("ask"),
-            "the sidebar still says Mynah can ask these agents things"
+            names.contains { $0.contains("agent") },
+            "an agent directory section is back in the sidebar: \(names)"
         )
-        XCTAssertFalse(summary.lowercased().contains("read"))
+        // The four that remain, in order. A fifth arriving should be a decision,
+        // not a side effect.
+        XCTAssertEqual(names, ["home", "memories", "privacy", "settings"])
     }
 }
 
