@@ -70,6 +70,20 @@ bash scripts/provision-asr-assets.sh
 step "provision signed Signal helper"
 bash scripts/provision-signal-cli.sh
 
+# The native voice's two binaries. package-app.sh requires both and this script
+# would otherwise never produce them — the same omission the call endpoint above
+# documents, which stayed hidden for several releases because the working repo
+# happened to have the artifact lying around from a manual run.
+#
+# espeak-ng is built from source rather than downloaded, so this is the slowest
+# step here by some margin. It is skipped on a repeat run: both scripts stop
+# early when their output is already staged.
+step "provision ONNX Runtime for the native voice"
+bash scripts/provision-onnxruntime.sh
+
+step "provision espeak-ng for the native voice"
+bash scripts/provision-espeak-ng.sh
+
 step "package + sign"
 bash scripts/package-app.sh
 
