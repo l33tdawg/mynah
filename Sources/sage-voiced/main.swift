@@ -867,6 +867,17 @@ func runDaemon(_ arguments: [String]) -> Never {
             synthesizer = nil
         }
 
+        // `sage-gui mcp` is a client, not a node. On a Mac where nothing ever
+        // started `serve` — every Mac that did not already have SAGE.app — the
+        // daemon would come up "ready" and answer the owner from a brain that
+        // could neither read nor write, because the port it talks to had no
+        // listener. Probes first and starts one only on a real connection
+        // failure, so an owner's existing node never gets a second beside it.
+        let nodeStanding = await ApplianceWriteReadinessCheck().checkStartingNodeIfNeeded()
+        if let headline = nodeStanding.headline {
+            note("[daemon] SAGE memory: \(headline)")
+        }
+
         do {
             let info = try await mcp.start()
             let tools = try await loop.availableTools()

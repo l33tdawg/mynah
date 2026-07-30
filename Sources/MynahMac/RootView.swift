@@ -306,7 +306,10 @@ struct ReadyStage: View {
         // stamped by consensus when the key registers, which may only just have
         // happened. Unauthenticated and on loopback, so it costs nothing and
         // works before any identity has been established.
-        .task { writeReadiness = await ApplianceWriteReadinessCheck().check() }
+        // Starts a node if nothing is listening, because on a Mac that never had
+        // SAGE nothing ever did: Mynah only spawns `sage-gui mcp`, which is a
+        // client. Lazy, so a Mac already running SAGE is untouched.
+        .task { writeReadiness = await ApplianceWriteReadinessCheck().checkStartingNodeIfNeeded() }
     }
 
     // MARK: The promise this screen makes

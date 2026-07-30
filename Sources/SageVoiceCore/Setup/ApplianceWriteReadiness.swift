@@ -412,22 +412,82 @@ public struct ApplianceWriteReadinessCheck: Sendable {
             return ApplianceWriteReadiness(agentID: nil, standing: .unknown("no identity on this Mac yet"))
         }
         do {
-            try LoopbackSecurity.requireLoopback(endpoint)
-            var request = URLRequest(url: endpoint)
-            request.httpMethod = "GET"
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let (data, response) = try await session.data(for: request)
-            try LoopbackSecurity.verifyResponseOrigin(response, expected: endpoint)
-            guard let code = (response as? HTTPURLResponse)?.statusCode, code == 200 else {
-                return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("the node did not answer"))
-            }
-            return ApplianceWriteReadiness(
-                agentID: agentID,
-                standing: Self.standing(inRoster: data, for: agentID)
-            )
+            return try await roster(for: agentID)
         } catch {
             return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("\(error)"))
         }
+    }
+
+    /// The same check, but starts a node first if nothing is listening.
+    ///
+    /// This is the boot path. `check` alone reports "the node did not answer"
+    /// on a Mac where the answer is that *nobody ever started one* — Mynah
+    /// spawns `sage-gui mcp`, which is a client, and until this existed no code
+    /// in this app ran `serve`. A fresh install therefore looked configured and
+    /// silently remembered nothing.
+    ///
+    /// Deliberately still lazy, which is QuietType's rule: a node is started
+    /// only after a real connection failure, so a Mac already running SAGE
+    /// never gets a second one started beside it.
+    ///
+    /// The no-identity branch starts a node too, and that is the case this was
+    /// built for rather than an edge: on a first run genesis is what *mints*
+    /// the companion key, so returning early because no key exists yet would
+    /// skip the one action that creates one. The standing reported immediately
+    /// afterwards is usually still `.unknown` — a chain takes longer to come up
+    /// than any settle delay worth blocking a launch on — and a later recheck
+    /// is what sees the enrolled agent.
+    public func checkStartingNodeIfNeeded(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        supervisor: SageNodeSupervisor = .shared
+    ) async -> ApplianceWriteReadiness {
+        guard let agentID = SageAgentIdentity.applianceAgentID(homeDirectory: homeDirectory) else {
+            _ = await supervisor.startAndSettle(homeDirectory: homeDirectory)
+            guard let minted = SageAgentIdentity.applianceAgentID(homeDirectory: homeDirectory) else {
+                return ApplianceWriteReadiness(
+                    agentID: nil,
+                    standing: .unknown("no identity on this Mac yet")
+                )
+            }
+            return await settledStanding(for: minted)
+        }
+        do {
+            return try await roster(for: agentID)
+        } catch {
+            guard SageNodeSupervisor.isNodeNotRunning(error) else {
+                return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("\(error)"))
+            }
+            switch await supervisor.startAndSettle(homeDirectory: homeDirectory) {
+            case .started, .openedApplication, .alreadyRunning:
+                return await settledStanding(for: agentID)
+            case .noNodeAvailable, .vendoredNodeTooOld, .cooledDown, .failed:
+                return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("\(error)"))
+            }
+        }
+    }
+
+    private func settledStanding(for agentID: String) async -> ApplianceWriteReadiness {
+        do {
+            return try await roster(for: agentID)
+        } catch {
+            return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("\(error)"))
+        }
+    }
+
+    private func roster(for agentID: String) async throws -> ApplianceWriteReadiness {
+        try LoopbackSecurity.requireLoopback(endpoint)
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: request)
+        try LoopbackSecurity.verifyResponseOrigin(response, expected: endpoint)
+        guard let code = (response as? HTTPURLResponse)?.statusCode, code == 200 else {
+            return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("the node did not answer"))
+        }
+        return ApplianceWriteReadiness(
+            agentID: agentID,
+            standing: Self.standing(inRoster: data, for: agentID)
+        )
     }
 
     /// Finds this agent's row and reads its mask.
