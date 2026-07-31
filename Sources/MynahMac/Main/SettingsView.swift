@@ -598,12 +598,10 @@ final class SettingsModel {
         }
     }
 
-    static var appVersion: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
-        let build = info?["CFBundleVersion"] as? String ?? "—"
-        return "\(short) (\(build))"
-    }
+    /// Through the shared accessor, so About and the sidebar cannot disagree
+    /// about which build is running — which is the one thing a version string
+    /// exists to settle.
+    static var appVersion: String { MynahReleaseVersion.currentBuildLabel() }
 
     /// The version of the SAGE this Mac is actually running.
     ///

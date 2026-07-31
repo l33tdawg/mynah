@@ -1,5 +1,6 @@
 import XCTest
 @testable import MynahMac
+@testable import SageVoiceCore
 
 /// The attribution panel.
 ///
@@ -190,6 +191,30 @@ final class AboutTests: XCTestCase {
         let short = info?["CFBundleShortVersionString"] as? String ?? "—"
         let build = info?["CFBundleVersion"] as? String ?? "—"
         XCTAssertEqual(SettingsModel.appVersion, "\(short) (\(build))")
+    }
+
+    /// **About and the sidebar read the same string.**
+    ///
+    /// The sidebar now carries the version, because the owner asked to see
+    /// which build he is running without opening Settings — after an afternoon
+    /// where the DMG in his Dock, the app in `/Applications` and the daemon
+    /// answering his phone were repeatedly three different builds.
+    ///
+    /// Two places computing it separately is how a version string starts
+    /// lying, which defeats the only thing it is for. One accessor, asserted
+    /// here rather than hoped for.
+    @MainActor
+    func testTheSidebarAndAboutCannotDisagreeAboutTheBuild() {
+        XCTAssertEqual(SettingsModel.appVersion, MynahReleaseVersion.currentBuildLabel())
+    }
+
+    /// The build number is the half that earns its place. The marketing version
+    /// cannot tell two builds of one release apart, and this project ships
+    /// several of those in an afternoon.
+    func testTheLabelCarriesTheBuildAndNotOnlyTheRelease() {
+        let label = MynahReleaseVersion.currentBuildLabel()
+        XCTAssertTrue(label.contains("("), "\"\(label)\" has no build number in it")
+        XCTAssertTrue(label.hasSuffix(")"), "\"\(label)\" is missing the build number")
     }
 
     /// A copyleft component must carry an offer of source, not just a credit.

@@ -899,15 +899,32 @@ struct Sidebar: View {
     private var identity: some View {
         HStack(spacing: s4) {
             MynahMark(side: 26)
-            Text("Mynah")
-                .mynahWordmark()
-                .foregroundStyle(Palette.ink.primary)
+            // Baseline-aligned so the version sits *on* the wordmark's line
+            // rather than centred against its cap height, which reads as a
+            // second word rather than a footnote to the first.
+            HStack(alignment: .firstTextBaseline, spacing: s2) {
+                Text("Mynah")
+                    .mynahWordmark()
+                    .foregroundStyle(Palette.ink.primary)
+                // **Which build am I looking at**, answered without opening
+                // Settings. Asked for after an afternoon of installing four of
+                // these: the DMG in the Dock, the app in /Applications and the
+                // daemon answering the phone were repeatedly three different
+                // builds, and nothing on screen said so.
+                //
+                // Tertiary and mono: present when looked for, and quiet enough
+                // that the column still reads as a wordmark rather than a
+                // version banner.
+                Text(MynahReleaseVersion.currentBuildLabel())
+                    .mynahFont(.mono)
+                    .foregroundStyle(Palette.ink.tertiary)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, s5)
         .padding(.bottom, s5)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Mynah")
+        .accessibilityLabel("Mynah, version \(MynahReleaseVersion.currentBuildLabel())")
         .accessibilityAddTraits(.isHeader)
     }
 

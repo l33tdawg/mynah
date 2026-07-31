@@ -117,6 +117,25 @@ public struct MynahReleaseVersion: Comparable, Equatable, Sendable {
         return parse(raw) ?? MynahReleaseVersion(major: 0, minor: 0, patch: 0)
     }
 
+    /// What the running build calls itself: marketing version and build number.
+    ///
+    /// **Both, and the build number is not decoration.** The marketing version
+    /// cannot tell two builds of the same release apart, and this project ships
+    /// several of those in an afternoon. On 31 July the owner replaced 1.1.0
+    /// with 1.1.1, the window came up saying 1.1.1, and the daemon answering
+    /// his phone stayed on 1.1.0 for two hours — same marketing version on
+    /// screen would have hidden it just as well.
+    ///
+    /// Em dashes rather than "unknown" when the bundle cannot be read: this
+    /// goes in a sidebar, where a word is a sentence starting and a dash is
+    /// visibly a blank.
+    public static func currentBuildLabel(bundle: Bundle = .main) -> String {
+        let info = bundle.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(short) (\(build))"
+    }
+
     // MARK: - Showing one
 
     /// What the owner reads. `1.1.0`, or `1.1.0 beta 2`.
