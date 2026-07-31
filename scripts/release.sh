@@ -44,7 +44,33 @@ See scripts/notarize.sh for how to store a keychain profile."
 fi
 
 step "tests"
-swift test
+# Two things, and the second is the one that matters.
+#
+# `swift test` on its own does not run the suite on an Apple Silicon Mac where
+# the xctest runner resolves to x86_64: the arm64 test bundle fails to load with
+# "incompatible architecture", the swift-testing runner then reports
+# "Test run with 0 tests in 0 suites passed", and the whole command **exits 0**.
+# Measured here, not theorised — 1148 tests became 0 and the step went green.
+# `arch -arm64` is what actually runs them; `--arch arm64` does not, because it
+# changes what is built rather than what loads it.
+#
+# And then the assertion, because the arch fix only addresses the cause known
+# today. A gate that silently runs zero tests is worse than no gate: this script
+# puts tests before the build precisely so a failing suite never reaches a
+# signing key, and a step that passes without executing anything hands that key
+# over while looking like it did its job. So the count is checked rather than
+# the exit code trusted.
+TEST_LOG="$(mktemp "${TMPDIR:-/tmp}/mynah-release-tests.XXXXXX")"
+trap 'rm -f "$TEST_LOG"' EXIT
+if [[ "$(uname -m)" == "arm64" ]]; then
+  arch -arm64 swift test 2>&1 | tee "$TEST_LOG"
+else
+  swift test 2>&1 | tee "$TEST_LOG"
+fi
+grep -qE "Executed [1-9][0-9]* tests" "$TEST_LOG" \
+  || die "The test step reported no executed tests, so nothing was verified.
+This is the false green described above rather than an empty suite — check for
+'incompatible architecture' in the output before trusting any of it."
 
 step "release build"
 swift build -c release --arch arm64
