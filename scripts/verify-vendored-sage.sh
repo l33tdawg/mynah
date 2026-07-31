@@ -56,19 +56,34 @@ ok "version $version is at or above the $MIN_MAJOR.$MIN_MINOR floor"
 
 # Symbols, not just a version string: a renamed or rebuilt bundle can carry any
 # version it likes. These are the two halves of the contract the app relies on.
-strings -a "$EXE" | grep -q "SAGE_VENDORED_AGENT_KEY_FILE" \
+#
+# Extracted once into a file rather than piped per-check, and that is a
+# correctness fix rather than a speed one. `strings -a | grep -q` looks right
+# and cannot work under `set -o pipefail`: `grep -q` exits at the first match,
+# `strings` then dies of SIGPIPE (141), and pipefail reports the *pipeline* as
+# failed. Every one of these checks failed closed on a bundle that carried the
+# string — the exact false alarm 11.16.1 produced here.
+#
+# It went unnoticed because the version gate above had never let a bundle
+# through: 11.15.1 stopped there, so these three lines had never run against a
+# passing bundle even once.
+SYMBOLS="$(mktemp "${TMPDIR:-/tmp}/sage-verify-strings.XXXXXX")"
+trap 'rm -f "$SYMBOLS"' EXIT
+strings -a "$EXE" > "$SYMBOLS"
+
+grep -qF "SAGE_VENDORED_AGENT_KEY_FILE" "$SYMBOLS" \
   || fail "vendored SAGE does not read SAGE_VENDORED_AGENT_KEY_FILE — it would
       ignore the companion contract and mint an un-bootstrappable chain."
 ok "reads the vendored companion bootstrap environment"
 
-strings -a "$EXE" | grep -q "first-party app-v23 companion" \
+grep -qF "first-party app-v23 companion" "$SYMBOLS" \
   || fail "vendored SAGE has no app-v23 companion readiness path"
 ok "carries the app-v23 companion readiness gate"
 
 # Advisory rather than fatal: app-v24 is what makes the Companion become ready
 # after activation, but the exact string is SAGE's to name and a rename here
 # should not block a release on its own.
-if strings -a "$EXE" | grep -q "app-v24"; then
+if grep -qF "app-v24" "$SYMBOLS"; then
   ok "carries app-v24"
 else
   echo "  WARNING: no app-v24 string found. 11.16+ is expected to govern"

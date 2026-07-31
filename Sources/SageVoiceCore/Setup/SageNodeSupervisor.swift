@@ -128,12 +128,44 @@ public final class SageNodeSupervisor: @unchecked Sendable {
     /// So: 11.16 or nothing. Lower it only if recall is verified working on the
     /// build in question.
     ///
+    /// ## 11.16.1: recall verified, on the same terms 11.15.1 failed
+    ///
+    /// Measured on a fresh isolated vendored node, not inferred. Genesis seeded
+    /// the root-bound app-v23 bootstrap for `voice-interface`; the local Root
+    /// proposed app-v24, auto-voted ACCEPT and persisted the plan; at the
+    /// activation height the node logged "first-party companion admitted after
+    /// app-v24 activation". A `sage_remember` then committed, and **both**
+    /// `sage_recall` and `sage_turn` returned that memory, signed by the
+    /// genesis-bound companion agent. No "Memory classification state is
+    /// unavailable" on any read — which is the whole difference from 11.15.1.
+    ///
+    /// So 11.16.1 is the build this floor has actually been tested against.
+    /// 11.16.0 satisfies the floor arithmetically but was never run here.
+    ///
+    /// ## A fresh node is legitimately mute for about ten minutes
+    ///
+    /// Also measured, and worth knowing before treating it as a fault: app-v24
+    /// activates at a **governed activation height** — 204 on that node — and
+    /// the pending-plan pump heartbeats a quiescent chain at roughly one block
+    /// every four seconds. That is ~13 minutes from first launch during which
+    /// writes are refused with "first-party companion memory writes require
+    /// governed app-v24 activation".
+    ///
+    /// That refusal is legible and self-correcting, unlike the failures above,
+    /// but it is the owner's first impression on a brand-new Mac. Anything that
+    /// reports readiness must not read it as broken.
+    ///
     /// ## Testing a second node beside a live one
     ///
     /// Needs a separate `SAGE_HOME`, `REST_ADDR`, `SAGE_CMT_RPC_ADDR` and
     /// `SAGE_CMT_P2P_ADDR`, plus `quorum.tls_addr` in config.yaml. Note
     /// `mcp_port` is discovery/output metadata and does **not** configure that
     /// listener, and there is no environment override for it yet.
+    ///
+    /// `quorum.tls_addr` is the one that bites: everything else has an
+    /// environment override, so a second node comes all the way up, prints
+    /// "SAGE Personal ready", and only then exits on `MCP TLS listener bind:
+    /// address already in use` against the live node's 8443.
     public static let minimumBootstrapCapableVersion = MynahReleaseVersion(
         major: 11,
         minor: 16,
