@@ -732,8 +732,45 @@ final class ConversationModel {
 
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isBusy, !isPaused else { return }
+        guard !text.isEmpty, !isPaused else { return }
+
+        // Typing while it thinks used to do nothing whatsoever. The guard was
+        // `!isBusy` and returned before clearing the draft, so Return left the
+        // sentence sitting in the box and the owner watching a spinner, with no
+        // way to tell a refused send from a slow one. On an appliance whose
+        // turns run 20–60 s that is most of the time it is being used.
+        //
+        // Queued rather than sent, because Ollama serves one slot: a second
+        // request now would either be refused or would evict the prompt cache
+        // the running turn is built on.
+        guard !isBusy else {
+            queued.append(text)
+            draft = ""
+            return
+        }
+
         draft = ""
+        let exchange = Exchange(question: text)
+        exchanges.append(exchange)
+        startTurn(id: exchange.id, transcript: text)
+    }
+
+    /// What the owner typed while the last turn was still running.
+    ///
+    /// Sent as **one** question rather than several turns. Three sentences
+    /// typed in a row while waiting are almost always one thought — "and the
+    /// address", "and their number" — and answering them separately costs
+    /// three full turns to say what one turn would have said better.
+    private(set) var queued: [String] = []
+
+    /// Starts a turn for everything queued during the last one.
+    ///
+    /// Joined with newlines, so the model reads them as consecutive lines of a
+    /// single message and the transcript records what was actually asked.
+    private func flushQueued() {
+        guard !queued.isEmpty, !isPaused, !isBusy else { return }
+        let text = queued.joined(separator: "\n")
+        queued.removeAll()
         let exchange = Exchange(question: text)
         exchanges.append(exchange)
         startTurn(id: exchange.id, transcript: text)
@@ -754,6 +791,13 @@ final class ConversationModel {
         guard let active = activeTurn else { return }
         active.task.cancel()
         activeTurn = nil
+        // Stop means stop, including whatever was typed while it ran. Draining
+        // the queue here would answer Stop by immediately starting another
+        // turn, which is the opposite of what the button says. Put back in the
+        // box rather than discarded — the owner can press Return again.
+        draft = ([queued.joined(separator: "\n"), draft]
+            .filter { !$0.isEmpty }).joined(separator: "\n")
+        queued.removeAll()
         finish(active.id, with: .failed(.stopped))
     }
 
@@ -843,6 +887,8 @@ final class ConversationModel {
     private func clearActiveTurn(_ id: UUID) {
         guard activeTurn?.id == id else { return }
         activeTurn = nil
+        // The one place a turn ends, so the one place the queue can drain.
+        flushQueued()
     }
 
     /// **What Mynah answers from: exactly what is on the screen.**

@@ -465,6 +465,34 @@ struct TalkView: View {
                             .id(exchange.id)
                         }
                     }
+                    // Typed while it was thinking, not yet asked.
+                    //
+                    // Drawn as real cards rather than a "3 queued" counter,
+                    // because the owner needs to see *which* sentences are
+                    // waiting — that is the difference between trusting the
+                    // queue and retyping into it. Dimmed, and with one caption
+                    // for the group, so a stack of them cannot be mistaken for
+                    // questions already answered.
+                    if !model.queued.isEmpty {
+                        VStack(alignment: .trailing, spacing: s4) {
+                            ForEach(Array(model.queued.enumerated()), id: \.offset) { _, text in
+                                AskedCard(text: text, at: nil, inset: Self.cardInset)
+                            }
+                            HStack(spacing: 0) {
+                                Spacer(minLength: Self.cardInset)
+                                Text(
+                                    model.queued.count == 1
+                                        ? "Waiting — goes when this answer lands."
+                                        : "Waiting — these \(model.queued.count) go together when this answer lands."
+                                )
+                                .mynahFont(.label)
+                                .foregroundStyle(Palette.ink.tertiary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .opacity(0.6)
+                    }
+
                     // A zero-height anchor rather than scrolling to the last
                     // exchange: an answer that is still growing would otherwise
                     // pin its own top edge and scroll the owner backwards.
