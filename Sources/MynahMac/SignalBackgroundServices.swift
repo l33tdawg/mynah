@@ -428,6 +428,35 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
 
     private var domain: String { "gui/\(userID)" }
 
+    /// Identity of an executable, as a string that changes whenever the file
+    /// behind a path does.
+    ///
+    /// This is what makes "Replace" mean replace. Both plists name a *path*
+    /// inside Mynah.app, and dragging a new build over the old one changes the
+    /// file at that path without changing one byte of the plist. `enable()`
+    /// then compared plists, found them identical, correctly concluded launchd
+    /// was already running what it would install, and returned — leaving the
+    /// daemon executing the old, now-unlinked inode.
+    ///
+    /// Measured on 31 July: the owner replaced 1.1.0 with 1.1.1, the GUI came
+    /// up as 1.1.1, and the daemon serving his phone stayed on 1.1.0 for two
+    /// hours. Its running inode was 586638994 against 592565057 on disk. The
+    /// fixes in that build were in the app he was looking at and absent from
+    /// the one answering his messages, which is worse than not shipping them.
+    ///
+    /// Size, mtime and inode rather than a hash: these binaries run to 120 MB
+    /// and this is computed on every launch, so hashing would cost more than
+    /// the problem is worth. A rebuild moves mtime, a replace moves the inode,
+    /// and a different build almost always moves size. A false positive costs
+    /// one restart nobody notices; a false negative is the bug above.
+    static func executableStamp(_ url: URL) -> String {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+        let inode = (attributes?[.systemFileNumber] as? NSNumber)?.int64Value ?? -1
+        return "\(size)-\(Int(modified))-\(inode)"
+    }
+
     static func signalPlist(
         _ configuration: SignalServiceConfiguration,
         logs: URL,
@@ -452,7 +481,10 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             "StandardOutPath": logs.appendingPathComponent("signal.log").path,
             "StandardErrorPath": logs.appendingPathComponent("signal.log").path,
             "EnvironmentVariables": [
-                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                // Not read by anything. It is here so that replacing the app
+                // changes these bytes, which is what makes `enable()` notice.
+                "MYNAH_BUILD_STAMP": executableStamp(configuration.signalCLI)
             ]
         ]
     }
@@ -484,7 +516,12 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             "StandardOutPath": logs.appendingPathComponent("bridge.log").path,
             "StandardErrorPath": logs.appendingPathComponent("bridge.log").path,
             "ProcessType": "Interactive",
-            "LowPriorityIO": false
+            "LowPriorityIO": false,
+            "EnvironmentVariables": [
+                // Not read by anything. It is here so that replacing the app
+                // changes these bytes, which is what makes `enable()` notice.
+                "MYNAH_BUILD_STAMP": executableStamp(configuration.bridge)
+            ]
         ]
     }
 
