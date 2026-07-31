@@ -462,6 +462,82 @@ final class ToolLoopTests: XCTestCase {
             XCTFail("unexpected error: \(error)")
         }
     }
+
+    // MARK: Promises that are not answers
+
+    /// A reply that announces a tool call and makes none must not end the turn.
+    ///
+    /// Observed live on 1.1.0: `qwen3.5:4b` answered "are you connected to
+    /// sage?" with "…Let me verify my direct memory and task storage:" and
+    /// called nothing. The log recorded a clean `1 iters, tools: none` turn —
+    /// no error, no timeout — because a reply with no tool calls was the loop's
+    /// definition of finished. The owner saw the promise and waited for a
+    /// second message that was never coming.
+    func testAPromiseWithNoToolCallIsNotTheAnswer() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering("Let me check your agent identity:"),
+            ScriptedBackend.answering("You are connected as sage-voice-bridge-agent.")
+        ])
+        let tools = StubToolSource(toolNames: ["sage_status"])
+
+        let result = try await makeLoop(backend: backend, tools: tools).run(transcript: "are you connected?")
+
+        XCTAssertEqual(
+            result.reply, "You are connected as sage-voice-bridge-agent.",
+            "the loop spoke the promise instead of asking the model again"
+        )
+        XCTAssertEqual(result.trace.unfulfilledPromises, 1)
+    }
+
+    /// Past the retry budget the wrap-up answers, and it answers with no tools.
+    ///
+    /// A model that promises every time would otherwise spend the whole turn —
+    /// 40–60 s per call on the appliance — discovering that. The wrap-up has no
+    /// tools attached, so it cannot promise a call it would then have to make.
+    func testARepeatedPromiseFallsThroughToTheToollessWrapUp() async throws {
+        let promises = Array(
+            repeating: ScriptedBackend.answering("Let me look that up:"),
+            count: ToolLoop.maximumPromiseRetries + 1
+        )
+        let backend = ScriptedBackend(promises + [ScriptedBackend.answering("You have two open tasks.")])
+        let tools = StubToolSource(toolNames: ["sage_backlog"])
+
+        let result = try await makeLoop(backend: backend, tools: tools).run(transcript: "what are my tasks?")
+
+        XCTAssertEqual(result.reply, "You have two open tasks.")
+        XCTAssertEqual(result.trace.unfulfilledPromises, ToolLoop.maximumPromiseRetries + 1)
+        XCTAssertEqual(
+            backend.requests.last?.tools.count, 0,
+            "the wrap-up must run with no tools, or it can promise all over again"
+        )
+    }
+
+    /// The trailing colon is the whole test, so an ordinary answer must survive.
+    ///
+    /// The rule is deliberately narrow. Rejecting replies that merely *open*
+    /// with "Let me…" would swallow "Let me know if you want the full list.",
+    /// which is a perfectly good last sentence.
+    func testAnOrdinaryAnswerIsNotTreatedAsAPromise() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering("Let me know if you want the full list.")
+        ])
+        let tools = StubToolSource(toolNames: ["sage_backlog"])
+
+        let result = try await makeLoop(backend: backend, tools: tools).run(transcript: "anything else?")
+
+        XCTAssertEqual(result.reply, "Let me know if you want the full list.")
+        XCTAssertEqual(result.trace.unfulfilledPromises, 0)
+        XCTAssertEqual(result.trace.modelCalls.count, 1, "a finished answer must not cost a second call")
+    }
+
+    /// The predicate itself, at the boundary.
+    func testPromiseDetectionIsAboutTheTrailingColon() {
+        XCTAssertTrue(ToolLoop.readsAsUnfulfilledPromise("Let me check your tasks:"))
+        XCTAssertTrue(ToolLoop.readsAsUnfulfilledPromise("Checking now:\n  "))
+        XCTAssertFalse(ToolLoop.readsAsUnfulfilledPromise("You have two tasks."))
+        XCTAssertFalse(ToolLoop.readsAsUnfulfilledPromise(""))
+        XCTAssertFalse(ToolLoop.readsAsUnfulfilledPromise("   "))
+    }
 }
 
 /// Regression tests for the conversation-history bug found on the live

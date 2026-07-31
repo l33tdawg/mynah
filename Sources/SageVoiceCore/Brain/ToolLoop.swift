@@ -216,6 +216,16 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// from, and that belongs in the same line as the rest of the turn.
     public var droppedToolCalls: Int = 0
 
+    /// Replies that announced a tool call the model then did not make.
+    ///
+    /// A 4B announces its intent in prose — "Let me check my agent identity:" —
+    /// and emits no tool call with it. That is a finished turn as far as the
+    /// loop is concerned, so the promise shipped as the answer and the owner
+    /// waited for a second message that was never coming. Counted rather than
+    /// silently retried, because the fix is a prompt change and the only way to
+    /// know whether it worked is to watch this number fall.
+    public var unfulfilledPromises: Int = 0
+
     public init(
         model: String,
         iterations: Int = 0,
@@ -273,6 +283,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         // budget, the other is the token ceiling.
         if wasTruncated { notes.append("[TRUNCATED]") }
         if droppedToolCalls > 0 { notes.append("[DROPPED \(droppedToolCalls)]") }
+        if unfulfilledPromises > 0 { notes.append("[PROMISED \(unfulfilledPromises)]") }
         return notes.isEmpty ? "" : " " + notes.joined(separator: " ")
     }
 }
@@ -419,6 +430,15 @@ public final class ToolLoop: @unchecked Sendable {
     /// model gets the results of what it asked for first and another iteration
     /// to ask again, which is a worse plan executed than no plan at all.
     public static let maximumToolCallsPerIteration = 3
+
+    /// How many times a turn will reject a promise and ask the model again.
+    ///
+    /// Two, and then the wrap-up takes over. Each retry is a whole model call —
+    /// 40–60 s on the appliance — so a model stuck in a promise loop would eat
+    /// the entire turn discovering it. The wrap-up runs with no tools attached
+    /// and cannot promise anything it would then have to deliver, which makes it
+    /// the right place to end up rather than a third attempt at the same thing.
+    public static let maximumPromiseRetries = 2
 
     public struct Configuration: Sendable {
         public var systemPrompt: String
@@ -846,7 +866,28 @@ public final class ToolLoop: @unchecked Sendable {
             messages.append(response.message)
 
             guard !response.toolCalls.isEmpty else {
-                reply = Self.speakable(response.message.content)
+                let spoken = Self.speakable(response.message.content)
+
+                // A promise is not an answer. The model said it was about to
+                // look something up and then called nothing, so accepting this
+                // as the final reply ends the turn on "Let me check:" and the
+                // owner waits for a second message that never comes.
+                //
+                // Retried rather than rewritten: the assistant's own promise is
+                // already in `messages`, and another iteration with the tools
+                // still attached is usually all it takes for the model to make
+                // the call it just described. Past the retry budget the loop
+                // leaves `reply` empty and falls through to the wrap-up, which
+                // has no tools and so cannot promise anything again.
+                if Self.readsAsUnfulfilledPromise(spoken) {
+                    trace.unfulfilledPromises += 1
+                    if trace.unfulfilledPromises <= Self.maximumPromiseRetries {
+                        continue
+                    }
+                    break
+                }
+
+                reply = spoken
                 Self.warnIfSpeakableAteTheAnswer(raw: response.message.content, spoken: reply)
                 break
             }
@@ -1165,6 +1206,26 @@ public final class ToolLoop: @unchecked Sendable {
             )
         }
         return cleaned
+    }
+
+    /// Whether a tool-less reply is a promise to act rather than an answer.
+    ///
+    /// Measured, not guessed: `qwen3.5:4b` answered "are you connected to sage?"
+    /// with "…Let me verify my direct memory and task storage:" and no tool
+    /// call, and the log recorded a clean `1 iters, tools: none` turn. The loop
+    /// had no way to tell that apart from a finished answer, so it spoke the
+    /// promise and stopped. The owner sent "well?" to get the real answer.
+    ///
+    /// A trailing colon is the whole test, and it is deliberately the only one.
+    /// For a spoken appliance a reply that ends on a colon is always wrong — it
+    /// introduces something that never arrives, whether that is a tool call, a
+    /// list, or a quote. Openers like "Let me…" are not tested, because "Let me
+    /// know if you want the full list." is a perfectly good last sentence and
+    /// suppressing it would cost a real answer to catch a rarer failure.
+    static func readsAsUnfulfilledPromise(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.hasSuffix(":")
     }
 
     public static func speakable(_ content: String) -> String {
