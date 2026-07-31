@@ -165,8 +165,23 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     /// it remembers", and this type's own remedy ends "it won't remember
     /// anything". Save appeared once, in this line, at the highest-stakes
     /// moment in the product.
+    ///
+    /// ## Why this is an instruction and not a diagnosis
+    ///
+    /// It used to read "Mynah can't remember anything yet." — true, accurate,
+    /// and the wrong sentence. It reports a defect and leaves the owner holding
+    /// it, which invites the two responses that cannot work: reinstall the app,
+    /// or file a bug against SAGE. Neither touches the actual state, which is
+    /// that a key is sitting in SAGE waiting for a human to approve it. Nothing
+    /// is broken here — a review step has not happened yet.
+    ///
+    /// So the sentence names the next action. The owner may not be the person
+    /// with administrator access; `remedy` says who is, and says it in the same
+    /// breath. A headline that instructs and a remedy that names the actor is
+    /// the right division — the reverse, a headline that complains and a remedy
+    /// buried a screen away, is what this replaced.
     public var headline: String? {
-        needsTheOwner ? "Mynah can't remember anything yet." : nil
+        needsTheOwner ? Self.ownHeadline : nil
     }
 
     /// The consequences, in the owner's terms, worst first.
@@ -217,7 +232,14 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
         // sentence cannot survive a rename of the thing it is telling somebody
         // to assign. That mismatch would fail exactly the way the original bug
         // did: writes refused, nothing said.
-        needsTheOwner ? Self.ownRemedy : nil
+        guard needsTheOwner else { return nil }
+        // Names the agent, because CEREBRUM lists every agent on the node by
+        // id and "approve Mynah" is not an instruction in front of a table of
+        // hex. This is also the check that would have caught the identity bug:
+        // an owner comparing this id against the row they approved would have
+        // seen two different keys.
+        guard let agentID, !agentID.isEmpty else { return Self.ownRemedy }
+        return "Mynah is the agent whose id starts \(agentID.prefix(16)). " + Self.ownRemedy
     }
 
     /// The one-line version, for a moment when the owner is waiting rather than
@@ -232,8 +254,14 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
         // and not the other is how a screen ends up saying "can't remember" in
         // its title and "can't save" in its banner — one mechanism, two words,
         // which is the thing we collapsed "subject" versus "domain" to avoid.
-        return "Mynah can't remember anything yet — SAGE restricted its key when it "
-            + "registered itself. The Agents page explains what to change."
+        //
+        // Leads with the same action as `headline` for the same reason: this is
+        // the string the Ready screen renders, so it is the one most owners
+        // read, and it is read at a moment when they are waiting rather than
+        // investigating. "Registered and waiting" is the state; it is not a
+        // fault, and saying so costs nothing.
+        return "\(Self.ownHeadline) It registered itself and is waiting for review. "
+            + "The Agents page has the steps."
     }
 
     /// One line for a log, so this is discoverable from a terminal too.
@@ -308,7 +336,7 @@ extension ApplianceWriteReadiness {
     public func status(observing denial: SageRitual.WriteDenial?) -> ApplianceMemoryStatus? {
         if let denial {
             return ApplianceMemoryStatus(
-                headline: "Mynah can't remember anything yet.",
+                headline: Self.ownHeadline,
                 detail: denial.detail,
                 // SAGE's own remedy when it sent one: it is per-cause and
                 // maintained by the people who own the rule. Ours is the
@@ -358,6 +386,14 @@ extension ApplianceWriteReadiness {
     /// distinction that matters: "here is what changes when you do this" is a
     /// different sentence from "here is how things are", and only the first is
     /// true today.
+    /// The one sentence, written once.
+    ///
+    /// Both paths into `ApplianceMemoryStatus` render it — the predictive one
+    /// through `headline` and the observed one from a `WriteDenial` — and a
+    /// test asserts the two agree. They agreed by coincidence before, because
+    /// the string was typed out in both places; now they agree by construction.
+    static let ownHeadline = "Approve Mynah in CEREBRUM so it can start remembering."
+
     static let ownRemedy = "Someone with administrator access to your SAGE node has to give "
         + "Mynah the companion profile and make it the owner of the subject "
         + "“\(SageRitual.memoryDomain)”, in CEREBRUM. An access grant won't do it — the "

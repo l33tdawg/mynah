@@ -25,7 +25,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         // "remember", not "save" — see the note on `headline`. The distinction
         // save was protecting cannot arise in this state, and remember is the
         // word the rest of the product uses to the owner.
-        XCTAssertEqual(state.headline, "Mynah can't remember anything yet.")
+        XCTAssertEqual(state.headline, "Approve Mynah in CEREBRUM so it can start remembering.")
     }
 
     /// Reading is never what the mask takes away, and saying otherwise would
@@ -331,7 +331,64 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         )
         let predicted = readiness(mask: 30).status(observing: nil)
         XCTAssertEqual(observed?.headline, predicted?.headline)
-        XCTAssertEqual(observed?.headline, "Mynah can't remember anything yet.")
+        XCTAssertEqual(observed?.headline, "Approve Mynah in CEREBRUM so it can start remembering.")
+    }
+
+    // MARK: - An instruction, not a fault report
+
+    /// The owner is not the person who broke this, and nothing here is broken:
+    /// a key is waiting for a review that has not happened. A sentence that
+    /// reports a defect hands the owner a problem and no next step, and the two
+    /// steps it invites — reinstall, or file a SAGE bug — both provably fail.
+    ///
+    /// So every owner-facing sentence in this state has to name the action.
+    /// `testNeitherRemedySuggestsReinstalling` polices the wrong remedies; this
+    /// polices the absence of a right one.
+    func testTheOwnerIsToldWhatToDoRatherThanWhatIsWrong() throws {
+        let state = readiness(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let headline = try XCTUnwrap(state.headline)
+        let short = try XCTUnwrap(state.shortRemedy)
+
+        // The action, not the symptom, and in the first sentence of each.
+        for sentence in [headline, short] {
+            XCTAssertTrue(
+                sentence.hasPrefix("Approve Mynah in CEREBRUM"),
+                "\"\(sentence)\" opens with something other than the next action"
+            )
+        }
+
+        // The phrasings that put it back on the owner as a defect they own.
+        for sentence in [headline, short, try XCTUnwrap(state.remedy)] {
+            let said = sentence.lowercased()
+            for complaint in ["can't remember anything yet", "failed", "error", "broken",
+                              "something went wrong", "unable to"] {
+                XCTAssertFalse(said.contains(complaint), "\"\(sentence)\" reports a fault")
+            }
+        }
+    }
+
+    /// CEREBRUM lists agents by id. "Approve Mynah" in front of a table of hex
+    /// is not an instruction, and comparing this id against the row they
+    /// approved is the check that would have caught the wrong-key bug.
+    func testTheRemedyNamesTheAgentToApprove() throws {
+        let state = ApplianceWriteReadiness(
+            agentID: "1ab7aa10deadbeefcafef00d",
+            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        )
+        XCTAssertTrue(try XCTUnwrap(state.remedy).contains("1ab7aa10deadbeef"))
+    }
+
+    /// And an unknown id must not produce "the agent whose id starts ." — a
+    /// sentence that reads like a truncation bug at the exact moment the owner
+    /// is deciding whether to trust what they are being told.
+    func testAMissingAgentIDLeavesACompleteSentence() throws {
+        let state = ApplianceWriteReadiness(
+            agentID: nil,
+            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        )
+        let remedy = try XCTUnwrap(state.remedy)
+        XCTAssertFalse(remedy.contains("id starts"))
+        XCTAssertTrue(remedy.hasPrefix("Someone with administrator access"))
     }
 
     // MARK: - What applying the remedy also does
