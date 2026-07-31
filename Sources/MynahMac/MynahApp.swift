@@ -594,8 +594,16 @@ final class MynahAppDelegate: NSObject, NSApplicationDelegate {
     /// is bounded by construction — `ProbeCommandRunner` caps each call at 15
     /// seconds — rather than by a timeout here that could not preempt it
     /// anyway.
+    /// `@MainActor` on the task, and it is load-bearing rather than decorative.
+    /// `NSApplicationDelegate` is not main-actor isolated here — the sibling
+    /// `applicationWillTerminate` needs `MainActor.assumeIsolated` to touch the
+    /// HUD, which is the proof — so a bare `Task {}` inherits no actor and
+    /// `reply(toApplicationShouldTerminate:)` would be called off the main
+    /// thread. That is the one mistake this method cannot survive: the reply is
+    /// what releases a `.terminateLater`, so getting it wrong leaves Mynah
+    /// unquittable by the owner who just asked it to quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        Task {
+        Task { @MainActor in
             await SignalBackgroundServiceManager.shared.disable(because: "the owner quit Mynah")
             NSApp.reply(toApplicationShouldTerminate: true)
         }
