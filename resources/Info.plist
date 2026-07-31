@@ -1,106 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-
-  <!-- The app, not the CLI. sage-voiced still ships alongside it in
-       Contents/MacOS as the debugging surface, but it is a helper: making it
-       the bundle executable is what made double-clicking this app open
-       nothing at all. -->
-  <key>CFBundleExecutable</key>
-  <string>Mynah</string>
-
-  <!-- DO NOT CHANGE. macOS files every TCC grant — microphone, automation,
-       files-and-folders — under this string. A new identifier silently revokes
-       all of them for every existing owner, who then gets permission boxes
-       with no idea why. scripts/package-app.sh hard-fails on a change for
-       exactly this reason; if you think you need a new one, you need a
-       migration plan first. -->
-  <key>CFBundleIdentifier</key>
-  <string>local.sage.voicebridge</string>
-
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-
-  <!-- What the owner calls it: the menu bar, the Dock, the "quit" box, the
-       first Finder column. "SAGE Voice Bridge" is the name of the machinery,
-       and the owner is never shown the machinery. -->
-  <key>CFBundleName</key>
-  <string>Mynah</string>
-  <key>CFBundleDisplayName</key>
-  <string>Mynah (Sage Voice Bridge)</string>
-
-  <!-- Contents/Resources/Mynah.icns, drawn by scripts/make-icon.sh. -->
-  <key>CFBundleIconFile</key>
-  <string>Mynah</string>
-  <key>CFBundleIconName</key>
-  <string>Mynah</string>
-
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <!-- The version the owner sees, and the one every release script reads back
-       off the built bundle: create-dmg.sh names the artifact from it,
-       notarize.sh labels the submission with it, and the tag is expected to
-       match. Change it here and nowhere else. -->
-  <key>CFBundleShortVersionString</key>
-  <string>1.1.1</string>
-  <!-- Monotonic build number, independent of the marketing version. macOS uses
-       it to decide which of two copies is newer, so it must never go backwards
-       even when the version string does. -->
-  <key>CFBundleVersion</key>
-  <string>3</string>
-
-  <key>LSApplicationCategoryType</key>
-  <string>public.app-category.productivity</string>
-
-  <!-- Package.swift targets macOS 14, so anything lower is a bundle that
-       launches into a dyld error instead of a window. -->
-  <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
-
-  <!-- Mynah has a window, a Dock icon and a full menu bar. It was an agent
-       when it was a daemon with a CLI; as an app, LSUIElement would hide the
-       Dock icon, and the Dock icon is the only way back after the owner closes
-       the window — the app deliberately keeps running when they do
-       (MynahApp.applicationShouldTerminateAfterLastWindowClosed). The menu bar
-       extra is an extra, not the product. -->
-  <key>LSUIElement</key>
-  <false/>
-
-  <key>NSHighResolutionCapable</key>
-  <true/>
-
-  <!-- Shown in the macOS microphone prompt, so it is written to be read by the
-       person staring at that box — not by a lawyer, and not by us.
-       Scoped honestly: Mynah does not record from this Mac today (the owner
-       talks into their phone and the voice note arrives over Signal), and
-       Settings says so in as many words. The key is here because the
-       hold-to-talk path in Setup/MicrophonePermissionView refuses to ask
-       without it, and because a bundle that gains a usage string later has to
-       be re-signed and re-notarized to pick it up. -->
-  <key>NSMicrophoneUsageDescription</key>
-  <string>Mynah asks for the microphone only if you choose to hold the talk button and speak to it from this Mac. It never listens in the background, and what you say is turned into words on this Mac.</string>
-
-  <!-- Mynah is an appliance: it answers the phone whether or not a window is
-       open. Letting macOS terminate it quietly at logout or under memory
-       pressure would mean messages going unanswered with nothing to see. -->
-  <key>NSSupportsSuddenTermination</key>
-  <false/>
-  <key>NSSupportsAutomaticTermination</key>
-  <false/>
-
-  <!-- The system's own About box and Finder's Get Info read this, which makes
-       it the ordinary place a Mac app names its author. It named nobody, and
-       pointed at a LICENSE file that package-app.sh was not copying into the
-       bundle — both fixed: the name is here and the file now really ships. -->
-  <key>NSHumanReadableCopyright</key>
-  <string>Copyright © 2026 Dhillon Andrew Kannabhiran. Apache 2.0 licensed; see LICENSE inside this app.</string>
-
-  <!-- Set by scripts/package-app.sh; read back by scripts/notarize.sh to name
-       the archive. Empty means a plain release. -->
-  <key>SageVoiceBridgeReleaseLabel</key>
-  <string></string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mynah (Sage Voice Bridge)</string>
+	<key>CFBundleExecutable</key>
+	<string>Mynah</string>
+	<key>CFBundleIconFile</key>
+	<string>Mynah</string>
+	<key>CFBundleIconName</key>
+	<string>Mynah</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.sage.voicebridge</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Mynah</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.1.2</string>
+	<key>CFBundleVersion</key>
+	<string>4</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Dhillon Andrew Kannabhiran. Apache 2.0 licensed; see LICENSE inside this app.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mynah asks for the microphone only if you choose to hold the talk button and speak to it from this Mac. It never listens in the background, and what you say is turned into words on this Mac.</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>SageVoiceBridgeReleaseLabel</key>
+	<string></string>
 </dict>
 </plist>
