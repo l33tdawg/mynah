@@ -81,7 +81,10 @@ struct AskedCard: View {
     private var bubble: some View {
         HStack(spacing: 0) {
             Spacer(minLength: inset)
-            Text(text)
+            // The owner's own words get the same treatment: they paste links in
+            // too, and one bubble where a URL is clickable and the one above it
+            // where it isn't would read as a bug in whichever came second.
+            Text(ChatLinks.attributed(text))
                 .mynahFont(.body)
                 .foregroundStyle(Palette.ink.primary)
                 .textSelection(.enabled)
@@ -126,13 +129,17 @@ struct AnsweredCard<Content: View>: View {
     }
 }
 
-/// Mynah's words inside an answer card. A plain `Text` with the one
-/// accessibility label that says who is speaking.
+/// Mynah's words inside an answer card, with any URLs in them clickable, and
+/// the one accessibility label that says who is speaking.
+///
+/// The label stays the plain string: VoiceOver reading a two-line URL aloud
+/// character by character helps nobody, and the link is reachable from the
+/// rotor regardless.
 struct AnsweredText: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(ChatLinks.attributed(text))
             .mynahFont(.body)
             .foregroundStyle(Palette.ink.primary)
             .textSelection(.enabled)
