@@ -23,6 +23,13 @@
 #      actually catch a mistake in that order
 set -euo pipefail
 
+# Defined here rather than beside the other helpers further down, because bash
+# resolves a function name when the call runs, not when the file is parsed. The
+# ad-hoc signature guard below is the earliest caller, and with the definition
+# further down it died with "die: command not found" and exit 127 — swallowing
+# the very explanation it exists to print.
+die() { echo "$*" >&2; exit 1; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${SAGE_VOICE_APP_PATH:-$ROOT/dist/Mynah.app}"
 
@@ -145,8 +152,6 @@ EXPECTED_BUNDLE_ID="local.sage.voicebridge"
 # error message on a dev build.
 TIMESTAMP_OPT="--timestamp"
 [[ "$SIGN_IDENTITY" == "-" ]] && TIMESTAMP_OPT=""
-
-die() { echo "$*" >&2; exit 1; }
 
 # Reads a command's output into a string instead of piping it into grep.
 #
