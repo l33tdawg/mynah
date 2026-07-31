@@ -150,6 +150,14 @@ public actor VoiceBridgeDaemon {
     /// message cannot bleed into each other's context.
     private var histories: [String: [BrainMessage]] = [:]
 
+    /// The thread whose prompt cache is currently anchored.
+    ///
+    /// Ollama serves one slot at a time, so only one conversation's checkpoint
+    /// can exist at a time, and it belongs to whoever spoke last — they are the
+    /// likeliest to speak next. Keep-warm needs this because the cache it must
+    /// preserve is a specific thread's, not the model in the abstract.
+    private var lastAnchoredKey: String?
+
     /// The last "hang on" line sent to each thread.
     ///
     /// Kept so the next one can avoid repeating it. Random choice from four
@@ -403,8 +411,37 @@ public actor VoiceBridgeDaemon {
     }
 
     private func reWarm(tools: [MCPTool]) async {
+        // Re-anchor the live conversation, rather than re-priming the boot
+        // probe, whenever there is one.
+        //
+        // `warmUp()` sends `[system, warmUpProbe]` — no history. That is the
+        // right prompt at boot, when no conversation exists, and the wrong one
+        // ever after: it diverges from a real turn immediately after the tool
+        // block, so the checkpoint it plants is on a sequence no turn will ask
+        // for. Ollama serves one slot, so planting it *destroys* the anchor the
+        // last turn left behind.
+        //
+        // Measured in ollama.log before this fix, alternating forever:
+        //
+        //     n_past 6137, prompt eval  1.3 s /  439 tokens   ← a real turn
+        //     n_past 3516, prompt eval 12.0 s / 2613 tokens   ← keep-warm
+        //     n_past 6125, prompt eval  1.7 s /  599 tokens   ← a real turn
+        //     n_past 3516, prompt eval 11.5 s / 2672 tokens   ← keep-warm
+        //
+        // Keep-warm was not merely failing to help; it was re-prefilling ~2,650
+        // tokens every 20 minutes and evicting the cache that made turns fast.
+        // An owner who spoke shortly after a tick paid the full prefill again —
+        // 18 s for "you still there?".
+        //
         // Silent unless it fails — a heartbeat that logs every 20 minutes buries
         // the lines that matter.
+        if let key = lastAnchoredKey, let history = histories[key], !history.isEmpty {
+            if await loop.anchorPromptCache(history: history, tools: tools) == false {
+                log("[daemon] keep-warm failed; the next turn will pay full prefill")
+            }
+            return
+        }
+
         if await loop.warmUp(tools: tools) == false {
             log("[daemon] keep-warm failed; the next turn will pay full prefill")
         }
@@ -658,6 +695,7 @@ public actor VoiceBridgeDaemon {
             // no longer waiting. Ollama serves one slot at a time, so this does
             // occupy the model briefly — acceptable only because it is short and
             // nobody is blocked on it.
+            lastAnchoredKey = key
             await loop.anchorPromptCache(history: histories[key] ?? [], tools: tools)
 
             // After the reply, never before. SAGE's turn discipline is the
