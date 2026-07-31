@@ -335,12 +335,59 @@ final class MynahIdentityTests: XCTestCase {
         let source = try String(contentsOf: main, encoding: .utf8)
 
         let spawns = source.components(separatedBy: "MCPClient(").count - 1
-        let pinned = source.components(separatedBy: "MynahIdentity.applianceEnvironment()").count - 1
+        // `applianceEnvironment(` and not `applianceEnvironment()`: one call site
+        // passes `environment:`/`homeDirectory:` for testability, and matching the
+        // empty-argument spelling would score it as unpinned.
+        let pinned = source.components(separatedBy: "MynahIdentity.applianceEnvironment(").count - 1
         XCTAssertGreaterThan(spawns, 0, "could not find any MCP spawn site to check")
         XCTAssertEqual(
             pinned,
             spawns,
             "\(spawns) MCP spawn site(s) but only \(pinned) pinned — an unpinned one derives its identity from the launch directory"
+        )
+    }
+
+    /// The same guard, over the whole product rather than one file.
+    ///
+    /// The test above reads `Sources/sage-voiced/main.swift` and nothing else,
+    /// so the app's three spawn sites — `ConversationModel`, `NodeAgents`,
+    /// `MemoriesView` — were never checked by anything. All three do pin today;
+    /// the point is that nothing was watching, and a fourth added tomorrow would
+    /// pass CI while signing as whatever the launch directory implies.
+    ///
+    /// That is not hypothetical. It is the mistake this file already records
+    /// twice: `runBrain` pinned and `runDaemon` did not, and separately
+    /// `MemoriesView` signed as the *node operator* for the life of a release.
+    /// Both were one unwatched spawn site.
+    ///
+    /// A source scan, for the reason given above — the executable target cannot
+    /// be imported, and "someone added a spawn site" is the regression worth
+    /// catching rather than any particular runtime value.
+    func testNoSpawnSiteAnywhereInTheProductGoesUnpinned() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+
+        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" } ?? []
+        XCTAssertFalse(files.isEmpty, "found no Swift sources, so this guard is checking nothing")
+
+        var unpinned: [String] = []
+        for file in files {
+            guard let source = try? String(contentsOf: file, encoding: .utf8),
+                  source.contains("MCPClient(") else { continue }
+            if !source.contains("MynahIdentity.applianceEnvironment(") {
+                unpinned.append(file.lastPathComponent)
+            }
+        }
+
+        XCTAssertEqual(
+            unpinned, [],
+            """
+            these spawn a SAGE MCP server without pinning Mynah's key, so they sign as \
+            whatever the launch directory derives: \(unpinned.joined(separator: ", "))
+            """
         )
     }
 

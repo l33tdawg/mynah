@@ -17,10 +17,28 @@ import Foundation
 ///     nothing registers this key any more. On the author's machine it derives
 ///     to `17641c48…`, which is genuinely absent from the roster.
 ///   * `MynahIdentity.applianceKeyURL()` — `appliance-agent.key`, the identity
-///     everything actually signs as. Derives to `74140c2d…`, which is the row
-///     named "Mynah - Sage Voice Bridge".
+///     everything actually signs as. On the author's machine it now derives to
+///     `1ab7aa10…`, the node's active `agent/sage-voice-bridge`.
 ///
 /// Both were checked against the live node before this file was written.
+///
+/// ## A correction, because the earlier version of this comment was evidence
+///
+/// This said the pinned key derived to `74140c2d…`, "which is the row named
+/// 'Mynah - Sage Voice Bridge'". Every word of that was observed and it still
+/// pointed at the wrong key. `74140c2d…` *was* a row under that name — because
+/// `sage_inception` auto-registers whatever key signs it, and the row it had
+/// created was `pending_review`. A pending row and an active one look identical
+/// through the only question that was asked, "does a row exist".
+///
+/// The question that separates them is **status**, and the node answers it
+/// plainly: `sage_find_agent` lists only active agents, and it returns exactly
+/// one for this appliance. So an id checked against the live node is worth
+/// nothing here unless the check was for an *active* registration — finding the
+/// name you expected is the failure mode, not the confirmation.
+///
+/// See `MynahIdentity.migrateApplianceKeyIfNeeded` for how the wrong key came
+/// to be pinned in the first place.
 ///
 /// Matching on the name is not merely less exact, it is actively wrong over
 /// time: `SageRitual.adoptDisplayName` deliberately lets an operator's rename in

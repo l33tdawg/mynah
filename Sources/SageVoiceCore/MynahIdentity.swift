@@ -291,6 +291,47 @@ public enum MynahIdentity {
     ///
     /// Runs only when the pinned key is absent, so it is a no-op on every boot
     /// after the first and on a genuinely fresh install.
+    ///
+    /// ## Why it looks in two directories, not one
+    ///
+    /// **This missed on the author's machine and minted a stranger.** The pinned
+    /// file was created 2026-07-28 holding a brand-new key, `74140c2d…`, while
+    /// the appliance's real identity — `1ab7aa10…`, the node's *active*
+    /// `agent/sage-voice-bridge` — sat unread in
+    /// `~/.sage/agents/sage-voice-bridge-agent-ad07f79c`. Every SAGE call for
+    /// three days auto-registered the stranger, got `pending_review`, and was
+    /// refused with "active ordinary agent identity required".
+    ///
+    /// The cause is that **the cwd at migration time is never the cwd that
+    /// minted the key.** The key is minted by whichever process first ran
+    /// `sage-gui mcp`; the migration runs later, in a different process, under a
+    /// launcher that sets its own directory. Concretely:
+    ///
+    ///   * the daemon runs under this repo's own plist, which sets
+    ///     `WorkingDirectory` to `$HOME` (`scripts/install-daemon.sh:84`,
+    ///     `SignalBackgroundServices.swift:480`);
+    ///   * the app is launched from Finder, whose cwd is `/`;
+    ///   * the key on the author's machine was minted from the repository
+    ///     directory, by a launch script that no longer exists.
+    ///
+    /// So passing only `FileManager.default.currentDirectoryPath` asks about a
+    /// directory the key was, by construction, unlikely to come from.
+    ///
+    /// `$HOME` is added because it is a **fact this repository writes**, not a
+    /// guess: it is the `WorkingDirectory` in the plists above, so it is exactly
+    /// where a customer's pre-pin daemon minted its key. Without it the general
+    /// upgrade path loses memories too, and worse, silently races: the app (cwd
+    /// `/`) and the daemon (cwd `$HOME`) derive *different* candidates, so
+    /// whichever boots first decides the appliance's identity forever. App-first
+    /// means a fresh mint, and the daemon then finds the pinned file already
+    /// present and adopts the stranger.
+    ///
+    /// It is still not exhaustive and cannot be: an arbitrary historical launch
+    /// directory is unrecoverable, and scanning `~/.sage/agents/*` for something
+    /// plausible would adopt another agent's identity — the failure this whole
+    /// type exists to prevent. When nothing matches, that is said out loud
+    /// rather than passed over, because silence is what made the original cost
+    /// three days and a round trip with the SAGE team.
     @discardableResult
     public static func migrateApplianceKeyIfNeeded(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -307,12 +348,32 @@ public enum MynahIdentity {
             return expanded.isEmpty ? nil : URL(fileURLWithPath: expanded, isDirectory: true)
         } ?? homeDirectory.appendingPathComponent(".sage", isDirectory: true)
 
-        let candidates = derivedKeyCandidates(
-            sageHome: sageHome,
-            workingDirectory: workingDirectory,
-            provider: environment["SAGE_PROVIDER"]
-        )
+        // The live cwd first — it is right when the migrating process happens to
+        // be the one that minted the key — then the launcher's directory.
+        var candidates: [URL] = []
+        for directory in [workingDirectory, homeDirectory.path] {
+            for candidate in derivedKeyCandidates(
+                sageHome: sageHome,
+                workingDirectory: directory,
+                provider: environment["SAGE_PROVIDER"]
+            ) where !candidates.contains(candidate) {
+                candidates.append(candidate)
+            }
+        }
+
         guard let source = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) else {
+            // The node is about to mint a new key at the pinned path, which is a
+            // new agent id, which is an appliance with no memories and no grant
+            // that every SAGE call will be refused for until an operator
+            // approves it. That is worth a line even on a genuinely fresh
+            // install, where it is the correct and expected outcome.
+            log("""
+            [identity] no existing appliance key found; SAGE will mint a new one at \
+            \(destination.path). If this appliance had memories, they belong to a key \
+            under \(sageHome.appendingPathComponent("agents").path) that this machine's \
+            launch directories do not derive — searched \
+            \(candidates.map(\.path).joined(separator: ", "))
+            """)
             return nil
         }
 

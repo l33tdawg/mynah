@@ -96,6 +96,61 @@ final class ApplianceKeyMigrationTests: XCTestCase {
         )
     }
 
+    /// **The one that actually happened.** The migrating process is never the
+    /// process that minted the key, so its cwd is the wrong question to ask.
+    ///
+    /// A customer's pre-pin daemon ran under this repo's plist, which sets
+    /// `WorkingDirectory` to `$HOME` — so its key is under
+    /// `~/.sage/agents/<user>-agent-<hash($HOME)>`. The app then boots from
+    /// Finder with cwd `/`, runs the migration first, derives a candidate for
+    /// `/`, finds nothing, and the node mints a stranger. The daemon starts
+    /// later, sees the pinned file already present, and adopts it. The
+    /// customer's memories are orphaned by a race between two directories
+    /// neither of which is wrong.
+    ///
+    /// On the author's own machine the same blindness cost three days: the real
+    /// key was under `sage-voice-bridge-agent-ad07f79c`, from a launch script's
+    /// `cd`, while `74140c2d…` — a fresh mint the node kept answering
+    /// `pending_review` for — sat pinned in its place.
+    func testTheDaemonsLaunchDirectoryIsSearchedNotJustTheLiveCwd() throws {
+        let key = Data("minted-by-the-pre-pin-daemon-under-the-plist".utf8)
+        _ = try plantDerivedKey(workingDirectory: home.path, provider: nil, bytes: key)
+
+        // cwd `/`, which is what a Finder-launched app has and what the app
+        // would have asked about on its own.
+        let migrated = MynahIdentity.migrateApplianceKeyIfNeeded(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertNotNil(migrated, "searched only the live cwd, so the appliance's key was missed")
+        XCTAssertEqual(
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            key,
+            "a different key here is a different agent id, which is an appliance with no memories"
+        )
+    }
+
+    /// Finding nothing is the moment the identity is decided, so it cannot be
+    /// silent. It was, and that silence is the entire reason the wrong key went
+    /// unnoticed while every SAGE call returned 403.
+    func testAFreshMintIsAnnouncedRatherThanPassedOver() throws {
+        var lines: [String] = []
+        let migrated = MynahIdentity.migrateApplianceKeyIfNeeded(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/nowhere-this-appliance-has-ever-run",
+            log: { lines.append($0) }
+        )
+
+        XCTAssertNil(migrated)
+        XCTAssertTrue(
+            lines.contains { $0.contains("mint a new one") },
+            "nothing was said, so a brand-new unregistered identity looks exactly like a working one"
+        )
+    }
+
     /// Same bytes is the whole point: same key means same agent id, so nothing
     /// re-registers and there is nothing to reconcile on the node.
     func testTheMigratedKeyIsOwnerOnly() throws {
