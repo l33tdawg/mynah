@@ -217,11 +217,24 @@ final class WindowConversation {
     /// Only answered turns reach here. A question that failed or was stopped is
     /// half a turn, and half a turn in a record is a conversation that reads as
     /// though Mynah ignored somebody.
+    /// **Deliberately does not `publish()`, and that is the whole fix for the
+    /// echo.**
+    ///
+    /// `messages` is what the transcript draws as turns from *before* this
+    /// window opened — its own doc comment says so. Publishing here appended
+    /// the turn that had just finished, while `ConversationModel.exchanges`
+    /// still held the same turn as a live one, so `TalkView.timeline` drew both
+    /// and every question the owner asked appeared twice: once bare, once with
+    /// its timing and tool line. Exactly what he screenshotted.
+    ///
+    /// The record on disk is still complete — `persist()` runs — so the turn is
+    /// there at the next launch, and `priorMessages` reads the record rather
+    /// than this list precisely so the engine is never told a shorter history
+    /// than actually happened.
     func record(question: String, answer: String, askedAt: Date?, answeredAt: Date?) {
         guard !isFixture else { return }
         record.append(question: question, answer: answer, askedAt: askedAt, answeredAt: answeredAt)
         persist()
-        publish()
     }
 
     /// The owner emptying the window.
@@ -242,9 +255,20 @@ final class WindowConversation {
     /// conversation, which is what made the two surfaces one — and what made
     /// "why does the Mac know what I said on my phone but not the other way
     /// round" the owner's question.
+    /// Read from the record rather than from `messages`, which stops at what was
+    /// on disk when the window opened. The engine has to hear this session's
+    /// turns too, or Mynah forgets the last thing it said the moment it says it.
     var priorMessages: [BrainMessage] {
-        messages.map {
+        (isFixture ? messages : recordedMessages).map {
             BrainMessage(role: $0.speaker == .owner ? .user : .assistant, content: $0.text)
+        }
+    }
+
+    /// The record as drawable messages, oldest first. One mapping, used by both
+    /// what is shown and what the engine is told, so the two cannot drift.
+    private var recordedMessages: [TranscriptMessage] {
+        record.turns.enumerated().map { index, turn in
+            TranscriptMessage(id: index, speaker: turn.speaker, text: turn.content, at: turn.at)
         }
     }
 
@@ -265,9 +289,7 @@ final class WindowConversation {
     /// `@Observable` does not compare, it announces, so an identical assignment
     /// still invalidates every view reading this.
     private func publish() {
-        let drawn = record.turns.enumerated().map { index, turn in
-            TranscriptMessage(id: index, speaker: turn.speaker, text: turn.content, at: turn.at)
-        }
+        let drawn = recordedMessages
         if drawn != messages { messages = drawn }
     }
 }

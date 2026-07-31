@@ -261,13 +261,40 @@ final class WindowConversationTests: XCTestCase {
 
     // MARK: What was said here
 
-    func testAFinishedTurnIsShownAsTwoMessages() async {
+    /// **A turn recorded now must not join the list the transcript draws.**
+    ///
+    /// It used to, and that is what the owner screenshotted: every question he
+    /// asked appeared twice, once plain and once with its timing and tool line.
+    /// `messages` is what was said *before* the turns currently on screen;
+    /// `ConversationModel.exchanges` owns the live ones. When `record` appended
+    /// to `messages`, `TalkView.timeline` had the same turn from both and drew
+    /// both.
+    ///
+    /// So this asserts the emptiness on purpose. The turn is not lost — the two
+    /// tests below prove it reaches disk and comes back — it simply is not this
+    /// list's to show yet.
+    func testARecordedTurnDoesNotJoinTheMessagesTheTranscriptDraws() async {
         let subject = makeConversation()
         await subject.restore()
         subject.record(question: "what did the roofer say", answer: "he quoted 2500", askedAt: nil, answeredAt: nil)
 
-        XCTAssertEqual(subject.messages.map(\.text), ["what did the roofer say", "he quoted 2500"])
-        XCTAssertEqual(subject.messages.map(\.speaker), [.owner, .mynah])
+        XCTAssertTrue(
+            subject.messages.isEmpty,
+            "the live turn was added to the earlier-turns list, so it is on screen twice"
+        )
+    }
+
+    /// And restoring shows it as two messages, which is where the shape the old
+    /// version of this test was checking actually belongs.
+    func testAFinishedTurnComesBackAsTwoMessages() async {
+        let first = makeConversation()
+        await first.restore()
+        first.record(question: "what did the roofer say", answer: "he quoted 2500", askedAt: nil, answeredAt: nil)
+
+        let reopened = makeConversation()
+        await reopened.restore()
+        XCTAssertEqual(reopened.messages.map(\.text), ["what did the roofer say", "he quoted 2500"])
+        XCTAssertEqual(reopened.messages.map(\.speaker), [.owner, .mynah])
     }
 
     /// The whole reason this type exists. Before it, the window's half of the
@@ -341,11 +368,17 @@ final class WindowConversationTests: XCTestCase {
     // MARK: The bound
 
     func testTheRecordStopsGrowingAtItsBound() async {
+        let writer = makeConversation()
+        await writer.restore()
+        for index in 0..<(WindowRecord.maximumTurns) {
+            writer.record(question: "q\(index)", answer: "a\(index)", askedAt: nil, answeredAt: nil)
+        }
+        // Through a reopen, because `record` no longer publishes — see
+        // `testARecordedTurnDoesNotJoinTheMessagesTheTranscriptDraws`. The bound
+        // is a property of what is kept, so measuring it on what is read back is
+        // the more honest measurement anyway.
         let subject = makeConversation()
         await subject.restore()
-        for index in 0..<(WindowRecord.maximumTurns) {
-            subject.record(question: "q\(index)", answer: "a\(index)", askedAt: nil, answeredAt: nil)
-        }
 
         XCTAssertEqual(subject.messages.count, WindowRecord.maximumTurns)
         // The oldest go first, which is the honest direction: a transcript
