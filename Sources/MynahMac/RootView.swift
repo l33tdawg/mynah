@@ -159,6 +159,28 @@ struct OnboardingFlow: View {
             // spinner the owner sits and watches.
             if model.choices == nil { await model.probe() }
         }
+        .task {
+            // Started on the *first* screen, and the timing is the whole point.
+            //
+            // A fresh vendored node cannot remember anything until governed
+            // app-v24 activates, which is roughly thirteen minutes of block
+            // production after genesis. Starting it on the Ready screen — where
+            // this used to live — put all thirteen of those minutes *after* the
+            // owner had been told setup was finished, so the first thing a new
+            // appliance did was forget everything said to it.
+            //
+            // Here, the wait runs underneath choosing a brain, pulling a model
+            // and pasting a key, and is usually over before anyone reaches the
+            // end. Nothing on the way to Ready depends on it: the brain stages
+            // choose an LLM provider, which is a separate question from the
+            // memory node.
+            //
+            // Safe to call early for the same reasons it was safe to call late
+            // — the supervisor is lazy about an already-running node, refuses a
+            // vendored copy below the floor, and holds a cooldown against spawn
+            // loops. On a Mac that already runs SAGE this is a no-op.
+            await model.startSageNodeEarly()
+        }
     }
 
     @ViewBuilder
@@ -209,6 +231,16 @@ struct ReadyStage: View {
     /// read "Mynah is ready" is worse than one that arrives with the screen.
     @State private var writeReadiness: ApplianceWriteReadiness?
 
+    /// How far a brand-new node is from being able to remember, or `nil` when
+    /// there is nothing to say — no node answered, or it answered and is ready.
+    ///
+    /// Separate from `writeReadiness` because the two describe different
+    /// problems that happen to share a symptom. A restricted mask needs a person
+    /// to act and stays wrong until they do; this one needs nothing and fixes
+    /// itself on a schedule. Telling them apart is the difference between "ask
+    /// your administrator" and "give it a few minutes".
+    @State private var activation: SageActivationState?
+
     private var unfinished: [AppModel.DeferredStep] { app.deferredSetupSteps }
 
     /// Read from `voice`'s type and never re-derived.
@@ -237,6 +269,14 @@ struct ReadyStage: View {
     /// exposed.
     private var cannotRemember: Bool { writeReadiness?.needsTheOwner == true }
 
+    /// A node that is up, is fine, and simply is not finished being born.
+    ///
+    /// False while `activation` is nil, which covers both "no node answered"
+    /// and "not asked yet". Saying nothing is right for both: an owner who has
+    /// their own SAGE never sees this, and one whose node is genuinely missing
+    /// has a different problem that this sentence would misdescribe.
+    private var memoryStillActivating: Bool { activation.map { !$0.isActivated } ?? false }
+
     var body: some View {
         StageShell(
             stageTitles: titles,
@@ -247,6 +287,7 @@ struct ReadyStage: View {
         ) {
             VStack(alignment: .leading, spacing: s4) {
                 writeWarning
+                activationNotice
                 MynahCard(density: .hero) {
                     VStack(spacing: 0) {
                         StatusLine(
@@ -310,6 +351,22 @@ struct ReadyStage: View {
         // SAGE nothing ever did: Mynah only spawns `sage-gui mcp`, which is a
         // client. Lazy, so a Mac already running SAGE is untouched.
         .task { writeReadiness = await ApplianceWriteReadinessCheck().checkStartingNodeIfNeeded() }
+        // Polled rather than read once, because this is the one number on the
+        // screen that is *expected* to change while somebody watches it. Five
+        // seconds is slower than a block and fast enough that the remaining
+        // minutes never look stuck.
+        //
+        // Ends the moment consensus reports app-v24, and ends for good: the
+        // loop returns rather than idling, because activation does not come
+        // back once it has happened.
+        .task {
+            while !Task.isCancelled {
+                let state = await SageActivationProbe().read()
+                activation = state
+                if state?.isActivated != false { return }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
     }
 
     // MARK: The promise this screen makes
@@ -343,7 +400,14 @@ struct ReadyStage: View {
         // Not a softened "almost ready". It can answer — that part is true and
         // worth saying — and it cannot remember, which is the fact the banner
         // below then explains.
-        if cannotRemember { return "Mynah can answer, but not remember yet." }
+        //
+        // A node still waiting on app-v24 reaches the same sentence by a
+        // different road, and it has to: for the minutes it lasts the appliance
+        // really will answer and really will not remember, and an owner who is
+        // told "ready" and then finds it forgot the conversation has been
+        // misled just as surely as by a bad capability mask. What differs is the
+        // explanation underneath, not the claim up here.
+        if cannotRemember || memoryStillActivating { return "Mynah can answer, but not remember yet." }
         // The pause marker outlives the app that set it. Somebody who paused
         // Mynah weeks ago, or in a previous install, finishes setup with an
         // appliance that will not answer — and "Mynah is ready." would be the
@@ -371,7 +435,12 @@ struct ReadyStage: View {
         if !unfinished.isEmpty { return StageIllustration.mark(.connect) }
         if app.isPaused { return "moon" }
         // Points where the sentence points.
-        return cannotRemember ? "person.2" : StageIllustration.mark(.ready)
+        if cannotRemember { return "person.2" }
+        // Not `person.2`: nobody needs to be found, and not the ready drawing
+        // either, which would leave the picture saying "done" over a title that
+        // says "not yet". Waiting is the honest subject.
+        if memoryStillActivating { return "hourglass" }
+        return StageIllustration.mark(.ready)
     }
 
     /// `voice`'s sentence, rendered rather than rewritten.
@@ -393,6 +462,28 @@ struct ReadyStage: View {
            let remedy = readiness.shortRemedy {
             InlineBanner(headline: headline, explanation: remedy)
                 .frame(maxWidth: MynahWidth.stageColumn)
+        }
+    }
+
+    /// The countdown, shown only when there is nothing for the owner to do.
+    ///
+    /// Suppressed while `writeWarning` has something to say, and that ordering
+    /// is deliberate: a restricted mask needs a person and does not go away on
+    /// its own, so telling somebody to wait a few minutes for a problem that
+    /// will still be there afterwards is worse than saying nothing. One thing
+    /// to read, and it is the one that needs acting on.
+    ///
+    /// No remedy line, because there is no remedy and inventing one would
+    /// manufacture work. It says what is happening and roughly how long.
+    @ViewBuilder
+    private var activationNotice: some View {
+        if !cannotRemember, let activation, !activation.isActivated {
+            InlineBanner(
+                headline: activation.ownerDescription,
+                explanation: "Your SAGE brain is finishing its first-time setup. "
+                    + "You can carry on — anything you say before it's done just won't be remembered."
+            )
+            .frame(maxWidth: MynahWidth.stageColumn)
         }
     }
 

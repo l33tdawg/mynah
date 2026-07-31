@@ -136,6 +136,29 @@ final class SetupModel {
         }
     }
 
+    // MARK: The memory node
+
+    /// Starts the SAGE node at the beginning of setup rather than the end.
+    ///
+    /// Only ever called once per launch, because the interesting work happens
+    /// exactly once: on a Mac that has never had SAGE, this is the call that
+    /// creates the chain, and genesis is what mints the appliance's own
+    /// companion key. Every later call — including the Ready screen's own check
+    /// — meets a node that is already running.
+    ///
+    /// Deliberately returns nothing and reports nothing. There is no owner-facing
+    /// failure here: a node that will not start is the Ready screen's problem to
+    /// describe, with the readiness signal in hand, and a warning raised on the
+    /// welcome screen about a component nobody has mentioned yet would be noise
+    /// at the worst possible moment.
+    func startSageNodeEarly() async {
+        guard !hasStartedSageNode else { return }
+        hasStartedSageNode = true
+        _ = await ApplianceWriteReadinessCheck().checkStartingNodeIfNeeded()
+    }
+
+    private var hasStartedSageNode = false
+
     // MARK: Probing
 
     func probe() async {
