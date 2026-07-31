@@ -42,6 +42,11 @@ ALLOWLIST = {
     "sage_backlog", "sage_timeline", "sage_status", "sage_reflect",
     "sage_inbox", "sage_find_agent", "sage_pipe", "sage_pipe_result",
     "sage_federation",
+    # Added when 11.16.x published 27 tools. Kept in step with
+    # BrainPrompts.voiceToolAllowlist deliberately: this set is duplicated from
+    # Swift, and letting the two drift is exactly the decoupling the note above
+    # says ends the numbers' meaning.
+    "sage_corroborate", "sage_link",
 }
 
 # Nine positives, all served by tools present in BOTH catalogue sizes, so a

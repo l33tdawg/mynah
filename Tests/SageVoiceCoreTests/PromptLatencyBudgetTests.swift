@@ -71,14 +71,31 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// accuracy for this model: 27 tools scored 5–6/12 where 14 scored 12/12.
     /// Every tool also carries its schema into the prefill.
     ///
-    /// 18 is where the note tools left it, and the budget is 18 — no headroom at
-    /// all, on purpose. 18 has only been spot-checked (6/6 on the appliance),
-    /// not run against the 12-utterance set those numbers come from, so the next
-    /// tool added turns this red and whoever adds it has to either measure
-    /// properly or raise this line and say why. That is the whole point: the
-    /// cost of tool nineteen is unknown, and it should not be possible to spend
-    /// it without noticing.
-    static let voiceCatalogueBudget = 18
+    /// 18 was where the note tools left it. It is now 20, and this is the "raise
+    /// this line and say why" the paragraph below always asked for.
+    ///
+    /// **Re-measured 2026-07-31, qwen3.5:4b, via `scripts/measure-tool-routing.py`
+    /// with `SYSTEM_PROMPT_FILE` set to the real 7,644-character voice prompt:**
+    ///
+    ///     curated(16 SAGE tools) = 9/12
+    ///     full(27 SAGE tools)    = 9/12     delta +0
+    ///
+    /// So the claim this budget was built on — 27 tools = 5–6/12, 14 = 12/12 —
+    /// **did not reproduce**, and adding `sage_corroborate` and `sage_link` cost
+    /// no measured accuracy. Two things are now true and should not be conflated:
+    /// the two new tools are paid for, and the original degradation is in doubt.
+    ///
+    /// What this run does NOT establish, stated so nobody quotes it as more than
+    /// it is: neither set scored 12/12, so this is not the same measurement the
+    /// old numbers came from and something differs beyond tool count. The
+    /// per-turn latency it printed is worthless for comparison — curated ran
+    /// first on a cold model and full ran second on a warm one, which is exactly
+    /// the confound the script's own header warns about. And it is one sample per
+    /// utterance at temperature 0.
+    ///
+    /// The budget still has no headroom, on purpose. Tool twenty-one turns this
+    /// red and whoever adds it re-runs the script.
+    static let voiceCatalogueBudget = 20
 
     func testTheVoiceCatalogueDoesNotSilentlyGrow() {
         let count = BrainPrompts.voiceToolAllowlist.count

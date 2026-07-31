@@ -306,6 +306,38 @@ public enum BrainPrompts {
         "sage_pipe",
         "sage_pipe_result",
         "sage_federation",
+        // Added for 11.16.x, and only these two of the thirteen it exposes that
+        // this list does not.
+        //
+        // Both are memory operations an ordinary agent can actually perform —
+        // verified against a live 11.16.1 node — and both are specific rather
+        // than high-generality, which is the shape the routing measurement
+        // above says is safe to add. `sage_corroborate` is how a second agent
+        // backs a memory so it moves from attributed to consensus, and
+        // `sage_link` is how "this refines that" gets recorded instead of
+        // being re-derived. An appliance whose whole job is remembering should
+        // be able to do both.
+        //
+        // The other eleven stay out, and not because this list is stale:
+        //   - sage_turn: the daemon calls it after every turn already, so
+        //     offering it to the model buys a duplicate write to a consensus
+        //     ledger. `ToolLoop.withoutServerNudge` exists because of this.
+        //   - sage_inception, sage_red_pill: the session-start ritual, also the
+        //     daemon's, and two of the worst attractors measured. red_pill is a
+        //     deprecated alias besides.
+        //   - sage_rename: an appliance that can rename itself is a support
+        //     call nobody can diagnose.
+        //   - sage_register, sage_reinstate: identity administration, and hard
+        //     to undo by voice.
+        //   - sage_gov_propose, sage_gov_vote: casting votes on the owner's own
+        //     chain is not a thing to hand a 4B.
+        //   - sage_gov_status, sage_scope_get, sage_scope_list: nobody asks for
+        //     governance out loud. gov_status does answer for an ordinary agent
+        //     — measured, not assumed — and the scope pair returns
+        //     "requires node-operator or admin access", so those two would be
+        //     prompt tokens spent on a guaranteed refusal.
+        "sage_corroborate",
+        "sage_link",
         // Not a SAGE tool. The allowlist filters the *composed* catalogue, so a
         // name missing here is a tool the model never sees, whichever source
         // published it — leaving this out was a silent no-op for web search.
