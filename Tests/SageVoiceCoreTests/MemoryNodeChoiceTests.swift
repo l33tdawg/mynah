@@ -123,7 +123,9 @@ final class MemoryNodeChoiceTests: XCTestCase {
     /// Every sentence on this screen, held to the same line as the board's: a
     /// failure may never read as "you have no memories".
     func testNoFailureSentenceClaimsTheMemoriesAreGone() {
-        let all: [MemoryTrouble] = [.notSetUp, .unreachable, .refused, .locked, .unreadable]
+        let all: [MemoryTrouble] = [
+            .notSetUp, .unreachable, .refused, .locked, .unreadable, .tooBroad, .unknownTopic
+        ]
         for trouble in all {
             XCTAssertFalse(trouble.headline.isEmpty)
             XCTAssertFalse(trouble.explanation.isEmpty)
@@ -131,6 +133,54 @@ final class MemoryNodeChoiceTests: XCTestCase {
             for lie in ["no memories", "nothing to remember", "it has forgotten", "empty"] {
                 XCTAssertFalse(said.contains(lie), "\"\(trouble.headline)\" says \"\(lie)\"")
             }
+        }
+    }
+
+    // MARK: The two refusals that "quit and reopen" cannot fix
+
+    /// **The one the owner actually hit**, in the node's own words.
+    ///
+    /// Measured on 31 July by driving `sage_list` over MCP signed as the
+    /// appliance's own key: the plain unfiltered first page comes back
+    /// `Query too broad: app-v23 authorization scan budget exceeded`. Every
+    /// earlier check of this call had been made over a developer's MCP
+    /// connection, which signs as an agent with more standing and returns
+    /// memories happily — so the screen was verified as working by a caller it
+    /// is never used by.
+    ///
+    /// It classified as `.refused`, and `.refused` says to quit and reopen. A
+    /// relaunch asks the identical question and gets the identical refusal, so
+    /// the advice could not work on any attempt.
+    func testAScanBudgetRefusalIsNotSomethingRelaunchingCanFix() {
+        for said in [
+            "Query too broad: app-v23 authorization scan budget exceeded",
+            "list memories: query too broad",
+            "authorization scan budget exceeded"
+        ] {
+            XCTAssertEqual(
+                MemoryTrouble.reading(refusal: said),
+                .tooBroad,
+                "\"\(said)\" was not recognised as a question that needs narrowing"
+            )
+        }
+        let advice = MemoryTrouble.tooBroad.explanation.lowercased()
+        XCTAssertFalse(advice.contains("quit"), "still telling the owner to quit and reopen")
+        XCTAssertFalse(advice.contains("try again"), "the same request fails the same way")
+    }
+
+    /// A filter naming a domain the node will not resolve. Both real messages
+    /// from `mynah.log`, including the one that named another agent's domain.
+    func testADeadTopicFilterIsToldApartFromAFlatRefusal() {
+        for said in [
+            "Authorization unavailable: app-v23 record disclosure state is unavailable: "
+                + "domain not found: sage-v11-development",
+            "record disclosure state is unavailable: domain name contains whitespace"
+        ] {
+            XCTAssertEqual(
+                MemoryTrouble.reading(refusal: said),
+                .unknownTopic,
+                "\"\(said)\" was not recognised as a filter problem"
+            )
         }
     }
 

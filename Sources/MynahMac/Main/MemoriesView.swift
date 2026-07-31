@@ -52,10 +52,30 @@ struct Memory: Identifiable, Hashable, Sendable {
 
     let id: String
     let text: String
-    /// The node calls this a domain. The owner calls it what the memory is about.
-    let topic: String
+    /// The node's own name for where this memory is filed, or `nil` when it
+    /// filed it under none.
+    ///
+    /// Separate from `topic` — the word the owner reads — because **a label is
+    /// not a query key**, and this screen spent a day proving it. `topic`
+    /// invents "General" for a memory with no domain, that invented word went
+    /// into the filter menu, and picking it sent `domain: "General"` back to a
+    /// node that has no such domain. From `mynah.log` on 31 July:
+    ///
+    ///     domain not found: sage-v11-development
+    ///     domain name contains whitespace
+    ///
+    /// Neither is a name this screen should ever have been able to send. Only
+    /// `domain` may be put in a query, and only when it is non-nil.
+    let domain: String?
     let learned: Date
     let certainty: Certainty
+
+    /// What the memory is about, as the owner reads it.
+    ///
+    /// A memory the node filed under no domain still has to say something in a
+    /// column headed by what it is about, so this invents a word. That is fine
+    /// for a label and fatal for a filter — see `domain`.
+    var topic: String { domain ?? "General" }
 }
 
 /// One page of memories, plus how many exist behind it.
@@ -95,6 +115,18 @@ enum MemoryTrouble: Error, Equatable, Sendable {
     case locked
     /// It answered with something this app could not read.
     case unreadable
+    /// The question was too wide for the node to authorize in one pass.
+    ///
+    /// Distinct from `refused` for the same reason `locked` is: quitting and
+    /// reopening asks the identical too-wide question and gets the identical
+    /// answer, so sending the owner round that loop is guaranteed to waste
+    /// their time. Narrowing is the only thing that works, and they can do it.
+    case tooBroad
+    /// The filter names a domain the node will not resolve.
+    ///
+    /// The remedy is one click — clear the filter — and it is emphatically not
+    /// a reinstall, which is where `refused` used to send people.
+    case unknownTopic
 
     var headline: String {
         switch self {
@@ -103,6 +135,8 @@ enum MemoryTrouble: Error, Equatable, Sendable {
         case .refused: return "Mynah wouldn't open its memory."
         case .locked: return "Your SAGE node is locked."
         case .unreadable: return "Mynah's memory answered with something unexpected."
+        case .tooBroad: return "Ask for a narrower slice of what Mynah remembers."
+        case .unknownTopic: return "Choose Everything to get the list back."
         }
     }
 
@@ -121,7 +155,12 @@ enum MemoryTrouble: Error, Equatable, Sendable {
             // when an app is trashed — so the same identity comes back with the
             // same registration. Sending somebody round that loop costs them an
             // afternoon and leaves them exactly where they started.
-            return "Quit Mynah and open it again. If it still won't open, send the diagnostics "
+            // "Copy", because that is what the button in Settings says. It was
+            // "send", and the owner went looking for a Send and reported that
+            // there was no diagnostics in Settings at all. There is; it is
+            // called something else. Instructions that name a control have to
+            // use the control's own word.
+            return "Quit Mynah and open it again. If it still won't open, copy the diagnostics "
                 + "from Settings — nothing you have told it is affected."
         case .locked:
             // **Kept deliberately, and it is the only "can't read" claim that
@@ -145,6 +184,15 @@ enum MemoryTrouble: Error, Equatable, Sendable {
                 + "until the node is unlocked. Unlock it in CEREBRUM and this fills in."
         case .unreadable:
             return "Try again. If it keeps happening, quit Mynah and open it again."
+        case .tooBroad:
+            // No "try again", deliberately. The same request fails the same way
+            // every time, and an owner who has been told to retry will retry.
+            return "There is more here than Mynah can check the permissions on in one go. "
+                + "Search for what you're after, or pick a single topic — everything is "
+                + "still there, and both ask a question small enough to answer."
+        case .unknownTopic:
+            return "The topic you picked isn't one Mynah's memory recognises any more. "
+                + "Nothing has been lost — clear the filter and the rest comes back."
         }
     }
 
@@ -159,7 +207,34 @@ enum MemoryTrouble: Error, Equatable, Sendable {
     static func reading(refusal detail: String?) -> MemoryTrouble {
         let said = (detail ?? "").lowercased()
         let locked = ["login_required", "unlock", "locked", "vault is sealed", "sealed"]
-        return locked.contains(where: said.contains) ? .locked : .refused
+        if locked.contains(where: said.contains) { return .locked }
+
+        // **Measured, signing as the appliance's own key rather than as a
+        // developer's.** That distinction is the whole reason this took a day:
+        // every check of `sage_list` had been made over a Claude Code MCP
+        // connection, which signs as an agent with far more standing, and it
+        // returned memories every time. Asked as Mynah, the plain unfiltered
+        // first page — the one the owner lands on — answers:
+        //
+        //     Query too broad: app-v23 authorization scan budget exceeded
+        //
+        // which fell through to `.refused`, whose advice is to quit and reopen.
+        // The next launch asks the same too-wide question and gets the same
+        // refusal, so the screen was telling the owner to do the one thing that
+        // provably could not work, forever.
+        let tooBroad = ["query too broad", "scan budget exceeded", "too many domains"]
+        if tooBroad.contains(where: said.contains) { return .tooBroad }
+
+        // From the same log: `domain not found: sage-v11-development` — another
+        // agent's domain, offered as a filter chip by this screen — and
+        // `domain name contains whitespace`. `Memory.domain` stops this screen
+        // manufacturing either. This stays because the node may retire a domain
+        // while it is the selected filter, and that is a real state with a
+        // one-click answer rather than a reinstall.
+        let unknownTopic = ["domain not found", "contains whitespace", "unknown domain"]
+        if unknownTopic.contains(where: said.contains) { return .unknownTopic }
+
+        return .refused
     }
 }
 
@@ -457,7 +532,13 @@ actor SageMemoryStore: MemoryStoring {
         return Memory(
             id: id,
             text: trimmed,
-            topic: (entry["domain"]?.stringValue).flatMap { $0.isEmpty ? nil : $0 } ?? "General",
+            // Trimmed, and `nil` rather than a blank: a domain that arrives
+            // padded goes back out padded, and the node rejects its own name
+            // with "domain name contains whitespace".
+            domain: (entry["domain"]?.stringValue).flatMap {
+                let name = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                return name.isEmpty ? nil : name
+            },
             learned: Self.date(from: entry["created_at"]?.stringValue) ?? .distantPast,
             certainty: Memory.Certainty(score: entry["confidence"]?.doubleValue ?? 0)
         )
@@ -536,10 +617,32 @@ final class MemoriesModel {
     var topic: String? {
         didSet {
             guard topic != oldValue else { return }
+            // `performLoad` clears a filter the node has stopped resolving and
+            // then reloads *in its own task*, so letting this fire there would
+            // start a second, racing load — and the reload the owner sees would
+            // be whichever of the two the scheduler favoured.
+            guard !isRepairingFilter else { return }
             selection = nil
             Task { await load() }
         }
     }
+
+    /// Set while `performLoad` is clearing a filter on the owner's behalf. See
+    /// the `didSet` above, which must not treat that as the owner choosing.
+    private var isRepairingFilter = false
+
+    /// Domains the node refused to resolve while this screen has been open.
+    ///
+    /// Removing a dead chip is not enough on its own, because the name comes
+    /// back: the memories still *report* that domain, so the next successful
+    /// load merges it straight back into the menu. The owner picks it again,
+    /// it fails again, and the screen quietly repairs itself again — a filter
+    /// that flickers rather than one that works.
+    ///
+    /// Session-scoped deliberately. A domain that starts resolving between one
+    /// launch and the next should be offered again; the node's answer is the
+    /// authority, and this only remembers the answers it has actually heard.
+    private var unresolvableTopics: Set<String> = []
 
     var selection: Memory.ID?
     /// The memory the confirmation dialog is about. Non-nil is what presents it.
@@ -585,6 +688,29 @@ final class MemoriesModel {
             phase = .ready
         } catch let trouble as MemoryTrouble {
             guard !Task.isCancelled else { return }
+            // The filter names something the node will not resolve, and the
+            // remedy — clear it — needs no owner. Doing it for them beats
+            // showing a screen whose only instruction is a click this code
+            // could have performed itself.
+            //
+            // The dead chip goes with it. Leaving it in the menu invites the
+            // owner to pick it again and watch the same thing happen.
+            if trouble == .unknownTopic, let dead = topic {
+                unresolvableTopics.insert(dead)
+                topics.removeAll { $0 == dead }
+                log.error("dropped the topic filter \(dead): the node does not resolve it")
+                isRepairingFilter = true
+                topic = nil
+                isRepairingFilter = false
+                // Inline and awaited, in this task, rather than through the
+                // property's `didSet`. That spawns a detached task, so the
+                // reload would outlive the load the caller is waiting on and
+                // the screen would still be showing "loading" when this
+                // returned. Terminating: the filter is nil now, and this branch
+                // needs one to run.
+                await performLoad()
+                return
+            }
             phase = .failed(trouble)
         } catch {
             guard !Task.isCancelled else { return }
@@ -593,12 +719,41 @@ final class MemoriesModel {
         }
     }
 
+    /// How far this screen will narrow its own question before handing the
+    /// problem to the owner.
+    ///
+    /// The node authorizes a listing by scanning what the caller may disclose,
+    /// and refuses outright when that scan runs past its budget — so a page
+    /// size is not only how much comes back, it is how much has to be checked.
+    /// Sixty is the size that fails on the owner's Mac today.
+    ///
+    /// Asking for less is not a retry in the usual sense: the first request did
+    /// not fail for a reason that time or luck can change, it failed because it
+    /// was too big, and this is the same question made smaller. A short list the
+    /// owner can read and scroll beats a correct-sized request that renders an
+    /// error, and `hasMore` already exists to fetch the rest.
+    private static let narrowerPages = [20, 8]
+
     private func fetchFirstPage() async throws -> MemoryPage {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty {
-            return try await store.recent(topic: topic, limit: Self.pageSize, offset: 0)
+        guard query.isEmpty else {
+            return try await store.search(query, topic: topic, limit: Self.searchLimit)
         }
-        return try await store.search(query, topic: topic, limit: Self.searchLimit)
+
+        var lastTrouble: MemoryTrouble = .tooBroad
+        for limit in [Self.pageSize] + Self.narrowerPages {
+            do {
+                return try await store.recent(topic: topic, limit: limit, offset: 0)
+            } catch MemoryTrouble.tooBroad {
+                guard !Task.isCancelled else { throw MemoryTrouble.tooBroad }
+                lastTrouble = .tooBroad
+                log.error("\(limit) memories was too broad to authorize; asking for fewer")
+            }
+        }
+        // Every size refused. The owner is told to narrow it themselves, which
+        // is now a true instruction rather than a guess — this has already
+        // tried the cheap version of that advice three times.
+        throw lastTrouble
     }
 
     func loadMore() async {
@@ -640,7 +795,13 @@ final class MemoriesModel {
     }
 
     private func mergeTopics(from memories: [Memory]) {
-        let merged = Set(topics).union(memories.map(\.topic))
+        // `domain`, never `topic`. This one line is where the label and the
+        // query key used to be the same string: every chip built here goes
+        // straight back to the node as a `domain` filter, so a chip the node
+        // cannot resolve is a filter that cannot succeed. See `Memory.domain`.
+        let merged = Set(topics)
+            .union(memories.compactMap(\.domain))
+            .subtracting(unresolvableTopics)
         topics = merged.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
@@ -1168,21 +1329,21 @@ struct PreviewMemoryStore: MemoryStoring {
             id: "1",
             text: "Prefers the espresso machine descaled every three weeks, not monthly — "
                 + "the water here is hard enough that monthly leaves scale in the group head.",
-            topic: "Home",
+            domain: "Home",
             learned: Date().addingTimeInterval(-3_600),
             certainty: .certain
         ),
         Memory(
             id: "2",
             text: "Flying to Kuala Lumpur on the 14th. Wants the 6am departure, not the redeye.",
-            topic: "Travel",
+            domain: "Travel",
             learned: Date().addingTimeInterval(-86_400 * 2),
             certainty: .fairlySure
         ),
         Memory(
             id: "3",
             text: "Someone called Marcus is meant to be picking up the keys, possibly on Thursday.",
-            topic: "Home",
+            domain: "Home",
             learned: Date().addingTimeInterval(-86_400 * 9),
             certainty: .unsure
         )
