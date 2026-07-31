@@ -1269,8 +1269,26 @@ struct SettingsView: View {
 
     /// Model names the local runtime actually has. Empty for an API provider —
     /// which is also what hides the button.
+    /// The local runtime's models, **and only when a local runtime is what is
+    /// doing the thinking.**
+    ///
+    /// The sheet's own comment already said this — "the probe knows exactly
+    /// what is installed for a local runtime; for an API provider nobody here
+    /// knows what the company is serving this week" — and then the value was
+    /// passed in unconditionally. So an owner on DeepSeek, with Ollama also
+    /// installed, opened "change the model" and was offered qwen and gemma:
+    /// *"it's showing me local model picker but i am using deepseek api"*.
+    ///
+    /// Worse than confusing, it was actionable: picking one would have stored a
+    /// local model name against a cloud provider.
+    ///
+    /// Empty for a cloud brain is the honest answer today. It is not the whole
+    /// answer — the owner wants DeepSeek's own list — and that needs the
+    /// provider's models endpoint asked at runtime, which is a real feature and
+    /// not this guard.
     private var localModels: [String] {
-        model.probe?.localRuntime.installedModels.sorted() ?? []
+        guard model.brain?.keepsWordsOnDevice == true else { return [] }
+        return model.probe?.localRuntime.installedModels.sorted() ?? []
     }
 
     private var modelRowDetail: String {
