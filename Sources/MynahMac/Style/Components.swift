@@ -213,13 +213,32 @@ struct MynahButtonStyle: ButtonStyle {
 
             case .secondary:
                 configuration.label
-                    .mynahFont(.title3)
+                    // **`.body`, to match the row it answers.** This was
+                    // `.title3` — 17pt, the size chosen for "Continue" on a
+                    // setup stage, where the button is the only thing on screen
+                    // and stands 132pt wide.
+                    //
+                    // Almost every secondary in the product is not that. It is
+                    // "See it", "Change", "Unlink", "Copy" — an action sitting
+                    // beside a `SettingsRow` whose title is `.body` at 15 and
+                    // whose detail is `.label` at 12. So the control was set in
+                    // type two steps larger than the heading it serves, and the
+                    // owner read it exactly right: *"the font size doesn't
+                    // match / doesn't flow properly"*.
+                    //
+                    // The three stage uses — "Back", "Not now", "Get a key" —
+                    // now sit a step under the primary beside them, which is
+                    // the hierarchy those pairs wanted anyway.
+                    .mynahFont(.body)
                     // A named token rather than an alpha on the enabled colour,
                     // for the same reason the primary stopped doing that: an
                     // opacity is a guess at a contrast ratio.
                     .foregroundStyle(isEnabled ? Palette.ink.primary : Palette.ink.secondary)
-                    .padding(.horizontal, s6)
-                    .padding(.vertical, 10)
+                    // Narrower with it. `s6` was proportioned for a 17pt label;
+                    // kept, it leaves "See it" floating in a control twice the
+                    // width of its own word.
+                    .padding(.horizontal, s5)
+                    .padding(.vertical, 8)
                     .background(
                         configuration.isPressed
                             ? Palette.ink.primary.opacity(0.05)
