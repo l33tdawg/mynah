@@ -1,3 +1,4 @@
+import SageVoiceCore
 import SwiftUI
 
 // MARK: - The board
@@ -349,7 +350,14 @@ private struct TaskCard: View {
         VStack(alignment: .leading, spacing: s2) {
             HStack(spacing: s3) {
                 if let domain = task.domain {
-                    Text(domain)
+                    // Through `MemorySubjectName`, because the node names an
+                    // agent's home domain after its own public key and the raw
+                    // form filled this chip with truncated hex beside "Book
+                    // hotel for Wednesday 19th".
+                    Text(MemorySubjectName.display(
+                        domain,
+                        applianceAgentID: SageAgentIdentity.applianceAgentID()
+                    ))
                         .mynahFont(.label)
                         .foregroundStyle(Palette.ink.secondary)
                         .lineLimit(1)

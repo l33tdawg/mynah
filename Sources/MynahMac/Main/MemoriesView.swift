@@ -75,7 +75,17 @@ struct Memory: Identifiable, Hashable, Sendable {
     /// A memory the node filed under no domain still has to say something in a
     /// column headed by what it is about, so this invents a word. That is fine
     /// for a label and fatal for a filter — see `domain`.
-    var topic: String { domain ?? "General" }
+    ///
+    /// `MemorySubjectName` handles the other end of the same problem: the
+    /// node's name for an agent's home domain is that agent's public key, which
+    /// is true, unique, and unreadable.
+    var topic: String {
+        guard let domain else { return "General" }
+        return MemorySubjectName.display(
+            domain,
+            applianceAgentID: SageAgentIdentity.applianceAgentID()
+        )
+    }
 }
 
 /// One page of memories, plus how many exist behind it.
@@ -805,6 +815,12 @@ final class MemoriesModel {
         topics = merged.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    /// The filter menu's own version of `Memory.topic`: what a subject is
+    /// called on screen, never what it is called in a query.
+    func readableTopic(_ raw: String) -> String {
+        MemorySubjectName.display(raw, applianceAgentID: SageAgentIdentity.applianceAgentID())
+    }
+
     // MARK: Forgetting
 
     func confirmForget(_ memory: Memory) {
@@ -948,12 +964,16 @@ struct MemoriesView: View {
         Menu {
             Button("Everything") { model.topic = nil }
             Divider()
+            // Labelled with the readable name, filtered with the node's. The
+            // separation `Memory.domain` established holds here too: what the
+            // owner reads and what gets sent are allowed to differ, and this is
+            // the only safe way to prettify a name that is also a query key.
             ForEach(model.topics, id: \.self) { topic in
-                Button(topic) { model.topic = topic }
+                Button(model.readableTopic(topic)) { model.topic = topic }
             }
         } label: {
             HStack(spacing: s3) {
-                Text(model.topic ?? "Everything")
+                Text(model.topic.map(model.readableTopic) ?? "Everything")
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: s3)
@@ -1083,7 +1103,10 @@ struct MemoriesView: View {
 
     private var list: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // Cards are separated by air, not by rules. A hairline between two
+            // bordered cards reads as a third edge and makes the column look
+            // like a table someone drew boxes on.
+            LazyVStack(alignment: .leading, spacing: s3) {
                 if let trouble = model.forgetTrouble {
                     InlineBanner(
                         tone: .critical,
@@ -1093,7 +1116,7 @@ struct MemoriesView: View {
                     .padding(.bottom, s5)
                 }
 
-                ForEach(Array(model.memories.enumerated()), id: \.element.id) { index, memory in
+                ForEach(model.memories) { memory in
                     MemoryEntry(
                         memory: memory,
                         isSelected: model.selection == memory.id,
@@ -1102,9 +1125,6 @@ struct MemoriesView: View {
                         onSelect: { model.selection = model.selection == memory.id ? nil : memory.id },
                         onForget: { model.confirmForget(memory) }
                     )
-                    if index < model.memories.count - 1 {
-                        MynahDivider(leadingInset: s4)
-                    }
                 }
 
                 if model.hasMore { showMoreRow.padding(.top, s5) }
@@ -1130,6 +1150,24 @@ struct MemoriesView: View {
 }
 
 // MARK: - One memory
+
+/// A shadow only while the card is raised.
+///
+/// A branch rather than `.mynahShadow(...)` with a zero radius: a shadow with
+/// no size is still a shadow, composited under every card in a list the owner
+/// scrolls. This screen can hold hundreds of them.
+private struct MemoryCardLift: ViewModifier {
+    let isRaised: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isRaised {
+            content.mynahShadow(.card)
+        } else {
+            content
+        }
+    }
+}
 
 /// A row that opens.
 ///
@@ -1160,18 +1198,44 @@ private struct MemoryEntry: View {
             .buttonStyle(.plain)
             .pointingHandCursor()
 
-            if isSelected { detail }
+            if isSelected {
+                // **Unrolls rather than appears.** `move(edge: .top)` slides the
+                // detail out from under the header while the card's own height
+                // grows to meet it, and the `clipShape` below is what makes
+                // that read as opening — without it the detail is drawn outside
+                // the card for the length of the animation and the whole thing
+                // looks like a second view landing on top of the first.
+                //
+                // Asymmetric because closing should not be a performance. Going
+                // is a fade at `Motion.fade`; arriving gets the spring.
+                detail.transition(
+                    .asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    )
+                )
+            }
         }
-        .background(
-            isSelected ? Palette.accent.wash : (isHovering ? Palette.surface.well : .clear),
-            in: RoundedRectangle.mynah(r.control)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
+        // The border carries the state, not a fill. A tinted card body competes
+        // with the sentence inside it, which is the one thing on this screen
+        // the owner came to read.
+        .mynahBorder(r.card, borderColour)
+        .clipShape(RoundedRectangle.mynah(r.card))
+        .modifier(MemoryCardLift(isRaised: isSelected || isHovering))
         .onHover { isHovering = $0 }
         .mynahAnimation(Motion.snap, value: isSelected)
         .mynahAnimation(Motion.fade, value: isHovering)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(memory.text)
         .accessibilityValue("Learned \(memory.learned.formatted(.relative(presentation: .named))), \(memory.topic)")
+    }
+
+    /// Three states, told apart by one edge: resting, under the pointer, open.
+    private var borderColour: Color {
+        if isSelected { return Palette.accent.fill.opacity(0.55) }
+        return isHovering ? Palette.line.strong : Palette.line.hairline
     }
 
     @ViewBuilder
