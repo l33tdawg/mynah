@@ -393,6 +393,31 @@ public enum MynahIdentity {
 
     /// Creates Mynah's key, if it does not have one yet.
     ///
+    /// ## "Mint" means a keypair, and never authority
+    ///
+    /// Thirty-two random bytes — the same thing `sage-gui mcp` does for itself
+    /// at `mcp.go:169-174`, moved earlier and nothing more. **It grants nothing.**
+    /// A keypair with no registration behind it is an agent the chain has never
+    /// heard of, which is why the failure this fixes looked the way it did.
+    ///
+    /// Standing comes from the chain, and Mynah cannot award itself any:
+    ///
+    ///   * **Root is not reachable from here.** It is the node operator key,
+    ///     `~/.sage/agent.key`, held by the CEREBRUM attached to SAGE at install.
+    ///     `isSafeToAdopt` refuses any override naming it, genesis refuses to let
+    ///     Root and companion be the same file, and `nodeOperatorKeyURL` exists
+    ///     precisely so this type can recognise and reject it.
+    ///   * **Even companion standing is capped.** The most this key can be given
+    ///     is Member/Companion at clearance 2, and SAGE fixes the profile and
+    ///     capability mask regardless of what is passed — see
+    ///     `SageNodeSupervisor.vendoredBootstrapEnvironment`.
+    ///   * **And only when Mynah installed SAGE.** `SageNodeChoice.resolve`
+    ///     prefers an installed bundle, so `mayBeManagedByMynah` — and with it
+    ///     the bootstrap that writes genesis — is false whenever the owner
+    ///     already has a SAGE. Against an existing node this key is registered
+    ///     like any other agent's and waits in `pending_review` for the owner to
+    ///     approve it in CEREBRUM, which is the design and not a fault.
+    ///
     /// ## Why the appliance mints its own instead of letting the node do it
     ///
     /// It used to say, a few lines up, that "the node creates the parent
