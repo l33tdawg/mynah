@@ -192,6 +192,36 @@ enum Palette {
             light: .mynahHex(0xC0392B, alpha: 0.09),
             dark: .mynahHex(0xFF6B5E, alpha: 0.12)
         )
+
+        /// **Words leave this Mac. That is the whole meaning, and it may never
+        /// acquire a second one.**
+        ///
+        /// Amber was removed from this product once, and the argument was the
+        /// owner's: *"amber accent kill it bro - its meaningless"*. It was
+        /// meaningless because it meant four things at once — paused,
+        /// restricted, setup unfinished, and words leaving the Mac — and he
+        /// proved what that costs by reading a yellow mark on a stale task list
+        /// as "Signal has crashed". It had not; both processes were up.
+        ///
+        /// It comes back for exactly one of those four, at his request: *"if
+        /// user is using api key, these model thing should be in yellow /
+        /// orange - green only when its fully private"*. That is the same
+        /// distinction `good` already carries from the other side — green has
+        /// only ever meant "stays on this Mac" and has never been used for a
+        /// fault, which is precisely why green survived the sweep.
+        ///
+        /// So this is one half of a pair, not a warning colour. It does not
+        /// mean danger, it does not mean broken, and nothing that is merely
+        /// *not working* may use it — a jammed engine disables Send, which is
+        /// the constraint that replaced the signal. `AmberIsGoneTests` holds
+        /// the line: it now permits this token and still forbids every other
+        /// amber, so the next person to reach for a warm yellow has to come
+        /// through here and read this.
+        static let caution = Color.mynah(light: .mynahHex(0x9A6212), dark: .mynahHex(0xE0A54A))
+        static let cautionWash = Color.mynah(
+            light: .mynahHex(0x9A6212, alpha: 0.10),
+            dark: .mynahHex(0xE0A54A, alpha: 0.13)
+        )
     }
 
     /// Stated explicitly in both schemes rather than inverting `Color.primary`,

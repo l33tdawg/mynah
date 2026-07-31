@@ -93,17 +93,34 @@ final class AmberIsGoneTests: XCTestCase {
     ///
     /// Asserted on the palette source, because "this identifier does not exist"
     /// is not a thing a value test can express.
-    func testTheCautionTokenIsGoneFromThePaletteEntirely() throws {
+    /// **The token is back, for one meaning, and the reasoning has to be beside
+    /// it.**
+    ///
+    /// The owner reversed this himself: *"if user is using api key, these model
+    /// thing should be in yellow / orange - green only when its fully private;
+    /// makes sense i think"*. It does make sense, and it is not the change that
+    /// was reverted. The old amber meant four things — paused, restricted,
+    /// setup unfinished, words leaving the Mac — and died of that. This is the
+    /// fourth of those and nothing else, and it completes a pair whose other
+    /// half already exists: green has only ever meant "stays on this Mac".
+    ///
+    /// So this test stops checking that the token is absent and starts checking
+    /// that the argument is present. A token somebody adds without reading why
+    /// the last one was removed is how four meanings happen again.
+    func testTheCautionTokenCarriesTheArgumentForItsOwnExistence() throws {
         let palette = try read("Sources/MynahMac/Style/MynahTheme.swift")
 
-        XCTAssertFalse(
-            palette.contains("static let caution"),
-            "the caution token is back in the palette"
-        )
-        XCTAssertFalse(
-            palette.contains("static let cautionWash"),
-            "the caution wash is back in the palette"
-        )
+        XCTAssertTrue(palette.contains("static let caution"), "the caution token vanished")
+        // Phrases that sit on one line. The first attempt required "never
+        // acquire a second one", which the palette does say — across a line
+        // break, so the substring is not contiguous and the test failed on
+        // prose it was happy with.
+        for required in ["Words leave this Mac", "one half of a pair", "kill it bro"] {
+            XCTAssertTrue(
+                palette.contains(required),
+                "the palette no longer explains what caution means or why it is limited to one job"
+            )
+        }
     }
 
     /// **The sweep, done as a property rather than as a list.**
@@ -117,8 +134,37 @@ final class AmberIsGoneTests: XCTestCase {
     /// explaining why a message from another agent should be treated carefully,
     /// it has never been a colour, and it is the exact false positive a naive
     /// sweep produces.
-    func testNoSurfaceInTheAppDrawsAnythingInCautionInk() throws {
+    /// Every file allowed to draw in amber, and why each one is.
+    ///
+    /// `MynahTheme` and `Components` define the token and the tone. `Settings`
+    /// is the only surface that uses it, on the three rows that answer "where
+    /// do my words go" — the provider pill on Home's status row, the appliance's
+    /// destination, and the Privacy list where the pair reads plainest with
+    /// "Stays here" in green two rows below.
+    private static let mayDrawInAmber: Set<String> = [
+        "MynahTheme.swift", "Components.swift", "SettingsView.swift"
+    ]
+
+    /// **The sweep, done as a property rather than as a list.**
+    ///
+    /// The first pass at removing amber reported five call sites and there were
+    /// thirty-five — a `grep | head` that truncated, which is the third time in
+    /// one day a partial search had been mistaken for a complete one. A test
+    /// that greps the whole tree cannot make that mistake twice.
+    ///
+    /// It no longer forbids amber outright — see the token test above — but the
+    /// containment is the entire reason the colour is allowed back, so the
+    /// sweep stays and is now an allowlist. Any *new* file reaching for it is a
+    /// second meaning arriving, which is the failure this whole file exists to
+    /// prevent.
+    ///
+    /// `AgentMessaging.Trust.caution` is excluded by name: it is a `String`
+    /// explaining why a message from another agent should be treated carefully,
+    /// it has never been a colour, and it is the exact false positive a naive
+    /// sweep produces.
+    func testOnlyTheRowsAboutWhereWordsGoDrawInAmber() throws {
         let offenders = try swiftFiles(under: "Sources").compactMap { url -> String? in
+            guard !Self.mayDrawInAmber.contains(url.lastPathComponent) else { return nil }
             let source = try String(contentsOf: url, encoding: .utf8)
             let hits = source.split(separator: "\n").enumerated().filter { _, line in
                 guard !line.trimmingCharacters(in: .whitespaces).hasPrefix("///") else { return false }
@@ -132,7 +178,24 @@ final class AmberIsGoneTests: XCTestCase {
             return "\(url.lastPathComponent): \(hits.map { "line \($0.offset + 1)" }.joined(separator: ", "))"
         }
 
-        XCTAssertEqual(offenders, [], "amber is back on a surface: \(offenders.joined(separator: "; "))")
+        XCTAssertEqual(
+            offenders, [],
+            "amber has picked up a second meaning: \(offenders.joined(separator: "; "))"
+        )
+    }
+
+    /// Green and amber must stay a pair rather than becoming a synonym.
+    func testPrivateAndNotPrivateAreDrawnDifferently() {
+        XCTAssertNotEqual(
+            MynahTone.good.ink.description,
+            MynahTone.caution.ink.description,
+            "a cloud model and an on-device one are now the same colour"
+        )
+        XCTAssertNotEqual(
+            MynahTone.caution.ink.description,
+            MynahTone.neutral.ink.description,
+            "caution collapsed into ordinary ink, so only the absence of green says anything"
+        )
     }
 
     /// The accent is ink, not a hue. The amber hexes are the thing to pin —

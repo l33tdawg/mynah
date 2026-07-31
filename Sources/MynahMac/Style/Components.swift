@@ -691,6 +691,9 @@ enum MynahTone: Sendable, CaseIterable {
     case neutral
     case good
     case critical
+    /// Words leave this Mac. One meaning, and see `Palette.state.caution` for
+    /// why it is allowed exactly one.
+    case caution
     case accent
 
     var ink: Color {
@@ -698,6 +701,7 @@ enum MynahTone: Sendable, CaseIterable {
         case .neutral: return Palette.ink.secondary
         case .good: return Palette.state.good
         case .critical: return Palette.state.critical
+        case .caution: return Palette.state.caution
         case .accent: return Palette.accent.ink
         }
     }
@@ -707,6 +711,7 @@ enum MynahTone: Sendable, CaseIterable {
         case .neutral: return Palette.surface.well
         case .good: return Palette.state.goodWash
         case .critical: return Palette.state.criticalWash
+        case .caution: return Palette.state.cautionWash
         case .accent: return Palette.accent.wash
         }
     }

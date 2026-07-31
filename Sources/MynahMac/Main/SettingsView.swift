@@ -1167,10 +1167,13 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     appliance.destination,
-                    // Neutral, not caution: the pill already names the
-                    // company, and a name is a more specific signal than a
-                    // colour that also means paused. See `Palette.state`.
-                    tone: appliance.keepsWordsOnDevice ? .good : .neutral
+                    // This used to say "neutral, not caution", on the grounds
+                    // that the name is more specific than a colour which also
+                    // meant paused. The colour no longer means paused — it
+                    // means one thing — so the objection is spent, and the
+                    // company's name and the colour now say the same thing
+                    // twice rather than one of them saying four.
+                    tone: appliance.keepsWordsOnDevice ? .good : .caution
                 )
             }
         } else {
@@ -1193,9 +1196,21 @@ struct SettingsView: View {
         conversation.trouble == nil ? brain.destination : "Not answering"
     }
 
+    /// Green only when it is genuinely private, amber when it is not.
+    ///
+    /// *"if user is using api key, these model thing should be in yellow /
+    /// orange - green only when its fully private; makes sense i think"*. It
+    /// does: green has only ever meant "stays on this Mac", so leaving the
+    /// other half grey made the absence of green the only signal — and an
+    /// absence is not something anybody notices. See `Palette.state.caution`
+    /// for why this one amber is allowed where the old four-job one was not.
+    ///
+    /// Still neutral while the engine is in trouble: that is a different fact,
+    /// and letting it borrow this colour is exactly how the old amber came to
+    /// mean nothing.
     private func destinationTone(_ brain: BrainChoice) -> MynahTone {
         guard conversation.trouble == nil else { return .neutral }
-        return brain.keepsWordsOnDevice ? .good : .neutral
+        return brain.keepsWordsOnDevice ? .good : .caution
     }
 
     /// Changing which model does the thinking.
@@ -1631,7 +1646,11 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     model.brain?.destination ?? "Not chosen",
-                    tone: model.brain.map { $0.keepsWordsOnDevice ? .good : .neutral } ?? .neutral
+                    // The Privacy list is where the pair reads most plainly:
+                    // "Stays here" green two rows down, the provider amber
+                    // here. Nothing chosen stays grey — an unanswered question
+                    // is not a destination.
+                    tone: model.brain.map { $0.keepsWordsOnDevice ? .good : .caution } ?? .neutral
                 )
             }
             MynahDivider()
