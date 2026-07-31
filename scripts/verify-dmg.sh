@@ -36,9 +36,23 @@ echo "== gatekeeper"
 # The real question: would this launch on a Mac that has never seen it? `spctl`
 # answers it, and it is the check that fails when notarization was skipped or
 # the ticket was never stapled.
-if spctl --assess --type execute --verbose=4 "$APP" 2>&1 | tee /dev/stderr | grep -q "accepted"; then
+#
+# Captured into a variable, and read from `spctl`'s own exit status rather than
+# by grepping its text. This is the same bug c93496b fixed in
+# verify-vendored-sage.sh: under `set -o pipefail`, `| tee /dev/stderr | grep -q`
+# fails a check that passed, because `grep -q` exits at the first match, `tee`
+# then dies of SIGPIPE, and pipefail reports the whole pipeline as failed.
+#
+# Worse than the earlier instance because it is a race rather than a certainty —
+# whether `tee` has finished writing when `grep` leaves decides it. The 1.1.0
+# release verified and 1.1.1 did not, from builds that were both correctly
+# signed, notarized and stapled. A release gate that fails intermittently on
+# good artifacts is one that gets ignored, which is the real damage.
+if ASSESSMENT="$(spctl --assess --type execute --verbose=4 "$APP" 2>&1)"; then
+  echo "$ASSESSMENT"
   echo "   accepted by Gatekeeper"
 else
+  echo "$ASSESSMENT" >&2
   echo "   NOT accepted — unsigned, unnotarized, or the ticket is not stapled" >&2
   echo "   (expected for an ad-hoc local build; a release build must pass)" >&2
   exit 1
