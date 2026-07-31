@@ -391,6 +391,162 @@ public enum MynahIdentity {
         }
     }
 
+    /// Creates Mynah's key, if it does not have one yet.
+    ///
+    /// ## Why the appliance mints its own instead of letting the node do it
+    ///
+    /// It used to say, a few lines up, that "the node creates the parent
+    /// directory and generates the key on first use, so nothing here has to
+    /// mint anything". True, and it put the key on disk at the **wrong moment**.
+    ///
+    /// A fresh install runs in this order:
+    ///
+    ///   1. `SageNodeSupervisor.startIfNeeded` starts the vendored node with
+    ///      `SAGE_VENDORED_AGENT_KEY_FILE` pointing at `applianceKeyURL()`;
+    ///   2. the node writes genesis, which is where an app-v23 companion agent
+    ///      is granted Member standing and its home domain;
+    ///   3. much later, the first `sage-gui mcp` call lazily generates the key.
+    ///
+    /// So the file named in step 1 does not exist until step 3. Genesis is
+    /// handed a path to nothing, and the identity Mynah eventually signs with is
+    /// one the chain has never seen — it self-registers, lands in
+    /// `pending_review`, and every call is refused with "active ordinary agent
+    /// identity required".
+    ///
+    /// **And that is not repairable afterwards.** `vendoredBootstrapEnvironment`
+    /// says why: SAGE declines to retrofit companion standing onto an existing
+    /// chain by design. Miss the genesis window and the only remedy is an
+    /// administrator in CEREBRUM, which a new owner does not have and cannot be
+    /// asked to find.
+    ///
+    /// Minting here closes the window: after this returns, the key exists, so
+    /// step 2 has a real public key to embed and Mynah is an active Member from
+    /// the node's first block.
+    ///
+    /// Ordering against the migration matters and is not arbitrary. Adoption
+    /// runs first and always: an upgrading appliance must keep the identity that
+    /// holds its memories, and minting over it would be the data loss the
+    /// migration exists to prevent. This only ever fires when there was nothing
+    /// to adopt, which is what a genuinely new install looks like.
+    ///
+    /// - Returns: the key's path when this call created it, `nil` when one was
+    ///   already there.
+    @discardableResult
+    public static func mintApplianceKeyIfNeeded(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fileManager: FileManager = .default,
+        log: (String) -> Void = { _ in }
+    ) -> URL? {
+        let destination = applianceKeyURL(homeDirectory: homeDirectory)
+        guard !fileManager.fileExists(atPath: destination.path) else { return nil }
+
+        // 32 raw bytes — the Ed25519 seed, which is the shape SAGE writes for a
+        // per-project key and the shape `SageAgentIdentity` derives an agent id
+        // from. Not the 64-byte seed+public form: that is what `~/.sage/agent.key`
+        // uses, and both are accepted, but writing the same shape the node writes
+        // keeps one fewer difference between a minted key and an adopted one.
+        let seed = Curve25519.Signing.PrivateKey().rawRepresentation
+        do {
+            try OwnerOnlyFileSecurity.write(seed, to: destination, fileManager: fileManager)
+        } catch {
+            // Non-fatal, and deliberately so. The node still mints lazily on
+            // first use, which is the old behaviour — a worse identity, not no
+            // appliance. Refusing to boot over a key file would strand the owner
+            // completely.
+            log("[identity] could not mint an appliance key at \(destination.path): \(error)")
+            return nil
+        }
+        log("[identity] minted this appliance's key: \(SageAgentIdentity.agentID(ofKeyBytes: seed) ?? "unreadable")")
+        return destination
+    }
+
+    /// Copies the current key aside before anything is allowed to touch it.
+    ///
+    /// **An install must never be the reason an appliance forgets.** Upgrading
+    /// is the moment the key is most at risk: the installer replaces the app,
+    /// a bootstrap may write genesis, and any of it could land on
+    /// `appliance-agent.key`. Losing those 32 bytes is not an inconvenience —
+    /// it is a different agent id, which is every memory the owner ever gave
+    /// Mynah, unreachable, with no way back.
+    ///
+    /// Named by agent id rather than by a timestamp, which makes it idempotent:
+    /// backing the same key up on every boot writes the same file instead of
+    /// growing a pile of dated copies nobody can tell apart. When the identity
+    /// really does change, the old one is still sitting there under its own
+    /// name, which is exactly when somebody needs to find it.
+    ///
+    /// No clock is involved for the same reason — a name that depends on when
+    /// it was written cannot be recognised later as "the key that was here
+    /// before".
+    @discardableResult
+    public static func backUpApplianceKeyIfPresent(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fileManager: FileManager = .default,
+        log: (String) -> Void = { _ in }
+    ) -> URL? {
+        let source = applianceKeyURL(homeDirectory: homeDirectory)
+        guard let key = try? Data(contentsOf: source) else { return nil }
+
+        let stamp = SageAgentIdentity.agentID(ofKeyBytes: key).map { String($0.prefix(8)) } ?? "unreadable"
+        let destination = source.deletingLastPathComponent()
+            .appendingPathComponent("retired", isDirectory: true)
+            .appendingPathComponent("appliance-agent.\(stamp).key", isDirectory: false)
+        guard !fileManager.fileExists(atPath: destination.path) else { return destination }
+
+        do {
+            try OwnerOnlyFileSecurity.write(key, to: destination, fileManager: fileManager)
+            log("[identity] backed up this appliance's key as \(destination.lastPathComponent)")
+            return destination
+        } catch {
+            // Said, not thrown. A failed backup is a risk worth reporting and a
+            // terrible reason to stop an owner installing an update.
+            log("[identity] could not back up \(source.path): \(error)")
+            return nil
+        }
+    }
+
+    /// Key check first, then install. The whole order, in one place.
+    ///
+    /// Every caller that is about to do something consequential — spawn an MCP
+    /// server, bootstrap a node, start the daemon — needs the same three things
+    /// to have happened, in the same order, and getting the order wrong fails
+    /// silently in a different way each time:
+    ///
+    ///   1. **Back up** whatever key is already there. Nothing below can run
+    ///      until the existing identity is safe, because steps 2 and 3 are the
+    ///      ones that would replace it.
+    ///   2. **Adopt** the identity an upgrading appliance was already using, so
+    ///      it keeps its memories. Runs only when there is no key yet.
+    ///   3. **Mint** one, so a genuinely new install has a real public key
+    ///      *before* genesis is written rather than hours after it.
+    ///
+    /// Adoption before minting is the part that must not be reordered: minting
+    /// first would hand every upgrading appliance a brand-new identity and
+    /// orphan everything it had stored, which is the exact data loss the
+    /// migration exists to prevent.
+    ///
+    /// - Returns: the path to Mynah's key, which after this call exists unless
+    ///   the disk refused every attempt.
+    @discardableResult
+    public static func prepareApplianceKey(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        workingDirectory: String = FileManager.default.currentDirectoryPath,
+        fileManager: FileManager = .default,
+        log: @escaping (String) -> Void = { _ in }
+    ) -> URL {
+        backUpApplianceKeyIfPresent(homeDirectory: homeDirectory, fileManager: fileManager, log: log)
+        migrateApplianceKeyIfNeeded(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            workingDirectory: workingDirectory,
+            fileManager: fileManager,
+            log: log
+        )
+        mintApplianceKeyIfNeeded(homeDirectory: homeDirectory, fileManager: fileManager, log: log)
+        return applianceKeyURL(homeDirectory: homeDirectory)
+    }
+
     /// Environment for the daemon's `sage-gui mcp`.
     ///
     /// Migration matters more than the pin here. Pointing an existing appliance
@@ -420,11 +576,14 @@ public enum MynahIdentity {
             }
             return [environmentVariable: expanded]
         }
-        migrateApplianceKeyIfNeeded(
+        // Back up, adopt, mint — in that order, and never just the middle one.
+        // This used to call `migrateApplianceKeyIfNeeded` alone, so on a fresh
+        // install it returned a path to a file that did not exist and left the
+        // node to fill it in whenever it got around to it.
+        return [environmentVariable: prepareApplianceKey(
             environment: environment,
             homeDirectory: homeDirectory,
             log: log
-        )
-        return [environmentVariable: applianceKeyURL(homeDirectory: homeDirectory).path]
+        ).path]
     }
 }

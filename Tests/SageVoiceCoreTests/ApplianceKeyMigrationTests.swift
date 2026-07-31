@@ -151,6 +151,104 @@ final class ApplianceKeyMigrationTests: XCTestCase {
         )
     }
 
+    // MARK: Minting, backing up, and the order of the two
+
+    /// A new install must have a key **before** the node writes genesis.
+    ///
+    /// Nothing used to create one — the node did, lazily, on the first MCP call.
+    /// By then genesis was sealed, so `SAGE_VENDORED_AGENT_KEY_FILE` had been
+    /// read as a path to nothing and the key Mynah went on to sign with was one
+    /// its own chain had never seen: self-registered, `pending_review`, refused
+    /// forever. SAGE will not retrofit companion standing onto an existing
+    /// chain, so there is no second chance at this.
+    func testAFreshInstallHasItsOwnKeyBeforeAnyNodeIsAskedAnything() throws {
+        let minted = MynahIdentity.mintApplianceKeyIfNeeded(homeDirectory: home)
+
+        XCTAssertNotNil(minted, "a fresh install got no key, so genesis has nothing to embed")
+        let pinned = MynahIdentity.applianceKeyURL(homeDirectory: home)
+        let bytes = try Data(contentsOf: pinned)
+        XCTAssertEqual(bytes.count, 32, "not an Ed25519 seed, so the node cannot sign with it")
+        XCTAssertNotNil(
+            SageAgentIdentity.agentID(ofKeyBytes: bytes),
+            "the minted key does not derive an agent id, so it is not a usable identity"
+        )
+    }
+
+    /// Minting must never be the thing that runs on an upgrade.
+    ///
+    /// An appliance that already has memories has an identity that holds them.
+    /// A fresh key here is a fresh agent id, which is every one of those
+    /// memories orphaned — silently, during an update the owner asked for.
+    func testAnExistingKeyIsNeverMintedOver() throws {
+        let existing = Data(repeating: 7, count: 32)
+        try OwnerOnlyFileSecurity.write(existing, to: MynahIdentity.applianceKeyURL(homeDirectory: home))
+
+        XCTAssertNil(MynahIdentity.mintApplianceKeyIfNeeded(homeDirectory: home))
+        XCTAssertEqual(
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            existing,
+            "the appliance was handed a new identity and lost every memory under the old one"
+        )
+    }
+
+    /// Adoption beats minting, and the order is the whole point.
+    ///
+    /// Both would leave a valid key on disk, so getting this backwards produces
+    /// an appliance that boots, registers, answers — and has forgotten
+    /// everything. Nothing about that looks like a failure from outside.
+    func testAnUpgradeAdoptsTheOldIdentityRatherThanMintingANewOne() throws {
+        let old = Data(repeating: 3, count: 32)
+        _ = try plantDerivedKey(workingDirectory: home.path, provider: nil, bytes: old)
+
+        let path = MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertEqual(
+            try Data(contentsOf: path), old,
+            "minted a new identity over an appliance that already had one"
+        )
+    }
+
+    /// Installing must not be how an appliance loses its key.
+    ///
+    /// The copy is named by agent id, so it is recognisable later as "the key
+    /// that was here before" — which a timestamped name is not — and so backing
+    /// up on every boot rewrites one file instead of growing a pile.
+    func testTheExistingKeyIsBackedUpBeforeAnythingCanTouchIt() throws {
+        let live = Data(repeating: 9, count: 32)
+        try OwnerOnlyFileSecurity.write(live, to: MynahIdentity.applianceKeyURL(homeDirectory: home))
+        let stamp = String(SageAgentIdentity.agentID(ofKeyBytes: live)!.prefix(8))
+
+        MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        let backup = MynahIdentity.applianceKeyURL(homeDirectory: home)
+            .deletingLastPathComponent()
+            .appendingPathComponent("retired/appliance-agent.\(stamp).key")
+        XCTAssertEqual(
+            try Data(contentsOf: backup), live,
+            "no recoverable copy of the identity was taken before the install"
+        )
+    }
+
+    /// A fresh install ends up with a key even though there was nothing to
+    /// adopt — the case the old code left to the node, too late to matter.
+    func testPreparingAFreshInstallLeavesAUsableKeyOnDisk() throws {
+        let path = MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
+        XCTAssertNotNil(SageAgentIdentity.agentID(ofKeyAt: path))
+    }
+
     /// Same bytes is the whole point: same key means same agent id, so nothing
     /// re-registers and there is nothing to reconcile on the node.
     func testTheMigratedKeyIsOwnerOnly() throws {

@@ -312,6 +312,24 @@ public final class SageNodeSupervisor: @unchecked Sendable {
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         if bootstrap {
+            // **Key check first, then install.** `vendoredBootstrapEnvironment`
+            // names `appliance-agent.key` as the companion identity to write
+            // into genesis, and until this call that file did not exist yet on
+            // a fresh machine — it was created lazily by the first `sage-gui
+            // mcp` call, long after genesis had been sealed. So the appliance
+            // ended up signing with a key its own chain had never seen,
+            // self-registered, and sat in `pending_review` while every call was
+            // refused.
+            //
+            // Genesis is the only chance: SAGE declines to retrofit companion
+            // standing onto an existing chain, as the environment builder below
+            // says at length. Preparing the key here — back up, adopt, mint —
+            // is what makes the path in that environment point at a real public
+            // key at the moment it is read.
+            MynahIdentity.prepareApplianceKey(
+                homeDirectory: homeDirectory,
+                log: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+            )
             process.environment = ProcessInfo.processInfo.environment.merging(
                 Self.vendoredBootstrapEnvironment(homeDirectory: homeDirectory)
             ) { _, managed in managed }
