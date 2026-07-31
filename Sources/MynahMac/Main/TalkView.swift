@@ -16,17 +16,18 @@ import SwiftUI
 /// underneath it: it is how work gets *made* and asked about, not the thing to
 /// stare at.
 ///
-/// The conversation shown is the *real* one — the Signal thread the appliance
-/// answers, accumulated from the daemon's own record by `ConversationMirror`. It
-/// used to be this window's private chat, which made the screen a second source
-/// of truth that knew nothing about the voice note the owner sent ten minutes
-/// ago and had answered on their phone. Typing here still works and its turns
-/// are appended below, labelled, so the two are never mistaken for one another.
+/// The conversation shown is this window's own, kept by `WindowConversation`.
 ///
-/// Nothing on this screen can reach the phone. Clearing empties the window's own
-/// record and leaves every message where it is, which is what the line beside
-/// the button says — and the reverse holds too: a thread cleared on the phone,
-/// or expired by the appliance, does not take this screen's copy with it.
+/// It used to be the phone's — the Signal thread mirrored out of the daemon's
+/// file — so that walking from the phone to the Mac showed one continuous
+/// conversation. That worked in one direction only, because the other direction
+/// means this app writing into somebody's Signal history, and the owner chose
+/// two whole conversations over one half-merged one. `WindowConversation` has
+/// the full reasoning and what carries continuity between them instead.
+///
+/// Nothing on this screen can reach the phone, in either direction now.
+/// Clearing empties this window's record and leaves every Signal message where
+/// it is, which is what the line beside the button says.
 @MainActor
 struct TalkView: View {
 
@@ -61,7 +62,7 @@ struct TalkView: View {
     let model: ConversationModel
     /// The conversation as it happened on the phone. Read-only, and re-read
     /// while this pane is on screen.
-    let mirror: ConversationMirror
+    let record: WindowConversation
     /// What is on the owner's plate. Read-only — see `SageTaskSource`.
     let board: TaskBoardModel
     /// Supplied by the shell so the recovery banner can jump straight to
@@ -82,12 +83,12 @@ struct TalkView: View {
     /// context, so naming a main-actor value there is an isolation error.
     init(
         model: ConversationModel? = nil,
-        mirror: ConversationMirror? = nil,
+        record: WindowConversation? = nil,
         board: TaskBoardModel? = nil,
         onOpenSettings: (() -> Void)? = nil
     ) {
         self.model = model ?? .shared
-        self.mirror = mirror ?? .shared
+        self.record = record ?? .shared
         self.board = board ?? .shared
         self.onOpenSettings = onOpenSettings
     }
@@ -118,33 +119,36 @@ struct TalkView: View {
         .background(Palette.surface.canvas)
         .task {
             // **Before `connect()`, so the very first question in the window
-            // already knows what the phone said.**
+            // already knows what was said here yesterday.**
             //
-            // This is the seam the two records were missing. The mirror draws
-            // the phone's conversation above the composer and the engine used to
+            // This is the seam the two records were missing. The record draws
+            // the earlier conversation above the composer and the engine used to
             // answer from an array that had never seen it — one screen, two
             // memories, and the owner catching it by asking for the steps of a
             // recipe printed directly above the question.
             //
-            // Read through a closure rather than copied here: the phone keeps
-            // talking while this window is open, so a snapshot taken now would
-            // be stale by the second turn. Evaluated per turn, this is simply
-            // "whatever is on screen".
-            model.priorContext = { [mirror] in
-                mirror.messages.map {
-                    BrainMessage(
-                        role: $0.speaker == .owner ? .user : .assistant,
-                        content: $0.text
-                    )
-                }
+            // Read through a closure rather than copied here: this window keeps
+            // adding to the record while it is open, so a snapshot taken now
+            // would be stale by the second turn. Evaluated per turn, this is
+            // simply "whatever is on screen".
+            model.priorContext = { [record] in record.priorMessages }
+            // And the other direction, so what is said here survives a relaunch.
+            // Nothing else writes this file, which is the whole reason the
+            // digests and the overlap matcher could go.
+            model.recordTurn = { [record] question, answer, askedAt, answeredAt in
+                record.record(
+                    question: question,
+                    answer: answer,
+                    askedAt: askedAt,
+                    answeredAt: answeredAt
+                )
             }
             await model.connect()
             app.presence = presence
         }
-        // Its own task, so the poll starts while the engine is still connecting
-        // — the phone's conversation is on disk already and has nothing to wait
-        // for. Cancelled with the pane, so nothing polls from Settings.
-        .task { await mirror.follow() }
+        // Its own task, so the read starts while the engine is still connecting
+        // — the record is on disk already and has nothing to wait for.
+        .task { await record.restore() }
         // And its own again, so a node that is slow to answer cannot hold up the
         // conversation underneath it.
         .task { await board.follow() }
@@ -299,7 +303,7 @@ struct TalkView: View {
     }
 
     private var conversationSummary: String {
-        let count = model.exchanges.count + mirror.messages.count
+        let count = model.exchanges.count + record.messages.count
         switch count {
         case 0: return "Conversation"
         case 1: return "Conversation — 1 message"
@@ -307,7 +311,7 @@ struct TalkView: View {
         }
     }
 
-    private var canClear: Bool { !model.exchanges.isEmpty || !mirror.messages.isEmpty }
+    private var canClear: Bool { !model.exchanges.isEmpty || !record.messages.isEmpty }
 
     /// The button, and the one thing the owner needs to know before pressing it.
     ///
@@ -356,7 +360,7 @@ struct TalkView: View {
     /// own record of the conversation. Neither reaches the phone.
     private func clearWindow() {
         model.clear()
-        mirror.clear()
+        record.clear()
     }
 
     private static let pausedHealth = ConversationModel.Health(
@@ -379,7 +383,7 @@ struct TalkView: View {
         // Nothing said on the phone *and* nothing asked here. A fresh install
         // has no saved conversation at all, which is not a failure and must not
         // be drawn as one — see `emptyMessage`.
-        if mirror.messages.isEmpty && model.exchanges.isEmpty {
+        if record.messages.isEmpty && model.exchanges.isEmpty {
             emptyState
         } else {
             VStack(spacing: 0) {
@@ -451,8 +455,8 @@ struct TalkView: View {
                             ConversationSourceLabel(text: label)
                         }
                         switch entry.item {
-                        case .phone(let exchange):
-                            MirroredExchangeView(exchange: exchange, inset: Self.cardInset)
+                        case .earlier(let exchange):
+                            TranscriptExchangeView(exchange: exchange, inset: Self.cardInset)
                         case .here(let exchange):
                             ExchangeView(
                                 exchange: exchange,
@@ -525,7 +529,7 @@ struct TalkView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
-            .onChange(of: mirror.messages) { _, _ in
+            .onChange(of: record.messages) { _, _ in
                 // Nobody asked this window for this message — it arrived from
                 // the phone while the owner may well have been reading
                 // something further up. Follow it only if they were already at
@@ -554,31 +558,26 @@ struct TalkView: View {
     /// exposed an ordering fault nobody could see. The block layout was always
     /// wrong; it was only ever *arguably* wrong while the evidence was missing.
     enum TranscriptItem: Identifiable {
-        case phone(MirroredExchange)
+        case earlier(TranscriptExchange)
         case here(Exchange)
 
         var id: String {
             switch self {
-            case .phone(let exchange): return "phone-\(exchange.id)"
+            case .earlier(let exchange): return "earlier-\(exchange.id)"
             case .here(let exchange): return "here-\(exchange.id)"
             }
         }
 
-        var cameFromPhone: Bool {
-            if case .phone = self { return true }
-            return false
-        }
-
         /// When this exchange started, when that is known.
         ///
-        /// The *earliest* time in a phone exchange rather than the latest: an
+        /// The *earliest* time in a restored exchange rather than the latest: an
         /// exchange is placed by when it began, so a long answer cannot push its
         /// own question below something said while it was still being written.
         var at: Date? {
             switch self {
             case .here(let exchange):
                 return exchange.askedAt
-            case .phone(let exchange):
+            case .earlier(let exchange):
                 return (exchange.asked + exchange.answered).compactMap(\.at).min()
             }
         }
@@ -608,7 +607,7 @@ struct TalkView: View {
     /// otherwise be free to swap on every redraw, and a transcript that
     /// reshuffles while it is being read is worse than one in the wrong order.
     var timeline: [TranscriptEntry] {
-        var items: [TranscriptItem] = MirroredExchange.group(mirror.messages).map { .phone($0) }
+        var items: [TranscriptItem] = TranscriptExchange.group(record.messages).map { .earlier($0) }
         items.append(contentsOf: model.exchanges.map { .here($0) })
 
         let ordered = items.enumerated()
@@ -624,21 +623,14 @@ struct TalkView: View {
             }
             .map(\.element)
 
-        // Labelled at each handover. With one source there is nothing to
-        // distinguish, so the label would be a caption on the obvious.
-        let hasBothSides = ordered.contains(where: \.cameFromPhone)
-            && ordered.contains(where: { !$0.cameFromPhone })
-        var previous: Bool?
-        return ordered.map { item in
-            defer { previous = item.cameFromPhone }
-            guard hasBothSides, previous != item.cameFromPhone else {
-                return TranscriptEntry(item: item, label: nil)
-            }
-            return TranscriptEntry(
-                item: item,
-                label: item.cameFromPhone ? "From your phone" : "In this window"
-            )
-        }
+        // No labels any more, and the reason is the point of the change: these
+        // used to be two conversations on one screen — the phone's and this
+        // window's — and the owner could not tell them apart without being
+        // told. There is one conversation here now. `.earlier` and `.here`
+        // differ only in whether a turn was read off disk at launch or happened
+        // while the window has been open, which is not a distinction anybody
+        // needs a divider for.
+        return ordered.map { TranscriptEntry(item: $0, label: nil) }
     }
 
     private static let bottomAnchor = "mynah.transcript.bottom"
@@ -1107,7 +1099,7 @@ private struct HoldToTalkButton: View {
 #Preview("Home — the plate") {
     TalkPreview(
         model: TalkPreviewFixtures.empty(),
-        mirror: TalkPreviewFixtures.phoneConversation(),
+        record: TalkPreviewFixtures.earlierConversation(),
         board: TalkPreviewFixtures.plate()
     )
 }
@@ -1153,7 +1145,7 @@ private struct HoldToTalkButton: View {
 #Preview("Talk — the phone's conversation") {
     TalkPreview(
         model: TalkPreviewFixtures.empty(),
-        mirror: TalkPreviewFixtures.phoneConversation()
+        record: TalkPreviewFixtures.earlierConversation()
     )
 }
 
@@ -1162,7 +1154,7 @@ private struct HoldToTalkButton: View {
 #Preview("Talk — phone and window") {
     TalkPreview(
         model: TalkPreviewFixtures.midTurn(),
-        mirror: TalkPreviewFixtures.phoneConversation()
+        record: TalkPreviewFixtures.earlierConversation()
     )
 }
 
@@ -1172,7 +1164,7 @@ private struct TalkPreview: View {
     let model: ConversationModel
     /// Empty by default, and never `.shared`: a preview must not open the
     /// developer's own saved conversation and draw it in a screenshot.
-    var mirror: ConversationMirror = ConversationMirror(messages: [])
+    var record: WindowConversation = WindowConversation(messages: [])
     /// Likewise never `.shared` — that one would go and start a node.
     var board: TaskBoardModel = TaskBoardModel(board: TaskBoard())
 
@@ -1185,7 +1177,7 @@ private struct TalkPreview: View {
     }
 
     private var pane: some View {
-        TalkView(model: model, mirror: mirror, board: board)
+        TalkView(model: model, record: record, board: board)
             .environment(AppModel(defaults: TalkPreviewFixtures.defaults()))
     }
 }
@@ -1369,32 +1361,31 @@ private enum TalkPreviewFixtures {
         )
     }
 
-    /// A voice note and its answer, as the daemon would have saved them. No
-    /// durations and no tool phrases, because the file records neither — the
-    /// preview has to show the owner exactly what the screen can show.
-    static func phoneConversation() -> ConversationMirror {
-        ConversationMirror(
+    /// An earlier conversation restored from disk. No durations and no tool
+    /// phrases, because the record keeps neither — the preview has to show the
+    /// owner exactly what the screen can show.
+    static func earlierConversation() -> WindowConversation {
+        WindowConversation(
             messages: [
-                MirroredMessage(id: 0, speaker: .owner, text: "remind me what the roofer said"),
-                MirroredMessage(
+                TranscriptMessage(id: 0, speaker: .owner, text: "remind me what the roofer said"),
+                TranscriptMessage(
                     id: 1,
                     speaker: .mynah,
                     text: "He quoted two and a half thousand for the whole roof and said he could "
                         + "start the week after next. You told him you wanted it in writing first."
                 ),
-                MirroredMessage(id: 2, speaker: .owner, text: "did I ever send that email"),
+                TranscriptMessage(id: 2, speaker: .owner, text: "did I ever send that email"),
                 // Two in a row, because people do that — and because it is the
                 // case that proves the grouping: both belong to the one answer
                 // below them, and the spacing has to show it.
-                MirroredMessage(id: 3, speaker: .owner, text: "the one about the quote I mean"),
-                MirroredMessage(
+                TranscriptMessage(id: 3, speaker: .owner, text: "the one about the quote I mean"),
+                TranscriptMessage(
                     id: 4,
                     speaker: .mynah,
                     text: "Not that I know of. You asked me to remind you on Monday and it's "
                         + "Thursday, so it's probably still sitting in your drafts."
                 )
-            ],
-            lastActivity: Date(timeIntervalSinceNow: -600)
+            ]
         )
     }
 

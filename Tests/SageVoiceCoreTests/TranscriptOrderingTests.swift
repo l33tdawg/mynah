@@ -26,14 +26,14 @@ final class TranscriptOrderingTests: XCTestCase {
         return Calendar(identifier: .gregorian).date(from: parts)!
     }
 
-    private func phoneMessage(_ id: Int, _ text: String, _ when: Date?) -> MirroredMessage {
-        MirroredMessage(id: id, speaker: id % 2 == 0 ? .owner : .mynah, text: text, at: when)
+    private func phoneMessage(_ id: Int, _ text: String, _ when: Date?) -> TranscriptMessage {
+        TranscriptMessage(id: id, speaker: id % 2 == 0 ? .owner : .mynah, text: text, at: when)
     }
 
-    private func view(phone: [MirroredMessage], here: [Exchange]) -> TalkView {
+    private func view(phone: [TranscriptMessage], here: [Exchange]) -> TalkView {
         TalkView(
             model: ConversationModel(exchanges: here),
-            mirror: ConversationMirror(messages: phone),
+            record: WindowConversation(messages: phone),
             board: TaskBoardModel(board: nil, trouble: nil)
         )
     }
@@ -108,7 +108,7 @@ final class TranscriptOrderingTests: XCTestCase {
     /// Two undated messages keep the order they arrived in — the record's own
     /// order is the only evidence available about them.
     /// Asserted on the flattened messages rather than on exchanges, because
-    /// `MirroredExchange.group` folds an adjacent question and answer into one
+    /// `TranscriptExchange.group` folds an adjacent question and answer into one
     /// exchange — the first version of this expected two entries, got one, and
     /// was measuring the grouping rather than the ordering.
     func testUndatedMessagesKeepTheOrderTheyArrivedIn() {
@@ -123,7 +123,7 @@ final class TranscriptOrderingTests: XCTestCase {
         )
 
         let texts = subject.timeline.flatMap { entry -> [String] in
-            guard case .phone(let exchange) = entry.item else { return [] }
+            guard case .earlier(let exchange) = entry.item else { return [] }
             return (exchange.asked + exchange.answered).map(\.text)
         }
         XCTAssertEqual(
@@ -147,45 +147,30 @@ final class TranscriptOrderingTests: XCTestCase {
         }
     }
 
-    // MARK: The labels
+    // MARK: The labels that are no longer there
 
-    /// A label at each handover, not once at a seam that no longer exists. The
-    /// conversation moves back and forth, and each move is worth naming.
-    func testTheSourceIsNamedEveryTimeTheConversationChangesHands() {
+    /// **There is one conversation on this screen now, so nothing is labelled.**
+    ///
+    /// The labels named a handover between two conversations — the phone's and
+    /// this window's — drawn in one column. Separating them removed the thing
+    /// the labels were pointing at. What remains looks superficially similar:
+    /// turns restored from disk, then turns said since the window opened. That
+    /// is not a handover, it is a scroll position, and captioning it "In this
+    /// window" above everything in the window is the caption on the obvious the
+    /// old test already warned about.
+    func testNothingIsLabelledBecauseThereIsOnlyOneConversation() {
         let subject = view(
             phone: [
-                phoneMessage(0, "on the phone", at(5)),
-                phoneMessage(1, "answered there", at(6))
+                phoneMessage(0, "said earlier", at(5)),
+                phoneMessage(1, "answered earlier", at(6))
             ],
-            here: [answered("typed here", at: at(10))]
+            here: [answered("typed just now", at: at(10))]
         )
 
-        XCTAssertEqual(
-            subject.timeline.compactMap(\.label),
-            ["From your phone", "In this window"]
-        )
-    }
-
-    /// Two exchanges in a row from the same side get one label between them, not
-    /// one each.
-    func testARunFromOneSideIsLabelledOnce() {
-        let subject = view(
-            phone: [phoneMessage(0, "phone", at(5))],
-            here: [answered("one", at: at(10)), answered("two", at: at(11))]
-        )
-
-        XCTAssertEqual(subject.timeline.compactMap(\.label).filter { $0 == "In this window" }.count, 1)
-    }
-
-    /// With one source there is nothing to tell apart, so a label would be a
-    /// caption on the obvious — and "In this window" above the only thing in the
-    /// window reads as though something is missing.
-    func testAConversationFromOneSideIsNotLabelledAtAll() {
-        let onlyHere = view(phone: [], here: [answered("typed here", at: at(10))])
-        XCTAssertEqual(onlyHere.timeline.compactMap(\.label), [])
-
-        let onlyPhone = view(phone: [phoneMessage(0, "on the phone", at(5))], here: [])
-        XCTAssertEqual(onlyPhone.timeline.compactMap(\.label), [])
+        XCTAssertEqual(subject.timeline.compactMap(\.label), [])
+        // And the ordering it was drawn in still holds — this is the guard that
+        // matters, and removing the labels must not have touched it.
+        XCTAssertEqual(subject.timeline.count, 2)
     }
 
     // MARK: Placement within an exchange

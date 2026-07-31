@@ -442,19 +442,34 @@ final class ConversationModel {
     private var connectedOptionID: BrainSetupOptionID?
     private let voice: VoiceCapture?
 
-    /// The conversation that reached this window from the phone.
+    /// What this window said before the turns currently on screen.
     ///
     /// **Injected, because this used to not exist and that was the bug.** The
-    /// window kept its own `history` array that started empty and only ever grew
-    /// from turns typed here, while the mirror drew the phone's messages on the
-    /// same screen above them. So the owner read one conversation and Mynah
-    /// answered from another: he asked for a recipe's steps directly beneath the
-    /// recipe and was asked which recipe he meant.
+    /// window kept a `history` array that started empty and only ever grew from
+    /// turns typed here, while a second record was drawn on the same screen
+    /// above them. So the owner read one conversation and Mynah answered from
+    /// another: he asked for a recipe's steps directly beneath the recipe and
+    /// was asked which recipe he meant.
+    ///
+    /// The source has changed and the seam has not. It used to be the phone's
+    /// thread, read from the daemon's file; it is now this window's own record,
+    /// read from disk at launch. One conversation per surface, and each answers
+    /// from the one it is showing — see `WindowConversation` for why the two
+    /// were separated and what carries continuity between them instead.
     ///
     /// A closure rather than a reference, because `ConversationModel` must not
-    /// know what a `ConversationMirror` is — and because previews and tests need
-    /// a window with no phone behind it, which is what the default gives them.
+    /// know what a `WindowConversation` is — and because previews and tests need
+    /// a window with no record behind it, which is what the default gives them.
     var priorContext: @MainActor () -> [BrainMessage] = { [] }
+
+    /// Where a finished turn goes to be remembered across a relaunch.
+    ///
+    /// Injected for the same reason as `priorContext`, and paired with it: the
+    /// closure that reads the record and the closure that writes it belong to
+    /// whoever owns the record. A window with neither — a preview, a test — is a
+    /// conversation that lasts as long as it is on screen, which is the right
+    /// behaviour for both.
+    var recordTurn: @MainActor (_ question: String, _ answer: String, _ askedAt: Date, _ answeredAt: Date) -> Void = { _, _, _, _ in }
     private var activeTurn: (id: UUID, task: Task<Void, Never>)?
     private var levelSampler: Task<Void, Never>?
     /// The connect that is already running, held so a second caller can *wait*
@@ -882,6 +897,17 @@ final class ConversationModel {
         guard let index = exchanges.firstIndex(where: { $0.id == id }),
               exchanges[index].isThinking else { return }
         exchanges[index].outcome = outcome
+        // The one place a turn resolves, so the one place worth writing down.
+        // Only answers: a failed or stopped turn is half an exchange, and half
+        // an exchange in a record reads as Mynah ignoring somebody.
+        guard case .answered(let answer) = outcome else { return }
+        let asked = exchanges[index].askedAt
+        recordTurn(
+            exchanges[index].question,
+            answer.text,
+            asked,
+            asked.addingTimeInterval(answer.seconds)
+        )
     }
 
     private func clearActiveTurn(_ id: UUID) {

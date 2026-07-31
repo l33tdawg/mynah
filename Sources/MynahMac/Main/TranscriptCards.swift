@@ -183,12 +183,12 @@ struct ConversationSourceLabel: View {
 /// timestamps per turn nor any marker of what belongs with what. This is the
 /// pairing a reader's eye already does, made explicit so the layout can hold a
 /// pair together.
-struct MirroredExchange: Identifiable, Equatable, Sendable {
+struct TranscriptExchange: Identifiable, Equatable, Sendable {
     /// The first message's position, which is stable for as long as the record
     /// is only appended to.
     let id: Int
-    var asked: [MirroredMessage]
-    var answered: [MirroredMessage]
+    var asked: [TranscriptMessage]
+    var answered: [TranscriptMessage]
 
     /// A conversation split into exchanges, oldest first.
     ///
@@ -196,23 +196,23 @@ struct MirroredExchange: Identifiable, Equatable, Sendable {
     /// front, so a conversation can quite legitimately begin with an answer
     /// whose question is no longer anywhere. Drawing that answer alone is
     /// honest; inventing a question for it would not be.
-    static func group(_ messages: [MirroredMessage]) -> [MirroredExchange] {
-        var exchanges: [MirroredExchange] = []
+    static func group(_ messages: [TranscriptMessage]) -> [TranscriptExchange] {
+        var exchanges: [TranscriptExchange] = []
         var index = messages.startIndex
         while index < messages.endIndex {
             let start = index
-            var asked: [MirroredMessage] = []
+            var asked: [TranscriptMessage] = []
             while index < messages.endIndex, messages[index].speaker == .owner {
                 asked.append(messages[index])
                 index += 1
             }
-            var answered: [MirroredMessage] = []
+            var answered: [TranscriptMessage] = []
             while index < messages.endIndex, messages[index].speaker == .mynah {
                 answered.append(messages[index])
                 index += 1
             }
             exchanges.append(
-                MirroredExchange(id: messages[start].id, asked: asked, answered: answered)
+                TranscriptExchange(id: messages[start].id, asked: asked, answered: answered)
             )
         }
         return exchanges
@@ -225,8 +225,8 @@ struct MirroredExchange: Identifiable, Equatable, Sendable {
 /// messages, and merging them would be the app rewriting what was said. What the
 /// grouping buys is the spacing: tight inside an exchange, open between them, so
 /// the eye takes a pair as one thing without any box being drawn around it.
-struct MirroredExchangeView: View {
-    let exchange: MirroredExchange
+struct TranscriptExchangeView: View {
+    let exchange: TranscriptExchange
     let inset: CGFloat
 
     var body: some View {
