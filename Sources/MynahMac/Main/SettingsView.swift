@@ -1707,8 +1707,13 @@ struct SettingsView: View {
             SettingsRow(
                 "Keep answering from my phone",
                 detail: app.answeringServiceError
-                    ?? ("Mynah runs privately in the background, even with this window closed. "
-                        + "Turn this off to stop the phone bridge.")
+                    // "Window closed" and "quit" are two different things and
+                    // this sentence now says which is which, because getting
+                    // them confused is exactly what happened: the owner quit
+                    // Mynah, Signal kept answering, and nothing anywhere had
+                    // told him it would.
+                    ?? ("Mynah runs privately in the background with this window closed. "
+                        + "Turn this off, or quit Mynah, to stop the phone bridge.")
             ) {
                 Toggle("", isOn: $app.keepsAnsweringWhenClosed).labelsHidden().mynahToggle()
             }
@@ -1737,7 +1742,10 @@ struct SettingsView: View {
     /// the thing is.
     @ViewBuilder
     private var backgroundHelperRow: some View {
-        SettingsRow("The helper that answers when Mynah is closed", detail: helperDetail) {
+        // "With the window closed", not "when Mynah is closed". The helper
+        // stops when Mynah quits, so the old title named the wrong event and
+        // read as a promise the app no longer keeps.
+        SettingsRow("The helper that answers with the window closed", detail: helperDetail) {
             switch model.helperState {
             case .running:
                 StatusPill("Running", tone: .good)

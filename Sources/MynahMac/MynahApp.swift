@@ -561,6 +561,47 @@ final class MynahAppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// **Quitting stops the appliance.**
+    ///
+    /// The owner quit Mynah and Signal kept answering him — *"i quit the mynah
+    /// app but its still answering me on signal"*. Nothing had leaked: both
+    /// helpers are LaunchAgents with `KeepAlive`, so they are launchd's
+    /// children and not the app's, and `ps` showed them at `PPID 1` with an
+    /// uptime shorter than the app had been closed — launchd had already
+    /// restarted one of them. Quitting was never going to affect them.
+    ///
+    /// That was defensible until you say it out loud: a background process the
+    /// owner cannot see in the Dock, cannot stop by quitting, that answers his
+    /// phone as him and that the system restarts when killed. Whatever it is
+    /// called, no owner should have to know it exists to turn it off.
+    ///
+    /// The two halves now read as one rule — **Mynah answers your phone while
+    /// Mynah is running**:
+    ///
+    ///   * closing the last window does not quit (above), so the appliance
+    ///     survives tidying a desktop, which is what that rule was for;
+    ///   * quitting stops it, because that is what quitting means everywhere
+    ///     else on this machine.
+    ///
+    /// `reconcileAnsweringService()` puts both jobs back on next launch from
+    /// the owner's persisted choices, so this is a stop and never an opt-out.
+    /// The cost is stated plainly rather than hidden: with Mynah quit, his
+    /// phone is not answered — including after a restart, until he opens it.
+    ///
+    /// `.terminateLater` because the removal is two `launchctl bootout` calls
+    /// and quitting must not race them; a job left running under a deleted
+    /// plist is the one outcome worse than either intended behaviour. The wait
+    /// is bounded by construction — `ProbeCommandRunner` caps each call at 15
+    /// seconds — rather than by a timeout here that could not preempt it
+    /// anyway.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task {
+            await SignalBackgroundServiceManager.shared.disable(because: "the owner quit Mynah")
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !flag else { return true }
         // `false` means "handled, do not also do the default thing". Returning
