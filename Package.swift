@@ -41,6 +41,22 @@ let onnxTargets: [Target] = hasOnnxRuntime ? [
     ),
 ] : []
 
+// Hoisted out of the `Package(...)` literal, and explicitly typed.
+//
+// **These were inline ternaries and they broke CI.** `dependencies:
+// ["SageVoiceCore"] + (hasOnnxRuntime ? ["KokoroEngine"] : [])` asks the type
+// checker to infer array literals, an optional-ish branch and a `+` overload
+// inside an already-large `Package` initialiser — and on a cold runner it gives
+// up: *"the compiler is unable to type-check this expression in reasonable
+// time"*. It compiled here because the manifest was already cached, so the
+// failure only ever appeared on GitHub, on a tag, after the release was cut.
+//
+// Naming the type removes the inference entirely.
+let daemonDependencies: [Target.Dependency] =
+    hasOnnxRuntime ? ["SageVoiceCore", "KokoroEngine"] : ["SageVoiceCore"]
+let macDependencies: [Target.Dependency] =
+    hasOnnxRuntime ? ["SageVoiceCore", "KokoroEngine"] : ["SageVoiceCore"]
+
 let package = Package(
     name: "sage-voice-bridge",
     platforms: [
@@ -65,7 +81,7 @@ let package = Package(
             // `KokoroEngine` only where its runtime is staged, so the call sites
             // are guarded with `#if canImport(KokoroEngine)` and a fresh clone
             // still builds and still speaks — through the system voice.
-            dependencies: ["SageVoiceCore"] + (hasOnnxRuntime ? ["KokoroEngine"] : []),
+            dependencies: daemonDependencies,
             linkerSettings: hasOnnxRuntime ? onnxLinkerSettings : []
         ),
         // The app a non-technical owner actually sees. The CLI above stays as
@@ -90,7 +106,7 @@ let package = Package(
             //
             // Guarded with `#if canImport(KokoroEngine)` at the call site, so a
             // fresh clone with no `vendor/onnxruntime` still builds.
-            dependencies: ["SageVoiceCore"] + (hasOnnxRuntime ? ["KokoroEngine"] : []),
+            dependencies: macDependencies,
             linkerSettings: hasOnnxRuntime ? onnxLinkerSettings : []
         ),
         // Nothing but `@main`. Everything real lives in the library above so it
