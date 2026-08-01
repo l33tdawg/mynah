@@ -59,3 +59,37 @@ final class SignalReplyTextTests: XCTestCase {
         XCTAssertFalse(out.hasSuffix("\n"), "a trailing blank line rides along: \(out.debugDescription)")
     }
 }
+
+// MARK: - The bold marker
+
+/// What makes `MYNAH >>` stand out from the owner's own words in a thread they
+/// also use with people.
+///
+/// Pinned because it cannot be seen from here: the range is handed to
+/// `signal-cli` and drawn on a phone, and an off-by-one — or a count of
+/// characters where Signal wants UTF-16 code units — bolds the wrong text
+/// silently rather than failing.
+final class SignalReplyStyleTests: XCTestCase {
+
+    func testBoldsExactlyTheMarkerAndNotTheAnswer() {
+        XCTAssertEqual(
+            SignalReplyText.styles(forPrefix: VoiceBridgeDaemon.Configuration.defaultReplyPrefix),
+            ["0:8:BOLD"],
+            "MYNAH >> is eight code units; the trailing space is not part of the marker"
+        )
+    }
+
+    func testAMarkerWithAnEmojiIsCountedTheWaySignalCountsIt() {
+        // 🐦 is one character and two UTF-16 code units. Counting characters
+        // here would leave the last unit of the bird outside the bold range.
+        XCTAssertEqual(SignalReplyText.styles(forPrefix: "🐦 "), ["0:2:BOLD"])
+    }
+
+    func testNoMarkerMeansNoFormattingAtAll() {
+        XCTAssertEqual(SignalReplyText.styles(forPrefix: ""), [])
+        XCTAssertEqual(
+            SignalReplyText.styles(forPrefix: "   "), [],
+            "a marker of spaces would bold a range of nothing, which signal-cli rejects"
+        )
+    }
+}

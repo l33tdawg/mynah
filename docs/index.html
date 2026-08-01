@@ -621,7 +621,7 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
         <span class="aside">
           macOS 14 or later &middot; free and open source &middot;
           <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
-          built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
+          built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span data-latest></span>
         </span>
       </div>
     </div>
@@ -805,7 +805,7 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
     <span class="aside">
       Free and open source &middot;
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
-      built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
+      built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span data-latest></span>
     </span>
   </div>
 </section>
@@ -831,15 +831,15 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
   </p>
 </footer>
 
-<!-- The download count, and nothing else.
+<!-- Which version this is, and nothing else.
      ==========================================================================
      Fails silent on purpose. GitHub rate-limits unauthenticated callers by IP,
      so a visitor behind a busy NAT can be refused for reasons that have nothing
-     to do with this page — and "downloads: —" is worse than no line at all.
+     to do with this page — and "version —" is worse than no line at all.
      Nothing here observes the visitor: one GET, no cookie, no identifier, and
      no second request whatever comes back. -->
 <script>
-/* The download link, and the download count.
+/* The download link, and which version it is.
    ==========================================================================
    The button's href in the HTML is `releases/latest/download/Mynah-macOS-arm64.dmg`
    — a fixed asset name, because that is the only thing GitHub's "latest"
@@ -881,16 +881,29 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
       });
     }
 
-    // Every release, not just the newest: "downloads" means how many copies
-    // went out, and a fresh release would otherwise reset it to nearly zero on
-    // the day it shipped.
-    const total = releases
-      .flatMap(release => release.assets || [])
-      .filter(asset => /\.dmg$/i.test(asset.name || ""))
-      .reduce((sum, asset) => sum + (asset.download_count || 0), 0);
-    if (total > 0) {
-      document.getElementById("downloads").textContent =
-        " \u00B7 " + total.toLocaleString() + " downloaded";
+    /* Which version the button hands over, and when it came out.
+       ----------------------------------------------------------------------
+       This used to be a download count, which flatters the project and tells
+       the reader nothing they can act on. The version is the fact they need
+       before pressing it \u2014 and the date answers the question a stranger
+       actually has about a small project, which is whether anyone is still
+       working on it.
+
+       `querySelectorAll`, and a data attribute rather than an id, because the
+       page says this twice: the masthead and the closing call to action. An id
+       has to be unique, so `getElementById` would have filled the first and
+       left the second blank \u2014 the same bug the download buttons had. */
+    const version = (newest?.tag_name || "").replace(/^v/i, "");
+    if (version) {
+      const published = newest.published_at ? new Date(newest.published_at) : null;
+      const date = published && !isNaN(published)
+        ? " \u00B7 " + published.toLocaleDateString(undefined, {
+            day: "numeric", month: "long", year: "numeric"
+          })
+        : "";
+      document.querySelectorAll("[data-latest]").forEach(span => {
+        span.textContent = " \u00B7 version " + version + date;
+      });
     }
   } catch (_) {
     // Offline, blocked, or rate-limited. The page is complete without it and

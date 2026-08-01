@@ -23,6 +23,27 @@ public enum SignalReplyText {
     /// the app, which parses the same shapes for the window.
     private static let bulletMarkers = ["- ", "* ", "• ", "– ", "— "]
 
+    /// The formatting ranges that make the marker at the front of a reply bold.
+    ///
+    /// **Signal's own bold, not a Unicode lookalike.** `signal-cli` takes
+    /// `start:length:STYLE` ranges on `send`, so `MYNAH >>` is genuinely bold
+    /// rather than spelled in mathematical alphanumerics — which are tofu in any
+    /// font missing them, and are read out letter by letter by a screen reader.
+    ///
+    /// Counted in **UTF-16 code units**, which is what signal-cli documents and
+    /// what Signal's wire format uses. `count` is a character count, and the two
+    /// disagree the moment a marker contains an emoji — which would put the bold
+    /// over the wrong text rather than failing loudly.
+    ///
+    /// A function of its own, not four lines inside `send`, because it is the
+    /// part with a rule in it and because nothing else in a daemon that holds a
+    /// socket open can be tested.
+    public static func styles(forPrefix prefix: String) -> [String] {
+        let marker = prefix.trimmingCharacters(in: .whitespaces)
+        guard !marker.isEmpty else { return [] }
+        return ["0:\(marker.utf16.count):BOLD"]
+    }
+
     public static func spacingOutLists(in text: String) -> String {
         let lines = text.components(separatedBy: "\n")
         guard lines.contains(where: isListItem) else { return text }

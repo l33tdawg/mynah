@@ -201,8 +201,17 @@ enum PrivacyClaim {
     /// Mac" the question an owner actually has about an update check no longer
     /// had an answer. Everything left was true; the reassurance was simply
     /// gone, which is the most expensive shape a copy edit can take.
-    static let updateCheckNoAutoInstall = "Nothing is downloaded or installed on its own — a "
-        + "newer version is something you go and get."
+    ///
+    /// **Rewritten when Mynah learned to fetch its own update, because the
+    /// second half stopped being true.** It used to end "a newer version is
+    /// something you go and get", and from 1.2.5 it is something Mynah gets —
+    /// when you press the button, never before. A privacy claim that survives
+    /// the feature it describes by being vague is worse than no claim; what the
+    /// owner is owed here is the trigger, which is still them.
+    static let updateCheckNoAutoInstall = "Nothing is downloaded or installed on its own. Press "
+        + "Update and Mynah fetches that release, checks it was signed by the same developer as "
+        + "this copy, and puts it in place — and goes on running the copy you have until you "
+        + "restart it."
 
     /// The About caption, composed rather than written out.
     ///
@@ -327,6 +336,34 @@ final class SettingsModel {
     /// What the last check found. `nil` while the first one is still running,
     /// which is the only state that means "asking".
     private(set) var update: UpdateAvailability?
+
+    /// How a swap is going, when one is happening.
+    ///
+    /// Three states rather than a handful of flags, because the card draws one
+    /// of exactly three things: it is working, it finished, or it stopped and
+    /// said why. `nil` is no card at all.
+    enum InstallState: Equatable {
+        case working(UpdateInstallProgress)
+        case installed(String)
+        case failed(UpdateInstallProblem)
+
+        var isWorking: Bool {
+            if case .working = self { return true }
+            return false
+        }
+    }
+
+    private(set) var installState: InstallState?
+
+    /// The version sitting on disk waiting for a restart, once one is.
+    ///
+    /// Kept apart from `installState` deliberately: closing the card puts the
+    /// card away, and it must not also throw away the fact that this Mac is now
+    /// carrying a newer Mynah than the one running. The row says so until the
+    /// owner restarts.
+    private(set) var installedAndWaiting: String?
+
+    private var installWork: Task<Result<String, UpdateInstallProblem>, Never>?
     private(set) var checksForUpdates: Bool
 
     /// What launchd says about the background helper, or `nil` before the first
@@ -472,6 +509,42 @@ final class SettingsModel {
         update = await UpdateCheck(preferencesFile: updatePreferences).run()
     }
 
+    private(set) var isCheckingForUpdate = false
+
+    /// Asks GitHub now, whatever the daily limit and the switch say.
+    ///
+    /// `force: true` for the reason spelled out on `UpdateCheck.run` — the
+    /// limit exists so the appliance does not pester GitHub *unprompted*, and
+    /// somebody pressing a button is the opposite of unprompted. Without it the
+    /// first press of the day answers and every press after it reports "hasn't
+    /// managed to check yet", which reads as a broken control.
+    func checkForUpdateNow() async {
+        guard !isCheckingForUpdate else { return }
+        isCheckingForUpdate = true
+        defer { isCheckingForUpdate = false }
+        update = await UpdateCheck(preferencesFile: updatePreferences).run(force: true)
+    }
+
+    /// When GitHub was last asked, in words.
+    ///
+    /// On the switch's row rather than the answer's, and it is the only
+    /// feedback a press of Check now produces when the answer does not change:
+    /// "Up to date" that was already on screen looks identical to "Up to date"
+    /// that has just been confirmed, and a button with no visible effect reads
+    /// as a broken one.
+    var lastCheckedDescription: String {
+        guard let when = UpdatePreferences.load(from: updatePreferences).lastCheckedAt else {
+            return "Once a day. It hasn't asked yet."
+        }
+        let ago = Date().timeIntervalSince(when)
+        // Under a minute is "just now" rather than "0 seconds ago", which is
+        // what the relative formatter says and is not how anybody speaks.
+        guard ago >= 60 else { return "Once a day. Last asked just now." }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "Once a day. Last asked \(formatter.localizedString(for: when, relativeTo: Date()))."
+    }
+
     /// Turning the check off stops the requests, not merely the reporting.
     ///
     /// Turning it back on clears the day's timestamp on purpose: an owner who
@@ -486,6 +559,88 @@ final class SettingsModel {
         }
         update = nil
         Task { await checkForUpdate() }
+    }
+
+    // MARK: Fetching a newer Mynah
+
+    /// Downloads the newest release, checks it, and puts it in place.
+    ///
+    /// The stages arrive on a stream rather than through a closure that writes
+    /// this object: the installer runs off this actor, and handing it something
+    /// that mutates the model from wherever it happens to be is how a screen
+    /// ends up redrawing from a background thread. The stream's continuation is
+    /// the only thing that crosses.
+    func installUpdate() async {
+        guard installWork == nil else { return }
+        installState = .working(UpdateInstallProgress(stage: .finding))
+
+        let (steps, feed) = AsyncStream<UpdateInstallProgress>.makeStream()
+        let installer = UpdateInstaller()
+        let work = Task { () -> Result<String, UpdateInstallProblem> in
+            let outcome = await installer.run { feed.yield($0) }
+            feed.finish()
+            return outcome
+        }
+        installWork = work
+
+        for await step in steps {
+            installState = .working(step)
+        }
+
+        let outcome = await work.value
+        installWork = nil
+        switch outcome {
+        case .success(let version):
+            log.info("update: \(version) is on disk, waiting for a restart")
+            installedAndWaiting = version
+            installState = .installed(version)
+        case .failure(let problem):
+            log.error("update: \(problem.spokenDescription)")
+            installState = .failed(problem)
+        }
+    }
+
+    /// Stops a download in progress. Only offered before anything is moved, so
+    /// there is never a half-installed app behind this button.
+    func stopInstalling() {
+        installWork?.cancel()
+    }
+
+    func dismissInstall() {
+        installState = nil
+    }
+
+    /// Starts the copy now on disk, then stands down.
+    ///
+    /// The shell waits for this process to be gone before opening the app,
+    /// because `open` on an app that is still running activates the old copy
+    /// instead of launching the new one — which looks exactly like the update
+    /// not having worked.
+    ///
+    /// The daemon answering the phone comes back by itself: its LaunchAgent
+    /// carries a stamp of the executable it was written for, so the new app
+    /// notices at launch that the bytes changed and re-installs the job. See
+    /// `SignalBackgroundServiceManager.executableStamp`.
+    func restartIntoNewVersion(bundleURL: URL = Bundle.main.bundleURL) {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let script = "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done; "
+            + "/usr/bin/open \"$1\""
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // The path as an argument rather than inside the script: a folder name
+        // with a quote in it would otherwise end the string and run whatever
+        // came after it.
+        process.arguments = ["-c", script, "mynah-restart", bundleURL.path]
+        do {
+            try process.run()
+        } catch {
+            // Quitting anyway would leave the owner with no Mynah and no
+            // explanation. Better to stay up and let them open it themselves.
+            log.error("update: could not arrange the restart: \(String(describing: error))")
+            installState = .failed(.couldNotRestart)
+            return
+        }
+        NSApplication.shared.terminate(nil)
     }
 
     // MARK: Re-checking the key
@@ -888,6 +1043,24 @@ struct SettingsView: View {
                         await app.reconcileAnsweringService()
                     }
                 }
+            }
+        }
+        // Bound to the state rather than a flag of its own, so there is one
+        // answer to "is an update happening" and the card cannot be open over a
+        // run that has finished.
+        .sheet(isPresented: Binding(
+            get: { model.installState != nil },
+            set: { isOpen in if !isOpen { model.dismissInstall() } }
+        )) {
+            if let state = model.installState {
+                UpdateInstallSheet(
+                    version: offeredVersion,
+                    state: state,
+                    onStop: { model.stopInstalling() },
+                    onClose: { model.dismissInstall() },
+                    onRestart: { model.restartIntoNewVersion() },
+                    onOpenReleases: { open(releasesPage) }
+                )
             }
         }
         .sheet(isPresented: $isPastingKey) {
@@ -2053,13 +2226,36 @@ struct SettingsView: View {
             // sentence in Settings and it made this row four lines tall with a
             // switch stranded beside it; under the card it is the same words,
             // available to anyone who wants them, costing the list nothing.
-            SettingsRow("Check GitHub for a newer version", detail: "Once a day.") {
-                Toggle("", isOn: Binding(
-                    get: { model.checksForUpdates },
-                    set: { model.setChecksForUpdates($0) }
-                ))
-                .labelsHidden()
-                .mynahToggle()
+            SettingsRow(
+                "Check GitHub for a newer version",
+                detail: model.lastCheckedDescription
+            ) {
+                HStack(spacing: s4) {
+                    // Offered even when the daily check is switched off, and
+                    // that is deliberate: turning the timer off is a decision
+                    // about what Mynah does unprompted, and pressing this is the
+                    // owner asking. Refusing to look because the automatic check
+                    // is off would be the app deciding it knows better than the
+                    // person clicking.
+                    //
+                    // It is on this screen as well as the privacy page because
+                    // this is where somebody comes when they have heard there is
+                    // a new version — and "Up to date" with nothing to press is
+                    // a screen that cannot be asked again until tomorrow.
+                    if model.isCheckingForUpdate {
+                        ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                    } else {
+                        MynahButton("Check now", kind: .secondary) {
+                            Task { await model.checkForUpdateNow() }
+                        }
+                    }
+                    Toggle("", isOn: Binding(
+                        get: { model.checksForUpdates },
+                        set: { model.setChecksForUpdates($0) }
+                    ))
+                    .labelsHidden()
+                    .mynahToggle()
+                }
             }
             MynahDivider()
 
@@ -2145,20 +2341,57 @@ struct SettingsView: View {
         }
     }
 
-    /// Notice, tell, link — never fetch and swap.
+    /// The version the check named, for the card's title.
+    private var offeredVersion: String {
+        if case .newer(let version, _)? = model.update { return version }
+        return model.installedAndWaiting ?? ""
+    }
+
+    /// Where the card sends somebody when the swap could not be done here. The
+    /// release's own page when GitHub named one, so they land on the build that
+    /// was being offered rather than on a list.
+    private var releasesPage: URL {
+        if case .newer(_, let page)? = model.update { return page }
+        return UpdateCheck.releasesPage
+    }
+
+    /// Notice, tell, fetch — and hand the restart to the owner.
     ///
-    /// Mynah does not replace itself. It holds a live Signal connection and, on
-    /// a call, an open microphone, and software that rewrites its own binary
-    /// underneath either of those fails in a way nobody afterwards can explain.
-    /// So this row is an answer to a question, with a link the owner can act on
-    /// when it suits them.
+    /// **This row used to end at a link, and the reasoning was half right.** The
+    /// argument was that an appliance holding a live Signal connection and, on a
+    /// call, an open microphone must not rewrite itself underneath either. True
+    /// of the *restart*; not true of the file. Replacing a bundle disturbs
+    /// nothing already running out of it, so Mynah now fetches the release,
+    /// checks who signed it, and puts it in place while it carries on answering
+    /// the phone. The only interruption is the restart, and that is a button.
     ///
-    /// "Could not check" is its own state and looks nothing like "up to date".
-    /// This repository is private, which means GitHub answers an unauthenticated
-    /// request with a 404 — silence, not agreement — and an owner told they were
-    /// current on the strength of that would be told it every single day.
+    /// The link is still here for every case where the swap will not work —
+    /// running from the disk image, a folder this owner cannot write to, GitHub
+    /// refusing — because a dead end has to name a door.
+    ///
+    /// "Could not check" is its own state and looks nothing like "up to date". A
+    /// 404 is silence, not agreement, and an owner told they were current on the
+    /// strength of one would be told it every single day.
     @ViewBuilder
     private var updateRow: some View {
+        if let waiting = model.installedAndWaiting {
+            // Ahead of the check, and deliberately: the running copy is still
+            // the old version, so `UpdateCheck` goes on reporting a newer one.
+            // It is right, and it is not the sentence this owner needs.
+            SettingsRow(
+                "A newer Mynah",
+                detail: "Version \(waiting) is on this Mac and isn't running yet. Mynah keeps "
+                    + "answering your phone on the version you have until you restart it."
+            ) {
+                MynahButton("Restart Mynah", kind: .secondary) { model.restartIntoNewVersion() }
+            }
+        } else {
+            checkedUpdateRow
+        }
+    }
+
+    @ViewBuilder
+    private var checkedUpdateRow: some View {
         switch model.update {
         case .none:
             SettingsRow("A newer Mynah", detail: "Mynah is asking GitHub whether there is one.") {
@@ -2173,15 +2406,17 @@ struct SettingsView: View {
                 StatusPill("Up to date", tone: .good)
             }
 
-        case .newer(let version, let page)?:
+        case .newer(let version, _)?:
             SettingsRow(
                 "A newer Mynah",
-                detail: "Version \(version) has been released. Mynah does not replace itself — "
-                    + "download it and swap this copy over whenever it suits you."
+                detail: "Version \(version) has been released. Mynah can fetch it and put it in "
+                    + "place from here — it keeps answering your phone until you restart it."
             ) {
                 HStack(spacing: s4) {
                     StatusPill(version, tone: .neutral, showsDot: false)
-                    MynahButton("Download", kind: .secondary) { open(page) }
+                    MynahButton("Download and install", kind: .secondary) {
+                        Task { await model.installUpdate() }
+                    }
                 }
             }
 
