@@ -491,7 +491,14 @@ Setting Signal up by hand, without the app, is documented in
 
 ## License
 
-Apache 2.0. The speech-to-text code is lifted from
+Apache 2.0.
+
+[SAGE](https://github.com/l33tdawg/sage) is the one to name first: it is where
+everything Mynah remembers is kept, a copy of it ships inside the bundle, and it
+is the reason the memory is governed rather than a file this app appends to.
+Apache 2.0, same licence.
+
+The speech-to-text code is lifted from
 [QuietType](https://github.com/l33tdawg/quiettype), same author. The ASR runtime
 depends on argmax-oss-swift (WhisperKit), MIT. signal-cli is GPL 3.0 and ships in
 the bundle; its licence text is staged into `Contents/Resources/licences` and the
