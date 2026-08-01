@@ -49,6 +49,38 @@ struct BrainProviderSheet: View {
         case chose(BrainSetupOption)
     }
 
+    /// How tall the list may grow before it starts scrolling instead.
+    ///
+    /// The sheet is capped at 760 overall and the header, switcher, result line
+    /// and buttons need the rest, so a list allowed past this pushes the
+    /// buttons off the bottom.
+    private static let listCeiling: CGFloat = 380
+
+    /// The list's natural height, measured.
+    ///
+    /// Two requirements that pull against each other, and this is the only way
+    /// to satisfy both. *"The box could be sized automatically to fit the
+    /// vertical content so you don't have the scroll"* — so a four-model list
+    /// must not open a half-empty panel. *"It needs a slider if the list is
+    /// longer than y"* — so twelve models must scroll rather than grow.
+    ///
+    /// A `ScrollView` cannot do both on its own: it is greedy, taking every
+    /// point offered, and `fixedSize` cures that by making it hug *always*.
+    /// Hugging always is what broke this — with a dozen models pulled the sheet
+    /// wanted more than its 760 cap and was clipped at both ends, the switcher
+    /// off the top and the buttons off the bottom, with nothing scrolling
+    /// because the ScrollView was still hugging. A list you could not reach the
+    /// end of, above buttons you could not reach at all.
+    @State private var listHeight: CGFloat = 0
+
+    /// Carries the measured height out of the content and up to the frame.
+    private struct ListHeight: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = max(value, nextValue())
+        }
+    }
+
     typealias Destination = BrainProviderChoice.Destination
 
     /// Every decision on this sheet, in a value the tests can reach.
@@ -88,9 +120,17 @@ struct BrainProviderSheet: View {
                     case .cloud: cloudSide
                     }
                 }
+                // Measured, not guessed. This is the only way to get both
+                // things the sheet needs at once — see `listHeight`.
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ListHeight.self, value: proxy.size.height)
+                    }
+                )
             }
             .scrollBounceBehavior(.basedOnSize)
-            .fixedSize(horizontal: false, vertical: choice.destination == .thisMac)
+            .onPreferenceChange(ListHeight.self) { listHeight = $0 }
+            .frame(height: min(max(listHeight, 1), Self.listCeiling))
 
             resultLine.padding(.top, s4)
 
@@ -339,6 +379,26 @@ struct BrainProviderSheet: View {
                 keyField(for: option).padding(.bottom, s4)
             }
         }
+        // The same green card the local list gives the model you are on, once
+        // this provider has a key: *"selected model should turn green once key
+        // is provided - same like how we show the other rows"*.
+        //
+        // Both conditions, not either. Selected-without-a-key is a row you have
+        // opened to type into and cannot commit yet, and green there would
+        // promise a working brain before one exists — the "Key saved" pill is
+        // what reports the key, and this reports the choice being complete.
+        .padding(.horizontal, isReady(option) ? s4 : 0)
+        .background(
+            isReady(option) ? Palette.state.goodWash : .clear,
+            in: RoundedRectangle.mynah(r.card)
+        )
+        .mynahBorder(r.card, isReady(option) ? Palette.state.good.opacity(0.55) : .clear)
+    }
+
+    /// Picked, and with a key behind it — the cloud equivalent of the local
+    /// list's highlighted row.
+    private func isReady(_ option: BrainSetupOption) -> Bool {
+        option.id == choice.selected?.id && hasSavedKey(option)
     }
 
     @ViewBuilder
