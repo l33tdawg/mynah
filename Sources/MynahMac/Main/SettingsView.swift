@@ -2059,6 +2059,26 @@ struct SettingsView: View {
             MynahDivider()
 
             SettingsRow(
+                "Mynah",
+                detail: "This app's own source. Open source, Apache 2.0, and built on SAGE."
+            ) {
+                // Absent until 1.2.0, when the repository became public. A row
+                // that looks like a link and delivers a 404 is worse than no
+                // row, so it waited for the link to be real.
+                Button { open(MynahAbout.projectURL) } label: {
+                    Text(MynahAbout.projectURL.host ?? "github.com")
+                        .mynahFont(.mono)
+                        .foregroundStyle(Palette.ink.primary)
+                        .underline()
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help(MynahAbout.projectURL.absoluteString)
+                .accessibilityLabel("Open the Mynah project page")
+            }
+            MynahDivider()
+
+            SettingsRow(
                 "Support",
                 // Names the place rather than pointing at it. Advanced used to
                 // sit above this row and now sits below it, and a sentence whose

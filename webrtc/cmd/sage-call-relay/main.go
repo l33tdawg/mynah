@@ -58,8 +58,8 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callpage"
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
+	"github.com/l33tdawg/mynah/webrtc/internal/callpage"
+	"github.com/l33tdawg/mynah/webrtc/internal/rendezvous"
 )
 
 // How long an appliance's poll is held open before it is answered empty.

@@ -39,7 +39,7 @@ import (
 
 	"github.com/pion/turn/v4"
 
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
+	"github.com/l33tdawg/mynah/webrtc/internal/rendezvous"
 )
 
 func main() {

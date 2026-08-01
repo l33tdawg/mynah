@@ -1,5 +1,8 @@
-SAGE Voice Bridge
+Mynah (SAGE Voice Bridge)
 Copyright (c) 2026 Dhillon Andrew Kannabhiran
+
+Built on SAGE — https://github.com/l33tdawg/sage — which is where everything
+Mynah remembers is stored. Apache 2.0, same licence as this project.
 
 Sources/SageVoiceCore contains speech-to-text code lifted from QuietType
 (https://github.com/l33tdawg/quiettype), same author.

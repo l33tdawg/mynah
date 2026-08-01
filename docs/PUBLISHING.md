@@ -3,30 +3,44 @@
 `docs/index.html` is the public page for Mynah. This is how it becomes a live URL, and how
 you take the screenshots that go on it without publishing the owner's life.
 
-The page is deliberately self-contained: the stylesheet is inline, the wordmark is an inline
-`<svg>`, and the file contains no `href` at all — not an external one, and not an in-page
-anchor. Nothing is fetched from anywhere. Its own footer makes that a claim to the reader —
-*"This page loads nothing from anywhere — no fonts, no scripts, no analytics"* — so anything
-you add later, screenshots included, has to be committed under `docs/` and referenced by a
-relative path. The moment one asset is hotlinked, the footer is a lie.
+The stylesheet is inline and the wordmark is an inline `<svg>`, so the page renders before
+anything else arrives. It is **not** asset-free any more, and the two things it does load are
+both deliberate:
 
-## Before you touch Settings: the repository is private
+* the screenshots in `docs/screenshots/`, served from this same site;
+* one `GET` to GitHub's public API for the download count, at the foot of the file.
 
-`gh repo view l33tdawg/sage-voice-bridge --json isPrivate` currently answers `true`.
+Until 1.2.0 the page contained no `href` at all and its footer claimed *"This page loads nothing
+from anywhere"*. Adding a live download counter made that false, so **the claim was removed
+rather than quietly falsified** — the footer now says exactly what the page asks for and from
+whom. Keep it that way: if you add anything that fetches, say so there or do not add it.
 
-GitHub Pages on a private repository requires a paid plan on the account that owns it. If the
-Pages settings panel tells you to upgrade, you have two honest options, and they are a decision
-rather than a step: make the repository public, or upgrade the account. Do not assume which one
-the owner wants.
+Everything else still holds. Any asset you add goes under `docs/` and is referenced by a
+relative path. The moment one is hotlinked from somebody else's server, the footer is wrong
+again.
 
-Also worth being clear with yourself before enabling it: publishing a Pages site makes the
-built output **publicly readable on the internet**, whether or not the repository stays private.
+## Before you touch Settings
+
+Publishing a Pages site makes the built output **publicly readable on the internet**.
 Everything in `docs/` is served, not just `index.html` — `RELEASE.md` and `MODEL-CHOICES.md`
-included. Read them before you publish and decide whether they should be there.
+included, at `…/RELEASE.md` and `…/MODEL-CHOICES.md`. Read them before you publish and decide
+whether they should be there. `RELEASE.md` in particular names the signing team id; that is not
+a secret — it is in the signature of every binary ever shipped — but it is worth knowing it is
+there rather than discovering it later.
+
+Check what you are publishing from:
+
+```
+gh repo view l33tdawg/mynah --json isPrivate,name
+```
+
+A private repository needs a paid plan for Pages. If the panel asks you to upgrade, that is a
+decision and not a step: make the repository public, or upgrade the account. Do not assume
+which one the owner wants.
 
 ## Settings → Pages
 
-1. Open <https://github.com/l33tdawg/sage-voice-bridge/settings/pages>. That URL goes straight
+1. Open <https://github.com/l33tdawg/mynah/settings/pages>. That URL goes straight
    to the panel and skips the sidebar entirely.
    If you would rather navigate: repository → **Settings** tab → find **Pages** in the left
    sidebar. It has lived under a "Code and automation" grouping for a while, but the groupings
@@ -48,7 +62,7 @@ expect the site to change.
 ## The URL
 
 ```
-https://l33tdawg.github.io/sage-voice-bridge/
+https://l33tdawg.github.io/mynah/
 ```
 
 That is a project site, so the repository name is part of the path and the trailing slash
@@ -70,7 +84,7 @@ the run in Actions and read it rather than reloading the URL hopefully.
 From any machine:
 
 ```sh
-curl -sI https://l33tdawg.github.io/sage-voice-bridge/ | head -1
+curl -sI https://l33tdawg.github.io/mynah/ | head -1
 ```
 
 Expect `HTTP/2 200`. A `404` means the build has not landed yet, or the folder is set to
@@ -79,21 +93,40 @@ Expect `HTTP/2 200`. A `404` means the build has not landed yet, or the folder i
 Then confirm you are looking at *this* page and not a stale or generated one:
 
 ```sh
-curl -s https://l33tdawg.github.io/sage-voice-bridge/ | grep -c '<title>Mynah'
+curl -s https://l33tdawg.github.io/mynah/ | grep -c '<title>Mynah'
 ```
 
-Expect `1`. And confirm the page is still self-contained — this must print nothing at all:
+Expect `1`. Then check what the page reaches for, which is no longer nothing:
 
 ```sh
-curl -s https://l33tdawg.github.io/sage-voice-bridge/ | grep -oE '(src|href)="https?://[^"]*"'
+curl -s https://l33tdawg.github.io/mynah/ | grep -oE '(src|href)="https?://[^"]*"' | sort -u
 ```
 
-The API tells you the same thing without a browser. It answers `404 Not Found` today, because
-Pages has never been enabled on this repository:
+Every line should be a `github.com/l33tdawg/…` link, or the `og:`/`twitter:` image on this same
+site. Anything else — a font host, a CDN, an analytics domain — is a regression, and the
+footer's promise to the reader is what it breaks.
+
+Check the screenshots actually resolve, since a relative path that is right locally and wrong
+on the deployed site fails silently as a broken image:
 
 ```sh
-gh api repos/l33tdawg/sage-voice-bridge/pages --jq '.status, .html_url, .source'
+for shot in home privacy voice general og; do
+  printf '%s %s\n' "$shot" \
+    "$(curl -s -o /dev/null -w '%{http_code}' https://l33tdawg.github.io/mynah/screenshots/$shot.png)"
+done
 ```
+
+`og.png` lives at the site root rather than under `screenshots/`, so expect `404` for that one
+from this loop and check it separately — the link preview is the one asset whose absence nobody
+notices from the page itself.
+
+The API tells you the deployment state without a browser:
+
+```sh
+gh api repos/l33tdawg/mynah/pages --jq '.status, .html_url, .source'
+```
+
+`404 Not Found` means Pages has never been enabled on the repository.
 
 Once it is live, `status` reads `built` and `source` reports the branch and path you set.
 

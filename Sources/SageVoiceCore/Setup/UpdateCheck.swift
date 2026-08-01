@@ -94,15 +94,17 @@ public struct ReleaseVersion: Sendable, Equatable, Comparable, CustomStringConve
 ///
 /// Every case here means "could not tell", and none of them means "up to date".
 /// That distinction is the point of this type: an outage, a rate limit and a
-/// private repository all produce silence, and silence read as agreement is how
-/// an owner ends up running an old build believing it is current.
+/// repository with no published release all produce silence, and silence read as
+/// agreement is how an owner ends up running an old build believing it is
+/// current.
 public enum UpdateCheckProblem: Sendable, Equatable {
     /// The owner turned the check off.
     case turnedOff
     /// Nothing came back — no network, DNS, a timeout.
     case noAnswer
-    /// GitHub answered 404. The repository is private, so this is the ordinary
-    /// answer rather than a fault.
+    /// GitHub answered 404 — no release it will show us. Was the ordinary answer
+    /// while the repository was private; since 1.2.0 it means a release is
+    /// genuinely missing, so it is worth reading as "could not tell" either way.
     case notVisible
     /// GitHub is refusing for now.
     case rateLimited
@@ -125,8 +127,8 @@ public enum UpdateCheckProblem: Sendable, Equatable {
         case .noAnswer:
             return "Mynah couldn't reach GitHub, so it doesn't know whether there is a newer version."
         case .notVisible:
-            return "GitHub didn't show Mynah any releases for this app, which is what a private "
-                + "repository looks like from here. It does not mean you are up to date."
+            return "GitHub didn't show Mynah any releases for this app. It does not mean you are "
+                + "up to date."
         case .rateLimited:
             return "GitHub asked Mynah to check again later, so it doesn't know whether there is "
                 + "a newer version."
@@ -263,19 +265,19 @@ public struct UpdatePreferences: Sendable, Equatable, Codable {
 /// is a fault nobody would be able to explain afterwards. The owner is told a
 /// version exists and given the page; when they replace it is their decision.
 ///
-/// The repository is private. An unauthenticated request for its releases comes
-/// back 404 — the same status as a repository that does not exist — so a 404 is
-/// treated as "cannot tell" and never as "nothing newer". As of writing, no
-/// release has been published at all, so 404 is the answer this will get on
-/// every real Mac until one is.
+/// A 404 is treated as "cannot tell" and never as "nothing newer". That rule was
+/// written when the repository was private, where 404 was the ordinary answer;
+/// it is kept now that it is public, because 404 still cannot be distinguished
+/// from a repository that does not exist, a release that was pulled, or a
+/// rename. None of those mean the owner is current.
 public struct UpdateCheck: Sendable {
 
     /// Where an owner goes to get a build. The one link that is offered when
     /// GitHub does not name a specific release.
-    public static let releasesPage = URL(string: "https://github.com/l33tdawg/sage-voice-bridge/releases")!
+    public static let releasesPage = URL(string: "https://github.com/l33tdawg/mynah/releases")!
 
     static let latestReleaseAPI = URL(
-        string: "https://api.github.com/repos/l33tdawg/sage-voice-bridge/releases/latest"
+        string: "https://api.github.com/repos/l33tdawg/mynah/releases/latest"
     )!
 
     /// Once a day. Not once a launch: this Mac restarts often, every check is a

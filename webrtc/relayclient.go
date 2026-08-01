@@ -13,7 +13,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/rendezvous"
+	"github.com/l33tdawg/mynah/webrtc/internal/rendezvous"
 )
 
 // serveViaRelay answers calls that arrive through the relay.

@@ -11,9 +11,9 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callaudio"
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/opus"
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/speech"
+	"github.com/l33tdawg/mynah/webrtc/internal/callaudio"
+	"github.com/l33tdawg/mynah/webrtc/internal/opus"
+	"github.com/l33tdawg/mynah/webrtc/internal/speech"
 )
 
 // conversation runs one call: the caller's audio in, the appliance's out.

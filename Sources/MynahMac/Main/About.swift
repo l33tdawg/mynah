@@ -54,23 +54,22 @@ enum MynahAbout {
     /// `package-app.sh` copies it, which it did not before, so `Info.plist`'s
     /// long-standing "see the LICENSE file included with this app" stopped being
     /// a claim about a file that was not there.
-    static let copyright = "Copyright © 2026. Apache 2.0 licensed."
+    static let copyright = "Copyright © 2026 Dhillon Andrew Kannabhiran. Apache 2.0 licensed."
 
     /// Where to write when something is wrong.
-    ///
-    /// The repository records no support address — the only address in the tree
-    /// is a placeholder in an example — so this is the author's own, which is
-    /// the honest answer for an appliance with one person behind it.
-    static let supportEmail = "dhillon.andrew@gmail.com"
+    static let supportEmail = "l33tdawg@hackinthebox.org"
 
     /// SAGE is public and Apache 2.0, so this link works for whoever is holding
-    /// the app.
-    ///
-    /// There is deliberately no link to this project's own repository. It is
-    /// private, and the people the owner hands this appliance to cannot open it
-    /// — a row that looks like a link and delivers a 404 is worse than no row,
-    /// and this app already refuses to draw controls that quietly do nothing.
+    /// the app. Mynah is built on it and stores everything it remembers there,
+    /// so it is the one link worth carrying whatever else changes.
     static let sageURL = URL(string: "https://github.com/l33tdawg/sage")!
+
+    /// Mynah's own repository.
+    ///
+    /// This used to be deliberately absent: the repository was private, and a
+    /// row that looks like a link and delivers a 404 is worse than no row. It is
+    /// public as of 1.2.0, so the reason is spent and the link is real.
+    static let projectURL = URL(string: "https://github.com/l33tdawg/mynah")!
 
     /// Everything third-party that reaches the owner, with the licence each was
     /// verified under.

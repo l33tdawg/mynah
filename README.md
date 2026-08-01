@@ -1,9 +1,11 @@
-# Mynah
+# Mynah (SAGE Voice Bridge): A Personal AI and Agent Manager
 
 Mynah is a macOS app that runs a personal agent on a Mac you own and answers you
 from your phone: you message your own Signal Note-to-Self thread, or you send
 `//call` and talk to it out loud. Its memory lives in a
-[SAGE](https://github.com/l33tdawg/sage) node it drives over MCP.
+[SAGE](https://github.com/l33tdawg/sage) node it drives over MCP — everything it
+remembers is stored there, and the other agents on that node are ones it can
+find by name and hand work to.
 
 **It's fully local and privacy-preserving by default.** Your words, your
 memories and your notes stay on your own Mac, and the thinking happens there too.
@@ -21,6 +23,27 @@ lists the other things that leave: the words a web search is made of, the call
 relay that serves the link and passes the two ends' details along, a call
 transcript posted back into the Signal thread if you have that turned on, and a
 once-a-day update check against GitHub.
+
+## What it looks like
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/home.png" alt="Home — an empty conversation inviting you to send a voice note from your phone"></td>
+    <td width="50%"><img src="docs/screenshots/privacy.png" alt="Privacy — a list of everything that leaves this Mac, and what each one tells somebody else"></td>
+  </tr>
+  <tr>
+    <td><b>Home.</b> What you say and what it says back, in one thread with the work it is holding.</td>
+    <td><b>Privacy.</b> Every exception to "it stays on this Mac", named rather than implied.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/voice.png" alt="Settings — the voice Mynah answers in, how fast it talks, and call transcripts"></td>
+    <td><img src="docs/screenshots/general.png" alt="Settings — the linked Signal account, the background helper, and appearance"></td>
+  </tr>
+  <tr>
+    <td><b>Voice.</b> Which voice answers, how fast it talks, whether a call is written back to Signal.</td>
+    <td><b>General.</b> The phone it answers, the helper that keeps answering with the window shut.</td>
+  </tr>
+</table>
 
 ## What it does
 
@@ -434,10 +457,6 @@ places that state a version are two places that can disagree.
 
 Stated plainly, because "builds and has tests" is not the same as "works":
 
-- **The repository is private and no GitHub release has been published.** The
-  update check treats the resulting 404 as "cannot tell" rather than as "nothing
-  newer", which is the right reading but means it cannot tell anyone anything
-  yet.
 - **Kokoro's weights are not in the DMG.** 353 MB is fetched when Signal is
   linked, because code downloaded after installation is unsigned and quarantined
   while model weights are opaque data Gatekeeper has no opinion about. Until that

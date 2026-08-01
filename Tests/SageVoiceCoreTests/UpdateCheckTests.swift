@@ -56,7 +56,7 @@ private func aDayApart(_ step: Int) -> Date {
 private func releaseJSON(
     tag: String = "Mynah-1.2.0",
     name: String = "Mynah 1.2.0",
-    url: String = "https://github.com/l33tdawg/sage-voice-bridge/releases/tag/Mynah-1.2.0"
+    url: String = "https://github.com/l33tdawg/mynah/releases/tag/Mynah-1.2.0"
 ) -> String {
     """
     {"tag_name": "\(tag)", "name": "\(name)", "html_url": "\(url)", "draft": false}
@@ -295,7 +295,7 @@ final class UpdateCheckTests: XCTestCase {
             answer,
             .newer(
                 version: "1.2.0",
-                page: URL(string: "https://github.com/l33tdawg/sage-voice-bridge/releases/tag/Mynah-1.2.0")!
+                page: URL(string: "https://github.com/l33tdawg/mynah/releases/tag/Mynah-1.2.0")!
             ),
             "a published newer version was not offered to the owner, or was offered without "
                 + "anywhere to get it"
@@ -325,7 +325,7 @@ final class UpdateCheckTests: XCTestCase {
     func testTheDownloadLinkNeverLeavesGitHub() async {
         let links = [
             "https://mynah-updates.example.com/download",
-            "http://github.com/l33tdawg/sage-voice-bridge/releases",
+            "http://github.com/l33tdawg/mynah/releases",
             "javascript:alert(1)",
             "file:///Applications",
         ]

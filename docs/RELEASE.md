@@ -46,7 +46,7 @@ touching the Apple ID — see the comment at the top of that script.
 ## Every release
 
 ```bash
-git clone https://github.com/l33tdawg/sage-voice-bridge
+git clone https://github.com/l33tdawg/mynah
 cd sage-voice-bridge
 
 # 1. Put a SAGE node in vendor/. Ships inside the app, so the owner never

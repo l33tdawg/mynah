@@ -62,8 +62,8 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/callpage"
-	"github.com/l33tdawg/sage-voice-bridge/webrtc/internal/speech"
+	"github.com/l33tdawg/mynah/webrtc/internal/callpage"
+	"github.com/l33tdawg/mynah/webrtc/internal/speech"
 )
 
 func main() {

@@ -3,15 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mynah — a personal AI that lives on your Mac</title>
+<title>Mynah (SAGE Voice Bridge): A Personal AI and Agent Manager</title>
 <meta name="description" content="Mynah runs on a Mac you own. Talk to it at your desk or from your phone on Signal. It remembers what you tell it, and it tells you plainly whenever your words leave the machine.">
 <meta name="theme-color" content="#F4F4F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)">
+
+<link rel="canonical" href="https://l33tdawg.github.io/mynah/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mynah">
+<meta property="og:url" content="https://l33tdawg.github.io/mynah/">
+<meta property="og:title" content="Mynah (SAGE Voice Bridge): A Personal AI and Agent Manager">
+<meta property="og:description" content="It runs on a Mac you own and answers you from your phone on Signal. It remembers what you tell it, and it tells you plainly whenever your words leave the machine.">
+<meta property="og:image" content="https://l33tdawg.github.io/mynah/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mynah — a personal AI that lives on your Mac">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mynah (SAGE Voice Bridge): A Personal AI and Agent Manager">
+<meta name="twitter:description" content="It runs on a Mac you own and answers you from your phone on Signal. It remembers what you tell it, and it tells you plainly whenever your words leave the machine.">
+<meta name="twitter:image" content="https://l33tdawg.github.io/mynah/og.png">
 <style>
 /* ---------------------------------------------------------------------------
-   Nothing is loaded from anywhere. No fonts, no scripts, no analytics, no CDN.
-   A page about an appliance that runs on your own machine has no business
-   phoning home, and this one renders identically with the network unplugged.
+   No fonts, no CDN, no analytics, and nothing that observes the visitor. Two
+   things are loaded, both deliberate: the screenshots under docs/screenshots/,
+   which are served from this same site, and one GET to GitHub's public API for
+   the download count. That count is the only request to anybody else, it sends
+   no identifier, and the page is complete without it — see the script at the
+   foot of the file.
+
+   This used to say "nothing is loaded from anywhere" and the footer said so to
+   the reader. That claim is gone rather than quietly falsified.
 
    Every value below is lifted from Sources/MynahMac/Style/MynahTheme.swift so
    the site and the app are the same object. Palette, type scale, radii and the
@@ -172,8 +193,10 @@ header { padding: var(--s9) 0 var(--s8); }
   gap: var(--s4);
 }
 
-/* An abstract waveform tile, not the app icon — the icon is a drawn bird and
-   this page ships no image assets. Ink only, so it carries no second meaning. */
+/* An abstract waveform tile rather than the app icon: inline SVG, so the
+   masthead needs no round-trip and renders before anything else arrives. Ink
+   only, so it carries no second meaning. The bird itself is on the preview card
+   (docs/og.png), which is drawn from the shipped icon. */
 .tile {
   width: 26px; height: 26px;
   border-radius: 8px;
@@ -297,6 +320,37 @@ figure { margin: var(--s8) 0 0; }
 .shot.window { aspect-ratio: 16 / 10; }
 .shot.phone  { aspect-ratio: 9 / 16; max-width: 300px; }
 
+/* A real screenshot rather than the dashed placeholder. The screenshots carry
+   their own window chrome and rounded corners, so the frame gets out of the
+   way entirely: no border, no padding, and the aspect ratio comes from the
+   image instead of being imposed on it. */
+.shot.filled {
+  aspect-ratio: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  display: block;
+  box-shadow: var(--shadow-card);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.shot.filled img { display: block; width: 100%; height: auto; }
+
+/* Download. */
+.get { margin-top: var(--s7); display: flex; flex-wrap: wrap; align-items: center; gap: var(--s4) var(--s5); }
+.get .button {
+  display: inline-block;
+  background: var(--accent-fill);
+  color: var(--on-fill);
+  text-decoration: none;
+  font-weight: 600;
+  padding: var(--s4) var(--s6);
+  border-radius: var(--r-control);
+}
+.get .button:hover { opacity: 0.9; }
+.get .aside { font-size: 13px; color: var(--ink-2); }
+.get .button, .get .button:hover { text-decoration: none; }
+
 figcaption {
   font-size: 13px;
   line-height: 1.5;
@@ -407,6 +461,15 @@ footer p { max-width: 34rem; }
     point it at a company&rsquo;s model instead, it names the company rather than
     letting you assume.
   </p>
+
+  <div class="get">
+    <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest">Download for Apple silicon</a>
+    <span class="aside">
+      macOS 14 or later &middot; free and open source &middot;
+      <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
+      built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
+    </span>
+  </div>
 </header>
 
 <!-- ===================================================================== -->
@@ -467,13 +530,11 @@ footer p { max-width: 34rem; }
        Use invented conversation text. Never the owner's real thread.
   ---------------------------------------------------------------------- -->
   <figure>
-    <div class="shot window">
-      <div>
-        <p class="eyebrow">Screenshot</p>
-        <p class="what">Home — the conversation view, with the task board open above it.</p>
-      </div>
+    <div class="shot window filled">
+      <img src="screenshots/home.png" width="1600" height="1383"
+           alt="The Mynah window. An empty conversation reading &ldquo;Say something to Mynah&rdquo;, with a status line saying your words stay on this Mac.">
     </div>
-    <figcaption>Home. The board on top, the conversation underneath. Either half folds away, and the fold is still there when you come back.</figcaption>
+    <figcaption>Home. The board beside the conversation. Either half folds away, and the fold is still there when you come back.</figcaption>
   </figure>
 </section>
 
@@ -831,6 +892,14 @@ footer p { max-width: 34rem; }
     </div>
     <figcaption>Nothing on that screen is a setting. It is a list of facts, and the update check is the only one of them you can turn off.</figcaption>
   </figure>
+
+  <figure>
+    <div class="shot window filled">
+      <img src="screenshots/privacy.png" width="1600" height="1383"
+           alt="The privacy screen, headed &ldquo;What leaves this Mac&rdquo;. Rows for asking from your phone, recordings and what Mynah remembers are marked &ldquo;Stays here&rdquo;; web search, calls and the daily update check are listed separately.">
+    </div>
+    <figcaption>Every row carries a pill. Green means it stayed on this Mac; anything else names where it went.</figcaption>
+  </figure>
 </section>
 
 <!-- ===================================================================== -->
@@ -902,6 +971,23 @@ footer p { max-width: 34rem; }
     </div>
     <figcaption>Setup never says &ldquo;daemon&rdquo;, &ldquo;socket&rdquo; or an exit code at you. It describes one small free add-on that only handles messages.</figcaption>
   </figure>
+
+  <div class="shots">
+    <figure>
+      <div class="shot window filled">
+        <img src="screenshots/voice.png" width="1600" height="1383"
+             alt="Settings, Voice tab. Rows for what you speak into, turning your voice into words on this Mac, the voice on a call, how fast it talks, and whether a call transcript is sent to your Signal thread.">
+      </div>
+      <figcaption>Which voice answers, how fast it talks, and whether a call is written back to your thread.</figcaption>
+    </figure>
+    <figure>
+      <div class="shot window filled">
+        <img src="screenshots/general.png" width="1600" height="1383"
+             alt="Settings, General tab. The linked Signal account with its number partly hidden, whether Mynah keeps answering with the window closed, and appearance options.">
+      </div>
+      <figcaption>The phone it answers, and the helper that keeps it answering with the window shut.</figcaption>
+    </figure>
+  </div>
 </section>
 
 <!-- ===================================================================== -->
@@ -913,10 +999,47 @@ footer p { max-width: 34rem; }
     account, as a linked device.
   </p>
   <p>
-    This page loads nothing from anywhere — no fonts, no scripts, no analytics.
-    It renders the same with the network unplugged, which is rather the point.
+    No fonts, no trackers, no analytics, and nothing here knows who you are.
+    Everything on this page is served from this page&rsquo;s own address, with one
+    exception: it asks GitHub how many people have downloaded Mynah. That is the
+    only thing it asks anybody else, it says nothing about you, and without an
+    answer it simply shows no number.
   </p>
 </footer>
+
+<!-- The download count, and nothing else.
+     ==========================================================================
+     Fails silent on purpose. GitHub rate-limits unauthenticated callers by IP,
+     so a visitor behind a busy NAT can be refused for reasons that have nothing
+     to do with this page — and "downloads: —" is worse than no line at all.
+     Nothing here observes the visitor: one GET, no cookie, no identifier, and
+     no second request whatever comes back. -->
+<script>
+(async () => {
+  try {
+    const response = await fetch(
+      "https://api.github.com/repos/l33tdawg/mynah/releases",
+      { headers: { Accept: "application/vnd.github+json" } }
+    );
+    if (!response.ok) return;
+    const releases = await response.json();
+    if (!Array.isArray(releases)) return;
+    // Every release, not just the latest: the number people mean by "downloads"
+    // is how many copies went out, and a fresh release would otherwise reset it
+    // to nearly zero on the day it shipped.
+    const total = releases
+      .flatMap(release => release.assets || [])
+      .filter(asset => /\.dmg$/i.test(asset.name || ""))
+      .reduce((sum, asset) => sum + (asset.download_count || 0), 0);
+    if (total > 0) {
+      document.getElementById("downloads").textContent =
+        " · " + total.toLocaleString() + " downloaded";
+    }
+  } catch (_) {
+    // Offline, blocked, or rate-limited. The page is complete without it.
+  }
+})();
+</script>
 
 </div>
 </body>

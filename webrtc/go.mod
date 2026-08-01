@@ -1,4 +1,4 @@
-module github.com/l33tdawg/sage-voice-bridge/webrtc
+module github.com/l33tdawg/mynah/webrtc
 
 go 1.23
 
