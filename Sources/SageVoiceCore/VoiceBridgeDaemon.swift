@@ -859,7 +859,22 @@ public actor VoiceBridgeDaemon {
         )
         return batch.flatMap { message in
             store.keep(
-                message.attachments,
+                // **Not the voice note.** A spoken message arrives as an
+                // `audio/*` attachment and it is not a file the owner sent — it
+                // *is* the message, and the daemon has already turned it into
+                // the transcript being answered.
+                //
+                // Filing it produced exactly the wrong reply: the owner spoke a
+                // question, and Mynah said "that attachment arrived and I've
+                // saved it… the model I'm running can't view images", offering
+                // to switch brains so it could look at their voice. The audio
+                // had been understood perfectly; it was the filing that invented
+                // a picture nobody sent.
+                //
+                // `isAudio` is the same test `audioURLs` uses to pick what to
+                // transcribe, so the two cannot disagree about which attachment
+                // is the message.
+                message.attachments.filter { !$0.isAudio },
                 caption: message.text,
                 receivedAt: Date(),
                 log: { [weak self] line in self?.log(line) }

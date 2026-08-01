@@ -56,18 +56,23 @@ struct TaskBoardView: View {
     /// Only In progress takes the accent. `Palette.accent` reserves it for "the
     /// one live thing", which on a board is exactly this column, and it is what
     /// makes the eye land there rather than on finished work.
+    /// One column, two groups, each scrolling on its own.
+    ///
+    /// **Four columns became two stacked groups, and the reason is what the node
+    /// can answer.** `sage_backlog` returns *open* tasks assigned to this agent;
+    /// finished and abandoned work is never in the reply, and `sage_list`
+    /// reports a memory's status rather than a board's. CEREBRUM shows Done and
+    /// Dropped because it is the operator UI talking to the node's dashboard
+    /// API, which this appliance has no authority for. Those two columns could
+    /// only ever have held what was dragged into them in this session and would
+    /// empty on the next refresh — permanently and confidently wrong.
+    ///
+    /// Side by side, two columns also gave each half the width of a narrow pane
+    /// and left the taller one scrolling while the other sat empty. Stacked,
+    /// each group takes the height it needs and scrolls within itself, so a long
+    /// backlog never buries what is under way.
     private func columns(_ board: TaskBoard) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            BoardColumnView(
-                title: "Planned",
-                tone: .neutral,
-                count: board.planned.count,
-                tasks: board.planned,
-                emptyLine: "Nothing planned.",
-                accepts: .planned,
-                onDrop: move
-            )
-            columnRule
+        VStack(spacing: 0) {
             BoardColumnView(
                 title: "In progress",
                 tone: .accent,
@@ -75,60 +80,51 @@ struct TaskBoardView: View {
                 tasks: board.inProgress,
                 emptyLine: "Nothing under way.",
                 accepts: .inProgress,
-                onDrop: move
+                onDrop: move,
+                onRemove: remove
             )
-            // **Absent, not empty.** `sage_backlog` answers with open work only,
-            // so finished and abandoned tasks are not in its reply at all. A
-            // Done column fed from it would read "Nothing finished yet." for
-            // ever, over work the owner knows they completed — and a column that
-            // is permanently and confidently wrong costs more trust than a
-            // column that is not drawn.
-            if board.coversFinishedWork {
-                columnRule
-                BoardColumnView(
-                    title: "Done",
-                    tone: .good,
-                    count: board.done.count,
-                    tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
-                    emptyLine: "Nothing finished yet.",
-                    isHistory: true,
-                    accepts: .done,
-                    onDrop: move
-                )
-                columnRule
-                BoardColumnView(
-                    title: "Dropped",
-                    // A cross, not a warning triangle. Abandoning a task is a
-                    // decision the owner made, not a fault, and this column should
-                    // read as closed rather than as something needing attention —
-                    // which is why it is `neutral` and not `critical`.
-                    tone: .neutral,
-                    count: board.dropped.count,
-                    tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
-                    emptyLine: "Nothing dropped.",
-                    isHistory: true,
-                    accepts: .dropped,
-                    onDrop: move
-                )
-            }
+            MynahDivider()
+            BoardColumnView(
+                title: "Planned",
+                tone: .neutral,
+                count: board.planned.count,
+                tasks: board.planned,
+                emptyLine: "Nothing planned.",
+                accepts: .planned,
+                onDrop: move,
+                onRemove: remove
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // On the board itself: SwiftUI then moves the card between the two
+        // groups rather than deleting it from one and inserting it into the
+        // other. A card that vanishes and reappears is a repaint; a card that
+        // travels is a move, and the difference is the whole reason the gesture
+        // feels like picking something up.
+        .mynahAnimation(Motion.snap, value: board)
     }
 
-    /// Carries a dropped card to its new column.
+    /// Carries a dropped card to its new group.
     ///
-    /// The animation is on the board's own value, so SwiftUI moves the card
-    /// between the two `ForEach`s rather than removing it from one and inserting
-    /// it into the other — a card that vanishes and reappears is a repaint, and
-    /// a card that travels is a move. `TaskBoardModel.move` updates the board
-    /// before the write lands and puts it back if the node refuses, so the
-    /// gesture never waits on consensus and never lies about the outcome.
+    /// `TaskBoardModel.move` updates the board before the write lands and puts
+    /// it back if the node refuses, so the gesture never waits on consensus and
+    /// never lies about the outcome.
     private func move(_ taskID: String, to status: BoardTask.Progress) {
         guard let task = model.board?.task(withID: taskID) else { return }
         Task { await model.move(task, to: status) }
     }
 
-    /// The two lines under the board, and both are conditional.
+    /// Takes a card off the board.
+    ///
+    /// Marks it `done` rather than `dropped`. The glyph is a cross because it is
+    /// a *remove* affordance on a card — but the meaning has to be the common
+    /// one, and taking something off your plate by hand almost always means you
+    /// did it. The tooltip says which, so nobody has to infer it from an icon.
+    private func remove(_ taskID: String) {
+        move(taskID, to: .done)
+    }
+
+    /// The two lines under the board, and both are conditional.    /// The two lines under the board, and both are conditional.
     ///
     /// Finished and abandoned cards leave the board seven days after they stop
     /// moving, which is what CEREBRUM does with the same timestamp. That is a
@@ -270,6 +266,7 @@ private struct BoardColumnView: View {
     /// Which status a card dropped here becomes, and who to tell.
     var accepts: BoardTask.Progress?
     var onDrop: ((String, BoardTask.Progress) -> Void)?
+    var onRemove: ((String) -> Void)?
 
     /// A card is over this column right now.
     @State private var isTargeted = false
@@ -289,7 +286,11 @@ private struct BoardColumnView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: s4) {
                         ForEach(tasks) { task in
-                            TaskCard(task: task, isHistory: isHistory)
+                            TaskCard(
+                                task: task,
+                                isHistory: isHistory,
+                                onRemove: onRemove.map { remove in { remove(task.id) } }
+                            )
                                 // The card itself is the payload: its id is the
                                 // memory id, which is all `sage_task` needs.
                                 .draggable(task.id) {
@@ -385,6 +386,11 @@ private struct BoardColumnView: View {
 private struct TaskCard: View {
     let task: BoardTask
     let isHistory: Bool
+    /// Takes this card off the board. Absent on a card that cannot be removed.
+    var onRemove: (() -> Void)?
+
+    /// The pointer is over this card, so the remove control is visible.
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: s3) {
@@ -399,6 +405,36 @@ private struct TaskCard: View {
             if hasFootnote { footnote }
         }
         .mynahCard(density: .compact)
+        // On hover, not always.
+        //
+        // A cross on every card, permanently, turns a list of work into a list
+        // of things to dismiss — and on a board the owner is reading rather than
+        // editing, that is the wrong invitation. It appears under the pointer,
+        // where the intent to act on *this* card already exists.
+        .overlay(alignment: .topTrailing) {
+            if let onRemove, isHovering {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Palette.ink.secondary)
+                        .frame(width: 18, height: 18)
+                        .background(Palette.surface.sunken, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                // The glyph is a cross because it removes the card; the meaning
+                // has to be said in words, because taking something off your
+                // plate by hand almost always means you did it, and an icon
+                // cannot carry that on its own.
+                .help("Done — take it off the board")
+                .accessibilityLabel("Mark done and remove from the board")
+                .padding(s3)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
+        }
+        .onHover { hovering in
+            withAnimation(Motion.fade) { isHovering = hovering }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spokenLabel)
     }
