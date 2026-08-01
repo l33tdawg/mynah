@@ -5,7 +5,8 @@ from your phone: you message your own Signal Note-to-Self thread, or you send
 `//call` and talk to it out loud. Its memory lives in a
 [SAGE](https://github.com/l33tdawg/sage) node it drives over MCP.
 
-**It can run fully offline, and by default the thinking happens on this Mac.**
+**It's fully local and privacy-preserving by default.** Your words, your
+memories and your notes stay on your own Mac, and the thinking happens there too.
 A fresh install downloads Ollama and `qwen3.5:4b` and runs the model on your Mac
 — you are not asked to choose, because a default nobody is given is not a
 default. Pointing it at a cloud provider instead is something you go and do
