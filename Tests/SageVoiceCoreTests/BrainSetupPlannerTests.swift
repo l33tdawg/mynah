@@ -405,9 +405,18 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// What survives is the useful half: evidence still counts, for **ordering**
     /// rather than existence. A provider whose key is already exported needs
     /// nothing pasted, so it ranks ahead on friction.
-    func testEveryProviderIsOfferableAndEvidenceOnlyChangesTheFriction() {
+    ///
+    /// **GLM has since left this list, and not for the reason that started it.**
+    /// The bias was hiding providers that *worked*, on an assumption about who
+    /// the owner is. GLM does not work: it has no grounded model id on the
+    /// endpoint this app calls, so picking it asked Zhipu for a model named
+    /// `local-model` — after the owner had opened the console and put credit on
+    /// a card. Withholding a broken option is not the same act as withholding a
+    /// working one, and the fix is to ground the id rather than to keep offering
+    /// the wall. See `docs/MODEL-CHOICES.md`, which says what is missing.
+    func testEveryProviderWeCanActuallyServeIsOfferableAndEvidenceOnlyChangesTheFriction() {
         let bare = planner.plan(for: .machine())
-        for id in [BrainSetupOptionID.moonshotAPIKey, .groqAPIKey, .deepSeekAPIKey, .glmAPIKey] {
+        for id in [BrainSetupOptionID.moonshotAPIKey, .groqAPIKey, .deepSeekAPIKey] {
             XCTAssertNotNil(
                 bare.option(withID: id),
                 "\(id) is unreachable for anyone who has not already exported its key"
@@ -575,13 +584,22 @@ final class BrainSetupPlannerTests: XCTestCase {
     /// picker claims choosability, and these never will be". They carried an
     /// explanation for a while, in the picker and then in Settings; it is gone
     /// now, and they are simply absent.
+    /// **Amended a third time for GLM, which is a different case again** and is
+    /// listed separately so it does not quietly become permanent. Google and the
+    /// CLIs are decisions — we will not serve those. GLM is an *unfinished job*:
+    /// it is absent only because no GLM model id has been grounded against
+    /// `open.bigmodel.cn/api/paas/v4`, so offering it asked Zhipu for a model
+    /// called `local-model` and refused the owner after they had paid. One
+    /// verified id brings it back, and `docs/MODEL-CHOICES.md` says exactly which.
     func testEveryOptionIsOfferableSoNoChoiceIsHiddenFromTheOwner() {
         let withdrawn: Set<BrainSetupOptionID> = [
             .googleSignIn, .googleAPIKey, .claudeCodeCLI, .codexCLI,
         ]
+        let awaitingAGroundedModelID: Set<BrainSetupOptionID> = [.glmAPIKey]
         let choices = planner.plan(for: .machine())
 
-        for id in BrainSetupOptionID.allCases where !withdrawn.contains(id) {
+        for id in BrainSetupOptionID.allCases
+        where !withdrawn.contains(id) && !awaitingAGroundedModelID.contains(id) {
             XCTAssertNotNil(
                 choices.option(withID: id),
                 "\(id) is missing from the catalogue — an owner cannot pick what he is never shown"

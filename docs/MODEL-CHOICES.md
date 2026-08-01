@@ -165,7 +165,27 @@ measurement's work, not an implementation's.
 **Kimi:** settled on 2026-08-01, see above. Named, still not measured, still not
 offered in setup.
 
-**GLM:** `GLM-5-Turbo` exists and is described as optimised for agent workflows
+**GLM — and it is now costing something.** GLM used to be *offered in setup*
+with this row blank, which meant an owner could read the instructions, open the
+Zhipu console, put credit on a card, paste a working key, and be refused —
+because `BrainFactory.defaultModelName` fell through to its `?? "local-model"`
+and asked Zhipu for a model by that name. The planner now refuses to offer a
+provider it has no pick for, so GLM is absent from the menu until this row is
+filled.
+
+**That is an unfinished job, not a decision.** It is not the US-bias problem the
+offer list was rewritten to fix: that was about hiding providers that *worked*.
+Bringing GLM back needs exactly one thing — a `glm-*` id verified against
+`open.bigmodel.cn/api/paas/v4`, ideally two so it can carry a Quick and a
+Careful tier like everything else. `glm-5` is confirmed on that endpoint with
+function calling (2026-08-01) but is documented as reachable through the GLM
+Coding Plan rather than plain pay-per-token, and no cheap tier has been
+confirmed there at all. The vendor's pricing page renders in JavaScript and
+returns nothing to fetch, so this wants an account and five minutes rather than
+more reading.
+
+Previously recorded here, still true and still not enough:
+`GLM-5-Turbo` exists and is described as optimised for agent workflows
 and tool use, at roughly $1.20/$4. But our backend talks to
 `open.bigmodel.cn/api/paas/v4`, and the id confirmed above was on a third-party
 router with its own namespace. **An id that is correct somewhere else is not a

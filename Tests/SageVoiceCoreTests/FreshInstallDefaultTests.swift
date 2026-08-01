@@ -146,4 +146,47 @@ final class FreshInstallDefaultTests: XCTestCase {
         // The menu is still there — this is a fallback, not a dead end.
         XCTAssertFalse(choices.availableOptions.isEmpty, "and now there is nothing to choose from")
     }
+
+    // MARK: Nothing on the menu may dead-end
+
+    /// **Every provider offered can actually be asked a question.**
+    ///
+    /// GLM shipped offerable and unusable: it has key instructions, so the
+    /// planner listed it, and no entry in `CloudBrainModelCatalog`, so
+    /// `BrainFactory.defaultModelName` fell through to its `?? "local-model"`
+    /// and asked Zhipu for a model called `local-model`. Somebody could read the
+    /// instructions, open the Zhipu console, put credit on a card, paste a
+    /// working key, and be told no.
+    ///
+    /// This walks the menu the planner actually produces rather than a list
+    /// written out here, so the next provider added with only half of what it
+    /// needs fails without anyone remembering to update a test.
+    func testNoOfferedProviderIsMissingAModelToAskFor() {
+        let choices = BrainSetupPlanner().plan(
+            for: .machine(ambientKeys: AmbientAPIKeyReport(providers: APIKeyProvider.allCases))
+        )
+
+        for option in choices.options where !option.keepsWordsOnDevice {
+            guard let provider = option.keyProviderIdentifier else { continue }
+            XCTAssertNotNil(
+                CloudBrainModelCatalog.model(forProvider: provider),
+                "\(option.label) is on the menu with no model behind it — picking it asks "
+                    + "the provider for \"local-model\" and fails after the owner has paid"
+            )
+        }
+    }
+
+    /// The specific one, named, so it cannot come back by accident.
+    func testGLMIsNotOfferedWhileItHasNoModelPick() {
+        let choices = BrainSetupPlanner().plan(
+            for: .machine(ambientKeys: AmbientAPIKeyReport(providers: [.glm]))
+        )
+        XCTAssertNil(
+            choices.option(withID: .glmAPIKey),
+            "GLM is offered again and still has no model this product knows to ask for"
+        )
+        // And the withdrawal is only of the *offer*. An owner who chose it in an
+        // older build still has a decodable identity, exactly as with Google.
+        XCTAssertNotNil(BrainSetupOptionID(rawValue: "key.glm"))
+    }
 }

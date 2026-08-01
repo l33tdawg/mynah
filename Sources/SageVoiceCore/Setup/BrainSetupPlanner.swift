@@ -484,6 +484,25 @@ public struct BrainSetupPlanner: Sendable {
             guard APIKeyOnboarding.instructions(forProvider: provider.backendIdentifier) != nil else {
                 return nil
             }
+
+            // The same guard, for the other half of what an option needs.
+            //
+            // **GLM shipped through the first one and dead-ended on this.** It
+            // has instructions, so it was offered; it has no entry in
+            // `CloudBrainModelCatalog`, so `BrainFactory.defaultModelName` fell
+            // through to its `?? "local-model"` and asked Zhipu for a model
+            // called `local-model`. The owner's reward for reading the
+            // instructions, opening the Zhipu console, and putting credit on a
+            // card was a refusal naming a model nobody has ever served.
+            //
+            // Knowing how to obtain a key is not the same as knowing what to
+            // ask for once you have one, and an option missing either is not
+            // offerable. The catalogue returning `nil` is a deliberate "this
+            // product has not chosen" — see its type comment — and this is what
+            // reading that answer honestly looks like at the menu.
+            guard CloudBrainModelCatalog.model(forProvider: provider.backendIdentifier) != nil else {
+                return nil
+            }
             let hasAmbientKey = keys.hasKey(for: provider)
             // The niche providers enter the catalog only on evidence. Listing
             // Moonshot and Groq to an owner who has never heard of either is
