@@ -1108,6 +1108,16 @@ func runCheck(_ arguments: [String]) -> Never {
             for task in tasks {
                 print("  - [\(task.status)] \(task.title)")
             }
+            // An empty list has two causes and they are not the same: a node
+            // with nothing assigned to this agent, and an answer this could not
+            // read. The watch cannot tell them apart and must not — it stays
+            // silent either way — but a person running this command needs to,
+            // so the node's own words go on screen when the parse came back
+            // with nothing.
+            if tasks.isEmpty {
+                let raw = (try? await mcp.call(name: "sage_backlog", arguments: [:])) ?? ""
+                print("  node said: \(raw.prefix(400))")
+            }
         } catch {
             reachable = false
             print("tasks: could not ask — \(error)")
