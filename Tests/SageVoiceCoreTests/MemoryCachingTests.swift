@@ -50,7 +50,7 @@ final class MemoryCachingTests: XCTestCase {
 
     private func memory(_ id: String) -> Memory {
         Memory(id: id, text: "kept: \(id)", domain: nil,
-               learned: .distantPast, certainty: .certain)
+               learned: .distantPast)
     }
 
     private func settle(_ model: MemoriesModel) async {
@@ -167,5 +167,86 @@ final class MemoryCachingTests: XCTestCase {
 
         XCTAssertEqual(store.recentCalls, 1)
         XCTAssertEqual(model.memories.count, 1)
+    }
+}
+
+/// **That the subject colours stay colours and never become verdicts.**
+///
+/// The owner asked for colour on the subject chips, and colour in this app has
+/// so far meant exactly one thing per hue: green is "stays on this Mac", amber
+/// is "words leave this Mac", red is "this failed". A subject tint means
+/// identity — "these two rows are filed in the same place" — which is a
+/// different axis, and the two must not be confusable on a screen where both
+/// appear.
+@MainActor
+final class SubjectTintTests: XCTestCase {
+
+    /// **The one that matters.** Swift seeds `Hashable` per process, so a naive
+    /// implementation gives a subject one colour today and another after a
+    /// relaunch — worse than no colour, because the owner would have learned
+    /// something that then stopped being true.
+    func testASubjectKeepsItsColourBetweenLaunches() {
+        // Precomputed FNV-1a. If the algorithm changes, every chip changes
+        // colour, so this is pinned rather than recomputed from the code.
+        XCTAssertEqual(SubjectTint.stableHash(""), 0xcbf2_9ce4_8422_2325)
+        XCTAssertEqual(SubjectTint.stableHash("a"), 0xaf63_dc4c_8601_ec8c)
+
+        // And the property that actually reaches the screen.
+        let subjects = ["voice-interface", "Mynah's own", "Home", "Travel", "General"]
+        for subject in subjects {
+            XCTAssertEqual(
+                SubjectTint.hueDegrees(for: subject),
+                SubjectTint.hueDegrees(for: subject),
+                "\(subject) does not resolve to a stable hue"
+            )
+        }
+    }
+
+    /// No tint may land in a band that already means something. A subject drawn
+    /// in amber is a warning on a row that is fine; one drawn in green is the
+    /// "stays on this Mac" promise being made about a filing cabinet.
+    func testNoSubjectTintCanBeMistakenForAVerdict() {
+        for hue in SubjectTint.hues {
+            XCTAssertFalse(
+                (0...60).contains(hue),
+                "\(hue)° is in the red/amber band, where colour already means trouble"
+            )
+            XCTAssertFalse(
+                (95...165).contains(hue),
+                "\(hue)° is in the green band, where colour already means it stays on this Mac"
+            )
+        }
+    }
+
+    /// Adjacent entries must be tellable apart, or the palette is decoration
+    /// rather than information.
+    func testTheHuesAreFarEnoughApartToTellApart() {
+        for (index, hue) in SubjectTint.hues.enumerated() {
+            let next = SubjectTint.hues[(index + 1) % SubjectTint.hues.count]
+            let apart = min(abs(hue - next), 360 - abs(hue - next))
+            XCTAssertGreaterThanOrEqual(
+                apart, 20,
+                "\(hue)° and \(next)° are neighbours in the table and look the same"
+            )
+        }
+    }
+
+    /// The node's own marker is read once, here, rather than by the owner on
+    /// every row — and the sentence they read no longer carries it.
+    func testATaskIsRecognisedAndItsMarkerStripped() {
+        let task = Memory(
+            id: "1", text: "[TASK] Book hotel for Wednesday",
+            domain: nil, learned: .distantPast
+        )
+        XCTAssertEqual(task.kind, .task)
+        XCTAssertEqual(task.displayText, "Book hotel for Wednesday")
+
+        let remembered = Memory(
+            id: "2", text: "Prefers the 6am departure",
+            domain: nil, learned: .distantPast
+        )
+        XCTAssertEqual(remembered.kind, .remembered)
+        XCTAssertEqual(remembered.displayText, "Prefers the 6am departure",
+                       "a plain memory had its own words trimmed")
     }
 }

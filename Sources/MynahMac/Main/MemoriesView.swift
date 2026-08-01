@@ -15,36 +15,39 @@ import SwiftUI
 /// sentence, when it was learned, what it is about, and how sure Mynah is.
 struct Memory: Identifiable, Hashable, Sendable {
 
-    /// Confidence as words. The node stores a float and the owner will never
-    /// see one — "0.82 confidence" is a fact about a consensus algorithm, not
-    /// about whether Mynah should be trusted on this.
-    enum Certainty: Sendable, Hashable, CaseIterable {
-        case certain
-        case fairlySure
-        case unsure
+    /// **There was a `Certainty` here and it is gone entirely.**
+    ///
+    /// It turned the node's confidence float into "Certain" / "Fairly sure" /
+    /// "Not sure" and printed it in the opened card, on the reasoning that the
+    /// owner should never see `0.82` because that is a fact about a consensus
+    /// algorithm. That reasoning was right and stopped one step short: a fact
+    /// about a consensus algorithm does not get better by being rounded into
+    /// English. It is still a number from the machine's own bookkeeping, and
+    /// nothing the owner reads it as changes what they do next.
+    ///
+    /// *"the how sure mynah is etc is fucking irrelevant bro — you only want to
+    /// show the user shit that matters."*
+    ///
+    /// What matters, and is now all this card carries: what it says, what it is
+    /// filed under, whether it is a task or something remembered, when it was
+    /// stored, and the one button that acts on it.
 
-        init(score: Double) {
-            switch score {
-            case 0.90...: self = .certain
-            case 0.70..<0.90: self = .fairlySure
-            default: self = .unsure
-            }
-        }
+    /// Which kind of thing this row is.
+    ///
+    /// SAGE stores a task and a memory in the same list, and the only thing
+    /// telling them apart was the literal `[TASK] ` the node prefixes onto the
+    /// text — which the owner was left to parse by eye, in the middle of a
+    /// sentence, on every row.
+    enum Kind: Sendable, Hashable {
+        case remembered
+        case task
 
         var word: String {
             switch self {
-            case .certain: return "Certain"
-            case .fairlySure: return "Fairly sure"
-            case .unsure: return "Not sure"
+            case .remembered: return "Memory"
+            case .task: return "Task"
             }
         }
-
-        // There was a `sentence` here too — "Mynah is fairly sure about this." —
-        // shown directly under the row that already said "How sure Mynah is:
-        // Fairly sure". The argument was that a one-word verdict invites the
-        // owner to wonder what the other words would have been. Whatever that is
-        // worth, it does not survive being printed twice in a row: *"remove this
-        // fairly sure nonsense bro"*. The word carries it.
     }
 
     let id: String
@@ -65,7 +68,24 @@ struct Memory: Identifiable, Hashable, Sendable {
     /// `domain` may be put in a query, and only when it is non-nil.
     let domain: String?
     let learned: Date
-    let certainty: Certainty
+
+    /// The node's marker, read once here rather than by the owner on every row.
+    var kind: Kind {
+        text.hasPrefix(Self.taskMarker) ? .task : .remembered
+    }
+
+    /// The sentence without the machine's prefix on the front of it.
+    ///
+    /// `[TASK] Book hotel for Wednesday` is the node talking to itself. The
+    /// owner gets "Book hotel for Wednesday" and a chip that says Task, which
+    /// is the same information in the place they were already looking.
+    var displayText: String {
+        kind == .task
+            ? String(text.dropFirst(Self.taskMarker.count)).trimmingCharacters(in: .whitespaces)
+            : text
+    }
+
+    private static let taskMarker = "[TASK]"
 
     /// What the memory is about, as the owner reads it.
     ///
@@ -546,8 +566,10 @@ actor SageMemoryStore: MemoryStoring {
                 let name = $0.trimmingCharacters(in: .whitespacesAndNewlines)
                 return name.isEmpty ? nil : name
             },
-            learned: Self.date(from: entry["created_at"]?.stringValue) ?? .distantPast,
-            certainty: Memory.Certainty(score: entry["confidence"]?.doubleValue ?? 0)
+            // `confidence` is deliberately not read. The node sends it, and it
+            // is its own bookkeeping — see `Memory`'s note where `Certainty`
+            // used to be.
+            learned: Self.date(from: entry["created_at"]?.stringValue) ?? .distantPast
         )
     }
 
@@ -1301,7 +1323,14 @@ private struct MemoryEntry: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
+        // A task sits on a slightly recessed card, so the two kinds are
+        // separable down the length of a scrolling list without reading a word
+        // of either. Sunken rather than a tint: the sentence stays the brightest
+        // thing on the card.
+        .background(
+            memory.kind == .task ? Palette.surface.sunken : Palette.surface.raised,
+            in: RoundedRectangle.mynah(r.card)
+        )
         // The border carries the state, not a fill. A tinted card body competes
         // with the sentence inside it, which is the one thing on this screen
         // the owner came to read.
@@ -1328,21 +1357,27 @@ private struct MemoryEntry: View {
             // The whole sentence, unclipped. A screen that promises the owner
             // can see everything Mynah remembers must not truncate the thing
             // they opened in order to read.
-            VStack(alignment: .leading, spacing: s2) {
-                Text(memory.text)
+            VStack(alignment: .leading, spacing: s3) {
+                Text(memory.displayText)
                     .mynahFont(.body)
                     .foregroundStyle(Palette.ink.primary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(memory.topic)
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.secondary)
+                HStack(spacing: s2) {
+                    if memory.kind == .task { KindChip(kind: .task) }
+                    SubjectChip(subject: memory.topic)
+                }
             }
             .padding(.horizontal, s4)
             .padding(.vertical, s4)
         } else {
-            MemoryRow(text: memory.text, date: memory.learned, topic: memory.topic)
+            MemoryRow(
+                text: memory.displayText,
+                date: memory.learned,
+                topic: memory.topic,
+                isTask: memory.kind == .task
+            )
         }
     }
 
@@ -1371,7 +1406,6 @@ private struct MemoryEntry: View {
                         ? "Not recorded"
                         : memory.learned.formatted(date: .long, time: .shortened)
                 )
-                factLine("How sure Mynah is", memory.certainty.word)
             }
 
             HStack(spacing: s4) {
@@ -1473,22 +1507,27 @@ struct PreviewMemoryStore: MemoryStoring {
             text: "Prefers the espresso machine descaled every three weeks, not monthly — "
                 + "the water here is hard enough that monthly leaves scale in the group head.",
             domain: "Home",
-            learned: Date().addingTimeInterval(-3_600),
-            certainty: .certain
+            learned: Date().addingTimeInterval(-3_600)
         ),
         Memory(
             id: "2",
             text: "Flying to Kuala Lumpur on the 14th. Wants the 6am departure, not the redeye.",
             domain: "Travel",
-            learned: Date().addingTimeInterval(-86_400 * 2),
-            certainty: .fairlySure
+            learned: Date().addingTimeInterval(-86_400 * 2)
         ),
+        // A task, carrying the node's own prefix, so the previews show what the
+        // chip and the recessed card actually do to a mixed list.
         Memory(
             id: "3",
+            text: "[TASK] Book the hire car for the 14th",
+            domain: "Travel",
+            learned: Date().addingTimeInterval(-86_400 * 2)
+        ),
+        Memory(
+            id: "4",
             text: "Someone called Marcus is meant to be picking up the keys, possibly on Thursday.",
             domain: "Home",
-            learned: Date().addingTimeInterval(-86_400 * 9),
-            certainty: .unsure
+            learned: Date().addingTimeInterval(-86_400 * 9)
         )
     ]
 

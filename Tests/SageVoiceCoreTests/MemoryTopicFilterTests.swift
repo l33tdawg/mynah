@@ -55,7 +55,7 @@ final class MemoryTopicFilterTests: XCTestCase {
 
     private func memory(_ id: String, domain: String?) -> Memory {
         Memory(id: id, text: "something worth keeping", domain: domain,
-               learned: .distantPast, certainty: .certain)
+               learned: .distantPast)
     }
 
     // MARK: The invented word

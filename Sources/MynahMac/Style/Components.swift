@@ -1790,32 +1790,40 @@ struct MemoryRow: View {
     let text: String
     let date: Date
     let topic: String
+    var isTask: Bool = false
     var isSelected: Bool = false
 
-    init(text: String, date: Date, topic: String, isSelected: Bool = false) {
+    init(
+        text: String,
+        date: Date,
+        topic: String,
+        isTask: Bool = false,
+        isSelected: Bool = false
+    ) {
         self.text = text
         self.date = date
         self.topic = topic
+        self.isTask = isTask
         self.isSelected = isSelected
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: s2) {
+        VStack(alignment: .leading, spacing: s3) {
             Text(text)
                 .mynahFont(.body)
                 .foregroundStyle(Palette.ink.primary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-            // When it was learned and what it is about are the two facts this
-            // row exists to carry, so they get `secondary`. The `·` between
-            // them is a genuine mark and stays quaternary.
-            HStack(spacing: s3) {
+            // When it was stored, what it is, and what it is about. The `·`
+            // between the first two is a genuine mark and stays quaternary.
+            HStack(spacing: s2) {
                 Text(date.formatted(.relative(presentation: .named)))
                     .mynahFont(.label)
                     .foregroundStyle(Palette.ink.secondary)
                 Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
-                Text(topic).mynahFont(.label).foregroundStyle(Palette.ink.secondary)
+                if isTask { KindChip(kind: .task) }
+                SubjectChip(subject: topic)
             }
         }
         .padding(.horizontal, s4)
@@ -1825,6 +1833,56 @@ struct MemoryRow: View {
             isSelected ? Palette.accent.wash : .clear,
             in: RoundedRectangle.mynah(r.control)
         )
+    }
+}
+
+// MARK: - Chips
+
+/// What a row is filed under, in a colour that is that subject's and no
+/// meaning's.
+///
+/// The tint is stable per subject name — see `SubjectTint` — so two rows in the
+/// same place look like it before either is read.
+struct SubjectChip: View {
+    let subject: String
+
+    var body: some View {
+        Text(subject)
+            .mynahFont(.label)
+            .foregroundStyle(SubjectTint.ink(for: subject))
+            .padding(.horizontal, s3)
+            .padding(.vertical, 3)
+            .background(SubjectTint.wash(for: subject), in: Capsule())
+            .accessibilityLabel("Filed under \(subject)")
+    }
+}
+
+/// Task or memory, said once, where the eye already is.
+///
+/// SAGE keeps both in one list and marks a task by prefixing `[TASK]` onto the
+/// text, which left the owner parsing a machine's bracket out of the middle of
+/// a sentence on every row. The prefix is stripped and this is shown instead.
+struct KindChip: View {
+    let kind: Kind
+
+    enum Kind {
+        case task
+
+        var word: String {
+            switch self {
+            case .task: return "Task"
+            }
+        }
+    }
+
+    var body: some View {
+        Text(kind.word)
+            .mynahFont(.label)
+            .foregroundStyle(Palette.accent.ink)
+            .padding(.horizontal, s3)
+            .padding(.vertical, 3)
+            .background(Palette.accent.wash, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.line.hairline, lineWidth: 1))
     }
 }
 
