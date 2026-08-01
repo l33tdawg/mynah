@@ -90,6 +90,26 @@ struct RootView: View {
             // linked Signal on the previous run, the two LaunchAgents are
             // restored here without another button or QR scan.
             Task { await app.reconcileAnsweringService() }
+            // The nice voice, fetched here rather than only when a phone is
+            // linked.
+            //
+            // **It failed silently for the owner and the silence was
+            // structural, not a bug in the download.** The only trigger lived
+            // inside the Signal link flow, chosen deliberately — *"the signal
+            // part //call only comes in once you link signal - download it
+            // then"* — which is a good trigger and the wrong *only* trigger.
+            // Anybody who linked their phone before that code existed never ran
+            // it, gets no assets, and `CallVoiceLibrary.load()` answers
+            // `.missing`, so `//call` falls back to the macOS built-in voice.
+            // He heard a robot and reasonably assumed it was the model's doing:
+            // *"i am reaching 'robot voice' instead of the nice sounding one
+            // and i am already on deepseekv4 api"*.
+            //
+            // Every launch, because that is what makes it self-healing: the
+            // installer no-ops in microseconds when the files are already there
+            // and verified, so the cost of asking again is nothing and the cost
+            // of never asking is a robot.
+            Task { await app.installCallVoiceIfNeeded() }
             // Who Mynah can reach, asked once, here.
             //
             // The owner's ruling: *"let mynah get it from mcp or we do it at

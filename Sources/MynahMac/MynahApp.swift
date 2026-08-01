@@ -142,6 +142,43 @@ final class AppModel {
         }
     }
 
+    /// Fetches Kokoro's weights when they are not already on this Mac.
+    ///
+    /// Safe on every launch: `installIfNeeded` verifies what is on disk against
+    /// each asset's SHA-256 and returns `.alreadyInstalled` without touching the
+    /// network. Safe to run twice concurrently for the same reason the
+    /// phone-link trigger can still call it — the loser finds the files present.
+    ///
+    /// **A failure is recorded at error level, which is the half that was
+    /// missing.** The existing trigger logged the outcome at info, so a failed
+    /// download and a successful one read the same to anybody not looking for
+    /// the difference, and the owner's first evidence was hearing the wrong
+    /// voice weeks later. 354 MB over a network that can drop is a thing that
+    /// *will* fail sometimes; the requirement is that it says so and tries
+    /// again next launch, both of which this now does.
+    /// - Parameter install: injected so a test can exercise the reporting
+    ///   without starting a 354 MB download. Not optional politeness: this
+    ///   codebase has already had `swift test` reach the real machine and
+    ///   uninstall the owner's phone bridge, twice in one afternoon.
+    func installCallVoiceIfNeeded(
+        install: @Sendable () async -> KokoroAssets.Outcome = { await KokoroAssets.installIfNeeded() }
+    ) async {
+        let outcome = await install()
+        switch outcome {
+        case .alreadyInstalled:
+            return
+        case .installed:
+            Self.log.notice("fetched the call voice: \(outcome.logLine)")
+        // Every remaining case is a failure, and `notEnoughSpace`,
+        // `couldNotReach`, `corrupted` and `couldNotSave` are all things the
+        // owner hears as the same robot. `outcome.logLine` is what tells them
+        // apart afterwards.
+        default:
+            Self.log.error("could not fetch the call voice, so calls will use the built-in voice "
+                + "until this succeeds: \(outcome.logLine)")
+        }
+    }
+
     /// The pause marker this app reads and writes.
     ///
     /// Injected so a test can point at a temporary file. Without that, every
