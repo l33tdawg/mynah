@@ -59,7 +59,41 @@ public enum HeardSpeech {
     ///   - milliseconds: how much audio produced it. A stock phrase over four
     ///     seconds of audio is a caller who really did say it; the same phrase
     ///     over half a second is the artefact.
-    public static func isNothing(_ transcript: String, milliseconds: Int) -> Bool {
+    /// Phrases that are both what Whisper invents over silence and ordinary
+    /// things to say to an assistant.
+    ///
+    /// **Not in `stockPhrases`, and that is deliberate** — the comment above
+    /// records what filtering these outright cost: a caller said "thanks", the
+    /// call ignored them, and they had no way to know why.
+    ///
+    /// So they are filtered only when the audio says nobody spoke, which is a
+    /// fact about the sound rather than an argument about the words. When the
+    /// segment has speech in it, every one of these is taken at face value
+    /// exactly as before.
+    static let phrasesOnlyDiscardedInSilence: Set<String> = [
+        "thank you",
+        "thanks",
+        "thank you very much",
+        "thanks very much",
+        "you",
+        "bye",
+        "goodbye",
+        "okay",
+        "ok",
+        "mm",
+        "mhm",
+        "uh",
+        "um"
+    ]
+
+    /// - Parameter cameFromSilence: the captured audio contained no speech. See
+    ///   `CallAudioEnergy`. Defaults to `false`, so a caller that cannot measure
+    ///   gets exactly the previous behaviour.
+    public static func isNothing(
+        _ transcript: String,
+        milliseconds: Int,
+        cameFromSilence: Bool = false
+    ) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
 
@@ -73,6 +107,19 @@ public enum HeardSpeech {
         // this safe: "thank you" is a thing people say, and at four seconds of
         // audio it is taken at face value.
         if milliseconds < 4000, stockPhrases.contains(normalised) { return true }
+
+        // The ambiguous ones, and only when the microphone heard nothing.
+        //
+        // **This is the case that cancelled an answer.** On 1 August the owner
+        // asked what was on the task list, Mynah said "Let me check your
+        // backlog", and an invented "Thank you." arrived while it was working —
+        // which `replaceTurn` treats as a new question, so it cancelled the
+        // reply being prepared. A hallucination does not merely say something
+        // silly; it takes away the answer somebody is waiting for.
+        //
+        // Guarded on the audio rather than the text, because the text of a real
+        // "thank you" and an invented one are identical and always will be.
+        if cameFromSilence, phrasesOnlyDiscardedInSilence.contains(normalised) { return true }
 
         // No Latin letters at all, while recognition is locked to English.
         //

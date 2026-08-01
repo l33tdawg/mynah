@@ -450,17 +450,39 @@ public actor CallTurnServer {
         }
         // 32 bytes per millisecond: 16 kHz, mono, sixteen bits.
         let milliseconds = Int(wav.count / 32)
-        guard !HeardSpeech.isNothing(heard, milliseconds: milliseconds) else {
+
+        // Measured every turn, not only when something looks suspicious.
+        //
+        // The threshold in `CallAudioEnergy.silenceCeiling` is set from the
+        // segmenter's own reported noise floors and has not yet been checked
+        // against a real call on real hardware. Logging the amplitude of every
+        // segment — the ones taken as speech included — is what turns that into
+        // a measured number instead of a guess, and it costs one line per turn.
+        let amplitude = CallAudioEnergy.rootMeanSquare(ofWAV: wav)
+        let cameFromSilence = amplitude.map { $0 < CallAudioEnergy.silenceCeiling } ?? false
+
+        guard !HeardSpeech.isNothing(
+            heard,
+            milliseconds: milliseconds,
+            cameFromSilence: cameFromSilence
+        ) else {
             // A cough, a door, a car, the appliance's own voice returning — or
             // Whisper filling silence with a phrase from its training data.
             // Nothing was said, so nothing changes, and in particular whatever
             // the appliance is already doing carries on.
             let what = heard.isEmpty ? "nothing" : "\"\(heard)\" (no one spoke)"
-            log("[call] heard \(what) in \(milliseconds)ms of audio")
+            let level = amplitude.map { String(format: "%.0f", $0) } ?? "unreadable"
+            log("[call] heard \(what) in \(milliseconds)ms of audio, amplitude \(level)")
             return
         }
 
         // Words. Now the previous turn is genuinely superseded.
+        // Measurement only — `replaceTurn` already logs what was heard. This is
+        // the number that tells us whether `silenceCeiling` is set anywhere near
+        // right, and it is only useful beside the accepted turns as well as the
+        // discarded ones.
+        log("[call] accepted \(milliseconds)ms of audio, amplitude "
+            + (amplitude.map { String(format: "%.0f", $0) } ?? "unreadable"))
         await replaceTurn(with: heard, recognisedIn: Date().timeIntervalSince(started), over: writer)
     }
 

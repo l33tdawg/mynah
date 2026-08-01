@@ -60,7 +60,6 @@ struct TaskBoardView: View {
         HStack(alignment: .top, spacing: 0) {
             BoardColumnView(
                 title: "Planned",
-                glyph: "circle",
                 tone: .neutral,
                 count: board.planned.count,
                 tasks: board.planned,
@@ -69,7 +68,6 @@ struct TaskBoardView: View {
             columnRule
             BoardColumnView(
                 title: "In progress",
-                glyph: "circle.inset.filled",
                 tone: .accent,
                 count: board.inProgress.count,
                 tasks: board.inProgress,
@@ -85,7 +83,6 @@ struct TaskBoardView: View {
                 columnRule
                 BoardColumnView(
                     title: "Done",
-                    glyph: "checkmark.circle",
                     tone: .good,
                     count: board.done.count,
                     tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
@@ -99,7 +96,6 @@ struct TaskBoardView: View {
                     // decision the owner made, not a fault, and this column should
                     // read as closed rather than as something needing attention —
                     // which is why it is `neutral` and not `critical`.
-                    glyph: "xmark.circle",
                     tone: .neutral,
                     count: board.dropped.count,
                     tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
@@ -241,7 +237,6 @@ struct TaskBoardView: View {
 private struct BoardColumnView: View {
     let title: String
     /// The column's mark, and the only coloured thing in its header.
-    let glyph: String
     /// What this column means, in the app's existing state vocabulary.
     var tone: MynahTone = .neutral
     /// `nil` when the column cannot be counted, which is not zero.
@@ -280,23 +275,35 @@ private struct BoardColumnView: View {
         .padding(.vertical, s6)
     }
 
+    /// A label, not a control.
+    ///
+    /// **The glyphs read as radio buttons.** `circle` and `circle.inset.filled`
+    /// are exactly what an unselected and a selected option look like on this
+    /// platform, sitting side by side at the tops of adjacent columns — so the
+    /// two headings looked like a choice with one option taken, over a board
+    /// where there is nothing to choose. The colour carried meaning and the
+    /// shape carried a lie.
+    ///
+    /// A pill instead: the same tone, no shape that suggests it can be pressed,
+    /// and the count inside it where it belongs — the column's name and how much
+    /// is in it are one fact, not two things that happen to be adjacent.
     private var header: some View {
-        HStack(alignment: .center, spacing: s3) {
-            Image(systemName: glyph)
-                .mynahIcon(.row)
-                .foregroundStyle(tone.ink)
-            Text(title)
-                .mynahFont(.title3)
-                .foregroundStyle(Palette.ink.primary)
-            if let count {
-                // Grey, and outside the coloured mark. A number in the column's
-                // own colour reads as part of the state rather than as how many
-                // things are in it.
-                Text("\(count)")
-                    .mynahFont(.mono)
-                    .monospacedDigit()
-                    .foregroundStyle(Palette.ink.secondary)
+        HStack(spacing: s3) {
+            HStack(spacing: s3) {
+                Text(title.uppercased())
+                    .mynahFont(.label)
+                    .tracking(0.6)
+                    .foregroundStyle(tone.ink)
+                if let count {
+                    Text("\(count)")
+                        .mynahFont(.mono)
+                        .monospacedDigit()
+                        .foregroundStyle(tone.ink.opacity(0.7))
+                }
             }
+            .padding(.horizontal, s4)
+            .padding(.vertical, s2)
+            .background(tone.wash, in: Capsule())
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
