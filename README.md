@@ -5,17 +5,20 @@ from your phone: you message your own Signal Note-to-Self thread, or you send
 `//call` and talk to it out loud. Its memory lives in a
 [SAGE](https://github.com/l33tdawg/sage) node it drives over MCP.
 
-**It runs fully offline and privacy-preserving by default.** A fresh install
-downloads Ollama and `qwen3.5:4b` and runs the model on your Mac — you are not
-asked to choose, because a default nobody is given is not a default. Pointing it
-at a cloud provider instead is something you go and do afterwards, in Settings,
-deliberately. On a Mac that cannot run a model locally — an Intel chip, too
-little memory, too little disk — it says which of those it is, and *then* asks.
+**It can run fully offline, and by default the thinking happens on this Mac.**
+A fresh install downloads Ollama and `qwen3.5:4b` and runs the model on your Mac
+— you are not asked to choose, because a default nobody is given is not a
+default. Pointing it at a cloud provider instead is something you go and do
+afterwards, in Settings, deliberately. On a Mac that cannot run a model
+locally — an Intel chip, too little memory, too little disk — it says which of
+those it is, and *then* asks.
 
 Nothing about it is a service: no account, no sign-in, no server of ours in the
 message path. Where anything does leave the Mac, the app says so — the Privacy
 screen names the model your words go to rather than leaving you to infer it, and
-lists the other two things that leave: the words a web search is made of, and a
+lists the other things that leave: the words a web search is made of, the call
+relay that serves the link and passes the two ends' details along, a call
+transcript posted back into the Signal thread if you have that turned on, and a
 once-a-day update check against GitHub.
 
 ## What it does
@@ -47,11 +50,13 @@ command. It never opens a conversation on its own.
 
 **Calls.** `//call` starts a call endpoint on this Mac, which dials out to a
 relay, registers an unguessable 128-bit token and hands you back a link. The link
-opens a web page, so there is nothing to install on the phone. Recognition, the
-model and synthesis all run on this Mac; the relay carries the offer and the
-answer and is not in the call itself. The link is not sent until the relay
-actually serves it, and issuing one revokes the previous one — a call link is a
-live microphone.
+opens a web page, so there is nothing to install on the phone. Recognition and
+synthesis run on this Mac, and the turn is driven from here; the model is the one
+you chose at setup, so a local brain keeps the whole call on the Mac and an API
+brain means your spoken words go to that provider. The relay carries the offer
+and the answer and is not in the call itself. The link is not sent until the
+relay actually serves it, and issuing one revokes the previous one — a call link
+is a live microphone.
 
 Calling needs a relay credential, minted automatically when you link a phone.
 Enrolment sends nothing that identifies anybody: no phone number, no hash of one,
@@ -182,13 +187,14 @@ Local, unless you change it. Setup does not ask.
   it for memory search. A fresh install downloads the runtime and pulls both
   models itself; you do not open a terminal. If the download fails it offers to
   resume it — Ollama keeps the partial layers — or to use a provider instead.
-- **API** — Anthropic, OpenAI, DeepSeek, Moonshot (shown as Kimi), Groq, or an
-  OpenAI-compatible endpoint including LM Studio, which is local. You go and pick
-  one in Settings; setup only offers this list when the Mac genuinely cannot run
-  a model on its own, and then it says which reason applies. Keys are read from
-  the environment or typed once and stored at `0600`, deliberately not in the
-  Keychain: a Keychain item prompts on first access after a restart, and this
-  appliance restarts unattended on a machine nobody is sitting at.
+- **API** — Anthropic, OpenAI, Google Gemini, DeepSeek, Moonshot (shown as
+  Kimi), Groq, or an OpenAI-compatible endpoint including LM Studio, which is
+  local. You go and pick one in Settings; setup only offers this list when the
+  Mac genuinely cannot run a model on its own, and then it says which reason
+  applies. Keys are read from the environment or typed once and stored at
+  `0600`, deliberately not in the Keychain: a Keychain item prompts on first
+  access after a restart, and this appliance restarts unattended on a machine
+  nobody is sitting at.
 
 Each provider offers two models — a quick one, which is the default, and a
 careful one — from one table (`CloudBrainModelCatalog`) with the reasoning in
@@ -236,16 +242,18 @@ build if a twenty-first is added without re-measuring routing.
   can be switched off entirely with `--no-web`.
 
 Eleven SAGE tools are deliberately withheld, each with a stated reason in
-`BrainPrompts.swift` — `sage_turn` and `sage_inception` because the daemon calls
-them itself, `sage_rename`, `sage_register` and `sage_reinstate` because
-identity administration is hard to undo by voice, the governance-vote pair
-because a 4B should not cast a vote on your chain, and the scope tools because
-they only answer for a node operator.
+`BrainPrompts.swift` — `sage_turn`, `sage_inception` and `sage_red_pill` because
+the daemon calls them itself and the last is a deprecated alias, `sage_rename`,
+`sage_register` and `sage_reinstate` because identity administration is hard to
+undo by voice, `sage_gov_propose` and `sage_gov_vote` because a 4B should not
+cast a vote on your chain, and `sage_gov_status` plus the two scope tools because
+nobody asks for governance out loud and the scope pair answers only a node
+operator.
 
 The routing measurement behind the curated catalogue is a file rather than a
 memory: 12 utterances, 3 of which must call nothing, in
 `Tests/SageVoiceCoreTests/VoiceRoutingUtterances.swift`, driven by
-`scripts/measure-tool-routing.py`. The numbers and their three caveats are in the
+`scripts/measure-tool-routing.py`. The numbers and their four caveats are in the
 doc comment above `voiceToolAllowlist`; read them there before quoting any of
 them, because the earlier figures did not reproduce.
 
@@ -276,13 +284,14 @@ node it vendored itself may be managed by it.
 ## Speech
 
 **Recognition** runs on this Mac: WhisperKit `large-v3` via a bundled helper on a
-loopback port, with a `whisper.cpp` `small.en` fallback. The transcriber refuses
-any endpoint that is not loopback and refuses to follow redirects — URLSession
-re-sends the body on a 3xx, so a hostile local process answering `307` would be
-handed your transcript. Known Whisper confabulation ("thanks for watching",
-"subtitles by the Amara.org community", and the Japanese equivalents) is
-discarded, guarded by audio length so someone who genuinely says one is not
-ignored.
+loopback port, with a `whisper.cpp` fallback behind it that takes the best model
+it finds — `large-v3-turbo` first, then `small.en`, `base.en`, `tiny.en`. The
+transcriber refuses any endpoint that is not loopback and refuses to follow
+redirects — URLSession re-sends the body on a 3xx, so a hostile local process
+answering `307` would be handed your transcript. Known Whisper confabulation
+("thanks for watching", "subtitles by the Amara.org community", and the Japanese
+equivalents) is discarded, guarded by audio length so someone who genuinely says
+one is not ignored.
 
 **Synthesis** is Kokoro, an 82M-parameter Apache-2.0 model. The appliance speaks
 it in process through ONNX Runtime, with espeak-ng for phonemes, so there is no
@@ -294,10 +303,11 @@ voice is `am_michael`.
 
 ## Privacy
 
-The argument for this product is that your words stay on your machine, so the
-places where that is not exactly true are worth stating precisely. The app's
-Privacy screen states these to the owner, composed from a registry of claims that
-`PrivacyClaimTests` checks against the screens.
+The argument for this product is that your words can stay on your machine, and
+that you are told plainly when they do not — so the places where they leave are
+worth stating precisely. The app's Privacy screen states these to the owner,
+composed from a registry of claims that `PrivacyClaimTests` checks against the
+screens.
 
 - **Signal messages** are end-to-end encrypted and stay within your own account.
   Mynah is a linked device, Note-to-Self only, enforced before the daemon sees
@@ -453,7 +463,7 @@ Stated plainly, because "builds and has tests" is not the same as "works":
     Sources/sage-voiced       the daemon and the debugging CLI
     webrtc/                   the call endpoint, the relay, TURN, Opus, the VAD
     scripts/                  provisioning, packaging, signing, notarisation
-    docs/                     release process, model choices
+    docs/                     release process, model choices, and the public site
     Tests/                    Swift tests; the Go tests live beside their packages
 
 Setting Signal up by hand, without the app, is documented in

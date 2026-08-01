@@ -4,11 +4,11 @@
 you take the screenshots that go on it without publishing the owner's life.
 
 The page is deliberately self-contained: the stylesheet is inline, the wordmark is an inline
-`<svg>`, and the only two `href`s in the whole file are the in-page anchors `#calls` and
-`#words`. Nothing is fetched from anywhere. Its own footer makes that a claim to the reader —
-*"served as plain HTML with nothing loaded from anywhere else"* — so anything you add later,
-screenshots included, has to be committed under `docs/` and referenced by a relative path.
-The moment one asset is hotlinked, the footer is a lie.
+`<svg>`, and the file contains no `href` at all — not an external one, and not an in-page
+anchor. Nothing is fetched from anywhere. Its own footer makes that a claim to the reader —
+*"This page loads nothing from anywhere — no fonts, no scripts, no analytics"* — so anything
+you add later, screenshots included, has to be committed under `docs/` and referenced by a
+relative path. The moment one asset is hotlinked, the footer is a lie.
 
 ## Before you touch Settings: the repository is private
 
@@ -40,9 +40,10 @@ included. Read them before you publish and decide whether they should be there.
 4. Press **Save**. Nothing happens until you do; the folder dropdown does not autosave.
 
 `main` is the repository's default branch, so this publishes what is on `main` — not whatever
-branch you happen to have checked out. `docs/` is currently identical on `main` and on
-`sage-voice-bridge`'s other branches, but that will not stay true. Merge first, then expect the
-site to change.
+branch you happen to have checked out. `docs/` already differs between `main` and the other
+branch in this repository — on `sage-11.16.1-activation-countdown`, `index.html` and
+`MODEL-CHOICES.md` are not the same file and this one does not exist at all. Merge first, then
+expect the site to change.
 
 ## The URL
 
@@ -78,7 +79,7 @@ Expect `HTTP/2 200`. A `404` means the build has not landed yet, or the folder i
 Then confirm you are looking at *this* page and not a stale or generated one:
 
 ```sh
-curl -s https://l33tdawg.github.io/sage-voice-bridge/ | grep -c '<title>Mynah</title>'
+curl -s https://l33tdawg.github.io/sage-voice-bridge/ | grep -c '<title>Mynah'
 ```
 
 Expect `1`. And confirm the page is still self-contained — this must print nothing at all:
@@ -96,9 +97,9 @@ gh api repos/l33tdawg/sage-voice-bridge/pages --jq '.status, .html_url, .source'
 
 Once it is live, `status` reads `built` and `source` reports the branch and path you set.
 
-One thing not to be surprised by: `index.html` carries `<meta name="robots" content="noindex">`.
-The site is public and anyone with the link can read it; search engines are being asked to stay
-out. If the page is meant to be findable, that tag has to come out on purpose.
+One thing to decide on purpose: `index.html` carries no `robots` meta tag, so once Pages is
+enabled the site is public **and** indexable. If it is meant to be unlisted, add
+`<meta name="robots" content="noindex">` to the `<head>` before you publish.
 
 ### Updating it later
 
@@ -143,8 +144,9 @@ The sidebar has four destinations, defined in `MainSection` in
 | **Settings** | "How Mynah is set up" | Where the model choice actually lives |
 
 If you want a fifth, take the onboarding brain picker (`Sources/MynahMac/Setup/BrainPickerView.swift`) —
-it is the screen where the owner chooses between a model on the Mac and an API key, which is the
-one decision the page says determines whether anything leaves the machine.
+it is the screen where the owner chooses between a model on the Mac and an API key — the
+decision that determines whether the thinking leaves the machine. It is not the only thing that
+leaves: web search, the call relay and the update check are on the list too.
 
 ### Window size
 
@@ -185,7 +187,7 @@ screenshot."*
   Three invented memories across two subjects, one at each certainty level.
 - **Home** — `TalkPreviewFixtures.plate()` and `TalkPreviewFixtures.earlierConversation()` in
   `Sources/MynahMac/Main/TalkView.swift`.
-- **Privacy** and **Settings** — `#Preview("Privacy — an API brain")` and the four
+- **Privacy** and **Settings** — `#Preview("Privacy — an API brain")` and the five
   `#Preview("Settings — …")` blocks. These render claim text and a model name rather than
   personal content, but read what is on screen before you shoot: Settings can show a linked
   phone number and a real model name.

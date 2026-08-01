@@ -403,8 +403,8 @@ footer p { max-width: 34rem; }
 
   <p class="standfirst">
     Talk to it at your desk, or from your phone on Signal. It remembers what you
-    tell it. It runs fully offline on your own machine by default — and if you
-    ever point it somewhere else, it says so in plain words.
+    tell it. It can run end to end on your own machine — and if you point it at a
+    company&rsquo;s model instead, it names the company rather than letting you assume.
   </p>
 </header>
 
@@ -426,7 +426,7 @@ footer p { max-width: 34rem; }
         </svg>
       </div>
       <h3 class="title3">It runs on your Mac</h3>
-      <p>One Mac, left switched on. No account, no server of ours, nothing to sign into.</p>
+      <p>One Mac, left switched on. No account, nothing to sign into, and no server of ours between your phone and your Mac when you message it.</p>
     </div>
 
     <div class="card">
@@ -482,9 +482,10 @@ footer p { max-width: 34rem; }
   <p class="eyebrow">Where it thinks</p>
   <h2 class="title1 column">It runs with nothing switched on but your Mac.</h2>
   <p class="lede">
-    Every part of a turn stays here, and that is what a fresh install sets up —
-    you are not asked to choose. Your words leave this machine only if you go
-    and tell it to.
+    Every part of the thinking, listening, speaking and remembering has a version
+    that runs here, and that is what a fresh install sets up — you are not asked
+    to choose. Pick those and nothing you say goes to a company to be thought
+    about; what still leaves is on the &ldquo;Where your words go&rdquo; list below.
   </p>
 
   <div class="rows">
@@ -498,7 +499,7 @@ footer p { max-width: 34rem; }
     <div class="row">
       <div class="text">
         <p class="title3">The listening</p>
-        <p>Voice notes and anything you say into the Mac are turned into words on this Mac, and never sent anywhere.</p>
+        <p>Voice notes and anything you say into the Mac are turned into words on this Mac. The recording itself is never sent anywhere.</p>
       </div>
       <span class="pill stays">Stays here</span>
     </div>
@@ -521,10 +522,10 @@ footer p { max-width: 34rem; }
   <div class="note column">
     <p style="margin:0 0 var(--s4)"><strong>Or point it at a bigger brain, and know that you did.</strong></p>
     <p style="margin:0 0 var(--s4)">
-      You can send the thinking to a company instead — Anthropic, OpenAI, DeepSeek,
-      Kimi or Groq. It is a setting you go and change afterwards, not a reinstall:
-      the same conversation, the same tools, the same memory, with something else
-      doing the thinking.
+      You can send the thinking to a company instead — Anthropic, OpenAI, Google
+      Gemini, DeepSeek, Kimi or Groq. It is a setting you go and change
+      afterwards, not a reinstall: the same conversation, the same tools, the
+      same memory, with something else doing the thinking.
     </p>
     <p style="margin:0">
       What changes is where your words go, and Mynah does not soften it. Its own
@@ -625,21 +626,21 @@ footer p { max-width: 34rem; }
         <p class="title3">A relay makes the introduction</p>
         <p>A Mac at home has no address your phone can dial, so the link is served by a relay that passes the two ends&rsquo; details along. It is not in the call itself.</p>
       </div>
-      <span class="pill leaves">Leaves this Mac</span>
+      <span class="pill">Not in the call</span>
     </div>
     <div class="row">
       <div class="text">
         <p class="title3">The link is the key</p>
-        <p>It carries an unguessable one-time path and travels inside Signal. Asking for a new call stops the old one — a call link is a live microphone, so the last one you were sent is the only one that works.</p>
+        <p>It carries an unguessable path, registered with the relay so it can serve the page, and it travels to you inside Signal. Asking for a new call stops the old one — a call link is a live microphone, so only the last one you were sent works, and there is never more than one.</p>
       </div>
-      <span class="pill stays">Stays here</span>
+      <span class="pill">One at a time</span>
     </div>
     <div class="row">
       <div class="text">
         <p class="title3">It starts talking before it has finished thinking</p>
-        <p>The answer is spoken sentence by sentence as each one is ready, so it begins about as fast as a person would.</p>
+        <p>The answer is spoken sentence by sentence as each one is ready, so it begins about as fast as a person would. Whether the thinking happens here or at a provider is the same choice you made for everything else.</p>
       </div>
-      <span class="pill stays">Stays here</span>
+      <span class="pill">Spoken as it goes</span>
     </div>
   </div>
 
@@ -711,7 +712,7 @@ footer p { max-width: 34rem; }
     </li>
     <li>
       <span class="what">It will not quietly invent a number</span>
-      <span class="why">When a result has been shortened to fit, it says it was shortened — and it refuses to add up figures the answer already gave.</span>
+      <span class="why">It counts what it can actually see, not what a node claims is behind it — and it will not invent a tool result, a memory, an agent name or a status. If a tool failed, it says so.</span>
     </li>
     <li>
       <span class="what">If it is not allowed to remember, you find out on day one</span>
@@ -788,7 +789,7 @@ footer p { max-width: 34rem; }
     <div class="row">
       <div class="text">
         <p class="title3">Looking something up on the web</p>
-        <p>When a question needs the internet, the words Mynah searches for go to a search engine. The rest of what you said does not. You can switch web search off entirely and keep everything else working.</p>
+        <p>When a question needs the internet, the words Mynah searches for go to a search engine. The rest of what you said does not.</p>
       </div>
       <span class="pill leaves">Leaves this Mac</span>
     </div>
@@ -811,7 +812,7 @@ footer p { max-width: 34rem; }
         <p class="title3">Checking for a newer Mynah</p>
         <p>Once a day it asks GitHub whether a newer version exists. That request tells GitHub a Mac asked — the one thing Mynah does that you did not ask for by speaking. Nothing is downloaded or installed on its own, and turning the check off means it never contacts GitHub at all.</p>
       </div>
-      <span class="pill leaves">Leaves this Mac</span>
+      <span class="pill">Once a day</span>
     </div>
   </div>
 
@@ -839,7 +840,7 @@ footer p { max-width: 34rem; }
 
   <ul class="claims column">
     <li>
-      <span class="what">It does not listen</span>
+      <span class="what">It only listens while you hold the button</span>
       <span class="why">The microphone opens only while you hold the record button. There is no wake word, and nothing is recorded on its own.</span>
     </li>
     <li>
