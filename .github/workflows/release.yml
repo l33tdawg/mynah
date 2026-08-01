@@ -19,13 +19,37 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-latest
     env:
       SAGE_VOICE_CODESIGN_IDENTITY: "Developer ID Application: Dhillon Kannabhiran (2N7GKZ8D8Z)"
       MYNAH_RELEASE_LABEL: ${{ github.event.inputs.label }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # **The newest Xcode on the runner, not the default one.**
+      #
+      # Every tagged run failed to compile, and the last one died at
+      # `error: fatalError` — SwiftPM's way of saying the compiler process
+      # itself gave out — on a file that builds fine here. The gap is the
+      # toolchain: this is developed on Swift 6.3 and the image defaults to
+      # Xcode 16.4, roughly two major versions behind.
+      #
+      # A CI that compiles with a compiler nobody ships against does not check
+      # the thing it looks like it is checking. It reports red for language
+      # features the product legitimately uses, and it would keep doing so
+      # after every fix.
+      #
+      # Listed before selecting so a future failure says which versions were
+      # actually available rather than leaving somebody to guess.
+      - name: Use the newest Xcode on this runner
+        run: |
+          set -euo pipefail
+          ls /Applications | grep -i '^Xcode' || true
+          NEWEST="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "selecting $NEWEST"
+          sudo xcode-select -s "$NEWEST/Contents/Developer"
+          swift --version
 
       # Decided once, up front, so every later step agrees about whether this is
       # a real release. A half-signed artifact is worse than an unsigned one:
