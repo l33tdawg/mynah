@@ -25,29 +25,65 @@ final class MemoryTopicFilterTests: XCTestCase {
 
     /// Answers whatever it is told to, and records every filter it was asked
     /// for — the filters are the point, so they are what it keeps.
+    ///
+    /// Every field is behind a lock, and that is a crash rather than a
+    /// principle. `MemoriesModel` is `@MainActor`, but a store call is `async`
+    /// and hops straight off it — so two loads overlap here whenever one is
+    /// started before the other has finished, which is exactly what cancelling
+    /// and replacing a load does. Cancellation does not unwind a request already
+    /// in flight; it only means the answer is discarded when it arrives.
+    ///
+    /// This was `@unchecked Sendable` with plain `var`s, which is a promise it
+    /// was not keeping. Two `askedLimits.append` calls landing together
+    /// reallocated the same buffer twice and the process took a SIGSEGV inside
+    /// `_swift_release_dealloc` — a segfault in the test double, reported
+    /// against whichever test happened to be running.
     private final class Stub: MemoryStoring, @unchecked Sendable {
-        var pages: [Int: MemoryPage] = [:]
-        var tooBroadBelow: Int = 0
+        private let lock = NSLock()
+        private var state = State()
+
+        private struct State {
+            var pages: [Int: MemoryPage] = [:]
+            var tooBroadBelow: Int = 0
+            var refuseFilters = false
+            var askedFilters: [String?] = []
+            var askedLimits: [Int] = []
+        }
+
+        var tooBroadBelow: Int {
+            get { lock.withLock { state.tooBroadBelow } }
+            set { lock.withLock { state.tooBroadBelow = newValue } }
+        }
+
         /// Whatever filter is passed, the node will not resolve it.
-        var refuseFilters = false
-        private(set) var askedFilters: [String?] = []
-        private(set) var askedLimits: [Int] = []
+        var refuseFilters: Bool {
+            get { lock.withLock { state.refuseFilters } }
+            set { lock.withLock { state.refuseFilters = newValue } }
+        }
+
+        var askedFilters: [String?] { lock.withLock { state.askedFilters } }
+        var askedLimits: [Int] { lock.withLock { state.askedLimits } }
 
         init(_ memories: [Memory] = []) {
-            pages[0] = MemoryPage(memories: memories, total: memories.count)
+            state.pages[0] = MemoryPage(memories: memories, total: memories.count)
         }
 
         func recent(topic: String?, limit: Int, offset: Int) async throws -> MemoryPage {
-            askedFilters.append(topic)
-            askedLimits.append(limit)
-            if refuseFilters, topic != nil { throw MemoryTrouble.unknownTopic }
-            if limit >= tooBroadBelow, tooBroadBelow > 0 { throw MemoryTrouble.tooBroad }
-            return pages[offset] ?? .empty
+            let answer: Result<MemoryPage, MemoryTrouble> = lock.withLock {
+                state.askedFilters.append(topic)
+                state.askedLimits.append(limit)
+                if state.refuseFilters, topic != nil { return .failure(.unknownTopic) }
+                if limit >= state.tooBroadBelow, state.tooBroadBelow > 0 { return .failure(.tooBroad) }
+                return .success(state.pages[offset] ?? .empty)
+            }
+            return try answer.get()
         }
 
         func search(_ query: String, topic: String?, limit: Int) async throws -> MemoryPage {
-            askedFilters.append(topic)
-            return pages[0] ?? .empty
+            lock.withLock {
+                state.askedFilters.append(topic)
+                return state.pages[0] ?? .empty
+            }
         }
 
         func forget(id: String) async throws -> ForgetOutcome { .forgotten }

@@ -661,7 +661,11 @@ final class MemoriesModel {
             // be whichever of the two the scheduler favoured.
             guard !isRepairingFilter else { return }
             selection = nil
-            Task { await load() }
+            // `startLoad()` and not `Task { await load() }` — see `startLoad`.
+            // The spawned form registered the task too late to be cancellable,
+            // so a caller that loaded straight after changing the filter got two
+            // loads and kept whichever the scheduler favoured.
+            startLoad()
         }
     }
 
@@ -772,11 +776,35 @@ final class MemoriesModel {
         }
     }
 
-    func load() async {
+    /// Replaces whatever load is in flight with a new one, and — the part that
+    /// matters — registers it **before returning**.
+    ///
+    /// The `topic` and `searchText` observers used to start their reload with a
+    /// bare `Task { await load() }`. That reads as "the same thing, later", and
+    /// the "later" is the bug: `loadTask` was assigned inside the spawned task,
+    /// so it was still nil until the scheduler got round to running it. Anything
+    /// that called `load()` in that window cancelled nothing, and two loads ran
+    /// against one screen.
+    ///
+    /// Both then raced to finish, and the loser had already cancelled the
+    /// winner: whichever load was cancelled returned early at one of the
+    /// `Task.isCancelled` guards in `performLoad`, so the repair that clears a
+    /// dead filter could be the half that got dropped — leaving the owner
+    /// holding a filter that cannot succeed, roughly one time in five.
+    ///
+    /// Assigning synchronously makes the ordering a fact rather than a
+    /// scheduling outcome: by the time this returns there is exactly one
+    /// registered load, and the next caller cancels precisely it.
+    @discardableResult
+    private func startLoad() -> Task<Void, Never> {
         loadTask?.cancel()
         let task = Task { await performLoad() }
         loadTask = task
-        await task.value
+        return task
+    }
+
+    func load() async {
+        await startLoad().value
     }
 
     private func performLoad() async {
