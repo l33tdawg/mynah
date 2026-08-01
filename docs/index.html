@@ -639,21 +639,50 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
 <!-- ===================================================================== -->
 
 <section>
+  <p class="eyebrow">What changes</p>
   <h2 class="title1 column">Stop introducing yourself to your assistant.</h2>
   <p class="lede">
-    You tell it once. Your dad&rsquo;s appointment moved to the 12th. The flight
-    is 6:40, not 6:14. Sarah is allergic to shellfish, not fish.
+    You tell it once. Ask in three weeks and it knows — because it remembers
+    across conversations instead of inside one.
   </p>
-  <p class="lede">
-    Ask in three weeks and it knows — because it remembers across conversations
-    instead of inside one. No re-briefing, no pasted context, no starting again
-    because you closed a tab.
-  </p>
+
+  <div class="rows">
+    <div class="row">
+      <div class="text">
+        <p class="title3">&ldquo;Dad&rsquo;s appointment moved to the 12th.&rdquo;</p>
+        <p>Still true in October, without you saying it again.</p>
+      </div>
+      <span class="pill stays">Remembered</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">&ldquo;The flight is 6:40, not 6:14.&rdquo;</p>
+        <p>The correction sticks. The wrong one does not come back.</p>
+      </div>
+      <span class="pill stays">Remembered</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">&ldquo;Sarah is allergic to shellfish, not fish.&rdquo;</p>
+        <p>It matters the next time you ask it to book somewhere.</p>
+      </div>
+      <span class="pill stays">Remembered</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <p>
+      <strong>No re-briefing, no pasted context, no starting again because you
+      closed a tab.</strong> Everything it keeps is on your Mac, and you can read
+      every line of it, search it by meaning, and delete anything you want gone.
+    </p>
+  </div>
 </section>
 
 <!-- ===================================================================== -->
 
 <section>
+  <p class="eyebrow">How you reach it</p>
   <h2 class="title1 column">It is already in a thread you open every day.</h2>
 
   <div class="shots">
@@ -664,16 +693,26 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
       </div>
     </figure>
     <div>
-      <p class="lede" style="margin-top:0">
-        You message yourself on Signal. It answers in that thread. Nothing new on
-        your phone, no app to open, no account to make — you already have the
-        habit, and it just starts replying.
-      </p>
-      <p class="lede">
-        Hands full? Send a voice note. Want to talk? Send <code>//call</code>,
-        tap the link, and speak to it — interrupting mid-sentence like you would
-        anyone else.
-      </p>
+      <div class="cards" style="margin-top:0; grid-template-columns:1fr">
+        <div class="card">
+          <div class="glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/>
+            </svg>
+          </div>
+          <h3 class="title3">Message yourself</h3>
+          <p>It links to your Signal account as a second device, like Signal Desktop does. No new number, no bot, nothing to install on your phone — you already have the habit, and it just starts replying.</p>
+        </div>
+        <div class="card">
+          <div class="glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v10M9 6v4M15 6v4M5 11a7 7 0 0 0 14 0M12 18v3"/>
+            </svg>
+          </div>
+          <h3 class="title3">Or just talk</h3>
+          <p>Hands full? Send a voice note. Want a conversation? Send <code>//call</code>, tap the link, and speak — interrupting mid-sentence like you would anyone else.</p>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -681,50 +720,92 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
 <!-- ===================================================================== -->
 
 <section>
+  <p class="eyebrow">What it takes off you</p>
   <h2 class="title1 column">It keeps track, so you can stop.</h2>
   <p class="lede">
     Hand it something and it stays handed over — the booking to chase, the thing
-    to renew before the 30th, the question you asked it to go and answer. You see
-    what is planned, what it is working on, and what is done.
+    to renew before the 30th, the question you asked it to go and answer.
   </p>
-  <p class="lede">
-    And if you run other <a href="https://github.com/l33tdawg/sage">SAGE</a>
-    agents, <strong>they become people you can talk to</strong>. Ask Mynah to
-    find one, hand it the job, and tell you what came back. One place to ask,
-    instead of a tab for each.
-  </p>
+
+  <div class="cards">
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="4" width="7" height="16" rx="1.6"/><rect x="13.5" y="4" width="7" height="9" rx="1.6"/>
+        </svg>
+      </div>
+      <h3 class="title3">A board, not a promise</h3>
+      <p>Planned, in progress, done — beside the conversation, so you can see what it is actually holding rather than hoping it remembered.</p>
+    </div>
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9.5 8.8 15 15.5M7 10v4a3 3 0 0 0 3 3h1"/>
+        </svg>
+      </div>
+      <h3 class="title3">Your other agents become people you can talk to</h3>
+      <p>Run <a href="https://github.com/l33tdawg/sage">SAGE</a> already? Mynah joins the node you have. Ask it to find an agent by name, hand it the job, and tell you what came back — one place to ask, instead of a tab for each.</p>
+    </div>
+  </div>
 </section>
 
 <!-- ===================================================================== -->
 
 <section>
+  <p class="eyebrow">Where your words go</p>
   <h2 class="title1 column">And none of it is anyone else&rsquo;s.</h2>
   <p class="lede">
     It runs on a Mac you own. A fresh install downloads a model and thinks on
-    that machine, so your words, your memories and your notes never leave the
-    house. No account, no sign-in, no server of ours in the middle.
+    that machine, so nothing leaves the house.
   </p>
-  <p class="lede">
-    Point it at a company&rsquo;s model if you want the extra power — and it will
-    name the company rather than let you assume. Everything it remembers is
-    yours to read, search and delete, line by line.
-  </p>
+
+  <div class="rows">
+    <div class="row">
+      <div class="text">
+        <p class="title3">What you say, and what it remembers</p>
+        <p>Answered and kept on your Mac, in a folder only your account can read.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Your voice notes and calls</p>
+        <p>Turned into words on the machine. The recordings are never uploaded.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">If you choose a company&rsquo;s model instead</p>
+        <p>It names the company rather than letting you assume, on a screen that lists every exception.</p>
+      </div>
+      <span class="pill leaves">You decide</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <p>
+      <strong>No account. No sign-in. No server of ours in the middle.</strong>
+      Free and open source, so the claim on this page is one you can go and check.
+    </p>
+  </div>
 </section>
 
 <!-- ===================================================================== -->
 
 <section>
+  <p class="eyebrow">Get started</p>
   <h2 class="title1 column">Give it a Mac and your Signal. That is it.</h2>
   <p class="lede">
     Apple silicon, macOS 14 or later, left switched on — a Mac mini is the usual
     choice. The model and the memory come with it.
   </p>
   <div class="get">
-    <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
+    <a class="button" id="download" href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
     <span class="aside">
       Free and open source &middot;
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
-      built on <a href="https://github.com/l33tdawg/sage">SAGE</a>
+      built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
     </span>
   </div>
 </section>
@@ -758,6 +839,21 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
      Nothing here observes the visitor: one GET, no cookie, no identifier, and
      no second request whatever comes back. -->
 <script>
+/* The download link, and the download count.
+   ==========================================================================
+   The button's href in the HTML is `releases/latest/download/Mynah-macOS-arm64.dmg`
+   — a fixed asset name, because that is the only thing GitHub's "latest"
+   redirect can resolve. It always fetches the newest release, and it always
+   saves as `Mynah-macOS-arm64.dmg`, which tells the person in their Downloads
+   folder nothing about which version they have.
+
+   So when the API answers, the link is repointed at the *versioned* asset from
+   the same release: same bytes, and a file called `Mynah-1.2.1-macOS-arm64.dmg`.
+   The fixed name stays as the href until then, so the button works with
+   JavaScript off, on a rate-limited network, and before this runs.
+
+   Nothing here observes the visitor: one GET, no cookie, no identifier, and no
+   second request whatever comes back. */
 (async () => {
   try {
     const response = await fetch(
@@ -766,20 +862,31 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
     );
     if (!response.ok) return;
     const releases = await response.json();
-    if (!Array.isArray(releases)) return;
-    // Every release, not just the latest: the number people mean by "downloads"
-    // is how many copies went out, and a fresh release would otherwise reset it
-    // to nearly zero on the day it shipped.
+    if (!Array.isArray(releases) || !releases.length) return;
+
+    const newest = releases.find(release => !release.draft && !release.prerelease);
+    const versioned = (newest?.assets || []).find(
+      asset => /^Mynah-\d[\w.]*-macOS-arm64\.dmg$/i.test(asset.name || "")
+    );
+    if (versioned?.browser_download_url) {
+      const button = document.getElementById("download");
+      if (button) button.href = versioned.browser_download_url;
+    }
+
+    // Every release, not just the newest: "downloads" means how many copies
+    // went out, and a fresh release would otherwise reset it to nearly zero on
+    // the day it shipped.
     const total = releases
       .flatMap(release => release.assets || [])
       .filter(asset => /\.dmg$/i.test(asset.name || ""))
       .reduce((sum, asset) => sum + (asset.download_count || 0), 0);
     if (total > 0) {
       document.getElementById("downloads").textContent =
-        " · " + total.toLocaleString() + " downloaded";
+        " \u00B7 " + total.toLocaleString() + " downloaded";
     }
   } catch (_) {
-    // Offline, blocked, or rate-limited. The page is complete without it.
+    // Offline, blocked, or rate-limited. The page is complete without it and
+    // the button still points at a real file.
   }
 })();
 </script>
