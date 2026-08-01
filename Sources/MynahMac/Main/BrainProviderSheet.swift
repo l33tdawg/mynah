@@ -77,6 +77,10 @@ struct BrainProviderSheet: View {
             header
             switcher.padding(.bottom, s4)
 
+            // Scrolls only when there is something to scroll. A `ScrollView` is
+            // greedy — it takes every point offered — so wrapping a four-row
+            // list in one is what pinned this sheet open at its maximum height
+            // with a scroller that never moved.
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     switch choice.destination {
@@ -86,6 +90,7 @@ struct BrainProviderSheet: View {
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
+            .fixedSize(horizontal: false, vertical: choice.destination == .thisMac)
 
             resultLine.padding(.top, s4)
 
@@ -100,7 +105,15 @@ struct BrainProviderSheet: View {
             .padding(.top, s5)
         }
         .padding(s8)
-        .frame(width: 620, height: 620)
+        // Width fixed, height from the content: *"the box could be sized
+        // automatically to fit the vertical content so you don't have the
+        // scroll"*. A flat 620 meant the local side — four short rows — opened
+        // with half a panel of blank and a scroller it never needed, while the
+        // cloud side scrolled anyway. The cap is the only fixed number left, so
+        // a machine with a long provider list still cannot open a sheet taller
+        // than the screen.
+        .frame(width: 620)
+        .frame(maxHeight: 760)
         .background(Palette.surface.overlay)
         .mynahAnimation(Motion.snap, value: refusal)
         .mynahAnimation(Motion.snap, value: choice.destination)
@@ -125,11 +138,21 @@ struct BrainProviderSheet: View {
 
     private var switcher: some View {
         VStack(alignment: .leading, spacing: s2) {
-            Picker("", selection: $choice.destination) {
-                ForEach(Destination.allCases) { Text($0.title).tag($0) }
+            // **Drawn from `Palette`, not `.segmented`.**
+            //
+            // A system segmented control brings the owner's System Settings
+            // accent with it, which is the one blue thing on a panel whose other
+            // controls are all ink — *"the on this mac / cloud thing i think
+            // could be improved to look more like the rest of the controls"*.
+            // The same capsule the top bar's destinations use, at the same
+            // radius as the buttons underneath it.
+            HStack(spacing: s2) {
+                ForEach(Destination.allCases) { destination in
+                    destinationTab(destination)
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            .padding(s1)
+            .background(Palette.surface.well, in: RoundedRectangle.mynah(r.control))
             .onChange(of: choice.destination) { _, new in
                 refusal = nil
                 choice.moved(
@@ -149,6 +172,26 @@ struct BrainProviderSheet: View {
         }
     }
 
+    private func destinationTab(_ destination: Destination) -> some View {
+        let isSelected = choice.destination == destination
+        return Button { choice.destination = destination } label: {
+            Text(destination.title)
+                .mynahFont(.bodyEmphasis)
+                .foregroundStyle(isSelected ? Palette.accent.onFill : Palette.ink.secondary)
+                .padding(.horizontal, s5)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(
+                    isSelected ? Palette.accent.fill : .clear,
+                    in: RoundedRectangle.mynah(r.chip)
+                )
+                .contentShape(RoundedRectangle.mynah(r.chip))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
     // MARK: - On this Mac
 
     var localOption: BrainSetupOption? { choices.localOption }
@@ -166,9 +209,8 @@ struct BrainProviderSheet: View {
                 )
                 .padding(.top, s2)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(installedLocalModels.enumerated()), id: \.element) { index, name in
-                        if index > 0 { MynahDivider() }
+                VStack(alignment: .leading, spacing: s3) {
+                    ForEach(orderedLocalModels, id: \.self) { name in
                         modelRow(name, option: option)
                     }
                 }
@@ -183,6 +225,23 @@ struct BrainProviderSheet: View {
         }
     }
 
+    /// The one in use first, then the rest as the machine reports them.
+    ///
+    /// *"last used / selected model should be... at the top of the list so you
+    /// don't have to go hunt for it."* A machine with eight models pulled — and
+    /// this one has eight, including two embedding models and a translator —
+    /// puts the answer to "which am I on" somewhere in the middle of an
+    /// alphabetical list, behind a scroll.
+    ///
+    /// Only the selected one is lifted. Sorting by anything else would move rows
+    /// under the pointer between visits, and a list that reorders itself is
+    /// worse to hunt through than one that does not.
+    private var orderedLocalModels: [String] {
+        guard let selected = choice.localModel,
+              installedLocalModels.contains(selected) else { return installedLocalModels }
+        return [selected] + installedLocalModels.filter { $0 != selected }
+    }
+
     private func modelRow(_ name: String, option: BrainSetupOption) -> some View {
         Button {
             choice.localModel = name
@@ -190,7 +249,7 @@ struct BrainProviderSheet: View {
             refusal = nil
         } label: {
             HStack(alignment: .top, spacing: s4) {
-                StatusDot(choice.localModel == name ? .accent : .neutral)
+                StatusDot(choice.localModel == name ? .good : .neutral)
                     .padding(.top, 5)
                 VStack(alignment: .leading, spacing: s1) {
                     HStack(spacing: s3) {
@@ -204,9 +263,20 @@ struct BrainProviderSheet: View {
                     }
                 }
             }
-            .padding(.vertical, s4)
+            .padding(s5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            // The same green card the API-key sheet uses for the picked model,
+            // asked for by name: a dot on one of eight rows is not an answer to
+            // "which am I on".
+            .background(
+                choice.localModel == name ? Palette.state.goodWash : Palette.surface.raised,
+                in: RoundedRectangle.mynah(r.card)
+            )
+            .mynahBorder(
+                r.card,
+                choice.localModel == name ? Palette.state.good.opacity(0.55) : Palette.line.hairline
+            )
+            .contentShape(RoundedRectangle.mynah(r.card))
         }
         .buttonStyle(.plain)
         .pointingHandCursor()

@@ -118,13 +118,27 @@ enum MynahCopy {
 /// A hairline at the right colour, insettable from the leading edge like a
 /// real list separator.
 struct MynahDivider: View {
+    /// Which way the rule runs. Vertical arrived with the board moving beside
+    /// the conversation rather than above it; a `Divider()` there would be the
+    /// system's grey next to this app's, on the one seam most looked at.
+    enum Axis { case horizontal, vertical }
+
+    var axis: Axis = .horizontal
     var leadingInset: CGFloat = 0
+
+    init(_ axis: Axis = .horizontal, leadingInset: CGFloat = 0) {
+        self.axis = axis
+        self.leadingInset = leadingInset
+    }
 
     var body: some View {
         Rectangle()
             .fill(Palette.line.divider)
-            .frame(height: 1)
-            .padding(.leading, leadingInset)
+            .frame(
+                width: axis == .vertical ? 1 : nil,
+                height: axis == .horizontal ? 1 : nil
+            )
+            .padding(.leading, axis == .horizontal ? leadingInset : 0)
     }
 }
 
@@ -192,11 +206,11 @@ struct MynahButtonStyle: ButtonStyle {
                 // picked: the first control in the product, on the screen that
                 // decides where a person's speech goes.
                 configuration.label
-                    .mynahFont(.title3)
+                    .mynahFont(.bodyEmphasis)
                     .foregroundStyle(Palette.ink.secondary)
-                    .padding(.horizontal, s6)
-                    .padding(.vertical, 10)
-                    .frame(minWidth: 132)
+                    .padding(.horizontal, s5)
+                    .padding(.vertical, 8)
+                    .frame(minWidth: 104)
                     .background(Palette.surface.well, in: RoundedRectangle.mynah(r.control))
                     // The shape still has to read as a button, or a disabled
                     // primary looks like a paragraph of grey text.
@@ -204,11 +218,25 @@ struct MynahButtonStyle: ButtonStyle {
 
             case .primary:
                 configuration.label
-                    .mynahFont(.title3)
+                    // **`.bodyEmphasis`, the same 15pt the secondary beside it
+                    // now uses.** This was `.title3` at 17 with `s6`/10 padding
+                    // and a 132pt floor — proportions chosen for "Continue" on a
+                    // setup stage, where the button is the only control on
+                    // screen and has a whole row to itself.
+                    //
+                    // In a sheet it is not that. It sits next to a quiet
+                    // "Cancel" and under a list set in `.body` and `.callout`,
+                    // and at those proportions it arrives as the largest thing
+                    // on the panel: *"the use this brain button also seems
+                    // oversized / not in keeping with the other buttons"*.
+                    //
+                    // The fill is what marks it as primary. It does not also
+                    // need to be a size larger than everything it sits beside.
+                    .mynahFont(.bodyEmphasis)
                     .foregroundStyle(Palette.button.primaryInk)
-                    .padding(.horizontal, s6)
-                    .padding(.vertical, 10)
-                    .frame(minWidth: 132)
+                    .padding(.horizontal, s5)
+                    .padding(.vertical, 8)
+                    .frame(minWidth: 104)
                     .background(primaryFill, in: RoundedRectangle.mynah(r.control))
 
             case .secondary:

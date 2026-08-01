@@ -59,6 +59,17 @@ struct TalkView: View {
     /// exchange and the start of the next on every window this app opens at.
     private static let conversationHeight: CGFloat = 280
 
+    /// The board column: about a third, never narrower than its own headings.
+    ///
+    /// "1/3" is the intent and a bare fraction is the wrong mechanism — at 900pt
+    /// a third is 300, which is fine, and at 600pt it is 200, which is two task
+    /// columns of ragged two-word lines. The floor is what the board needs; the
+    /// ceiling stops it eating a wide window where the conversation is the thing
+    /// being read.
+    private static let boardMinimum: CGFloat = 260
+    private static let boardIdeal: CGFloat = 320
+    private static let boardMaximum: CGFloat = 420
+
     let model: ConversationModel
     /// The conversation as it happened on the phone. Read-only, and re-read
     /// while this pane is on screen.
@@ -94,26 +105,40 @@ struct TalkView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            healthLine
-            MynahDivider()
+        // **Beside the conversation, not above it.**
+        //
+        // The board used to sit on top and take a fixed 280pt off the
+        // transcript, which is why it had a collapse control at all: it competed
+        // with the thing underneath it for vertical room, so the owner folded it
+        // away, and a board nobody can see is not doing its job.
+        //
+        // *"the middle section we can have a left 1/3rd section for open /
+        // ongoing / done tasks (collapsible), and to the right of that 2/3 is
+        // the chat window."*
+        //
+        // Side by side it stays visible while they type, which is the whole
+        // point of a board, and the width it takes is width the window had
+        // spare — the sidebar it replaces was wider than this column.
+        HStack(spacing: 0) {
             if app.homeSplit.showsBoard {
                 TaskBoardView(model: board)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // A third, with a floor. A fraction alone squeezes the
+                    // columns to unreadable on a narrow window, and a fixed
+                    // width alone wastes half a wide one.
+                    .frame(minWidth: Self.boardMinimum, idealWidth: Self.boardIdeal)
+                    .frame(maxWidth: Self.boardMaximum, maxHeight: .infinity)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                MynahDivider(.vertical)
             }
-            splitControl
-            if app.homeSplit.showsConversation {
-                // A fixed share of the window when the board is above it, and
-                // all of it when the board is folded away.
-                conversation
-                    .frame(maxHeight: app.homeSplit == .conversationOnly
-                           ? .infinity
-                           : Self.conversationHeight)
+            VStack(spacing: 0) {
+                healthLine
+                MynahDivider()
+                conversation.frame(maxHeight: .infinity)
+                // Always. Collapsing the board folds away what is planned, not
+                // the ability to say something.
+                composer
             }
-            // Always. Collapsing the transcript folds away what was said, not
-            // the ability to say something — a board you can only read is not
-            // what "chat is too big" asked for.
-            composer
+            .frame(maxWidth: .infinity)
         }
         .mynahAnimation(Motion.snap, value: app.homeSplit)
         .background(Palette.surface.canvas)
@@ -1005,7 +1030,18 @@ private struct ThinkingRow: View {
                         .mynahAnimation(Motion.fade, value: secondLine(elapsed))
                 }
             }
-            MynahButton("Stop", kind: .quiet, action: onStop)
+            // **A bordered control, not bare words.** `.quiet` is the kind used
+            // for "Not now" and "Learn more" — text that leads somewhere, drawn
+            // with no chrome. Here it sat alone at the right edge of a card,
+            // where a word with no edge to it reads as a stray label rather than
+            // the one thing on this row you can press: *"the stop button looks
+            // weird"*.
+            //
+            // Stopping a turn in progress is also the most consequential control
+            // on the screen while it is on the screen, and the only one. It can
+            // afford an outline.
+            MynahButton("Stop", kind: .secondary, action: onStop)
+                .help("Stop this answer")
         }
     }
 

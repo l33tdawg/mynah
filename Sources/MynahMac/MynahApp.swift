@@ -667,7 +667,6 @@ final class MynahAppDelegate: NSObject, NSApplicationDelegate {
     /// panel arriving over their desktop for the length of one runloop hop.
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
-            FloatingHUDController.shared.applicationWillTerminate()
         }
     }
 }
@@ -797,31 +796,12 @@ private struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        // Read inside `body` rather than held as a stored property: `body` is
-        // already main-actor isolated, and reading `isVisible` here is what
-        // makes the item below rename itself when the panel comes and goes.
-        let hud = FloatingHUDController.shared
-
         Text("Mynah — \(app.effectivePresence.verb)")
 
         Divider()
 
         Button("Open Mynah") {
             MainWindowPresenter.present(using: openWindow)
-        }
-
-        // The only way back once the panel has been sent away, which is why it
-        // sits beside "Open Mynah" rather than under a submenu. "Panel" is a
-        // word an owner uses; it is not a class name leaking into the menu.
-        //
-        // Absent during onboarding rather than present and disabled: the panel
-        // reports on a conversation that does not exist until setup finishes, so
-        // the item would be a verb that leads nowhere — which is the one thing
-        // every escape hatch in this app is written not to be.
-        if app.hasCompletedSetup {
-            Button(hud.isVisible ? "Hide the panel" : "Show the panel") {
-                hud.toggleFromMenuBar()
-            }
         }
 
         Button(app.isPaused ? "Resume answering" : "Pause answering") {

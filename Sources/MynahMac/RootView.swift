@@ -85,7 +85,6 @@ struct RootView: View {
             // and has to read the live `AppModel`, which the scene owns. It is
             // this call that makes "keeps answering when this window is closed"
             // something the owner can watch rather than only read about.
-            FloatingHUDController.shared.attach(app: app)
             // Relaunch is reconciliation, not a special case. If the owner
             // linked Signal on the previous run, the two LaunchAgents are
             // restored here without another button or QR scan.
@@ -782,27 +781,38 @@ struct MainShell: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            Sidebar(selection: $selection)
-                // Primary navigation, not a settings list. Four destinations,
-                // each naming itself and saying what it is for, need the width
-                // to do that on two lines without wrapping mid-phrase.
-                .navigationSplitViewColumnWidth(min: 248, ideal: 284, max: 340)
-        } detail: {
+        // **A horizontal bar rather than a sidebar column.**
+        //
+        // The sidebar was ~284pt carrying four rows and then the rest of an
+        // 820pt window of nothing — the largest dead area in the app, and it
+        // cost the panes beside it a third of their width to hold four words.
+        //
+        // *"what do you think about placing the vertical menu items into a
+        // horizontal bar that is on the same spacing as the mynah bird, logo,
+        // version section — i think would be cleaner?"*
+        //
+        // Four destinations fit a row comfortably, and putting them on the
+        // wordmark's line turns two sparse bands into one dense header. What is
+        // given up is real and small: the per-destination summaries have no room
+        // on one line, so they become the hover text, and `NavigationSplitView`'s
+        // sidebar vibrancy and collapse animation go with the column they
+        // belonged to.
+        VStack(spacing: 0) {
+            MainTopBar(selection: $selection)
+            MynahDivider()
             // The `GeometryReader` is a clamp, not a measurement.
             //
-            // A detail pane sized by its own content feeds that height back into
-            // the split view, and past a certain point the *sidebar* column is
-            // laid out outside the window and renders blank — measured here at
-            // screen y = -5, height 1356 inside an 820pt window, with the
-            // accessibility tree still perfectly intact, so it looks like a
-            // rendering bug rather than a layout one. The error grew with the
-            // detail content's height, which is what gave it away.
+            // A pane sized by its own content used to feed that height back into
+            // the split view, and past a certain point the *sidebar* column was
+            // laid out outside the window and rendered blank — measured at screen
+            // y = -5, height 1356 inside an 820pt window, with the accessibility
+            // tree still intact, so it looked like a rendering bug rather than a
+            // layout one.
             //
-            // `GeometryReader` always accepts the size it is proposed and never
-            // reports its content's ideal upward, so the pane can never push the
-            // split view around again. It also hands every pane a definite size
-            // to centre inside.
+            // The split view is gone and this stays: it always accepts the size
+            // it is proposed and never reports its content's ideal upward, which
+            // is what hands every pane a definite size to fill rather than one to
+            // argue with.
             GeometryReader { proxy in
                 detail.frame(width: proxy.size.width, height: proxy.size.height)
             }
@@ -866,90 +876,59 @@ struct MainShell: View {
     }
 }
 
-/// The app's mark, the three sections, and one live status row at the bottom.
+/// The app's mark, its four destinations and what it is doing, on one line.
 ///
-/// No version number under the wordmark — that is a developer's instinct.
-/// Version belongs in Settings → About.
-struct Sidebar: View {
+/// **Replaces the sidebar**, which spent 284pt on four words and left the rest
+/// of the column empty for the height of the window. The destinations are the
+/// same four in the same order; what changed is that they now sit on the
+/// wordmark's own line, so the header is one band instead of a band and a
+/// mostly-blank column.
+///
+/// The per-destination summaries — "What's on your plate", "What Mynah
+/// remembers" — have nowhere to go on one line and became the hover text. That
+/// is a real loss and a small one: they exist so four bare nouns do not have to
+/// be clicked to be understood, and a tooltip answers the same question for
+/// anyone who still has it.
+struct MainTopBar: View {
     @Binding var selection: MainSection?
     @Environment(AppModel.self) private var app
 
     @State private var isHoveringStatus = false
 
     var body: some View {
-        // The `List` is the column's root, with the identity block and status
-        // row attached as safe-area insets.
-        //
-        // Wrapping the list in a `VStack` to stack them looks equivalent and is
-        // not: measured here, the whole sidebar laid out at screen y = -5 with a
-        // height of 1356pt inside an 820pt window, so every row rendered outside
-        // the window and the column appeared empty while the accessibility tree
-        // still listed all three sections.
-        List(selection: $selection) {
-            ForEach(MainSection.allCases) { section in
-                row(section).tag(section)
+        HStack(spacing: s6) {
+            identity
+            // The rule between the identity and the destinations, which is what
+            // stops "Mynah 1.1.9 Home Memories Privacy Settings" reading as one
+            // run of words.
+            Rectangle()
+                .fill(Palette.line.hairline)
+                .frame(width: 1, height: 22)
+            HStack(spacing: s2) {
+                ForEach(MainSection.allCases) { section in
+                    destination(section)
+                }
             }
+            Spacer(minLength: s4)
+            status
         }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) { identity }
-        .safeAreaInset(edge: .bottom, spacing: 0) { status }
+        .padding(.horizontal, s6)
+        .padding(.vertical, s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.surface.raised)
     }
 
-    /// A destination: glyph, name, and what it is for.
-    ///
-    /// **Nothing here sets a text colour, and that is load-bearing.** A selected
-    /// sidebar row is filled with the accent the owner chose in System Settings,
-    /// and macOS inverts the row's labels to stay legible on it — but only for
-    /// labels it is allowed to style. Pinning `Palette.ink.primary` on the title
-    /// would survive review and then render dark-on-dark for anyone whose accent
-    /// is not blue. The system's own `.secondary` is used for the second line for
-    /// the same reason: `Palette.ink.secondary` is fixed and would not invert.
-    /// This is the platform-chrome exception `Palette.accent` describes.
-    private func row(_ section: MainSection) -> some View {
-        HStack(alignment: .top, spacing: s4) {
-            // `.well` is the largest glyph size the scale has short of `.hero`,
-            // which is the single 30pt mark on an empty state and would be a
-            // cartoon in a list. This was `.card` at 18pt, which is a card
-            // header's size — a step up from a default sidebar label and not
-            // what "big icons" meant. The owner asked twice.
-            Image(systemName: section.glyph)
-                .mynahIcon(.well)
-                // A fixed column so four glyphs of different widths still leave
-                // their titles on one vertical line.
-                .frame(width: 30, alignment: .center)
-            VStack(alignment: .leading, spacing: 1) {
-                // `.title2`, the card-title size, rather than `.title3`, the
-                // list-row size. This is the app's primary navigation and it
-                // should not be set at the density of a settings list.
-                Text(section.title).mynahFont(.title2)
-                Text(section.summary)
-                    .mynahFont(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        // Four destinations in a window this wide can afford the air. The rows
-        // land near 56pt, which is roughly twice a stock sidebar row — the
-        // point of the change rather than a side effect of it.
-        .padding(.vertical, s4)
-        // Two `Text`s and a glyph read as three stops in VoiceOver, which turns
-        // four destinations into twelve. One stop, one sentence.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(section.title). \(section.summary)")
-    }
+    // MARK: Identity
 
     /// The mark and the wordmark, where every recent Mac app that has an
     /// identity to state puts it.
     ///
-    /// The window has no title — `RootView` clears it, because a title beside
-    /// the traffic lights would be a second and worse wordmark — so this is the
-    /// only place the app says its own name. A word on its own did that job
-    /// and looked like a heading somebody forgot to style; the mark beside it is
-    /// what makes the column read as belonging to a product.
+    /// The window has no title — a title beside the traffic lights would be a
+    /// second and worse wordmark — so this is the only place the app says its
+    /// own name.
     private var identity: some View {
-        HStack(spacing: s4) {
-            MynahMark(side: 26)
+        HStack(spacing: s3) {
+            MynahMark(side: 24)
             // Baseline-aligned so the version sits *on* the wordmark's line
             // rather than centred against its cap height, which reads as a
             // second word rather than a footnote to the first.
@@ -962,62 +941,76 @@ struct Sidebar: View {
                 // these: the DMG in the Dock, the app in /Applications and the
                 // daemon answering the phone were repeatedly three different
                 // builds, and nothing on screen said so.
-                //
-                // Tertiary and mono: present when looked for, and quiet enough
-                // that the column still reads as a wordmark rather than a
-                // version banner.
                 Text(MynahReleaseVersion.currentBuildLabel())
                     .mynahFont(.mono)
                     .foregroundStyle(Palette.ink.tertiary)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, s5)
-        .padding(.bottom, s5)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Mynah, version \(MynahReleaseVersion.currentBuildLabel())")
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// What MYNAH is doing, and a way to the screen that changes it.
+    // MARK: Destinations
+
+    /// One destination: glyph and name in a capsule that fills when selected.
     ///
-    /// Insets and a rounded hover fill rather than a full-bleed press target:
-    /// the row now sits on the same rails as the selection capsules above it,
-    /// which is what stops the bottom of the column looking like a different
-    /// piece of software from the top of it.
-    private var status: some View {
-        VStack(spacing: 0) {
-            // `MynahDivider`, not `Divider`. `Divider().foregroundStyle(_:)`
-            // does not colour a divider — it was a no-op, and the separator
-            // here was the system's grey rather than the app's.
-            MynahDivider()
-            Button {
-                selection = .settings
-            } label: {
-                HStack(spacing: s3) {
-                    StatusDot(app.effectivePresence.tone)
-                    Text(app.effectivePresence.verb)
-                        .mynahFont(.label)
-                        .foregroundStyle(Palette.ink.secondary)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, s3)
-                .padding(.vertical, s3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(RoundedRectangle.mynah(r.control))
-                .background(
-                    isHoveringStatus ? Palette.surface.well : .clear,
-                    in: RoundedRectangle.mynah(r.control)
-                )
+    /// Drawn from `Palette` rather than left to a `List`'s sidebar styling,
+    /// which is the trade this layout makes. A sidebar row gets the owner's
+    /// System Settings accent and macOS inverts its labels to stay legible on
+    /// it; a hand-drawn capsule does not, so the ink is set explicitly here and
+    /// `Palette.accent` is ink rather than a hue, which is what makes
+    /// `onAccent` a safe pairing for every appearance.
+    private func destination(_ section: MainSection) -> some View {
+        let isSelected = (selection ?? .home) == section
+        return Button { selection = section } label: {
+            HStack(spacing: s3) {
+                Image(systemName: section.glyph).mynahIcon(.row)
+                Text(section.title).mynahFont(.bodyEmphasis)
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(isSelected ? Palette.accent.onFill : Palette.ink.secondary)
+            .padding(.horizontal, s4)
+            .padding(.vertical, s3)
+            .background(
+                isSelected ? Palette.accent.fill : .clear,
+                in: RoundedRectangle.mynah(r.control)
+            )
+            .contentShape(RoundedRectangle.mynah(r.control))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        // Where the sidebar's second line went.
+        .help(section.summary)
+        .accessibilityLabel("\(section.title). \(section.summary)")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    // MARK: Status
+
+    /// What Mynah is doing, and a way to the screen that changes it.
+    private var status: some View {
+        Button {
+            selection = .settings
+        } label: {
+            HStack(spacing: s3) {
+                StatusDot(app.effectivePresence.tone)
+                Text(app.effectivePresence.verb)
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+            }
             .padding(.horizontal, s3)
             .padding(.vertical, s3)
-            .onHover { isHoveringStatus = $0 }
-            .pointingHandCursor()
-            .mynahAnimation(Motion.fade, value: isHoveringStatus)
-            .accessibilityLabel("Mynah is \(app.effectivePresence.verb). Open settings.")
+            .contentShape(RoundedRectangle.mynah(r.control))
+            .background(
+                isHoveringStatus ? Palette.surface.well : .clear,
+                in: RoundedRectangle.mynah(r.control)
+            )
         }
+        .buttonStyle(.plain)
+        .onHover { isHoveringStatus = $0 }
+        .pointingHandCursor()
+        .mynahAnimation(Motion.fade, value: isHoveringStatus)
+        .accessibilityLabel("Mynah is \(app.effectivePresence.verb). Open settings.")
     }
 }
 

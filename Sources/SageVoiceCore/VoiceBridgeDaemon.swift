@@ -40,7 +40,17 @@ public actor VoiceBridgeDaemon {
         ///
         /// Still bracketed, and still a label, for the reason above: the phone
         /// has no second column to put these in.
-        public static let defaultReplyPrefix = "‹🐦› "
+        /// **After the words, not in front of them, and no brackets.**
+        ///
+        /// *"i think make the bird face right and add >> after (no need
+        /// anything at the start so no < or anything) - would look cleaner."*
+        ///
+        /// Which way the bird faces is the one part that cannot be done. A
+        /// Signal message is text, so the app's own mark cannot go here and the
+        /// only birds available are the ones Unicode ships — `🐦‍⬛` is the black
+        /// one, and every emoji font draws it facing left. There is no
+        /// right-facing variant and no way for a sender to request one.
+        public static let defaultReplyPrefix = "🐦‍⬛>> "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String
@@ -988,7 +998,13 @@ public actor VoiceBridgeDaemon {
         // Applied here rather than to history: the model keeps seeing what it
         // actually said, and nothing about this can reach routing.
         let linked = Linkify.promotingBareDomains(in: text)
-        let body = configuration.replyPrefix.isEmpty ? linked : configuration.replyPrefix + linked
+        // Signal draws whatever text it is handed, at one line height, with no
+        // gap between a sentence and the list under it. The window learned to
+        // lay these out in `AnswerLayout`; the phone cannot, because a Signal
+        // message has no structure to lay out — so the spacing has to be in the
+        // characters or it is nowhere.
+        let spaced = SignalReplyText.spacingOutLists(in: linked)
+        let body = configuration.replyPrefix.isEmpty ? spaced : configuration.replyPrefix + spaced
         // Spoken as well as written, never instead of. A voice note the owner
         // cannot play — on a watch, in a meeting, on a bad connection — would
         // otherwise be an answer they cannot read, and the text costs nothing.
