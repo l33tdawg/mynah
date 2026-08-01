@@ -499,48 +499,15 @@ actor SageMemoryStore: MemoryStoring {
     /// The reply is not always bare JSON: on the first call of a session the
     /// node prepends a plain-text banner separated by `\n\n---\n\n`, and it can
     /// append a plain-text reminder afterwards. Both are addressed to an AI
-    /// agent, not to this app. Brace-matching from the first `{` — skipping
-    /// braces inside strings — is the only reading that survives both.
+    /// agent, not to this app.
+    ///
+    /// **The reading moved to `SageReply` and this forwards to it.** It was
+    /// written here, correctly, and stayed here — so the task board read a
+    /// backlog through it while `SageAgentMessaging` parsed the whole string
+    /// and reported an empty inbox every time the node appended a reminder. A
+    /// fix that lives only where somebody hit the bug is half a fix.
     static func embeddedObject(in text: String) -> JSONValue? {
-        if let whole = JSONValue.parse(text), whole.objectValue != nil { return whole }
-
-        // The banner is separated from the payload by a horizontal rule on its
-        // own line. Cutting there first means a banner that ever grows a brace
-        // of its own cannot capture the brace matcher below.
-        var body = text
-        if let rule = body.range(of: "\n\n---\n\n", options: .backwards) {
-            body = String(body[rule.upperBound...])
-        }
-
-        let characters = Array(body)
-        guard let start = characters.firstIndex(of: "{") else { return nil }
-
-        var depth = 0
-        var isInsideString = false
-        var isEscaped = false
-        for index in start..<characters.count {
-            let character = characters[index]
-            if isEscaped {
-                isEscaped = false
-                continue
-            }
-            if isInsideString {
-                if character == "\\" { isEscaped = true }
-                else if character == "\"" { isInsideString = false }
-                continue
-            }
-            switch character {
-            case "\"": isInsideString = true
-            case "{": depth += 1
-            case "}":
-                depth -= 1
-                if depth == 0 {
-                    return JSONValue.parse(String(characters[start...index]))
-                }
-            default: break
-            }
-        }
-        return nil
+        SageReply.value(in: text)
     }
 
     /// `sage_list` and `sage_recall` publish the same seven fields for a

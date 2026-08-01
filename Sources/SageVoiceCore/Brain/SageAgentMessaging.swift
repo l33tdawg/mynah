@@ -170,9 +170,14 @@ public struct SageAgentMessaging: AgentMessaging {
         return flat.count <= 200 ? flat : String(flat.prefix(200)) + "…"
     }
 
+    /// **Was `JSONSerialization` over the whole reply, and that silently emptied
+    /// this owner's inbox.** The node appends a `[SAGE] Reminder: …` line after
+    /// the JSON every few calls, trailing bytes make the parse fail, and the
+    /// failure lands in the branch that returns `[]` — so an inbox with
+    /// messages in it reported as clear, intermittently, for as long as this
+    /// has shipped. See `SageReply`.
     static func object(in reply: String) -> [String: Any]? {
-        guard let data = reply.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        SageReply.object(in: reply)
     }
 
     private static func string(_ object: [String: Any], _ key: String) -> String? {

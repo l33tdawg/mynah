@@ -87,7 +87,12 @@ public struct SageMemoryVocabularySource: Sendable {
     /// costs an empty vocabulary, which is the state this already degrades to,
     /// so a lenient parser is strictly better than a strict one that throws.
     static func texts(in reply: String) -> [String] {
-        guard let data = reply.data(using: .utf8),
+        // The object is *found* rather than assumed, because the node appends a
+        // `[SAGE] Reminder: …` line every few calls and trailing bytes fail the
+        // parse outright. Here the damage was quieter than elsewhere — the
+        // fallback hands the whole reply over as prose, so the vocabulary got
+        // the node's reminder text mixed into the owner's own coinages.
+        guard let data = (SageReply.jsonSlice(in: reply) ?? reply).data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) else {
             // Not JSON. The whole reply is the sample — mining coinages out of
             // prose is exactly what the vocabulary does anyway.

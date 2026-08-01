@@ -152,7 +152,7 @@ final class ProactiveWatchTests: XCTestCase {
 
         let report = await ProactiveWatch(source: node).check(against: ledger)
 
-        XCTAssertEqual(report.message, "A new task landed: “Renew the passport”.")
+        XCTAssertEqual(report.message, "A new task landed: “Renew the passport.”")
     }
 
     func testATaskThatMovedIsNews() async {
@@ -356,5 +356,22 @@ final class SageBacklogReadingTests: XCTestCase {
         XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "Error: not authorised").count, 0)
         XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "").count, 0)
         XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "{}").count, 0)
+    }
+}
+
+// MARK: - Punctuation
+
+extension ProactiveWatchTests {
+
+    func testATitleThatEndsInAStopDoesNotGetASecond() async {
+        var ledger = ProactiveLedger(hasSeeded: true)
+        ledger.knownTasks = [:]
+        let node = ScriptedNode(tasks: [
+            WatchedTask(id: "t1", title: "Message them that we can't make it.", status: "planned")
+        ])
+
+        let report = await ProactiveWatch(source: node).check(against: ledger)
+
+        XCTAssertEqual(report.message, "A new task landed: “Message them that we can't make it.”")
     }
 }

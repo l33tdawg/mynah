@@ -201,7 +201,7 @@ public struct ProactiveWatch: Sendable {
         var lines: [String] = []
 
         for task in tasks where known[task.id] == nil {
-            lines.append("A new task landed: “\(task.title)”.")
+            lines.append("A new task landed: “\(ending(task.title))”")
         }
         for task in tasks {
             guard let before = known[task.id], before != task.status else { continue }
@@ -216,6 +216,17 @@ public struct ProactiveWatch: Sendable {
             lines.append("A task came off the list.")
         }
         return lines
+    }
+
+    /// A task's own words, ending in a full stop exactly once.
+    ///
+    /// The owner writes these by speaking, so some end in a stop and some do
+    /// not — and `“…the TBCERT event.”.` is the sort of detail that makes a
+    /// message read as assembled rather than written.
+    static func ending(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return "" }
+        return ".!?".contains(last) ? trimmed : trimmed + "."
     }
 
     static func readable(_ status: String) -> String {

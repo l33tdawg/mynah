@@ -35,8 +35,11 @@ public struct SageProactiveSource: ProactiveSource {
     /// backlog this cannot read is indistinguishable from an empty one for the
     /// purpose of "has anything changed".
     static func tasks(inBacklog reply: String) -> [WatchedTask] {
-        guard let data = reply.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // Through `SageReply`, because the node appends prose after the JSON
+        // every few calls and parsing the whole string fails on it. That is not
+        // a hypothetical: it is why this returned nothing against a node
+        // answering "You have 3 assigned open tasks".
+        guard let root = SageReply.object(in: reply),
               let byDomain = root["tasks_by_domain"] as? [String: Any] else {
             return []
         }

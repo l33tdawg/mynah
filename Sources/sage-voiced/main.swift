@@ -1116,7 +1116,8 @@ func runCheck(_ arguments: [String]) -> Never {
             // with nothing.
             if tasks.isEmpty {
                 let raw = (try? await mcp.call(name: "sage_backlog", arguments: [:])) ?? ""
-                print("  node said: \(raw.prefix(400))")
+                print("  node said (\(raw.count) chars), last 300:")
+                print("  …\(raw.suffix(300))")
             }
         } catch {
             reachable = false

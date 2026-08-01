@@ -1,0 +1,145 @@
+import XCTest
+@testable import SageVoiceCore
+
+/// Reading what the node said when the node also said something else.
+///
+/// This is the seam every SAGE answer enters the product through, and it was
+/// wrong in three places at once. The node writes for an AI agent, not for this
+/// app: it prepends a banner on the first call of a session and appends a
+/// `[SAGE] Reminder: …` every few calls after that. Trailing bytes fail
+/// `JSONSerialization` outright, and every reader here treated that failure as
+/// *empty* — so the appliance reported no tasks and no waiting messages while
+/// the node was answering with three of one.
+///
+/// Measured against the real thing on 2 August: 1,709 characters, of which the
+/// last 121 were the reminder.
+final class SageReplyTests: XCTestCase {
+
+    private let real = """
+    {
+      "message": "You have 3 assigned open tasks across 1 domains.",
+      "tasks_by_domain": {
+        "mynah-home": [
+          {
+            "assigned_to_you": true,
+            "content": "[TASK] Message Biatch0 on Wednesday about TBCERT.",
+            "memory_id": "abc123",
+            "task_status": "planned"
+          }
+        ]
+      },
+      "total_open": 3
+    }
+
+    [SAGE] Reminder: call sage_turn with the current topic + observation. \
+    You haven't logged a turn in 3 calls (0min) — your recent experience isn't being stored.
+    """
+
+    func testTheRemindersDoNotHideTheAnswer() throws {
+        let root = try XCTUnwrap(SageReply.object(in: real))
+
+        XCTAssertEqual(root["total_open"] as? Int, 3)
+        XCTAssertNotNil(root["tasks_by_domain"])
+    }
+
+    func testAPlainAnswerStillReads() throws {
+        let root = try XCTUnwrap(SageReply.object(in: #"{"total_open": 0}"#))
+        XCTAssertEqual(root["total_open"] as? Int, 0)
+    }
+
+    func testTheBannerBeforeItIsCutAway() throws {
+        let banner = """
+        Welcome back. You are MYNAH on this node.
+
+        ---
+
+        {"total_open": 1}
+        """
+        XCTAssertEqual(SageReply.object(in: banner)?["total_open"] as? Int, 1)
+    }
+
+    func testABraceInTheTrailingProseCannotSwallowTheAnswer() throws {
+        // "first { to last }" would run past the end of the object and produce
+        // nothing at all. This is why the reading counts depth.
+        let reply = #"{"total_open": 2}"# + "\n\n[SAGE] Reminder: use {topic} next time }"
+        XCTAssertEqual(SageReply.object(in: reply)?["total_open"] as? Int, 2)
+    }
+
+    func testBracesInsideStringsAreNotStructure() throws {
+        let reply = #"{"content": "a task about {braces} and \"quotes\"", "total_open": 1}"#
+            + "\n\n[SAGE] Reminder: something."
+        let root = try XCTUnwrap(SageReply.object(in: reply))
+
+        XCTAssertEqual(root["total_open"] as? Int, 1)
+        XCTAssertEqual(root["content"] as? String, #"a task about {braces} and "quotes""#)
+    }
+
+    func testNestingIsFollowedToTheRightBrace() throws {
+        let reply = #"{"a": {"b": {"c": 1}}, "total_open": 9}"# + "\n\n[SAGE] Reminder."
+        XCTAssertEqual(SageReply.object(in: reply)?["total_open"] as? Int, 9)
+    }
+
+    func testATruncatedAnswerIsNotGuessedAt() {
+        XCTAssertNil(SageReply.object(in: #"{"total_open": 3, "tasks": ["#))
+        XCTAssertNil(SageReply.object(in: "Error: get backlog: connection refused"))
+        XCTAssertNil(SageReply.object(in: ""))
+    }
+
+    func testTheValueFormReadsTheSameThing() throws {
+        let value = try XCTUnwrap(SageReply.value(in: real))
+        XCTAssertEqual(value["total_open"]?.intValue, 3)
+    }
+}
+
+// MARK: - The readers that were wrong
+
+/// The two in this module that parsed the whole string, and the backlog reader
+/// that found the bug.
+final class SageReplyCallersTests: XCTestCase {
+
+    private func withReminder(_ json: String) -> String {
+        json + "\n\n[SAGE] Reminder: call sage_turn with the current topic + observation."
+    }
+
+    func testTheBacklogReadsThroughAReminder() {
+        let reply = withReminder("""
+        {"tasks_by_domain":{"mynah-home":[
+          {"memory_id":"abc","content":"[TASK] Send the car in","task_status":"planned"}]},
+         "total_open":1}
+        """)
+
+        let tasks = SageProactiveSource.tasks(inBacklog: reply)
+
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.title, "Send the car in")
+    }
+
+    func testTheAgentInboxReadsThroughAReminder() {
+        // The quiet one. An inbox that cannot be parsed reports as clear, so
+        // this failed by telling the owner nobody had written to them.
+        let reply = withReminder("""
+        {"count":1,"items":[
+          {"pipe_id":"p1","from":"Cerebrum","payload":"The quote came back.",
+           "trust":"agent_untrusted","requires_result":false}]}
+        """)
+
+        let root = SageAgentMessaging.object(in: reply)
+
+        XCTAssertNotNil(root)
+        XCTAssertEqual((root?["items"] as? [[String: Any]])?.count, 1)
+    }
+
+    func testTheDictationVocabularyDoesNotSwallowTheReminderAsProse() {
+        // Here the failure was quieter still: the fallback hands the whole
+        // reply over as a language sample, so the node's own reminder text
+        // became part of the owner's dictation vocabulary.
+        let reply = withReminder(#"{"memories":[{"content":"Nasi lemak at Village Park"}]}"#)
+
+        let texts = SageMemoryVocabularySource.texts(in: reply)
+
+        XCTAssertFalse(
+            texts.contains { $0.contains("sage_turn") },
+            "the node's nudge to an AI agent is not a word the owner says"
+        )
+    }
+}
