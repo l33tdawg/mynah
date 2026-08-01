@@ -1109,6 +1109,21 @@ public actor VoiceBridgeDaemon {
         // characters or it is nowhere.
         let spaced = SignalReplyText.spacingOutLists(in: linked)
         let body = configuration.replyPrefix.isEmpty ? spaced : configuration.replyPrefix + spaced
+        // **Signal's own bold, not a Unicode lookalike.**
+        //
+        // `signal-cli` takes formatting ranges — `start:length:STYLE` — so the
+        // marker can be genuinely bold rather than spelled in mathematical
+        // alphanumerics, which are tofu in any font missing them and are read
+        // out letter by letter by a screen reader.
+        //
+        // Counted in UTF-16 code units because that is what signal-cli
+        // documents and what Signal's wire format uses. `count` would be
+        // character count, and the two disagree the moment a reply contains an
+        // emoji — putting the bold range over the wrong text rather than
+        // failing loudly.
+        let styles = configuration.replyPrefix.isEmpty
+            ? []
+            : ["0:\(configuration.replyPrefix.trimmingCharacters(in: .whitespaces).utf16.count):BOLD"]
         // Spoken as well as written, never instead of. A voice note the owner
         // cannot play — on a watch, in a meeting, on a bad connection — would
         // otherwise be an answer they cannot read, and the text costs nothing.
@@ -1127,6 +1142,7 @@ public actor VoiceBridgeDaemon {
             _ = try await signal.send(
                 text: body,
                 attachmentPaths: attachments.map(\.path),
+                textStyles: styles,
                 to: recipient
             )
         } catch {

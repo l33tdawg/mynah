@@ -136,10 +136,16 @@ public actor SignalClient {
     /// the signal-cli process can read, then pass its path. signal-cli has no "voice note"
     /// flag — Signal carries voice notes as ordinary `audio/*` attachments — so recipients
     /// see an audio attachment rather than the waveform bubble.
+    /// - Parameter textStyles: Signal's own formatting ranges, each
+    ///   `start:length:STYLE` with the offsets counted in **UTF-16 code units**,
+    ///   which is what signal-cli documents and what Signal's wire format uses.
+    ///   Passing character counts would misplace the range the moment a reply
+    ///   contains an emoji.
     @discardableResult
     public func send(
         text: String?,
         attachmentPaths: [String],
+        textStyles: [String] = [],
         to recipient: SignalRecipient
     ) async throws -> Int64 {
         var params: [String: Any] = [:]
@@ -154,6 +160,9 @@ public actor SignalClient {
         }
         if !attachmentPaths.isEmpty {
             params["attachments"] = attachmentPaths
+        }
+        if !textStyles.isEmpty {
+            params["textStyle"] = textStyles
         }
 
         let result = try await request(method: "send", params: params)

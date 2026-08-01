@@ -971,9 +971,34 @@ final class MemoriesModel {
         let id = SageAgentIdentity.applianceAgentID()
         return memories.filter { memory in
             guard let domain = memory.domain else { return false }
-            return MemorySubjectName.isOwnHome(domain, applianceAgentID: id)
+            if MemorySubjectName.isOwnHome(domain, applianceAgentID: id) { return true }
+            return Self.ownDomains.contains(domain.lowercased())
         }
     }
+
+    /// The named domains this appliance writes to, beyond its `local-<id>` home.
+    ///
+    /// **`isOwnHome` alone matched nothing, so the control never appeared.** It
+    /// recognises only the app-v23 form, `local-` followed by the agent's public
+    /// key — and Mynah's own work does not carry that name. On the owner's node
+    /// its tasks sit in `mynah-home`, which is what the board draws under every
+    /// card it calls "the work assigned to Mynah".
+    ///
+    /// Both are established rather than guessed. `voice-interface` is
+    /// `SageRitual.memoryDomain`, this app's own constant for where it stores
+    /// what it is told. And `mynah-home` is not this identity's: a `sage_backlog`
+    /// signed as the Claude Code agent returns `local-<that id>` and
+    /// `voice-interface` and never `mynah-home`, and a `sage_list` for it is
+    /// refused outright with "agent does not have read access".
+    ///
+    /// The node is still the authority. `sage_forget` refuses anything this
+    /// appliance may not deprecate, and `forgetEverythingMynahOwns` counts those
+    /// refusals and reports them rather than pretending they worked — so this
+    /// list decides what is *offered*, never what is permitted.
+    private static let ownDomains: Set<String> = [
+        SageRitual.memoryDomain.lowercased(),
+        "mynah-home"
+    ]
 
     /// Clears what Mynah filed, one at a time, and says what it could not.
     ///
