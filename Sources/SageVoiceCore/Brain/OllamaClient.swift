@@ -637,6 +637,15 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// Ollama runs on this machine; nothing leaves it.
     public let isLocal = true
 
+    /// The only backend that has ever read `BrainMessage.images`.
+    ///
+    /// Not a claim that every Ollama model has eyes — a text-only model handed
+    /// an image will say it cannot see one, and that is the model's own honest
+    /// answer rather than an attachment silently discarded three layers below
+    /// it. What this asserts is narrower and checkable: the request built here
+    /// carries the bytes (`object["images"]`), so a vision model receives them.
+    public let seesImages = true
+
     /// Context window to ask Ollama for, in tokens.
     ///
     /// Ollama does not use the model's own context length — it defaults

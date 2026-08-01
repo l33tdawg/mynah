@@ -423,6 +423,25 @@ public protocol BrainBackend: Sendable {
     /// the vendor is headquartered.
     var isLocal: Bool { get }
 
+    /// Whether this backend does anything at all with `BrainMessage.images`.
+    ///
+    /// **Default `false`, and the default is the point.** `images` has been on
+    /// `BrainMessage` since it was written and only `OllamaClient` ever read it;
+    /// every other backend accepted the array and dropped it. Nothing failed,
+    /// nothing logged, and the model — handed a caption with no picture —
+    /// answered the only way it could: *"I can't see an image attached to this
+    /// message — nothing came through."*
+    ///
+    /// That sentence is a fabrication about the owner's phone. They watched
+    /// Signal upload a photo and were told it never arrived, when in fact the
+    /// daemon had found it, read it off disk and encoded 94KB of it.
+    ///
+    /// So the capability is declared rather than assumed, and a backend that
+    /// adds vision has to say so here. A new backend that forgets is treated as
+    /// blind, which is the safe direction: the owner is told the picture was
+    /// kept but not looked at, which is true of a backend that ignores it.
+    var seesImages: Bool { get }
+
     /// Cheap liveness/credential probe. Returns `false` rather than throwing so
     /// the setup flow can rank several candidates without exception plumbing.
     ///
@@ -492,6 +511,17 @@ public extension BrainBackend {
     func availability() async -> BrainAvailability {
         await isAvailable() ? .indeterminate : .unreachable("This backend does not report why.")
     }
+}
+
+public extension BrainBackend {
+    /// Blind unless a backend says otherwise.
+    ///
+    /// The default is deliberately the pessimistic one. A backend author who
+    /// forgets this property ships something that keeps the owner's photo and
+    /// tells them it was not looked at — which is true. The opposite default
+    /// ships something that claims to have seen a picture it discarded, and
+    /// that is the failure this whole property exists to end.
+    var seesImages: Bool { false }
 }
 
 public extension BrainBackend {

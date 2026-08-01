@@ -199,7 +199,10 @@ code {
    element, and no negative margins that fight the safe-area insets on a
    notched display. */
 header {
-  padding: var(--s9) var(--s6) var(--s8);
+  /* Roughly double the old top and bottom. A hero is mostly air — the previous
+     values were section padding, which is why the band read as a coloured strip
+     rather than an opening. */
+  padding: calc(var(--s9) * 1.7) var(--s6) calc(var(--s9) * 1.6);
   margin-bottom: var(--s9);
   background: var(--hero);
   box-shadow: 0 0 0 100vmax var(--hero);
@@ -220,6 +223,38 @@ header .get .button {
 }
 header .get .aside { color: var(--hero-ink-2); }
 header .get .aside a { color: var(--hero-ink); text-decoration-color: var(--hero-ink-2); }
+
+/* Copy left, the app right. The screenshot is the wider of the two because it
+   is the thing being described; the copy has a measure it should not exceed
+   anyway. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: var(--s9);
+  align-items: center;
+  margin-top: var(--s9);
+}
+.hero .display { margin-top: 0; max-width: 16ch; }
+.hero .standfirst { max-width: 32rem; }
+
+.hero-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--r-card);
+  /* Deeper than --shadow-card: this one sits on near-black, where the standard
+     card shadow is invisible. */
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+/* One breakpoint, and it is where the two columns stop having room for a
+   sentence rather than a round number. Below it the screenshot goes under the
+   copy instead of beside it. */
+@media (max-width: 880px) {
+  .hero { grid-template-columns: 1fr; gap: var(--s8); }
+  .hero .display { max-width: 15ch; }
+  header { padding: var(--s9) var(--s5) var(--s9); }
+}
 
 .wordmark {
   /* .rounded is permitted in exactly two places in the app. This is one. */
@@ -492,21 +527,32 @@ footer p { max-width: 34rem; }
       </svg>
     </span>Mynah</span>
 
-  <h1 class="display">A personal AI that lives on your Mac.</h1>
+  <div class="hero">
+    <div class="hero-copy">
+      <h1 class="display">A personal AI that lives on your Mac.</h1>
 
-  <p class="standfirst">
-    Talk to it from your desk, or your phone via Signal. It remembers what you
-    tell it, and is fully local and privacy-preserving by default — and if you
-    have other SAGE agents on your network, you can message them too.
-  </p>
+      <p class="standfirst">
+        Talk to it from your desk, or your phone via Signal. It remembers what you
+        tell it, and is fully local and privacy-preserving by default — and if you
+        have other SAGE agents on your network, you can message them too.
+      </p>
 
-  <div class="get">
-    <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest">Download for Apple silicon</a>
-    <span class="aside">
-      macOS 14 or later &middot; free and open source &middot;
-      <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
-      built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
-    </span>
+      <div class="get">
+        <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest">Download for Apple silicon</a>
+        <span class="aside">
+          macOS 14 or later &middot; free and open source &middot;
+          <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
+          built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span id="downloads"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- The app itself, bled off the right edge on a wide window. A hero that
+         only describes the thing asks the reader to imagine it; showing the
+         window answers "what am I downloading" before the fold. -->
+    <div class="hero-shot" aria-hidden="true">
+      <img src="screenshots/home.png" width="1600" height="1383" alt="">
+    </div>
   </div>
 </header>
 
@@ -655,13 +701,11 @@ footer p { max-width: 34rem; }
          conversation, no contact list.
     ------------------------------------------------------------------ -->
     <figure>
-      <div class="shot phone">
-        <div>
-          <p class="eyebrow">Screenshot</p>
-          <p class="what">The Signal Note-to-Self thread, with a question and Mynah&rsquo;s reply.</p>
-        </div>
+      <div class="shot phone filled">
+        <img src="screenshots/signal.png" width="900" height="1649"
+             alt="A Signal Note-to-Self thread. The question &ldquo;Tell me what your capabilities are&rdquo; is answered by a message beginning &ldquo;&gt;&gt;&rdquo;, listing what Mynah can do.">
       </div>
-      <figcaption>Every reply is marked, because Signal draws Note to Self as one column of your own messages and there would otherwise be no way to tell who said what.</figcaption>
+      <figcaption>Every reply starts with <code>&gt;&gt;</code>, because Signal draws Note to Self as one column of your own messages and there would otherwise be no way to tell who said what.</figcaption>
     </figure>
 
     <div>
