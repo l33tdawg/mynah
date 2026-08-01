@@ -45,6 +45,7 @@ func usage() -> Never {
       sage-voiced google [--provision] [--sign-out]        sign in with Google
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
                          [--reply-prefix "MYNAH >> "] [--acknowledge]
+      sage-voiced check [--sage PATH]                     one proactive check, printed
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
     Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
@@ -1047,9 +1048,97 @@ case "search":      runSearch(Array(arguments.dropFirst()))
 case "google":      runGoogle(Array(arguments.dropFirst()))
 case "key":         runKey(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
+case "check":       runCheck(Array(arguments.dropFirst()))
 default:            usage()
 }
 
+
+// MARK: - check
+
+/// Runs one proactive check and prints what it *would* say.
+///
+/// **The unit tests cover the rules; this covers the wiring.** Everything in
+/// `ProactiveWatch` is a value type tested without a node, which proves the
+/// decisions and proves nothing about whether this appliance's key can read its
+/// own backlog, whether the node's shapes still parse, or whether the identity
+/// the daemon runs under is the one holding the tasks. Those are exactly the
+/// failures that would otherwise show up as an appliance that has been silent
+/// for a week and nobody able to say whether that is correct.
+///
+/// **Deliberately does not touch the real ledger.** Running this must not
+/// consume the news: whatever it finds is still new to the daemon afterwards.
+func runCheck(_ arguments: [String]) -> Never {
+    let flags = parseFlags(arguments)
+    let sagePath = flags["sage"]
+        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
+        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+
+    runAndExit {
+        let mcp = MCPClient(
+            executableURL: URL(fileURLWithPath: sagePath),
+            arguments: ["mcp"],
+            environment: MynahIdentity.applianceEnvironment()
+        )
+        defer { mcp.stop() }
+        let source = SageProactiveSource(tools: mcp)
+
+        // What it can see at all — and **why not**, when it cannot.
+        //
+        // `ProactiveWatch` swallows these on purpose: a check nobody asked for
+        // must not put an error on the owner's phone. That is right for the
+        // daemon and wrong here, and it showed the first time this ran: "inbox:
+        // 0, tasks: 0" against a node that has both, because a failed
+        // connection and an empty node are the same `?? []`. A diagnostic that
+        // reports "nothing" when it means "could not ask" is worse than no
+        // diagnostic.
+        var reachable = true
+        do {
+            let waiting = try await source.waitingMessages(limit: 20)
+            print("inbox: \(waiting.count) waiting")
+            for item in waiting {
+                print("  - from \(item.content.sender)\(item.intent.map { " (\($0))" } ?? "")")
+            }
+        } catch {
+            reachable = false
+            print("inbox: could not ask — \(error)")
+        }
+        do {
+            let tasks = try await source.openTasks()
+            print("tasks: \(tasks.count) open")
+            for task in tasks {
+                print("  - [\(task.status)] \(task.title)")
+            }
+        } catch {
+            reachable = false
+            print("tasks: could not ask — \(error)")
+        }
+        print("identity: \(MynahIdentity.applianceKeyURL().path)")
+
+        let preferences = ProactivePreferences.load()
+        print("")
+        print("setting: \(preferences.isOn ? "on" : "off"), every \(preferences.clampedMinutes) minutes, "
+            + "quiet \(preferences.quietFrom):00–\(preferences.quietUntil):00")
+
+        // Against an empty ledger, seeded, so everything present reads as new —
+        // which is what makes this useful as a rehearsal. The real ledger is
+        // untouched.
+        let report = await ProactiveWatch(source: source)
+            .check(against: ProactiveLedger(hasSeeded: true))
+        print("")
+        guard reachable else {
+            print("the node did not answer, so this proves nothing about what it holds.")
+            return 1
+        }
+        if let message = report.message {
+            print("it would say:")
+            print("")
+            print(message)
+        } else {
+            print("it would say nothing.")
+        }
+        return 0
+    }
+}
 
 /// Where the call endpoint is, looking in the sensible place first.
 ///
