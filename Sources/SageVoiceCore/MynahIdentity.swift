@@ -55,19 +55,26 @@ public enum MynahIdentity {
             .appendingPathComponent("agent.key", isDirectory: false)
     }
 
+    /// The node's own directory, resolved the way the node resolves it —
+    /// `SAGE_HOME` included, so a non-standard install cannot slip past the
+    /// comparisons below or leave the key somewhere CEREBRUM is not looking.
+    public static func sageHomeURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        environment["SAGE_HOME"].flatMap { value -> URL? in
+            let expanded = NSString(string: value).expandingTildeInPath
+            return expanded.isEmpty ? nil : URL(fileURLWithPath: expanded, isDirectory: true)
+        } ?? homeDirectory.appendingPathComponent(".sage", isDirectory: true)
+    }
+
     /// The node operator's key — the thing this type exists to never return.
-    ///
-    /// Resolved the same way the node resolves it, `SAGE_HOME` included, so a
-    /// non-standard install cannot slip past the comparison below.
     public static func nodeOperatorKeyURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        let sageHome = environment["SAGE_HOME"].flatMap { value -> URL? in
-            let expanded = NSString(string: value).expandingTildeInPath
-            return expanded.isEmpty ? nil : URL(fileURLWithPath: expanded, isDirectory: true)
-        } ?? homeDirectory.appendingPathComponent(".sage", isDirectory: true)
-        return sageHome.appendingPathComponent("agent.key", isDirectory: false)
+        sageHomeURL(environment: environment, homeDirectory: homeDirectory)
+            .appendingPathComponent("agent.key", isDirectory: false)
     }
 
     // MARK: - Deliberately absent: resolvedKeyPath() and childEnvironment()
@@ -147,13 +154,26 @@ public enum MynahIdentity {
             return false
         }
 
-        // Mynah's own directory. Both `agent.key` and `appliance-agent.key`
-        // live here, so an override may still name either — what it may not do
-        // is name somebody else's identity.
-        let ourDirectory = keyURL(homeDirectory: homeDirectory)
-            .deletingLastPathComponent().standardizedFileURL.path
-        return candidate.deletingLastPathComponent().path
-            .compare(ourDirectory, options: .caseInsensitive) == .orderedSame
+        // Mynah's own directories, and only those. Two of them now that the key
+        // lives in `~/.sage/agents/mynah/`: the current one and the Application
+        // Support directory it moved out of, which still holds an upgrading
+        // appliance's identity.
+        //
+        // The allowlist matters more than it used to. Mynah's key now sits
+        // *inside* `~/.sage/agents/`, which is the directory full of other
+        // agents' identities — so "is this under the agents directory" would
+        // admit every one of them. Naming the two acceptable directories keeps
+        // the refusal exactly as narrow as it was when Mynah's key lived
+        // somewhere else entirely.
+        let ourDirectories = [
+            applianceKeyURL(environment: environment, homeDirectory: homeDirectory),
+            legacyApplianceKeyURL(homeDirectory: homeDirectory)
+        ].map { $0.deletingLastPathComponent().standardizedFileURL.path }
+
+        let candidateDirectory = candidate.deletingLastPathComponent().path
+        return ourDirectories.contains {
+            candidateDirectory.compare($0, options: .caseInsensitive) == .orderedSame
+        }
     }
 
     /// Same file on disk, whatever the two paths look like. Resolves symlinks
@@ -182,22 +202,77 @@ public enum MynahIdentity {
         ]) { identity, _ in identity }
     }
 
-    /// The phone appliance's key.
+    /// Mynah's directory inside `~/.sage/agents/`.
     ///
-    /// Separate from the app's because they are two agents with two grants —
-    /// see `SageRitual.applianceAgentName` — and separate from the node operator's
-    /// for the same reason everything else here is.
+    /// A fixed name, and it is fixed for a safety reason rather than a tidiness
+    /// one: every directory the node derives is `<base>-<provider>-<8 hex>`, so
+    /// a name carrying no hash suffix is **unreachable by derivation**. No
+    /// project, whatever it is called and wherever it is launched from, can ever
+    /// be handed this directory and become Mynah.
+    public static let applianceDirectoryName = "mynah"
+
+    /// The appliance's key — the identity every part of this product signs as.
     ///
-    /// This exists because the daemon had no pinned identity at all: it spawned
-    /// `sage-gui mcp` with no environment, so the node fell through to its
-    /// per-directory rule and minted a key from the launch working directory.
-    /// The appliance had accumulated three of them —
+    /// Separate from the node operator's for the reason everything else here is:
+    /// Mynah is an agent that can be granted and restricted, and the operator is
+    /// neither.
+    ///
+    /// ## Why it lives in `~/.sage/agents/` and not in this app's own directory
+    ///
+    /// It used to live beside the owner's provider keys and notes, in
+    /// `~/Library/Application Support/SAGE Voice Bridge/appliance-agent.key`, on
+    /// the reasoning that the key belongs to this app rather than to the node.
+    /// That reasoning was about ownership and it answered the wrong question.
+    ///
+    /// **CEREBRUM looks for agent keys in `~/.sage/agents/`.** A key held
+    /// anywhere else is one the owner cannot see, approve, or grant a domain to
+    /// through the interface built for exactly that — so the appliance shows up
+    /// as an agent id with no key behind it, and the operator has nothing to act
+    /// on. Ownership is not what discovery keys on; location is.
+    ///
+    /// Nothing about the previous reasoning becomes false: Mynah still owns this
+    /// key, still mints it, still refuses to sign as anyone else. Storing it
+    /// where the node's own tooling looks borrows no authority and forges none —
+    /// the file is 32 bytes of Ed25519 seed either way, and standing still comes
+    /// from the chain. It is the same key, in the place the owner's console can
+    /// find it. Confirmed with the SAGE team, who are keeping node-side work
+    /// separate from this migration.
+    ///
+    /// The old path is still read — see `legacyApplianceKeyURL` — because an
+    /// upgrading appliance's identity is sitting in it, and pointing at a fresh
+    /// path without adopting first is the data loss `migrateApplianceKeyIfNeeded`
+    /// exists to prevent.
+    public static func applianceKeyURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        sageHomeURL(environment: environment, homeDirectory: homeDirectory)
+            .appendingPathComponent("agents", isDirectory: true)
+            .appendingPathComponent(applianceDirectoryName, isDirectory: true)
+            .appendingPathComponent("agent.key", isDirectory: false)
+    }
+
+    /// Where the appliance's key lived before it moved into `~/.sage/agents/`.
+    ///
+    /// Read, never written. Every installed appliance in the world has its
+    /// identity here and nowhere else, so this is the first thing the migration
+    /// looks at — ahead of the derived candidates, because it is the key the app
+    /// has actually been signing with rather than one it might once have.
+    ///
+    /// The bytes are deliberately left in place after adoption rather than moved
+    /// or deleted. They are the same key, so a stale copy cannot become a second
+    /// identity, and a downgrade to an older build finds its identity exactly
+    /// where it expects to.
+    ///
+    /// This exists because the daemon once had no pinned identity at all: it
+    /// spawned `sage-gui mcp` with no environment, so the node fell through to
+    /// its per-directory rule and minted a key from the launch working
+    /// directory. The appliance accumulated three of them —
     /// `~/.sage/agents/ableton-agent-*`, `sage-voice-bridge-agent-*`,
     /// `svbtest-agent-*` — one per place it had ever been started from, each
     /// with its own memories. The `cd` in the launch script was load-bearing and
-    /// nothing said so; starting the daemon from anywhere else silently gave the
-    /// owner an appliance that had forgotten everything.
-    public static func applianceKeyURL(
+    /// nothing said so.
+    public static func legacyApplianceKeyURL(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
         homeDirectory
@@ -340,17 +415,21 @@ public enum MynahIdentity {
         fileManager: FileManager = .default,
         log: (String) -> Void = { _ in }
     ) -> URL? {
-        let destination = applianceKeyURL(homeDirectory: homeDirectory)
+        let destination = applianceKeyURL(environment: environment, homeDirectory: homeDirectory)
         guard !fileManager.fileExists(atPath: destination.path) else { return nil }
 
-        let sageHome = environment["SAGE_HOME"].flatMap { value -> URL? in
-            let expanded = NSString(string: value).expandingTildeInPath
-            return expanded.isEmpty ? nil : URL(fileURLWithPath: expanded, isDirectory: true)
-        } ?? homeDirectory.appendingPathComponent(".sage", isDirectory: true)
+        let sageHome = sageHomeURL(environment: environment, homeDirectory: homeDirectory)
 
-        // The live cwd first — it is right when the migrating process happens to
-        // be the one that minted the key — then the launcher's directory.
-        var candidates: [URL] = []
+        // Application Support first, and it is not one candidate among several.
+        // Every appliance installed before the key moved into `~/.sage/agents/`
+        // has its identity in exactly this file — no derivation, no guessing,
+        // no dependence on where anything was launched from. The derived
+        // candidates below only matter for an appliance old enough to predate
+        // the pin as well, which is a smaller and shrinking set.
+        var candidates: [URL] = [legacyApplianceKeyURL(homeDirectory: homeDirectory)]
+
+        // Then the live cwd — right when the migrating process happens to be the
+        // one that minted the key — and then the launcher's directory.
         for directory in [workingDirectory, homeDirectory.path] {
             for candidate in derivedKeyCandidates(
                 sageHome: sageHome,
@@ -458,11 +537,12 @@ public enum MynahIdentity {
     ///   already there.
     @discardableResult
     public static func mintApplianceKeyIfNeeded(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default,
         log: (String) -> Void = { _ in }
     ) -> URL? {
-        let destination = applianceKeyURL(homeDirectory: homeDirectory)
+        let destination = applianceKeyURL(environment: environment, homeDirectory: homeDirectory)
         guard !fileManager.fileExists(atPath: destination.path) else { return nil }
 
         // 32 raw bytes — the Ed25519 seed, which is the shape SAGE writes for a
@@ -503,17 +583,30 @@ public enum MynahIdentity {
     /// No clock is involved for the same reason — a name that depends on when
     /// it was written cannot be recognised later as "the key that was here
     /// before".
+    ///
+    /// Backups stay in this app's own directory rather than following the key
+    /// into `~/.sage/agents/`. A retired identity is Mynah's business and not
+    /// the node's, and the one thing the agents directory should contain for
+    /// this appliance is the single key it currently signs with.
     @discardableResult
     public static func backUpApplianceKeyIfPresent(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default,
         log: (String) -> Void = { _ in }
     ) -> URL? {
-        let source = applianceKeyURL(homeDirectory: homeDirectory)
-        guard let key = try? Data(contentsOf: source) else { return nil }
+        // Whichever key is live. During the move into `~/.sage/agents/` the
+        // appliance's only identity is still the Application Support one, and
+        // that is precisely the boot where a lost key would cost the most.
+        let candidates = [
+            applianceKeyURL(environment: environment, homeDirectory: homeDirectory),
+            legacyApplianceKeyURL(homeDirectory: homeDirectory)
+        ]
+        guard let key = candidates.lazy.compactMap({ try? Data(contentsOf: $0) }).first else { return nil }
 
         let stamp = SageAgentIdentity.agentID(ofKeyBytes: key).map { String($0.prefix(8)) } ?? "unreadable"
-        let destination = source.deletingLastPathComponent()
+        let destination = legacyApplianceKeyURL(homeDirectory: homeDirectory)
+            .deletingLastPathComponent()
             .appendingPathComponent("retired", isDirectory: true)
             .appendingPathComponent("appliance-agent.\(stamp).key", isDirectory: false)
         guard !fileManager.fileExists(atPath: destination.path) else { return destination }
@@ -525,7 +618,7 @@ public enum MynahIdentity {
         } catch {
             // Said, not thrown. A failed backup is a risk worth reporting and a
             // terrible reason to stop an owner installing an update.
-            log("[identity] could not back up \(source.path): \(error)")
+            log("[identity] could not back up this appliance's key to \(destination.path): \(error)")
             return nil
         }
     }
@@ -560,7 +653,12 @@ public enum MynahIdentity {
         fileManager: FileManager = .default,
         log: @escaping (String) -> Void = { _ in }
     ) -> URL {
-        backUpApplianceKeyIfPresent(homeDirectory: homeDirectory, fileManager: fileManager, log: log)
+        backUpApplianceKeyIfPresent(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager,
+            log: log
+        )
         migrateApplianceKeyIfNeeded(
             environment: environment,
             homeDirectory: homeDirectory,
@@ -568,8 +666,13 @@ public enum MynahIdentity {
             fileManager: fileManager,
             log: log
         )
-        mintApplianceKeyIfNeeded(homeDirectory: homeDirectory, fileManager: fileManager, log: log)
-        return applianceKeyURL(homeDirectory: homeDirectory)
+        mintApplianceKeyIfNeeded(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager,
+            log: log
+        )
+        return applianceKeyURL(environment: environment, homeDirectory: homeDirectory)
     }
 
     /// Environment for the daemon's `sage-gui mcp`.

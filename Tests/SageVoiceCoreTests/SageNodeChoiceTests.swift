@@ -190,30 +190,67 @@ final class SageNodeChoiceTests: XCTestCase {
         )
     }
 
-    // MARK: Nothing of Mynah's is written inside SAGE
+    // MARK: Exactly one thing of Mynah's is written inside SAGE
 
-    /// Mynah keeps its own key in its own directory.
+    /// Mynah writes one file into `~/.sage`, and it is its own key.
     ///
-    /// The third way an appliance can interfere with somebody's node is to write
-    /// into its state — and `~/.sage` holds their agents and their keys. Mynah
-    /// reads from there once, to adopt a key it created itself under an older
-    /// scheme, and writes only to its own Application Support directory.
+    /// This test used to assert the opposite — that nothing of Mynah's went into
+    /// `~/.sage` at all — on the reasoning that an appliance must not write into
+    /// somebody else's node state. **That reasoning was about ownership and it
+    /// answered the wrong question.** CEREBRUM discovers agent keys in
+    /// `~/.sage/agents/`, so a key kept anywhere else is one the owner cannot
+    /// see, approve, or grant a domain to through the interface built for
+    /// exactly that. Ownership is not what discovery keys on; location is.
     ///
-    /// Asserted rather than assumed, because the natural place to put an agent
-    /// key looks like `~/.sage/agents/`, and a later change that "tidied" it
-    /// there would be putting Mynah's files inside somebody else's store.
-    func testMynahsOwnKeyIsNotStoredInsideSage() {
+    /// The concern the old assertion was protecting has not gone away, so it is
+    /// asserted here in the form that still holds: one file, in a directory that
+    /// is Mynah's alone, and nothing else. Not the operator key, not `~/.sage`
+    /// itself, and not another agent's directory.
+    func testMynahWritesNothingInsideSageExceptItsOwnKey() {
         let home = URL(fileURLWithPath: "/Users/someone")
-        let key = MynahIdentity.applianceKeyURL(homeDirectory: home).path
-        let sageHome = home.appendingPathComponent(".sage").path
+        let key = MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)
+        let agents = home.appendingPathComponent(".sage/agents", isDirectory: true).path
 
-        XCTAssertFalse(
-            key.hasPrefix(sageHome),
-            "Mynah writes its key inside SAGE's own state directory: \(key)"
-        )
         XCTAssertTrue(
-            key.contains("SAGE Voice Bridge"),
-            "Mynah's key is not in its own directory: \(key)"
+            key.path.hasPrefix(agents + "/"),
+            "Mynah's key is not where CEREBRUM looks for agent keys: \(key.path)"
+        )
+        XCTAssertEqual(
+            key.deletingLastPathComponent().lastPathComponent,
+            MynahIdentity.applianceDirectoryName,
+            "Mynah's key is loose in the agents directory rather than in its own"
+        )
+        XCTAssertNotEqual(
+            key.path,
+            MynahIdentity.nodeOperatorKeyURL(environment: [:], homeDirectory: home).path
+        )
+    }
+
+    /// Retired keys stay out of it.
+    ///
+    /// The agents directory should hold exactly the one key this appliance
+    /// currently signs with. A pile of superseded identities beside it is how a
+    /// console ends up offering the owner a choice between four Mynahs, three of
+    /// which are dead.
+    func testRetiredKeysAreNotLeftInTheAgentsDirectory() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("retired-keys-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+
+        let live = Data(repeating: 4, count: 32)
+        try OwnerOnlyFileSecurity.write(
+            live,
+            to: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)
+        )
+
+        let backup = MynahIdentity.backUpApplianceKeyIfPresent(environment: [:], homeDirectory: home)
+
+        XCTAssertNotNil(backup)
+        XCTAssertFalse(
+            backup!.path.hasPrefix(home.appendingPathComponent(".sage").path),
+            "a retired identity was left inside SAGE's own directory: \(backup!.path)"
         )
     }
 

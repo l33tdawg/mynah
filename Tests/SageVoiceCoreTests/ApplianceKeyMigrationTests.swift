@@ -88,7 +88,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
         )
 
         XCTAssertNotNil(migrated, "the appliance's own key was not found")
-        let pinned = MynahIdentity.applianceKeyURL(homeDirectory: home)
+        let pinned = MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)
         XCTAssertEqual(
             try Data(contentsOf: pinned),
             key,
@@ -126,7 +126,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
 
         XCTAssertNotNil(migrated, "searched only the live cwd, so the appliance's key was missed")
         XCTAssertEqual(
-            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)),
             key,
             "a different key here is a different agent id, which is an appliance with no memories"
         )
@@ -162,10 +162,10 @@ final class ApplianceKeyMigrationTests: XCTestCase {
     /// forever. SAGE will not retrofit companion standing onto an existing
     /// chain, so there is no second chance at this.
     func testAFreshInstallHasItsOwnKeyBeforeAnyNodeIsAskedAnything() throws {
-        let minted = MynahIdentity.mintApplianceKeyIfNeeded(homeDirectory: home)
+        let minted = MynahIdentity.mintApplianceKeyIfNeeded(environment: [:], homeDirectory: home)
 
         XCTAssertNotNil(minted, "a fresh install got no key, so genesis has nothing to embed")
-        let pinned = MynahIdentity.applianceKeyURL(homeDirectory: home)
+        let pinned = MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)
         let bytes = try Data(contentsOf: pinned)
         XCTAssertEqual(bytes.count, 32, "not an Ed25519 seed, so the node cannot sign with it")
         XCTAssertNotNil(
@@ -181,11 +181,11 @@ final class ApplianceKeyMigrationTests: XCTestCase {
     /// memories orphaned — silently, during an update the owner asked for.
     func testAnExistingKeyIsNeverMintedOver() throws {
         let existing = Data(repeating: 7, count: 32)
-        try OwnerOnlyFileSecurity.write(existing, to: MynahIdentity.applianceKeyURL(homeDirectory: home))
+        try OwnerOnlyFileSecurity.write(existing, to: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home))
 
-        XCTAssertNil(MynahIdentity.mintApplianceKeyIfNeeded(homeDirectory: home))
+        XCTAssertNil(MynahIdentity.mintApplianceKeyIfNeeded(environment: [:], homeDirectory: home))
         XCTAssertEqual(
-            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)),
             existing,
             "the appliance was handed a new identity and lost every memory under the old one"
         )
@@ -219,7 +219,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
     /// up on every boot rewrites one file instead of growing a pile.
     func testTheExistingKeyIsBackedUpBeforeAnythingCanTouchIt() throws {
         let live = Data(repeating: 9, count: 32)
-        try OwnerOnlyFileSecurity.write(live, to: MynahIdentity.applianceKeyURL(homeDirectory: home))
+        try OwnerOnlyFileSecurity.write(live, to: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home))
         let stamp = String(SageAgentIdentity.agentID(ofKeyBytes: live)!.prefix(8))
 
         MynahIdentity.prepareApplianceKey(
@@ -228,7 +228,10 @@ final class ApplianceKeyMigrationTests: XCTestCase {
             workingDirectory: "/"
         )
 
-        let backup = MynahIdentity.applianceKeyURL(homeDirectory: home)
+        // In this app's own directory, not in `~/.sage/agents/`. A retired
+        // identity is Mynah's business; the agents directory should hold exactly
+        // the one key the appliance currently signs with.
+        let backup = MynahIdentity.legacyApplianceKeyURL(homeDirectory: home)
             .deletingLastPathComponent()
             .appendingPathComponent("retired/appliance-agent.\(stamp).key")
         XCTAssertEqual(
@@ -258,7 +261,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
             homeDirectory: home,
             workingDirectory: "/Users/ableton"
         )
-        let pinned = MynahIdentity.applianceKeyURL(homeDirectory: home)
+        let pinned = MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)
         let mode = try FileManager.default.attributesOfItem(atPath: pinned.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(mode, 0o600)
     }
@@ -267,7 +270,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
     /// unconditional copy would overwrite the live key from a stale directory.
     func testItDoesNothingOnceThePinnedKeyExists() throws {
         let original = Data("original".utf8)
-        try OwnerOnlyFileSecurity.write(original, to: MynahIdentity.applianceKeyURL(homeDirectory: home))
+        try OwnerOnlyFileSecurity.write(original, to: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home))
         _ = try plantDerivedKey(workingDirectory: "/Users/ableton", provider: nil, bytes: Data("stale".utf8))
 
         let migrated = MynahIdentity.migrateApplianceKeyIfNeeded(
@@ -278,7 +281,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
 
         XCTAssertNil(migrated)
         XCTAssertEqual(
-            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)),
             original,
             "a stale derived key overwrote the live identity"
         )
@@ -301,7 +304,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
 
         XCTAssertNil(migrated, "adopted an unrelated project's agent identity")
         XCTAssertFalse(
-            FileManager.default.fileExists(atPath: MynahIdentity.applianceKeyURL(homeDirectory: home).path)
+            FileManager.default.fileExists(atPath: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home).path)
         )
     }
 
@@ -332,13 +335,146 @@ final class ApplianceKeyMigrationTests: XCTestCase {
 
         XCTAssertEqual(
             environment[MynahIdentity.environmentVariable],
-            MynahIdentity.applianceKeyURL(homeDirectory: home).path
+            MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home).path
         )
         XCTAssertEqual(
-            try Data(contentsOf: MynahIdentity.applianceKeyURL(homeDirectory: home)),
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)),
             key,
             "applianceEnvironment did not run the migration"
         )
+    }
+
+    // MARK: Where the key lives
+
+    /// CEREBRUM looks for agent keys in `~/.sage/agents/`. A key anywhere else
+    /// is one the owner cannot see, approve, or grant a domain to through the
+    /// interface built for exactly that.
+    ///
+    /// The key used to sit in this app's Application Support directory on the
+    /// reasoning that it belongs to Mynah rather than to the node. True, and
+    /// beside the point: ownership is not what discovery keys on.
+    func testTheKeyLivesWhereCerebrumLooksForIt() {
+        XCTAssertEqual(
+            MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home).path,
+            home.appendingPathComponent(".sage/agents/mynah/agent.key").path
+        )
+    }
+
+    /// `SAGE_HOME` moves the agents directory, so it has to move the key too —
+    /// otherwise a non-standard install writes the key somewhere the owner's own
+    /// node is not looking.
+    func testARelocatedNodeTakesTheKeyWithIt() {
+        XCTAssertEqual(
+            MynahIdentity.applianceKeyURL(
+                environment: ["SAGE_HOME": "/opt/sage-data"],
+                homeDirectory: home
+            ).path,
+            "/opt/sage-data/agents/mynah/agent.key"
+        )
+    }
+
+    /// The name is fixed, and that is a safety property rather than a tidiness
+    /// one. Every directory the node derives ends in `-<8 hex>`, so a name
+    /// without that suffix cannot be produced by the derivation — no project,
+    /// whatever it is called or wherever it is launched from, can be handed
+    /// Mynah's directory and become Mynah.
+    func testMynahsDirectoryCannotBeReachedByTheNodesDerivation() {
+        let sage = URL(fileURLWithPath: "/Users/tester/.sage", isDirectory: true)
+        for directory in ["mynah", "/Users/mynah", "/tmp/mynah", "/Users/tester/mynah"] {
+            for provider in [nil, "", "agent", "claude-code"] as [String?] {
+                for candidate in MynahIdentity.derivedKeyCandidates(
+                    sageHome: sage, workingDirectory: directory, provider: provider
+                ) {
+                    XCTAssertNotEqual(
+                        candidate.deletingLastPathComponent().lastPathComponent,
+                        MynahIdentity.applianceDirectoryName,
+                        "a project working directory derived Mynah's own directory"
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: Moving out of Application Support
+
+    /// Every appliance installed before the key moved has its identity in
+    /// Application Support and nowhere else. Pointing at the new path without
+    /// adopting first is the same data loss the derived-candidate migration
+    /// exists to prevent — a new agent id, and every memory the owner ever gave
+    /// Mynah orphaned, during an update they asked for.
+    func testAnUpgradeAdoptsTheKeyFromApplicationSupport() throws {
+        let existing = Data(repeating: 5, count: 32)
+        try OwnerOnlyFileSecurity.write(existing, to: MynahIdentity.legacyApplianceKeyURL(homeDirectory: home))
+
+        let path = MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertEqual(path.path, home.appendingPathComponent(".sage/agents/mynah/agent.key").path)
+        XCTAssertEqual(
+            try Data(contentsOf: path), existing,
+            "the appliance was handed a new identity on the boot that moved its key"
+        )
+    }
+
+    /// Application Support is not one candidate among several — it is the key
+    /// the app has actually been signing with. A derived directory is at best a
+    /// guess about where it once ran, so it must never win.
+    func testApplicationSupportBeatsADerivedDirectory() throws {
+        let live = Data(repeating: 1, count: 32)
+        let stale = Data(repeating: 2, count: 32)
+        try OwnerOnlyFileSecurity.write(live, to: MynahIdentity.legacyApplianceKeyURL(homeDirectory: home))
+        _ = try plantDerivedKey(workingDirectory: home.path, provider: nil, bytes: stale)
+
+        MynahIdentity.migrateApplianceKeyIfNeeded(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertEqual(
+            try Data(contentsOf: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home)),
+            live,
+            "a directory the appliance once ran from beat the key it is actually signing with"
+        )
+    }
+
+    /// The old bytes stay put. They are the same key, so a leftover copy cannot
+    /// become a second identity, and a downgrade to an older build finds its
+    /// identity exactly where it expects to.
+    func testAdoptionLeavesTheOldCopyAlone() throws {
+        let existing = Data(repeating: 5, count: 32)
+        let legacy = MynahIdentity.legacyApplianceKeyURL(homeDirectory: home)
+        try OwnerOnlyFileSecurity.write(existing, to: legacy)
+
+        MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        XCTAssertEqual(try Data(contentsOf: legacy), existing, "the appliance's only key was moved rather than copied")
+    }
+
+    /// The backup has to cover the boot that performs the move, which is the one
+    /// where the appliance's only identity is still the old file.
+    func testTheApplicationSupportKeyIsBackedUpBeforeTheMove() throws {
+        let existing = Data(repeating: 6, count: 32)
+        try OwnerOnlyFileSecurity.write(existing, to: MynahIdentity.legacyApplianceKeyURL(homeDirectory: home))
+        let stamp = String(SageAgentIdentity.agentID(ofKeyBytes: existing)!.prefix(8))
+
+        MynahIdentity.prepareApplianceKey(
+            environment: ["SAGE_HOME": sageHome.path],
+            homeDirectory: home,
+            workingDirectory: "/"
+        )
+
+        let backup = MynahIdentity.legacyApplianceKeyURL(homeDirectory: home)
+            .deletingLastPathComponent()
+            .appendingPathComponent("retired/appliance-agent.\(stamp).key")
+        XCTAssertEqual(try Data(contentsOf: backup), existing, "no copy was taken before the key moved")
     }
 
     // MARK: The legacy-directory trap
@@ -377,7 +513,7 @@ final class ApplianceKeyMigrationTests: XCTestCase {
 
         XCTAssertNil(migrated, "the appliance adopted a Claude Code agent's identity")
         XCTAssertFalse(
-            FileManager.default.fileExists(atPath: MynahIdentity.applianceKeyURL(homeDirectory: home).path),
+            FileManager.default.fileExists(atPath: MynahIdentity.applianceKeyURL(environment: [:], homeDirectory: home).path),
             "another agent's key was copied into the appliance's identity"
         )
     }

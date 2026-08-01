@@ -55,7 +55,7 @@ final class MynahIdentityTests: XCTestCase {
         let resolved = identityPath(environment: [:], homeDirectory: home)
         XCTAssertNotEqual(resolved, operatorKey, "Mynah is still signing as the node operator")
         XCTAssertTrue(
-            resolved.hasSuffix("SAGE Voice Bridge/appliance-agent.key"),
+            resolved.hasSuffix(".sage/agents/mynah/agent.key"),
             "expected the appliance's own key, got \(resolved)"
         )
     }

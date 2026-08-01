@@ -16,9 +16,12 @@ import Foundation
 ///     Since "One appliance is one agent" the window signs as the appliance, so
 ///     nothing registers this key any more. On the author's machine it derives
 ///     to `17641c48…`, which is genuinely absent from the roster.
-///   * `MynahIdentity.applianceKeyURL()` — `appliance-agent.key`, the identity
-///     everything actually signs as. On the author's machine it now derives to
-///     `1ab7aa10…`, the node's active `agent/sage-voice-bridge`.
+///   * `MynahIdentity.applianceKeyURL()` — the identity everything actually
+///     signs as. On the author's machine it derives to `1ab7aa10…`, the node's
+///     active `agent/sage-voice-bridge`. It has since moved to
+///     `~/.sage/agents/mynah/agent.key`, where CEREBRUM can find it; the bytes
+///     and therefore the id are unchanged, which is the whole point of that
+///     migration.
 ///
 /// Both were checked against the live node before this file was written.
 ///

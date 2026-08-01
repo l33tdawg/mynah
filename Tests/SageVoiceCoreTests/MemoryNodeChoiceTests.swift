@@ -212,13 +212,20 @@ final class MemoryNodeChoiceTests: XCTestCase {
             "the memories store spawns without pinning an identity at all"
         )
 
-        XCTAssertTrue(
-            keyPath.hasSuffix("appliance-agent.key"),
-            "the memories screen signs with \((keyPath as NSString).lastPathComponent), "
-                + "not the appliance's key"
+        // Compared on the whole path, not the filename. The appliance's key is
+        // now `~/.sage/agents/mynah/agent.key` and the vestigial one is
+        // `Application Support/SAGE Voice Bridge/agent.key` — both called
+        // `agent.key`, so a suffix check on the name cannot tell the identity
+        // from the dead key any more. It used to, and that made it exactly the
+        // kind of assertion that keeps passing after it stops meaning anything.
+        XCTAssertEqual(
+            keyPath,
+            MynahIdentity.applianceKeyURL().path,
+            "the memories screen does not sign as the appliance"
         )
-        XCTAssertFalse(
-            keyPath.hasSuffix("/agent.key"),
+        XCTAssertNotEqual(
+            keyPath,
+            MynahIdentity.keyURL().path,
             "the memories screen is back on the vestigial key"
         )
     }
