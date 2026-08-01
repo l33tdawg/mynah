@@ -1,13 +1,14 @@
 # Which model Mynah picks, and why
 
-The owner picks a **provider**. Mynah picks the **model**.
+The owner picks a **provider**. Mynah offers **two models**, and defaults to the
+quick one.
 
 This file is the reasoning behind those picks. Model names age out within
 months — three of ours already have, see *Stale names found* below — so the
 reasoning is written down here rather than left as a string constant with no
 explanation next to it.
 
-## Why the owner does not pick the model
+## Why the owner does not pick out of a catalogue
 
 A model name is not a choice a person can make well. It is a lookup against a
 catalogue that changes without notice, in a vocabulary the owner has no reason
@@ -17,7 +18,30 @@ name a year from now is not making a mistake anybody could have warned them
 about at the moment they made it.
 
 What the owner does know, and can be asked, is who they hold an account with.
-That is the whole of what setup asks now.
+That is the whole of what setup asks.
+
+## Why they still get a choice of two
+
+For a while this file said the owner picked nothing at all, and the settings
+screen offered no button. That went one step too far. It reasoned from *"they
+cannot rank nine ids by benchmark"* — true — to *"they cannot want a slower,
+better answer"*, which does not follow. Quick or careful is a judgement about
+the question in front of them, and they are the only one who can make it.
+
+So each provider offers exactly two: **Quick**, the default, and **Careful**.
+The same two everywhere, in the owner's words rather than the vendor's — "flash",
+"turbo", "instant" and "sol" all mean the same thing to four different companies
+and nothing at all to the person choosing.
+
+Two, not three. `gpt-5.6-terra` sits between OpenAI's pair at $2/$12 and is left
+out on purpose: a middle option is the one the owner has no basis to choose.
+
+**The pair is enforced by the type.** `CloudBrainModelCatalog.Pick` has no
+single-model initialiser, so a provider cannot be added with one tier and
+quietly offer half of what every other provider offers. The previous table held
+one id per provider and grew a second tier nowhere — a table that merely *ought*
+to stay uniform is the same class of promise as the comment that started this
+file.
 
 ## What gets offered
 
@@ -64,38 +88,68 @@ measurement, and it is not what this table records.
 
 ## The picks
 
-| Provider | Model | Grounded | Offered | Checked |
+| Provider | Quick (default) | Careful | Offered in setup | Grounded |
 |---|---|---|---|---|
-| Anthropic | `claude-haiku-4-5` | vendor catalogue | **yes** — in use and known | 2026-07-29 |
-| OpenAI | `gpt-5.6-luna` | vendor catalogue | **yes** — in use and known | 2026-07-29 |
-| DeepSeek | `deepseek-v4-flash` | vendor catalogue | **yes** — owner's own evidence | 2026-07-29 |
-| Groq | `llama-3.1-8b-instant` | vendor catalogue | no — unmeasured | 2026-07-29 |
-| Kimi (Moonshot) | *not settled* | — | no — unmeasured | 2026-07-29 |
+| Anthropic | `claude-haiku-4-5` | `claude-sonnet-5` | **yes** — in use and known | 2026-08-01 |
+| OpenAI | `gpt-5.6-luna` | `gpt-5.6-sol` | **yes** — in use and known | 2026-08-01 |
+| DeepSeek | `deepseek-v4-flash` | `deepseek-v4-pro` | **yes** — owner's own evidence | 2026-08-01 |
+| Groq | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | no — unmeasured | 2026-08-01 |
+| Kimi (Moonshot) | `kimi-k2.6` | `kimi-k3` | no — unmeasured | 2026-08-01 |
+| Gemini (Google) | `gemini-3.6-flash` | `gemini-2.5-pro` | no — legacy resolution only | 2026-08-01 |
 | GLM (Zhipu) | *not confirmed on our endpoint* | — | no | 2026-07-29 |
 
-**Grounded** means the id was read off the vendor's own current catalogue on the
-date shown, not recalled. **Offered** is a separate question and a higher bar:
-naming a model is not measuring it.
+**Grounded** means both ids were read off the vendor's own current documentation
+on the date shown, not recalled. **Offered** is a separate question and a higher
+bar: naming a model is not measuring it.
 
-### Anthropic — `claude-haiku-4-5`
+### Anthropic — `claude-haiku-4-5` / `claude-sonnet-5`
 
-The fast tier: $1/$5 per million tokens against `claude-sonnet-5` at $3/$15,
-with full tool use. 200K context, far more than a spoken conversation reaches.
-Cheapest thing in the range that meets (1) and (2), which is the rule applied
-exactly.
+$1/$5 per million tokens against $3/$15, both with full tool use. 200K context,
+far more than a spoken conversation reaches. The quick one is the cheapest thing
+in the range that meets (1) and (2), which is the rule applied exactly.
 
-### OpenAI — `gpt-5.6-luna`
+### OpenAI — `gpt-5.6-luna` / `gpt-5.6-sol`
 
-$1/$6, the cost-optimised tier of the current frontier family (`gpt-5.6-sol` at
-$5/$30, `gpt-5.6-terra` at $2.50/$15). Function calling supported. Same shape of
-argument as Anthropic: the cheap end of a family whose whole range holds a
-conversation.
+$0.20/$1.20 against $5/$30 — the cost-optimised and frontier ends of one family,
+both with function calling. `gpt-5.6-terra` at $2/$12 is the middle option left
+out for the reason given above.
 
-### DeepSeek — `deepseek-v4-flash`
+*(An earlier revision of this file put luna at $1/$6 and terra at $2.50/$15,
+recalled rather than read. Corrected against the vendor's page on 2026-08-01 —
+which is the whole argument for the "Grounded" column existing.)*
 
-$0.14/$0.28 per million on a cache miss, $0.0028 cached — an order of magnitude
-below everything else here. Offered on the owner's direct evidence: he uses it
-and reports it fast. That counts, and it is better evidence than a spec sheet.
+### DeepSeek — `deepseek-v4-flash` / `deepseek-v4-pro`
+
+$0.14/$0.28 per million on a cache miss against $0.435/$0.87 — an order of
+magnitude below everything else here at both ends. 1M context, 384K output.
+Offered on the owner's direct evidence: he uses it and reports it fast. That
+counts, and it is better evidence than a spec sheet.
+
+The legacy aliases `deepseek-chat` and `deepseek-reasoner` were **discontinued
+on 2026-07-24**. Neither may come back; a test asserts it.
+
+### Gemini — `gemini-3.6-flash` / `gemini-2.5-pro`, and why that looks wrong
+
+**There is no `gemini-3.6-pro`.** The naming convention every other provider here
+follows does not hold for Google: the 3.6 family ships Flash, and the newest Pro
+is `gemini-3.1-pro-preview`. A preview id has no business in a shipped
+appliance — previews get withdrawn without a deprecation window — so the careful
+tier is the current stable `gemini-2.5-pro`, deliberately an older family than
+its own quick tier.
+
+This is the pick most likely to be "tidied up" by someone who notices the
+mismatch. Doing so produces a 404 on the owner's key. Recorded here and asserted
+in `CloudBrainModelCatalogTests` for that reason.
+
+### Kimi (Moonshot) — `kimi-k2.6` / `kimi-k3`
+
+`kimi-k3` is the flagship at $3/$15 with a 1M context and documented tool calls.
+The quick tier is **not** the faster-sounding `kimi-k2.7-code-highspeed`: that is
+a coding specialist, and this is something you hold a conversation with — the
+right speed and the wrong shape. `kimi-k2.6` is the general-purpose model.
+
+This replaces `kimi-k2-0905-preview`, which Moonshot had already deprecated and
+which this repo was still carrying.
 
 ### Groq — `llama-3.1-8b-instant`, named but not offered
 
@@ -108,11 +162,8 @@ measurement's work, not an implementation's.
 
 ### Kimi and GLM — not settled
 
-**Kimi:** the fast variant is `kimi-k2.7-code-highspeed` (~180 tokens/sec), but
-it is a *coding* specialist and this is a conversational appliance, so it is the
-wrong shape even though it is the fast one. The general models are `kimi-k3`,
-`kimi-k2.6`, `kimi-k2.5`. Tool-use support is not documented on the model list.
-Nothing here is a confident pick yet.
+**Kimi:** settled on 2026-08-01, see above. Named, still not measured, still not
+offered in setup.
 
 **GLM:** `GLM-5-Turbo` exists and is described as optimised for agent workflows
 and tool use, at roughly $1.20/$4. But our backend talks to
@@ -128,14 +179,20 @@ from the picker, and it should be read that way.
 Three model names already in the codebase have expired. Recording them because
 they are the argument for this file existing:
 
-| Name in repo | Status |
-|---|---|
-| `kimi-k2-0905-preview` | **deprecated** by Moonshot |
-| `gpt-5` | superseded by the `gpt-5.6-*` family |
-| `llama-3.3-70b-versatile` | still serves tools, but at 280 tok/s — half `llama-3.1-8b-instant` |
+| Name in repo | Status | Now |
+|---|---|---|
+| `kimi-k2-0905-preview` | **deprecated** by Moonshot | replaced by `kimi-k2.6` |
+| `gpt-5` | superseded by the `gpt-5.6-*` family | gone |
+| `llama-3.3-70b-versatile` | serves tools at 280 tok/s — half `llama-3.1-8b-instant` | kept, as Groq's *careful* tier |
+| `deepseek-chat`, `deepseek-reasoner` | **discontinued 2026-07-24** | gone |
 
 None of these caused a visible failure, because none is on a path an owner
 reaches today. That is exactly how the next one will arrive too.
+
+`llama-3.3-70b-versatile` is worth noting as the one that moved rather than
+died: half the speed was disqualifying when there was one pick per provider and
+that pick had to be fast. With two tiers it is exactly what the careful tier is
+for. A stale name and a name in the wrong slot are different problems.
 
 ## What catches it when a name here goes stale
 

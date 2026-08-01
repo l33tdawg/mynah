@@ -1,6 +1,6 @@
 import Foundation
 
-/// The model Mynah picks for each provider — one list, so nothing can drift.
+/// The models Mynah offers for each provider — one list, so nothing can drift.
 ///
 /// **This type exists because the two lists it replaces disagreed, under a
 /// comment asserting that they agreed.**
@@ -17,6 +17,26 @@ import Foundation
 /// once. There is no second place to update and therefore no second place to
 /// forget.
 ///
+/// ## Two per provider, and the same two shapes everywhere
+///
+/// Each provider offers exactly a `fast` and a `pro`, because that is the only
+/// distinction between models an owner can actually hold an opinion about. They
+/// cannot rank nine ids by benchmark, and they should not have to; they can
+/// absolutely say *"this answer is worth waiting for"* — which is a judgement
+/// about the question in front of them, not about the vendor's catalogue.
+///
+/// **The pair is enforced by the type rather than by care.** `Pick` has no
+/// single-model initialiser, so a provider cannot be added half-specified and
+/// then quietly offer one option where every other provider offers two. The
+/// previous table held one id per provider and grew a second tier nowhere; a
+/// table that merely *ought* to stay uniform is the same class of promise as the
+/// comment in the first paragraph.
+///
+/// `fast` is the default and stays the default. This is an appliance somebody
+/// talks to, and `docs/MODEL-CHOICES.md` puts conversational latency first for
+/// the reason that a reply arriving after twenty seconds is not a reply. `pro`
+/// is a thing the owner reaches for, never a thing they are given.
+///
 /// ## Why these names are allowed to be wrong
 ///
 /// Every id below will eventually be retired by its vendor. That is not a risk
@@ -31,40 +51,119 @@ import Foundation
 /// explanation, not an outage.
 public enum CloudBrainModelCatalog {
 
-    /// What Mynah picks, keyed by `BrainBackend.identifier`.
+    /// Which of a provider's two models — the distinction the owner is asked to
+    /// make, phrased as the thing they are choosing between rather than as the
+    /// vendor's tier name.
+    public enum Tier: String, Sendable, Codable, CaseIterable, Hashable {
+        /// What Mynah uses unless told otherwise.
+        case fast
+        /// Slower, more expensive, better at a hard question.
+        case pro
+
+        /// What the owner is offered. Not the vendor's marketing word: "flash",
+        /// "turbo", "sol" and "instant" all mean the same thing to four
+        /// different companies and nothing at all to the person choosing.
+        public var ownerFacingName: String {
+            switch self {
+            case .fast: return "Quick"
+            case .pro:  return "Careful"
+            }
+        }
+
+        /// One line under the name, written as the trade the owner is making.
+        public var ownerFacingDetail: String {
+            switch self {
+            case .fast:
+                return "Answers in a beat. What Mynah uses for everything unless you change it."
+            case .pro:
+                return "Thinks longer and costs more. Worth it for a question you'd wait for."
+            }
+        }
+    }
+
+    /// A provider's pair.
+    ///
+    /// Both ids are required. See the type comment: the uniformity the owner
+    /// sees is a property of this initialiser, not of anybody remembering.
+    public struct Pick: Sendable, Equatable, Hashable {
+        public let fast: String
+        public let pro: String
+
+        public init(fast: String, pro: String) {
+            self.fast = fast
+            self.pro = pro
+        }
+
+        public func model(_ tier: Tier) -> String {
+            switch tier {
+            case .fast: return fast
+            case .pro:  return pro
+            }
+        }
+
+        /// Both ids in the order they are shown, quick first.
+        public var both: [String] { [fast, pro] }
+    }
+
+    /// What Mynah offers, keyed by `BrainBackend.identifier`.
     ///
     /// Speed first, tool-calling second, price third — see
     /// `docs/MODEL-CHOICES.md` for why that order and what each pick cost.
     /// Being in this table is **not** the same as being offered in setup: a
     /// provider must also have been measured. `BrainSetupPlanner` decides that;
     /// this only decides what to ask for once something has decided to connect.
-    private static let picks: [String: String] = [
-        // Fast tier, full tool use, $1/$5 against Sonnet 5's $3/$15.
-        "anthropic": "claude-haiku-4-5",
-        // Cost-optimised tier of the current frontier family, $1/$6.
-        "openai": "gpt-5.6-luna",
-        // $0.14/$0.28 uncached and an order of magnitude cheaper than the rest.
-        // Not "deepseek-chat": that alias stopped resolving, which is the drift
-        // this type was written to make impossible.
-        "deepseek": "deepseek-v4-flash",
-        // Named but NOT offered in setup — 560 tok/s is Groq's claim, not our
-        // measurement. Present so that a stored choice still builds.
-        "groq": "llama-3.1-8b-instant",
+    ///
+    /// Every id below was read off the vendor's own current documentation on
+    /// 2026-08-01, not recalled. Two were checked precisely because they looked
+    /// obvious and were not:
+    ///
+    /// - **`gemini-3.6-pro` does not exist.** The convention the other five
+    ///   providers follow does not hold for Google: the 3.6 family ships Flash,
+    ///   and the newest Pro is `gemini-3.1-pro-preview`. A preview id has no
+    ///   business in a shipped appliance, so the pro tier here is the current
+    ///   stable `gemini-2.5-pro` — deliberately an older family than its own
+    ///   fast tier, which looks like a mistake and is not.
+    /// - **Moonshot's fast tier was the deprecated `kimi-k2-0905-preview`.** The
+    ///   obvious replacement, `kimi-k2.7-code-highspeed`, is a coding specialist
+    ///   and the wrong shape for something you hold a conversation with, so the
+    ///   general-purpose `kimi-k2.6` takes it.
+    private static let picks: [String: Pick] = [
+        // $1/$5 against Sonnet 5's $3/$15, both with full tool use.
+        "anthropic": Pick(fast: "claude-haiku-4-5", pro: "claude-sonnet-5"),
+        // Cost-optimised and frontier ends of the same family: $0.20/$1.20
+        // against $5/$30. `gpt-5.6-terra` sits between them at $2/$12 and is
+        // left out — a third option is the choice the owner cannot make.
+        "openai": Pick(fast: "gpt-5.6-luna", pro: "gpt-5.6-sol"),
+        // $0.14/$0.28 uncached against $0.435/$0.87, an order of magnitude
+        // cheaper than the rest at both ends. Not "deepseek-chat": that alias
+        // was retired on 2026-07-24, which is the drift this type was written
+        // to make impossible.
+        "deepseek": Pick(fast: "deepseek-v4-flash", pro: "deepseek-v4-pro"),
 
-        // Below here: providers not offered in setup, kept only so an owner's
-        // stored choice from an older build still resolves to something rather
-        // than to nothing. Removing an offer is not removing an identity.
+        // Below here: providers not offered in setup, kept so an owner's stored
+        // choice from an older build still resolves to something rather than to
+        // nothing. Removing an offer is not removing an identity.
         //
-        // These are the repo's historical values, deliberately left as they
-        // were. `kimi-k2-0905-preview` is deprecated upstream and there is no
-        // confident replacement yet — a conversational pick for Kimi is still
-        // open, and guessing one here would put an unverified string next to
-        // four verified ones with nothing to tell them apart.
-        "moonshot": "kimi-k2-0905-preview",
-        "gemini": "gemini-3.6-flash"
+        // 560 tok/s and 280 tok/s are Groq's published claims, not our
+        // measurement — which is exactly why Groq is named and not offered.
+        "groq": Pick(fast: "llama-3.1-8b-instant", pro: "llama-3.3-70b-versatile"),
+        // `kimi-k3` is the flagship at $3/$15 with documented tool calls.
+        "moonshot": Pick(fast: "kimi-k2.6", pro: "kimi-k3"),
+        // See the note above on why the pro tier is an older family than the
+        // fast one. Do not "fix" this to `gemini-3.6-pro`; it 404s.
+        "gemini": Pick(fast: "gemini-3.6-flash", pro: "gemini-2.5-pro")
     ]
 
-    /// The pick for a provider, or `nil` when this product has not chosen one.
+    /// The tier Mynah uses when nothing has said otherwise.
+    public static let defaultTier: Tier = .fast
+
+    /// Both models for a provider, or `nil` when this product has not chosen.
+    public static func pick(forProvider identifier: String) -> Pick? {
+        picks[identifier]
+    }
+
+    /// The default model for a provider, or `nil` when this product has not
+    /// chosen one.
     ///
     /// `nil` rather than a plausible fallback on purpose. A default string here
     /// would be sent to a real provider on the owner's real key and fail as a
@@ -72,10 +171,30 @@ public enum CloudBrainModelCatalog {
     /// from the appliance being broken. Not choosing is a state worth
     /// representing.
     public static func model(forProvider identifier: String) -> String? {
-        picks[identifier]
+        picks[identifier]?.model(defaultTier)
     }
 
-    /// Providers this product has a pick for. Sorted so it is stable to assert on.
+    /// The model for one tier of a provider.
+    public static func model(forProvider identifier: String, tier: Tier) -> String? {
+        picks[identifier]?.model(tier)
+    }
+
+    /// Both models for a provider in the order they are offered, or empty when
+    /// there is nothing to offer. Empty rather than `nil` because the caller is
+    /// a picker, and a picker with nothing in it is a list of length zero.
+    public static func models(forProvider identifier: String) -> [String] {
+        picks[identifier]?.both ?? []
+    }
+
+    /// Which tier a stored model name belongs to, or `nil` if it is neither —
+    /// which is what a name stored by an older build looks like after a vendor
+    /// retires it.
+    public static func tier(ofModel model: String, forProvider identifier: String) -> Tier? {
+        guard let pick = picks[identifier] else { return nil }
+        return Tier.allCases.first { pick.model($0) == model }
+    }
+
+    /// Providers this product has picks for. Sorted so it is stable to assert on.
     public static var providersWithAPick: [String] {
         picks.keys.sorted()
     }

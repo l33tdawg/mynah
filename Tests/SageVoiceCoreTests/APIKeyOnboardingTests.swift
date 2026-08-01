@@ -384,4 +384,87 @@ final class CloudBrainModelCatalogTests: XCTestCase {
     func testDeepSeekDoesNotRegressToTheAliasThatStoppedResolving() {
         XCTAssertEqual(CloudBrainModelCatalog.model(forProvider: "deepseek"), "deepseek-v4-flash")
     }
+
+    /// **Every provider offers the same two things.** *"only show like the 2
+    /// latest models - the fast / flash one and their pro model - this should be
+    /// standardized across all models in our list."*
+    ///
+    /// The `Pick` initialiser already makes a half-specified provider
+    /// unrepresentable, so this cannot fail by omission — it fails when someone
+    /// makes both tiers the same string, which is the way a pair degrades back
+    /// into a single offer while still looking like a pair. An owner who opens
+    /// the sheet then sees two rows that do the same thing.
+    func testEveryProviderOffersExactlyTwoDistinctModels() {
+        for provider in CloudBrainModelCatalog.providersWithAPick {
+            let models = CloudBrainModelCatalog.models(forProvider: provider)
+            XCTAssertEqual(models.count, 2, "\(provider) does not offer a pair")
+            XCTAssertNotEqual(
+                models[0], models[1],
+                "\(provider) offers the same model twice, which is one choice wearing two rows"
+            )
+            for model in models {
+                XCTAssertFalse(
+                    model.trimmingCharacters(in: .whitespaces).isEmpty,
+                    "\(provider) has an empty model name, which reaches the provider as a 400"
+                )
+            }
+        }
+    }
+
+    /// The quick one is what Mynah uses on its own. This is the appliance
+    /// argument in `docs/MODEL-CHOICES.md` — a reply that arrives after twenty
+    /// seconds is not a reply — so `pro` must stay something the owner reaches
+    /// for rather than something they are given.
+    func testTheDefaultIsAlwaysTheQuickOne() {
+        XCTAssertEqual(CloudBrainModelCatalog.defaultTier, .fast)
+        for provider in CloudBrainModelCatalog.providersWithAPick {
+            let picked = CloudBrainModelCatalog.model(forProvider: provider)
+            XCTAssertEqual(
+                picked, CloudBrainModelCatalog.pick(forProvider: provider)?.fast,
+                "\(provider) hands out its slow model by default"
+            )
+        }
+    }
+
+    /// A stored name resolves back to the tier it came from, which is what lets
+    /// the sheet show "Careful" next to the row the owner is already on.
+    func testAStoredNameResolvesBackToItsTier() {
+        XCTAssertEqual(
+            CloudBrainModelCatalog.tier(ofModel: "deepseek-v4-pro", forProvider: "deepseek"), .pro
+        )
+        XCTAssertEqual(
+            CloudBrainModelCatalog.tier(ofModel: "deepseek-v4-flash", forProvider: "deepseek"), .fast
+        )
+        // A name an older build stored and the catalogue has since moved off.
+        // `nil` rather than a guess: the sheet shows it as a bare id, which is
+        // honest, instead of labelling it with a tier it no longer belongs to.
+        XCTAssertNil(
+            CloudBrainModelCatalog.tier(ofModel: "deepseek-chat", forProvider: "deepseek")
+        )
+    }
+
+    /// **The two ids that look wrong and are right.** Both were arrived at by
+    /// reading the vendor's own documentation on 2026-08-01 after the obvious
+    /// guess turned out to be wrong, and both are the kind of thing a later
+    /// tidy-up "corrects" back into a 404.
+    func testTheTwoPicksThatLookLikeMistakes() {
+        // Google ships no `gemini-3.6-pro`. The 3.6 family is Flash-only and the
+        // newest Pro is a preview, which has no business in a shipped appliance.
+        XCTAssertEqual(
+            CloudBrainModelCatalog.pick(forProvider: "gemini"),
+            .init(fast: "gemini-3.6-flash", pro: "gemini-2.5-pro")
+        )
+        // Moonshot's fast tier is not the faster-sounding
+        // `kimi-k2.7-code-highspeed`: that is a coding specialist, and this is
+        // something you hold a conversation with.
+        XCTAssertEqual(
+            CloudBrainModelCatalog.pick(forProvider: "moonshot"),
+            .init(fast: "kimi-k2.6", pro: "kimi-k3")
+        )
+        // And the deprecated id it replaced must not come back.
+        XCTAssertFalse(
+            CloudBrainModelCatalog.models(forProvider: "moonshot").contains("kimi-k2-0905-preview"),
+            "a model Moonshot has deprecated is being offered again"
+        )
+    }
 }

@@ -852,13 +852,13 @@ struct SettingsView: View {
             if let option = model.brainOption {
                 BrainModelSheet(
                     option: option,
-                    // A real list when the node can supply one, and none when it
-                    // cannot. The probe knows exactly what is installed for a
-                    // local runtime; for an API provider nobody here knows what
-                    // the company is serving this week, and a hardcoded list of
-                    // model names is a list that goes stale silently — which is
-                    // the same reason no version number is typed into this app.
-                    installed: localModels
+                    // The same list the row decided to show a button for. Two
+                    // catalogue picks for a cloud provider, or what Ollama has
+                    // pulled for a local one — never the local list handed to a
+                    // cloud brain, which is what put qwen and gemma in front of
+                    // an owner on DeepSeek.
+                    choices: offeredModels,
+                    provider: cloudProvider
                 ) { chosen in
                     isChangingModel = false
                     guard let chosen else { return }
@@ -1244,24 +1244,28 @@ struct SettingsView: View {
     /// above reports what the phone is *actually* running, and if the two ever
     /// disagree the owner can see it rather than being told a number that is
     /// true of only half the product.
-    /// **The owner no longer picks a cloud model, so this row no longer offers
-    /// to change one.** It still reports, because what is running is worth
-    /// knowing and the two-places-to-land problem above is still real.
+    /// **The owner picks between two, never out of a catalogue.**
     ///
-    /// The button survives for a local runtime only, and the distinction is not
-    /// an inconsistency. A cloud model name is a lookup against a catalogue that
-    /// changes without telling anyone, in a vocabulary the owner has no reason
-    /// to have learned — that is the whole argument for Mynah picking it. None
-    /// of that is true of a model sitting on this Mac: it does not get retired
-    /// behind his back, and somebody who ran `ollama pull` knows exactly what
-    /// they pulled and why. Taking that away would be applying the rule past the
-    /// thing the rule was aimed at.
+    /// The row offered nothing at all for a cloud provider for a while, on the
+    /// argument that a model name is a lookup against a vendor list that changes
+    /// without notice, in a vocabulary the owner has no reason to have learned.
+    /// That argument is still right about *catalogues* and was wrong about
+    /// *choices*: it concluded from "they cannot rank nine ids" that they cannot
+    /// want a slower better answer, which does not follow. Quick or careful is a
+    /// judgement about the question in front of them.
+    ///
+    /// So both kinds of brain now offer the same button, over a list this
+    /// product controls the length of — two, from `CloudBrainModelCatalog` — or
+    /// over what Ollama has actually pulled, which is the same shape of choice
+    /// for the same reason.
     private var modelRow: some View {
         SettingsRow(
             "The model it thinks with",
             detail: modelRowDetail
         ) {
-            if !localModels.isEmpty {
+            // One thing to pick is not a choice, and a sheet showing a single
+            // row the owner cannot move off is a button that wastes their time.
+            if offeredModels.count > 1 {
                 MynahButton("Change", kind: .secondary) { isChangingModel = true }
             }
         }
@@ -1282,28 +1286,49 @@ struct SettingsView: View {
     /// Worse than confusing, it was actionable: picking one would have stored a
     /// local model name against a cloud provider.
     ///
-    /// Empty for a cloud brain is the honest answer today. It is not the whole
-    /// answer — the owner wants DeepSeek's own list — and that needs the
-    /// provider's models endpoint asked at runtime, which is a real feature and
-    /// not this guard.
+    /// Empty for a cloud brain, whose two choices come from the catalogue
+    /// instead — see `offeredModels`.
     private var localModels: [String] {
         guard model.brain?.keepsWordsOnDevice == true else { return [] }
         return model.probe?.localRuntime.installedModels.sorted() ?? []
     }
 
+    /// The provider identifier the model catalogue is keyed by, or `nil` for a
+    /// local runtime, which has no vendor to ask.
+    private var cloudProvider: String? {
+        guard model.brain?.keepsWordsOnDevice != true else { return nil }
+        return model.brain?.keyProvider
+    }
+
+    /// What the owner may choose between, whichever kind of brain they are on.
+    ///
+    /// Deliberately one property rather than two branches at every call site.
+    /// The row, its wording and the sheet all have to agree about whether there
+    /// is a choice, and the previous shape — a `localModels` that the sheet was
+    /// then passed *unconditionally* — is exactly how they came to disagree:
+    /// an owner on DeepSeek with Ollama also installed opened "change the
+    /// model" and was offered qwen and gemma. Picking one would have stored a
+    /// local model name against a cloud provider.
+    private var offeredModels: [String] {
+        if let cloudProvider {
+            return CloudBrainModelCatalog.models(forProvider: cloudProvider)
+        }
+        return localModels
+    }
+
     private var modelRowDetail: String {
         let current = model.brain?.modelName.map { "Currently \($0)." }
             ?? "Mynah hasn't recorded which model it is on."
-        guard localModels.isEmpty else {
-            return current + " This window changes over straight away. Your phone picks it up "
-                + "the next time the appliance starts."
+        guard offeredModels.count > 1 else {
+            // Nothing to pick between: either a local runtime with one model
+            // pulled, or a provider this build has no picks for.
+            return current + " Mynah picks the model for this provider."
         }
-        // No longer "whatever this provider gives it by default" — that was
-        // never true. Mynah asks for a specific model; it just isn't one the
-        // owner was ever asked to name.
-        return current + " Mynah picks the model for each provider — a fast one that can "
-            + "hold a conversation and drive its tools. To change it, change where your "
-            + "words go above."
+        let choice = cloudProvider == nil
+            ? " Pick from what this Mac has pulled."
+            : " Pick the quick one or the careful one."
+        return current + choice + " This window changes over straight away. Your phone "
+            + "picks it up the next time the appliance starts."
     }
 
     private var recheckRow: some View {
@@ -2359,23 +2384,27 @@ private struct BrainKeySheet: View {
 /// and asks it a real question. The same machinery that catches a key which has
 /// run out of credit catches a model that does not exist.
 ///
-/// **Local runtimes only.** It used to have a second mode — a free-text field
-/// for API providers — and that mode is gone, because the owner no longer names
-/// cloud models. Mynah picks those; see `CloudBrainModelCatalog` and
-/// `docs/MODEL-CHOICES.md`.
+/// **Always a list, never a text field.** It used to have a second mode — a
+/// free-text box for API providers — and that mode is gone for good. A model
+/// name typed by hand is a typo that becomes an appliance going quiet two
+/// screens later.
 ///
-/// What is left is a list of what this Mac actually has, and that is a different
-/// kind of choice rather than a survivor of the old one. A cloud model name is a
-/// lookup against a catalogue that changes without telling anyone; a model the
-/// owner pulled onto their own disk is neither unfamiliar nor liable to vanish.
-/// The verification stays regardless — a local model that is installed but will
-/// not drive tools fails here rather than mid-answer.
+/// What replaced it differs by brain but not in kind: two curated picks for a
+/// cloud provider, or whatever this Mac has pulled for a local runtime. Both
+/// are short lists somebody can read; neither is a vendor catalogue.
+///
+/// The verification stays regardless, and matters most for the local case — a
+/// model that is installed but will not drive tools fails here rather than
+/// mid-answer.
 private struct BrainModelSheet: View {
     let option: BrainSetupOption
-    /// Model names the local runtime actually has. Never empty: the row that
-    /// opens this sheet is hidden when there is nothing to choose between, so
-    /// "a sheet with no options" is unreachable rather than handled.
-    let installed: [String]
+    /// What the owner may pick between. Never fewer than two: the row that
+    /// opens this sheet is hidden below that, so "a sheet you cannot move
+    /// within" is unreachable rather than handled.
+    let choices: [String]
+    /// The catalogue provider, or `nil` for a local runtime. Decides whether
+    /// each row gets a tier name over its id.
+    let provider: String?
     /// The option to save, or `nil` when the owner backed out.
     let onClose: (BrainSetupOption?) -> Void
 
@@ -2383,9 +2412,15 @@ private struct BrainModelSheet: View {
     @State private var verdict: BrainKeyValidator.Verdict?
     @State private var isChecking = false
 
-    init(option: BrainSetupOption, installed: [String], onClose: @escaping (BrainSetupOption?) -> Void) {
+    init(
+        option: BrainSetupOption,
+        choices: [String],
+        provider: String?,
+        onClose: @escaping (BrainSetupOption?) -> Void
+    ) {
         self.option = option
-        self.installed = installed
+        self.choices = choices
+        self.provider = provider
         self.onClose = onClose
         _name = State(initialValue: option.modelName ?? "")
     }
@@ -2431,19 +2466,45 @@ private struct BrainModelSheet: View {
     }
 
     private var subtitle: String {
-        "These are the models installed on this Mac. Mynah asks the one you pick a real "
-            + "question before keeping it, so one that can't drive its tools is caught here "
-            + "rather than mid-answer."
+        let where_ = provider == nil
+            ? "These are the models installed on this Mac."
+            : "Mynah offers two of your provider's models: one that answers quickly, "
+                + "one that thinks harder."
+        return where_ + " Mynah asks the one you pick a real question before keeping it, "
+            + "so one that can't drive its tools is caught here rather than mid-answer."
     }
 
     private var list: some View {
         VStack(spacing: 0) {
-            ForEach(Array(installed.enumerated()), id: \.element) { index, candidate in
+            ForEach(Array(choices.enumerated()), id: \.element) { index, candidate in
                 if index > 0 { MynahDivider() }
                 Button { name = candidate } label: {
-                    HStack(spacing: s3) {
+                    HStack(alignment: .firstTextBaseline, spacing: s3) {
                         StatusDot(candidate == trimmed ? .accent : .neutral)
-                        Text(candidate).mynahFont(.mono).foregroundStyle(Palette.ink.primary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            // The tier name leads for a cloud provider because
+                            // it is the part the owner is actually choosing
+                            // between; the id stays underneath because it is
+                            // what a support conversation needs. A local model
+                            // has no tier and the id *is* the name.
+                            if let tier = tierOf(candidate) {
+                                Text(tier.ownerFacingName)
+                                    .mynahFont(.bodyEmphasis)
+                                    .foregroundStyle(Palette.ink.primary)
+                                Text(tier.ownerFacingDetail)
+                                    .mynahFont(.callout)
+                                    .foregroundStyle(Palette.ink.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(candidate)
+                                    .mynahFont(.mono)
+                                    .foregroundStyle(Palette.ink.tertiary)
+                                    .padding(.top, 2)
+                            } else {
+                                Text(candidate)
+                                    .mynahFont(.mono)
+                                    .foregroundStyle(Palette.ink.primary)
+                            }
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(.vertical, s3)
@@ -2454,6 +2515,12 @@ private struct BrainModelSheet: View {
             }
         }
         .mynahGroupCard()
+    }
+
+    /// The tier a candidate belongs to, or `nil` for a local model and for a
+    /// name stored by an older build that the catalogue has since moved off.
+    private func tierOf(_ candidate: String) -> CloudBrainModelCatalog.Tier? {
+        provider.flatMap { CloudBrainModelCatalog.tier(ofModel: candidate, forProvider: $0) }
     }
 
     @ViewBuilder
