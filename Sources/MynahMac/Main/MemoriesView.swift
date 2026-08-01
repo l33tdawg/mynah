@@ -1423,17 +1423,29 @@ private struct MemoryEntry: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(alignment: .leading, spacing: s3) {
-                // A memory the node sent without a timestamp is still a memory,
-                // and it still belongs on a screen that promises the owner can
-                // see everything. It says so rather than inventing a date or
-                // quietly vanishing from the list.
-                factLine(
-                    "Stored",
+            // One line, not a label column.
+            //
+            // `factLine` reserves 132pt for its label because it was written for
+            // a stack of facts — certainty, domain, stored — that had to line up
+            // with each other. Those are gone and only this one is left, so the
+            // column now reserves space for a table of one and leaves a hand's
+            // width of nothing between the word and the date.
+            //
+            // A memory the node sent without a timestamp is still a memory, and
+            // it still belongs on a screen that promises the owner can see
+            // everything. It says so rather than inventing a date.
+            HStack(alignment: .firstTextBaseline, spacing: s3) {
+                Text("Stored")
+                    .mynahFont(.label)
+                    .foregroundStyle(Palette.ink.secondary)
+                Text(
                     memory.learned == .distantPast
                         ? "Not recorded"
                         : memory.learned.formatted(date: .long, time: .shortened)
                 )
+                .mynahFont(.bodyEmphasis)
+                .foregroundStyle(Palette.ink.primary)
+                .textSelection(.enabled)
             }
 
             HStack(spacing: s4) {
@@ -1457,22 +1469,14 @@ private struct MemoryEntry: View {
         }
         .padding(.horizontal, s4)
         .padding(.bottom, s4)
-        .transition(.push(from: .top).combined(with: .opacity))
+        // Opacity alone. `.push(from: .top)` slides the panel down from above
+        // its own card while the card is still growing to hold it, so the text
+        // arrives before the box does — *"the animation slide down is a bit
+        // weird - text slides down then the box"*. A reveal has one moving
+        // part: the card's height. The contents just become visible.
+        .transition(.opacity)
     }
 
-    private func factLine(_ title: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: s4) {
-            Text(title)
-                .mynahFont(.label)
-                .foregroundStyle(Palette.ink.secondary)
-                .frame(width: 132, alignment: .leading)
-            Text(value)
-                .mynahFont(.bodyEmphasis)
-                .foregroundStyle(Palette.ink.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 }
 
 // MARK: - Search field
