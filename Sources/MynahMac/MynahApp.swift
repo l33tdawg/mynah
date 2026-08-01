@@ -321,6 +321,45 @@ final class AppModel {
     private let serviceConfiguration: () -> SignalServiceConfiguration?
     private(set) var answeringServiceError: String?
 
+    /// Retracts a remembered failure once launchd is observed running the
+    /// helper.
+    ///
+    /// **The toggle said the helper could not start while the row underneath it
+    /// said it was running.** Both were reporting honestly; they were answering
+    /// different questions. This one is memory and that one is observation, and
+    /// there was no path from the second back to the first.
+    ///
+    /// The failure is real when it happens and usually momentary: `enable()`
+    /// runs `launchctl bootstrap`, which returns non-zero when the job is
+    /// already loaded — precisely what an upgrade looks like, because the
+    /// previous copy is still running while the new one installs itself. launchd
+    /// carries on running the old job, so the appliance never stops answering,
+    /// and a sentence saying it could not start outlives the second it was true
+    /// for. Nothing cleared it: `reconcileAnsweringService` only clears on a
+    /// later success, and nothing schedules one.
+    ///
+    /// So the owner is told their phone bridge is broken, indefinitely, while it
+    /// works. That is the worst direction for this particular error to be wrong
+    /// in, and it is why the fix clears the stored value rather than hiding the
+    /// string in the view: the sentence is read from `answeringServiceError` and
+    /// the next screen to read it would say the same wrong thing.
+    ///
+    /// Only ever clears. A running helper is proof the error is stale; a stopped
+    /// one proves nothing, because the owner is free to switch it off in System
+    /// Settings and that is a choice rather than a fault.
+    ///
+    /// `presence` is deliberately not touched. The failing reconcile also pushes
+    /// it to `.needsOwner`, and retracting that is tempting — but presence is a
+    /// *derived* value: `TalkView` computes it from readiness and busyness and
+    /// assigns it on every change. Setting it from here would mean guessing at
+    /// an answer that view owns, and guessing "Online" while the brain is
+    /// actually unreachable trades a stale warning for a false reassurance.
+    /// It corrects itself on the next readiness change.
+    func noteHelperObserved(_ state: BackgroundHelperState) {
+        guard state == .running, answeringServiceError != nil else { return }
+        answeringServiceError = nil
+    }
+
     /// - Parameter backgroundServices: **inject this from a test, whatever the
     ///   test is about.** The default is the shared manager, and the shared
     ///   manager is aimed at the real home directory — so a test that omits it

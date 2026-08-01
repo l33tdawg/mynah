@@ -79,7 +79,19 @@ let package = Package(
         // `BrainFactory` handled four, and no test could see both lists at once.
         .target(
             name: "MynahMac",
-            dependencies: ["SageVoiceCore"]
+            // `KokoroEngine` for the same reason `sage-voiced` has it, and it
+            // was missing for a reason worth writing down: the Listen button on
+            // the call-voice row synthesized through `KokoroHTTPSynthesizer`,
+            // which speaks to `python run.py` on port 8765. Nothing in this
+            // repository ever starts that — it was a development service — so
+            // the button could not work in any shipped build and said "Mynah
+            // couldn't play that voice just now" on every Mac including this
+            // one.
+            //
+            // Guarded with `#if canImport(KokoroEngine)` at the call site, so a
+            // fresh clone with no `vendor/onnxruntime` still builds.
+            dependencies: ["SageVoiceCore"] + (hasOnnxRuntime ? ["KokoroEngine"] : []),
+            linkerSettings: hasOnnxRuntime ? onnxLinkerSettings : []
         ),
         // Nothing but `@main`. Everything real lives in the library above so it
         // can be tested.

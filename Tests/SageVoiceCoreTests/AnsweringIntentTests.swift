@@ -191,6 +191,55 @@ final class AnsweringIntentTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(disables, 1, "it adopted the pause but left the jobs running")
     }
 
+    // MARK: A failure that outlived the thing it described
+
+    /// **The toggle said the helper could not start; the row beneath it said
+    /// Running.** Both were reporting honestly and they were answering different
+    /// questions — one from memory, one from launchd — and there was no path
+    /// from the observation back to the memory.
+    ///
+    /// The failure is real when it happens and usually lasts a second:
+    /// `launchctl bootstrap` returns non-zero when the job is already loaded,
+    /// which is exactly what installing a new build over a running one looks
+    /// like. launchd keeps running the old job, so the phone never stops being
+    /// answered — and a sentence saying the bridge is broken sits under an
+    /// enabled switch indefinitely.
+    func testARunningHelperRetractsAStaleFailure() async throws {
+        let services = FailingThenRunningServices()
+        let app = makeApp(services: services, configuration: .fixture)
+
+        await app.reconcileAnsweringService()
+        XCTAssertNotNil(
+            app.answeringServiceError,
+            "a failed bootstrap has to be reported, or the fix below is testing nothing"
+        )
+
+        // launchd is then asked, and says the helper is up.
+        app.noteHelperObserved(.running)
+
+        XCTAssertNil(
+            app.answeringServiceError,
+            "the owner is still told their phone bridge is broken while it is answering"
+        )
+    }
+
+    /// Only a running helper retracts it. A stopped one proves nothing — the
+    /// owner is free to switch it off in Login Items, and clearing a real
+    /// failure on that reading would hide a fault behind the owner's own choice.
+    func testAStoppedHelperDoesNotRetractAnything() async throws {
+        let services = FailingThenRunningServices()
+        let app = makeApp(services: services, configuration: .fixture)
+
+        await app.reconcileAnsweringService()
+        let reported = app.answeringServiceError
+
+        app.noteHelperObserved(.installedButNotRunning)
+        XCTAssertEqual(app.answeringServiceError, reported)
+
+        app.noteHelperObserved(.absent)
+        XCTAssertEqual(app.answeringServiceError, reported)
+    }
+
     // MARK: Coming back
 
     /// Backing out of "Change where your words go" has to put the appliance
@@ -230,7 +279,12 @@ final class AnsweringIntentTests: XCTestCase {
     }
 
     private func makeApp(
-        services: RecordingServices,
+        // `any SignalBackgroundServicing`, not `RecordingServices`. It was the
+        // concrete double, which meant a test needing services that behave
+        // differently could not use this at all — and Swift reports that as a
+        // type-inference failure on the *arguments of later lines*, which sends
+        // you looking in the wrong place entirely.
+        services: any SignalBackgroundServicing,
         configuration: SignalServiceConfiguration?,
         defaults: UserDefaults? = nil,
         setupComplete: Bool = true
@@ -499,4 +553,24 @@ private extension BrainSetupOption {
         backendIdentifier: "anthropic",
         modelName: "claude-sonnet-4-5"
     )
+}
+
+/// Fails to install, the way `launchctl bootstrap` fails when the job is
+/// already loaded — while launchd carries on running the previous copy, so
+/// `state()` still answers `.running`. That combination is the whole bug.
+private actor FailingThenRunningServices: SignalBackgroundServicing {
+    private(set) var disableCount = 0
+
+    func enable(_ configuration: SignalServiceConfiguration) async throws {
+        throw Failure.launchFailed
+    }
+
+    func disable(because reason: String) async { disableCount += 1 }
+
+    func state() async -> BackgroundHelperState { .running }
+
+    enum Failure: LocalizedError {
+        case launchFailed
+        var errorDescription: String? { "macOS could not start local.sage.voicebridge." }
+    }
 }

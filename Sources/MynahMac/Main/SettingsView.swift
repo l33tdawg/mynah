@@ -447,11 +447,16 @@ final class SettingsModel {
             try await callPreview.play(voice: callVoice, speed: callSpeed)
         } catch {
             log.error("voice preview failed: \(String(describing: error))")
-            // Deliberately claims nothing about whether the voice would work on
-            // a real call. A failed preview usually means the bridge went away,
-            // in which case the call would fall back to the built-in voice too —
-            // and reassuring the owner otherwise would be a guess.
-            callVoiceProblem = "Mynah couldn't play that voice just now."
+            // The reason, when there is one worth acting on.
+            //
+            // This was always "Mynah couldn't play that voice just now" — a
+            // sentence that names no cause and no next step, on a button that
+            // was wired to a service no shipped build runs, so it was the only
+            // thing anyone ever saw. `Unavailable` says the model is not
+            // downloaded yet and what happens meanwhile, which is a fact the
+            // owner can do something with.
+            callVoiceProblem = (error as? CallVoicePreview.Unavailable)?.errorDescription
+                ?? "Mynah couldn't play that voice just now."
         }
     }
 
@@ -793,7 +798,15 @@ struct SettingsView: View {
         // Asked every time the screen appears, not cached: the owner may have
         // just come back from switching Mynah off in Login Items, and that is
         // the trip this row exists to report on.
-        .task { await model.refreshHelperState() }
+        //
+        // The answer is also what retracts a stale "macOS could not start
+        // local.sage.voicebridge" above it — see `AppModel.noteHelperObserved`.
+        // Without this the toggle claimed the bridge was broken while the row
+        // directly beneath it said Running, and only one of them had asked.
+        .task {
+            await model.refreshHelperState()
+            if let state = model.helperState { app.noteHelperObserved(state) }
+        }
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
@@ -1537,12 +1550,35 @@ struct SettingsView: View {
                         + "nothing about how a voice sounds, so listen to one before you keep it."
                 ) {
                     HStack(spacing: s4) {
+                        // A play glyph, not the word "Listen".
+                        //
+                        // The word did not fit: at 220pt of picker beside it the
+                        // row ran out of width and AppKit broke the label across
+                        // two lines as "List" / "en", which is worse than any
+                        // icon. It is also the one control here whose meaning a
+                        // triangle carries better than a verb — everything else
+                        // on this screen is a switch or a menu.
+                        //
+                        // The accessibility label keeps the word, because a
+                        // screen reader saying "play" alone would not say what
+                        // is being played.
                         if model.isPlayingCallVoice {
                             ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                                .frame(width: 28)
                         } else {
-                            MynahButton("Listen", kind: .quiet) {
+                            Button {
                                 Task { await model.playCallVoice() }
+                            } label: {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Palette.ink.primary)
+                                    .frame(width: 28, height: 24)
+                                    .background(Palette.surface.sunken, in: RoundedRectangle(cornerRadius: 7))
                             }
+                            .buttonStyle(.plain)
+                            .pointingHandCursor()
+                            .help("Hear this voice")
+                            .accessibilityLabel("Hear this voice")
                         }
                         Picker("", selection: Binding(
                             get: { model.callVoice },

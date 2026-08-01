@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
 import SageVoiceCore
+#if canImport(KokoroEngine)
+import KokoroEngine
+#endif
 
 // MARK: - What the owner chose about calls
 
@@ -187,8 +190,48 @@ final class CallVoicePreview {
     /// Both, because a preview at a different speed than the call is a preview
     /// of something else — and speaking rate is exactly the setting nobody can
     /// judge from a number.
+    /// Why the voice a call would use is unavailable.
+    ///
+    /// A distinct error rather than letting the synthesizer's own failure
+    /// through, because "the model is not downloaded yet" and "synthesis broke"
+    /// are different sentences to an owner and only one of them is worth acting
+    /// on.
+    enum Unavailable: LocalizedError {
+        case voiceNotInstalled
+
+        var errorDescription: String? {
+            "The natural voice isn't on this Mac yet. Mynah downloads it when "
+                + "you link your phone; until then calls use the built-in macOS voice."
+        }
+    }
+
     func play(voice: String, speed: Double) async throws {
-        let synthesizer = KokoroHTTPSynthesizer(voice: voice)
+        // The engine that runs in this process, which is the one a call uses.
+        //
+        // **This used to be `KokoroHTTPSynthesizer`, and it could never work.**
+        // That backend posts to `http://127.0.0.1:8765/api/speech`, a Python
+        // development service (`python run.py`) that nothing in this repository
+        // starts and that no shipped build contains. So the Listen button
+        // failed on every Mac — including the author's, with the 337 MB of
+        // weights sitting right there — and said "Mynah couldn't play that
+        // voice just now", which reads as a transient glitch rather than a
+        // button wired to nothing.
+        //
+        // The daemon had it right the whole time: `nativeKokoro` in
+        // `sage-voiced/main.swift` builds `KokoroSpeechSynthesizer` in-process.
+        // The preview now uses the same engine, so what you audition is what a
+        // call actually sounds like — which was the entire point of the button.
+        #if canImport(KokoroEngine)
+        guard let synthesizer = KokoroSpeechSynthesizer.ifReady(voice: voice) else {
+            throw Unavailable.voiceNotInstalled
+        }
+        #else
+        // No `vendor/onnxruntime` in this checkout, so the engine was not
+        // compiled in. Same sentence as a missing model: from the owner's side
+        // it is the same fact.
+        throw Unavailable.voiceNotInstalled
+        #endif
+
         let speech = try await synthesizer.synthesize(
             SpeechRequest(text: Self.sample, voice: voice, speed: speed)
         )
