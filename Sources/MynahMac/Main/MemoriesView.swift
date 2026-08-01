@@ -689,6 +689,11 @@ final class MemoriesModel {
     var selection: Memory.ID?
     /// The memory the confirmation dialog is about. Non-nil is what presents it.
     var pendingForget: Memory?
+    /// Presenting the confirmation for clearing everything Mynah owns.
+    var isConfirmingClear = false
+    var isClearing = false
+    /// What the last bulk clear did, including what it deliberately did not do.
+    var clearedReport: String?
 
     private var searchTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
@@ -947,6 +952,72 @@ final class MemoriesModel {
         pendingForget = memory
     }
 
+    /// The ones this appliance filed itself, which are the only ones it may
+    /// clear in bulk.
+    ///
+    /// **The list on screen is not Mynah's list.** A node holds every agent's
+    /// memories and this screen shows what Mynah is allowed to read, so a
+    /// "forget everything" that walked the visible rows would deprecate a Claude
+    /// Code session's memories, another agent's weekly reports, and anything
+    /// else the owner had granted read access to. Those are not Mynah's to
+    /// throw away, and the owner's own safety net — *"it has its notes fallback
+    /// conversation history thing so it can easily re-add it if asked"* — covers
+    /// Mynah's memories and none of theirs.
+    ///
+    /// `isOwnHome` compares the domain against this appliance's own agent id,
+    /// which is the node's own definition of ownership rather than a guess from
+    /// the text.
+    var mynahOwned: [Memory] {
+        let id = SageAgentIdentity.applianceAgentID()
+        return memories.filter { memory in
+            guard let domain = memory.domain else { return false }
+            return MemorySubjectName.isOwnHome(domain, applianceAgentID: id)
+        }
+    }
+
+    /// Clears what Mynah filed, one at a time, and says what it could not.
+    ///
+    /// Sequential rather than concurrent: each one is a consensus write, and
+    /// forty at once is a burst the node answers by refusing some of them —
+    /// which would look identical to "some of these are not yours" and hide the
+    /// distinction this whole method exists to preserve.
+    func forgetEverythingMynahOwns() async {
+        let mine = mynahOwned
+        guard !mine.isEmpty else { return }
+        isClearing = true
+        clearedReport = nil
+        forgetTrouble = nil
+        defer { isClearing = false }
+
+        var cleared = 0
+        var refused = 0
+        for memory in mine {
+            do {
+                switch try await store.forget(id: memory.id) {
+                case .forgotten:
+                    memories.removeAll { $0.id == memory.id }
+                    stillLettingGo.remove(memory.id)
+                    cleared += 1
+                case .stillLettingGo:
+                    stillLettingGo.insert(memory.id)
+                    cleared += 1
+                }
+            } catch {
+                // Kept going. One refusal is not a reason to leave the rest,
+                // and the count at the end is what the owner needs.
+                log.error("bulk forget failed for \(memory.id): \(String(describing: error))")
+                refused += 1
+            }
+        }
+        selection = nil
+
+        let others = memories.count
+        var parts = ["Forgot \(cleared) of Mynah\u{2019}s own memories"]
+        if refused > 0 { parts.append("\(refused) could not be forgotten") }
+        if others > 0 { parts.append("\(others) belonging to other agents were left alone") }
+        clearedReport = parts.joined(separator: " \u{00B7} ") + "."
+    }
+
     func forget(_ memory: Memory) async {
         guard !forgetInFlight.contains(memory.id) else { return }
         forgetInFlight.insert(memory.id)
@@ -1015,6 +1086,29 @@ struct MemoriesView: View {
         .background(Palette.surface.canvas)
         .task { await model.loadIfNeeded() }
         .confirmationDialog(
+            "Forget everything Mynah remembers?",
+            isPresented: $model.isConfirmingClear
+        ) {
+            Button("Forget them", role: .destructive) {
+                model.isConfirmingClear = false
+                Task { await model.forgetEverythingMynahOwns() }
+            }
+            Button("Keep them", role: .cancel) { model.isConfirmingClear = false }
+        } message: {
+            // The count and the boundary, because both are load-bearing. The
+            // owner is looking at a list that is mostly not Mynah's, and a
+            // dialog that said "forget everything" over that list would be
+            // promising something much larger than it does.
+            let mine = model.mynahOwned.count
+            let others = model.memories.count - mine
+            Text(
+                others > 0
+                    ? "This deprecates the \(mine) memories Mynah filed itself. "
+                        + "The \(others) belonging to other agents on this node are left alone."
+                    : "This deprecates the \(mine) memories Mynah filed itself."
+            )
+        }
+        .confirmationDialog(
             "Forget this?",
             isPresented: Binding(
                 get: { model.pendingForget != nil },
@@ -1035,11 +1129,36 @@ struct MemoriesView: View {
     // MARK: Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: s2) {
-            Text("What Mynah remembers")
-                .mynahFont(.title1)
-                .foregroundStyle(Palette.ink.primary)
-            countLine
+        HStack(alignment: .firstTextBaseline, spacing: s5) {
+            VStack(alignment: .leading, spacing: s2) {
+                Text("What Mynah remembers")
+                    .mynahFont(.title1)
+                    .foregroundStyle(Palette.ink.primary)
+                countLine
+            }
+            Spacer(minLength: 0)
+            clearControl
+        }
+    }
+
+    /// Clears what Mynah filed — and only that.
+    ///
+    /// Hidden when there is nothing of Mynah's to clear, rather than disabled: a
+    /// greyed button on a screen full of rows invites the owner to work out why
+    /// it will not press, and the answer ("those forty are somebody else's")
+    /// belongs in the confirmation, not in a tooltip on a dead control.
+    @ViewBuilder
+    private var clearControl: some View {
+        let mine = model.mynahOwned.count
+        if mine > 0 {
+            if model.isClearing {
+                ProgressView().controlSize(.small).tint(Palette.accent.fill)
+            } else {
+                MynahButton("Forget all Mynah's", kind: .quiet) {
+                    model.isConfirmingClear = true
+                }
+                .help("Deprecate the \(mine) memories Mynah filed itself. Other agents' are left alone.")
+            }
         }
     }
 

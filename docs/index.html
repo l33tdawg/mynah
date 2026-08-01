@@ -215,6 +215,7 @@ header {
    black the moment somebody switched to light mode. */
 header .display { color: var(--hero-ink); }
 header .standfirst { color: var(--hero-ink-2); }
+header .standfirst strong { color: var(--hero-ink); font-weight: 600; }
 header .wordmark { color: var(--hero-ink); }
 header .tile { background: var(--hero-ink); color: var(--hero); }
 header .get .button {
@@ -237,14 +238,32 @@ header .get .aside a { color: var(--hero-ink); text-decoration-color: var(--hero
 .hero .display { margin-top: 0; max-width: 16ch; }
 .hero .standfirst { max-width: 32rem; }
 
+/* Two windows, overlapped.
+   ==========================================================================
+   One screenshot of an empty conversation is an honest picture of a fresh
+   install and a poor picture of the product — it shows a blank rectangle where
+   the reader is trying to see what they get. Stacking the memory list behind it
+   says "there is more than one screen here" without a gallery. */
+.hero-shot { position: relative; padding-bottom: 12%; }
 .hero-shot img {
   display: block;
   width: 100%;
   height: auto;
   border-radius: var(--r-card);
-  /* Deeper than --shadow-card: this one sits on near-black, where the standard
-     card shadow is invisible. */
+  /* Deeper than --shadow-card: these sit on near-black, where the standard card
+     shadow is invisible. */
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.hero-shot .behind {
+  width: 88%;
+  margin-left: auto;
+  opacity: 0.85;
+}
+.hero-shot .front {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 88%;
 }
 
 /* One breakpoint, and it is where the two columns stop having room for a
@@ -282,6 +301,16 @@ header .get .aside a { color: var(--hero-ink); text-decoration-color: var(--hero
 }
 .tile svg { width: 15px; height: 15px; display: block; }
 
+/* The app's own mark, not an abstract tile. It already carries a white field
+   and the bird; the radius is ours so it matches the cards. */
+img.tile {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: none;
+  object-fit: cover;
+}
+
 h1.display { margin-top: var(--s8); max-width: 15ch; }
 
 .standfirst {
@@ -304,11 +333,19 @@ section h2 + p.lede { font-size: 17px; line-height: 1.5; color: var(--ink-2); ma
 
 /* --- Cards --------------------------------------------------------------- */
 
+/* Two by two, not auto-fit.
+   ==========================================================================
+   `auto-fit` packed three across and dropped the fourth onto a row of its own,
+   which reads as three points and an afterthought. These four are peers — Mac,
+   phone, memory, board — so they get a grid that says so. */
 .cards {
   display: grid;
-  gap: var(--s4);
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s5);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: var(--s7);
+}
+@media (max-width: 640px) {
+  .cards { grid-template-columns: 1fr; }
 }
 
 .card {
@@ -320,16 +357,18 @@ section h2 + p.lede { font-size: 17px; line-height: 1.5; color: var(--ink-2); ma
 .card h3 { margin: 0 0 var(--s3); }
 .card p { font-size: 13px; line-height: 1.5; color: var(--ink-2); margin: 0; }
 
+/* Bigger. At 44/22 the icon read as a bullet beside the heading rather than
+   as the card's subject; half the card's width is now doing that job. */
 .glyph {
-  width: 44px; height: 44px;
-  border-radius: var(--r-control);
+  width: 60px; height: 60px;
+  border-radius: var(--r-card);
   background: var(--well);
-  color: var(--ink-2);
+  color: var(--ink-1);
   display: grid;
   place-items: center;
   margin-bottom: var(--s5);
 }
-.glyph svg { width: 22px; height: 22px; }
+.glyph svg { width: 32px; height: 32px; }
 
 /* --- Rows (the app's list-row grammar) ----------------------------------- */
 
@@ -432,12 +471,22 @@ figcaption {
   margin-top: var(--s4);
 }
 
+/* The picture takes the width it needs; the text takes the rest.
+   ==========================================================================
+   `auto-fit` split this into two equal halves, and the phone shot is capped at
+   300px — so its half carried 300px of image and 140px of nothing, while the
+   list beside it was pushed right and wrapped every line at a width it did not
+   need to. Sizing the first column to the picture puts the text back against
+   the picture and gives it a full measure. */
 .shots {
   display: grid;
-  gap: var(--s6);
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s7);
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
   align-items: start;
   margin-top: var(--s8);
+}
+@media (max-width: 760px) {
+  .shots { grid-template-columns: 1fr; }
 }
 .shots figure { margin-top: 0; }
 
@@ -452,19 +501,34 @@ figcaption {
   border-top: 1px solid var(--divider);
 }
 .cmd:first-of-type { border-top: 0; }
+/* The command is the heading of its own row.
+   ==========================================================================
+   At 13px/500 in a grey chip it read as an inline code span inside the
+   sentence beside it — the same weight as the prose, so the eye had nothing to
+   scan down. These two strings are the entire command surface of the product;
+   they should be findable at a glance. */
 .cmd .key {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink-1);
   background: var(--well);
   border-radius: var(--r-chip);
-  padding: 3px 9px;
+  padding: 5px 12px;
   flex: 0 0 auto;
+  min-width: 7.5rem;
 }
 .cmd .says { flex: 1 1 16rem; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
 
 /* --- Note panel ---------------------------------------------------------- */
 
+/* Full stage width, matching the `.rows` block it sits under.
+   ==========================================================================
+   These carried `.column` (720px) while the white row-group above them spans
+   the stage (880px), so every one of them stopped short of the box it belongs
+   to and read as indented rather than aligned. The prose measure is a little
+   wider than ideal here; matching the thing directly above it is worth more
+   than the last 160px of ideal line length. */
 .note {
   background: var(--sunken);
   border-radius: var(--r-card);
@@ -498,6 +562,25 @@ footer {
 }
 footer p { max-width: 34rem; }
 
+/* Matches the masthead, so the page is bookended rather than trailing off into
+   the canvas. Same tokens, same fixed ink — see `--hero`. */
+footer {
+  background: var(--hero);
+  box-shadow: 0 0 0 100vmax var(--hero);
+  clip-path: inset(0 -100vmax);
+  margin-top: var(--s9);
+  padding: var(--s9) var(--s6) calc(var(--s9) * 1.2);
+  border-top: 0;
+  color: var(--hero-ink-2);
+}
+footer strong { color: var(--hero-ink); }
+footer a { color: var(--hero-ink); text-decoration-color: var(--hero-ink-2); }
+footer a:hover { text-decoration-color: var(--hero-ink); }
+footer .faint { color: rgba(255,255,255,0.42); }
+/* A small heading for each group, so the block reads as a footer rather than
+   three sentences that happen to be last. */
+footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
+
 /* --- Narrow -------------------------------------------------------------- */
 
 @media (max-width: 640px) {
@@ -521,11 +604,7 @@ footer p { max-width: 34rem; }
 
 <header>
   <span class="wordmark">
-    <span class="tile" aria-hidden="true">
-      <svg viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-        <path d="M1.5 7.5h1M5 4v7M8 1.8v11.4M11 5.2v4.6M13.5 7.5h1"/>
-      </svg>
-    </span>Mynah</span>
+    <img class="tile" src="mark.png" width="256" height="256" alt="" aria-hidden="true">Mynah</span>
 
   <div class="hero">
     <div class="hero-copy">
@@ -534,7 +613,7 @@ footer p { max-width: 34rem; }
       <p class="standfirst">
         Talk to it from your desk, or your phone via Signal. It remembers what you
         tell it, and is fully local and privacy-preserving by default — and if you
-        have other SAGE agents on your network, you can message them too.
+        have other SAGE agents on your network, <strong>you can message them too</strong>.
       </p>
 
       <div class="get">
@@ -551,7 +630,8 @@ footer p { max-width: 34rem; }
          only describes the thing asks the reader to imagine it; showing the
          window answers "what am I downloading" before the fold. -->
     <div class="hero-shot" aria-hidden="true">
-      <img src="screenshots/home.png" width="1600" height="1383" alt="">
+      <img class="behind" src="screenshots/privacy.png" width="1600" height="1383" alt="">
+      <img class="front" src="screenshots/home.png" width="1600" height="1383" alt="">
     </div>
   </div>
 </header>
@@ -665,7 +745,7 @@ footer p { max-width: 34rem; }
     </div>
   </div>
 
-  <div class="note column">
+  <div class="note">
     <p style="margin:0 0 var(--s4)"><strong>Or point it at a bigger brain, and know that you did.</strong></p>
     <p style="margin:0 0 var(--s4)">
       You can send the thinking to a company instead — Anthropic, OpenAI,
@@ -734,7 +814,7 @@ footer p { max-width: 34rem; }
     </div>
   </div>
 
-  <div class="note column">
+  <div class="note">
     <p style="margin:0 0 var(--s4)">
       Linking is a QR code on the screen, not a command line. Mynah installs the
       small helper it needs and drives it for you. The code is good for about a
@@ -788,7 +868,7 @@ footer p { max-width: 34rem; }
     </div>
   </div>
 
-  <div class="note column">
+  <div class="note">
     Calling sets itself up the moment you link your phone — no port to forward, no
     certificate to install, nothing to configure. On a Mac that was never set up
     for it, Mynah says so in a sentence you can act on instead of failing halfway
@@ -815,55 +895,7 @@ footer p { max-width: 34rem; }
   </div>
 </section>
 
-<!-- ===================================================================== -->
 
-<section>
-  <p class="eyebrow">Memory</p>
-  <h2 class="title1 column">You can read everything it remembers. And delete it.</h2>
-  <p class="lede">
-    Not a transcript you scroll back through. A list of things it learned, newest
-    first, each one a sentence you can read, search by meaning, and remove.
-  </p>
-
-  <!-- SCREENSHOT SLOT 3 -----------------------------------------------------
-       Memories — "What Mynah remembers": the list of memories newest first,
-       with the search field and the subject filter chips visible, and one
-       memory's confidence word showing. Invent every memory line. Nothing from
-       the owner's real memory store.
-  ---------------------------------------------------------------------- -->
-  <figure>
-    <div class="shot window">
-      <div>
-        <p class="eyebrow">Screenshot</p>
-        <p class="what">What Mynah remembers — the memory list, with search and the subject filter.</p>
-      </div>
-    </div>
-    <figcaption>Each memory is four things: the sentence, when it learned it, what it is about, and how sure it is — in words, never a number.</figcaption>
-  </figure>
-
-  <ul class="claims column">
-    <li>
-      <span class="what">Search by meaning, not spelling</span>
-      <span class="why">Describe the thing rather than quoting it. If nothing matches, the screen says what it actually searched rather than telling you to try again.</span>
-    </li>
-    <li>
-      <span class="what">Forgetting asks first, and is honest about it</span>
-      <span class="why">&ldquo;Mynah won&rsquo;t be able to use this again, and it can&rsquo;t be brought back.&rdquo; If the removal is still going through, the row says so instead of pretending it is gone.</span>
-    </li>
-    <li>
-      <span class="what">It files everything under one subject it owns</span>
-      <span class="why">It does not invent a new pile per topic, and it does not write into anybody else&rsquo;s.</span>
-    </li>
-    <li>
-      <span class="what">It will not quietly invent a number</span>
-      <span class="why">It counts what it can actually see, not what a node claims is behind it — and it will not invent a tool result, a memory, an agent name or a status. If a tool failed, it says so.</span>
-    </li>
-    <li>
-      <span class="what">If it is not allowed to remember, you find out on day one</span>
-      <span class="why">It checks at startup whether it may write anything at all, rather than after a week of being told things.</span>
-    </li>
-  </ul>
-</section>
 
 <!-- ===================================================================== -->
 
@@ -875,7 +907,7 @@ footer p { max-width: 34rem; }
     It sits on the Home screen so you see it before you type anything.
   </p>
 
-  <div class="note column">
+  <div class="note">
     <p style="margin:0 0 var(--s4)">
       <strong>There is no Done column, and that is on purpose.</strong>
       What Mynah can ask for is open work — finished and abandoned tasks are not
@@ -890,133 +922,9 @@ footer p { max-width: 34rem; }
   </div>
 </section>
 
-<!-- ===================================================================== -->
 
-<section>
-  <p class="eyebrow">The whole argument</p>
-  <h2 class="title1 column">Where your words go.</h2>
-  <p class="lede">
-    Almost everything Mynah does happens on this Mac. These are the exceptions,
-    and what each one tells somebody else. The app has this same page inside it,
-    filled in with the choices you actually made.
-  </p>
 
-  <div class="rows">
-    <div class="row">
-      <div class="text">
-        <p class="title3">Thinking, on a brain that runs here</p>
-        <p>Answered by a model on this Mac. Nothing you say goes anywhere else to be thought about.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">Thinking, on a brain you rent</p>
-        <p>What you say goes to that company so it can work out an answer — and so does anything Mynah recalls in order to answer it, because a remembered fact has to be in front of the model to be used. That is the one thing this product cannot do without.</p>
-      </div>
-      <span class="pill leaves">Leaves this Mac</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">Your recordings</p>
-        <p>They are turned into words on this Mac and never sent anywhere.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">What Mynah remembers</p>
-        <p>Kept on this Mac, in a folder only you can read.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">Looking something up on the web</p>
-        <p>When a question needs the internet, the words Mynah searches for go to a search engine. The rest of what you said does not.</p>
-      </div>
-      <span class="pill leaves">Leaves this Mac</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">Talking to it out loud</p>
-        <p>Your side of a call is turned into words on this Mac, and Mynah&rsquo;s answer is spoken here too. The link you tap is served by a relay, which passes the two ends&rsquo; details along and is not in the call itself.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">After a call</p>
-        <p>If you have transcripts turned on, what was said in a call is posted back into your Signal thread when it ends. It is a switch, and it is yours.</p>
-      </div>
-      <span class="pill">Your choice</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">Checking for a newer Mynah</p>
-        <p>Once a day it asks GitHub whether a newer version exists. That request tells GitHub a Mac asked — the one thing Mynah does that you did not ask for by speaking. Nothing is downloaded or installed on its own, and turning the check off means it never contacts GitHub at all.</p>
-      </div>
-      <span class="pill">Once a day</span>
-    </div>
-  </div>
 
-  <!-- SCREENSHOT SLOT 4 -----------------------------------------------------
-       Privacy — "What leaves this Mac": the rows with their pills, showing a
-       green "Stays here" row and a row naming a cloud company. Any model or
-       company name in frame is fine; no phone number, no memory content.
-  ---------------------------------------------------------------------- -->
-  <figure>
-    <div class="shot window">
-      <div>
-        <p class="eyebrow">Screenshot</p>
-        <p class="what">What leaves this Mac — the privacy screen, with a pill on every row.</p>
-      </div>
-    </div>
-    <figcaption>Nothing on that screen is a setting. It is a list of facts, and the update check is the only one of them you can turn off.</figcaption>
-  </figure>
-
-  <figure>
-    <div class="shot window filled">
-      <img src="screenshots/privacy.png" width="1600" height="1383"
-           alt="The privacy screen, headed &ldquo;What leaves this Mac&rdquo;. Rows for asking from your phone, recordings and what Mynah remembers are marked &ldquo;Stays here&rdquo;; web search, calls and the daily update check are listed separately.">
-    </div>
-    <figcaption>Every row carries a pill. Green means it stayed on this Mac; anything else names where it went.</figcaption>
-  </figure>
-</section>
-
-<!-- ===================================================================== -->
-
-<section>
-  <p class="eyebrow">Small print that matters</p>
-  <h2 class="title1 column">What it will not do.</h2>
-
-  <ul class="claims column">
-    <li>
-      <span class="what">It only listens while you hold the button</span>
-      <span class="why">The microphone opens only while you hold the record button. There is no wake word, and nothing is recorded on its own.</span>
-    </li>
-    <li>
-      <span class="what">It does not message anyone first</span>
-      <span class="why">It replies into a thread that was already addressed to it, and that is all it ever does unprompted — nothing.</span>
-    </li>
-    <li>
-      <span class="what">It cannot write outside its own notes folder</span>
-      <span class="why">Ask it to write something down and you get a real document. It takes a title, never a path, so writing somewhere else is not something it refuses — it is something it cannot express.</span>
-    </li>
-    <li>
-      <span class="what">It cannot rename or deregister itself, or vote on anything</span>
-      <span class="why">Those tools are deliberately kept away from the model, because a speech transcript can contain a mishearing and some verbs do not undo.</span>
-    </li>
-    <li>
-      <span class="what">A page it reads on the web is not an instruction</span>
-      <span class="why">Search results are handed to the model as somebody else&rsquo;s text to summarise, and the code is honest that this raises the bar rather than closing the hole. The real safeguard is that the answer comes back to you, where you can see it.</span>
-    </li>
-    <li>
-      <span class="what">It is not always right</span>
-      <span class="why">It is a model with tools. It can mishear a voice note, misread a search result, or be confidently wrong. What it did during a turn is in the answer you read, which is the point — you are the one checking it.</span>
-    </li>
-  </ul>
-</section>
 
 <!-- ===================================================================== -->
 
