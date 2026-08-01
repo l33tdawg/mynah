@@ -417,7 +417,10 @@ final class ConversationModel {
     enum Readiness: Equatable, Sendable {
         case connecting
         /// `destination` is already phrased for the owner.
-        case ready(destination: String, staysOnDevice: Bool)
+        /// `model` is the exact name the brain answers as, shown beside the
+        /// company. Two facts, not one: "DeepSeek" says where the words go and
+        /// says nothing about which of their models is answering.
+        case ready(destination: String, model: String?, staysOnDevice: Bool)
         case blocked(Exchange.Failure)
     }
 
@@ -426,6 +429,16 @@ final class ConversationModel {
         var tone: MynahTone
         var title: String
         var detail: String?
+        /// Where the words go, as a company or "This Mac".
+        var provider: String?
+        /// Which model answers.
+        var model: String?
+        /// Drives the pills' colour, and it is the app's existing rule rather
+        /// than a new one: green means it stayed on this Mac, amber means it
+        /// left. The Privacy screen has used exactly these two meanings from
+        /// the start, so a cloud brain reads amber here for the same reason it
+        /// does there.
+        var staysOnDevice: Bool = false
     }
 
     private(set) var exchanges: [Exchange] = []
@@ -551,7 +564,7 @@ final class ConversationModel {
             return Health(tone: .neutral, title: "Waking up", detail: nil)
         case .blocked:
             return Health(tone: .neutral, title: "Not ready yet", detail: "Finish the step below.")
-        case .ready(let destination, let staysOnDevice):
+        case .ready(let destination, let model, let staysOnDevice):
             return Health(
                 tone: .good,
                 // "Online", not "Listening".
@@ -563,9 +576,13 @@ final class ConversationModel {
                 // speaks into their phone. "Online" says the same thing about
                 // readiness without the implication.
                 title: isBusy ? "Answering" : "Online",
-                detail: staysOnDevice
-                    ? "your words stay on this Mac"
-                    : "your words go to \(destination)"
+                // Was the sentence "your words go to DeepSeek". It is two
+                // pills now — the company and the model — because a sentence
+                // cannot be scanned and the model was missing from it entirely.
+                detail: nil,
+                provider: staysOnDevice ? "This Mac" : destination,
+                model: model,
+                staysOnDevice: staysOnDevice
             )
         }
     }
@@ -718,7 +735,11 @@ final class ConversationModel {
         // options can share a destination company, so the displayed name cannot
         // tell one brain from another.
         connectedOptionID = option.id
-        readiness = .ready(destination: company, staysOnDevice: option.keepsWordsOnDevice)
+        readiness = .ready(
+            destination: company,
+            model: option.modelName,
+            staysOnDevice: option.keepsWordsOnDevice
+        )
         // Not awaited: the owner can start typing while the prefill lands.
         Task { await candidate.warmUp() }
     }

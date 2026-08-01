@@ -187,7 +187,17 @@ struct TalkView: View {
     /// not buy a control panel.
     private var healthLine: some View {
         let health = app.isPaused ? Self.pausedHealth : model.health
+        // **The board control on the left, beside the column it opens.**
+        //
+        // It sat on the right, at the far end of the line from the thing it
+        // acts on, which is what made "what is this chevron for" a question at
+        // all. A control belongs next to what it moves.
+        //
+        // State goes to the right in exchange: readiness and the brain are
+        // things you glance at, not things you press.
         return HStack(spacing: s3) {
+            boardToggle
+            Spacer(minLength: s5)
             StatusDot(health.tone)
             Text(health.title)
                 .mynahFont(.body)
@@ -200,8 +210,15 @@ struct TalkView: View {
                     .mynahFont(.body)
                     .foregroundStyle(Palette.ink.secondary)
             }
-            Spacer(minLength: s5)
-            boardToggle
+            // Two pills rather than "your words go to DeepSeek": the company
+            // and the model it answers as. The sentence never named the model
+            // at all, and a sentence is read while a pill is scanned.
+            if let provider = health.provider {
+                StatusPill(provider, tone: health.staysOnDevice ? .good : .caution)
+            }
+            if let model = health.model, !model.isEmpty {
+                StatusPill(model, tone: health.staysOnDevice ? .good : .caution)
+            }
         }
         .padding(.horizontal, s8)
         .padding(.vertical, s5)
@@ -1176,7 +1193,7 @@ private enum TalkPreviewFixtures {
         ConversationModel(
             engine: SlowPreviewEngine(),
             voice: PreviewVoiceCapture(),
-            readiness: .ready(destination: "Google", staysOnDevice: false)
+            readiness: .ready(destination: "Google", model: "gemini-3.6-flash", staysOnDevice: false)
         )
     }
 
@@ -1202,7 +1219,7 @@ private enum TalkPreviewFixtures {
                     askedAt: Date(timeIntervalSinceNow: -24)
                 )
             ],
-            readiness: .ready(destination: "this Mac", staysOnDevice: true)
+            readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true)
         )
     }
 
@@ -1249,7 +1266,7 @@ private enum TalkPreviewFixtures {
                     ago: 120
                 )
             ],
-            readiness: .ready(destination: "this Mac", staysOnDevice: true)
+            readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true)
         )
     }
 
@@ -1273,7 +1290,7 @@ private enum TalkPreviewFixtures {
                     )
                 )
             ],
-            readiness: .ready(destination: "Google", staysOnDevice: false)
+            readiness: .ready(destination: "Google", model: "gemini-3.6-flash", staysOnDevice: false)
         )
     }
 

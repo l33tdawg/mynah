@@ -26,7 +26,7 @@ final class ConversationContinuityTests: XCTestCase {
     /// The phone said something; the window must answer knowing it.
     func testAQuestionInTheWindowCarriesWhatThePhoneAlreadySaid() async {
         let engine = RecordingEngine()
-        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", staysOnDevice: true))
+        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true))
         model.priorContext = {
             [
                 BrainMessage(role: .user, content: "search for a tomato soup recipe"),
@@ -52,7 +52,7 @@ final class ConversationContinuityTests: XCTestCase {
     /// above and break every follow-up typed in the window.
     func testTheWindowsOwnTurnsFollowThePhonesInOrder() async {
         let engine = RecordingEngine()
-        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", staysOnDevice: true))
+        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true))
         model.priorContext = { [BrainMessage(role: .assistant, content: "from the phone")] }
 
         model.draft = "first question here"
@@ -75,7 +75,7 @@ final class ConversationContinuityTests: XCTestCase {
     /// history the model is asked the same thing twice in one request.
     func testTheQuestionBeingAskedIsNotAlsoInTheHistory() async {
         let engine = RecordingEngine()
-        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", staysOnDevice: true))
+        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true))
 
         model.draft = "only once please"
         model.send()
@@ -102,7 +102,7 @@ final class ConversationContinuityTests: XCTestCase {
     /// nothing on the phone, quietly amputating the conversation.
     func testClearingTheScreenLeavesTheApplianceItsContext() async {
         let engine = RecordingEngine()
-        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", staysOnDevice: true))
+        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true))
         model.priorContext = { [BrainMessage(role: .assistant, content: "said on the phone")] }
 
         model.draft = "before the clear"
@@ -129,7 +129,7 @@ final class ConversationContinuityTests: XCTestCase {
     /// Signal holds".
     func testClearedWindowTurnsDoNotReturnToTheContext() async {
         let engine = RecordingEngine()
-        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", staysOnDevice: true))
+        let model = ConversationModel(engine: engine, readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true))
 
         model.draft = "swept away"
         model.send()

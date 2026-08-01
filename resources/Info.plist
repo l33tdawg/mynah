@@ -50,7 +50,7 @@
        it to decide which of two copies is newer, so it must never go backwards
        even when the version string does. -->
   <key>CFBundleVersion</key>
-  <string>12</string>
+  <string>13</string>
 
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>

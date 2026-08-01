@@ -74,6 +74,7 @@ final class AmberIsGoneTests: XCTestCase {
 
     private static let working = ConversationModel.Readiness.ready(
         destination: "this Mac",
+        model: "qwen3.5:4b",
         staysOnDevice: true
     )
 

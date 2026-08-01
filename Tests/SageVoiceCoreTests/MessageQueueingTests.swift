@@ -15,7 +15,7 @@ final class MessageQueueingTests: XCTestCase {
     private func makeModel(_ engine: GatedEngine) -> ConversationModel {
         ConversationModel(
             engine: engine,
-            readiness: .ready(destination: "this Mac", staysOnDevice: true)
+            readiness: .ready(destination: "this Mac", model: "qwen3.5:4b", staysOnDevice: true)
         )
     }
 
