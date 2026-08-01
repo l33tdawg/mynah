@@ -645,6 +645,15 @@ public actor VoiceBridgeDaemon {
             log("[daemon] discarding \(stale.count) undelivered note(s) from an earlier turn")
         }
 
+        // **Kept before the brain is asked anything.**
+        //
+        // Storage does not depend on what the model can do with a picture —
+        // *"attachments sent via signal should not matter what the backend is if
+        // the user wants it stored, just store it and pull it up when asked"* —
+        // and doing it here means an attachment survives a turn that fails, a
+        // model that has no eyes, and a tool loop that runs out of iterations.
+        let kept = keepAttachments(in: batch)
+
         if configuration.sendsThinkingAcknowledgement {
             await reply(
                 WaitingPhrases.acknowledgement(estimatedSeconds: estimator.typicalSeconds),
@@ -656,7 +665,7 @@ public actor VoiceBridgeDaemon {
             let tools = try await toolCatalogue()
             let key = recipient.description
             let result = try await loop.run(
-                transcript: transcript,
+                transcript: attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript,
                 tools: tools,
                 history: histories[key] ?? [],
                 images: batch.flatMap { resolveImages($0) },
@@ -832,6 +841,55 @@ public actor VoiceBridgeDaemon {
     /// that proceeds on the words alone — refusing to answer "what is this?"
     /// because one attachment was a malformed HEIC would be a worse appliance
     /// than one that says it cannot see anything.
+    /// Files everything attached to this batch, whatever the brain can do with
+    /// it. See `SignalAttachmentStore`.
+    private func keepAttachments(in batch: [SignalIncomingMessage]) -> [SignalAttachmentStore.Kept] {
+        let store = SignalAttachmentStore(
+            notesDirectory: notes?.notesDirectory ?? NotesToolSource.defaultDirectory()
+        )
+        return batch.flatMap { message in
+            store.keep(
+                message.attachments,
+                caption: message.text,
+                receivedAt: Date(),
+                log: { [weak self] line in self?.log(line) }
+            )
+        }
+    }
+
+    /// Tells the model what arrived and what it can do about it.
+    ///
+    /// **This is the fix for a fabrication, not a nicety.** Handed a caption
+    /// with no picture — which is what every hosted backend receives, because
+    /// only Ollama reads `BrainMessage.images` — a model answers the only way it
+    /// can: *"I can't see an image attached to this message, nothing came
+    /// through."* The owner watched Signal upload a photo and was told it never
+    /// arrived.
+    ///
+    /// The model was not lying; it was never told. So the transcript now carries
+    /// the two facts it was missing: the picture exists, and whether this brain
+    /// can look at it. What it says next is then its own honest answer instead
+    /// of a guess about the owner's phone.
+    private func attachmentNote(for kept: [SignalAttachmentStore.Kept]) -> String? {
+        guard !kept.isEmpty else { return nil }
+
+        let names = kept.map(\.file.lastPathComponent).joined(separator: ", ")
+        let count = kept.count == 1 ? "an attachment" : "\(kept.count) attachments"
+        let saved = "[The owner sent \(count) with this message. It is already saved on this Mac"
+            + " under Notes/\(SignalAttachmentStore.subdirectory)/ as \(names), and a note"
+            + " describing it has been written, so it can be found later by asking for it."
+
+        guard !loop.backendSeesImages else {
+            return saved + " You can see it.]"
+        }
+        // Said flatly, because the model must not soften it into "I couldn't
+        // find an image" — the image is there, and the limitation is ours.
+        return saved + " The brain currently answering cannot view images, so you have NOT seen it."
+            + " Do not say it failed to arrive or that nothing came through: it arrived and it is"
+            + " saved. Say it is stored, and offer either to be told what it contains, or to"
+            + " switch to a local model in Settings, which can look at pictures.]"
+    }
+
     private func resolveImages(_ message: SignalIncomingMessage) -> [Data] {
         // Logged unconditionally when anything is attached, because the failure
         // this catches is silent by construction: an attachment that is not

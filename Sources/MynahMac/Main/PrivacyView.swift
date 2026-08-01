@@ -134,6 +134,9 @@ struct PrivacyView: View {
     /// source for what leaves when the owner speaks to their phone.
     @State private var appliance: ApplianceStatus?
     @State private var checksForUpdates = UpdatePreferences.load().checksForUpdates
+    @State private var isChecking = false
+    /// What the last press found, in one sentence. Nil until asked.
+    @State private var updateReport: String?
     @State private var sendsCallTranscript = CallPreferences.load().transcript
 
     var body: some View {
@@ -254,12 +257,61 @@ struct PrivacyView: View {
                 // speaking, which is exactly why leaving it off would be the
                 // worst omission available.
                 PrivacyRow("Checking for a newer Mynah", detail: PrivacyClaim.aboutCaption) {
-                    StatusPill(
-                        checksForUpdates ? "Once a day" : "Turned off",
-                        tone: checksForUpdates ? .neutral : .good
-                    )
+                    HStack(spacing: s4) {
+                        StatusPill(
+                            checksForUpdates ? "Once a day" : "Turned off",
+                            tone: checksForUpdates ? .neutral : .good
+                        )
+                        // The one row on this page that describes something
+                        // happening on a timer, so it is the one place where
+                        // "not now, later" is a real answer to a real question.
+                        // A button that asks immediately turns waiting a day
+                        // into waiting a second.
+                        //
+                        // Offered even when the daily check is off, and that is
+                        // deliberate rather than an oversight: turning the timer
+                        // off is a decision about what Mynah does unprompted,
+                        // and pressing this is the owner asking. Those are not
+                        // the same thing, and refusing to look because the
+                        // automatic check is disabled would be the app deciding
+                        // it knows better than the person clicking.
+                        if isChecking {
+                            ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                        } else {
+                            MynahButton("Check now", kind: .quiet) {
+                                Task { await checkNow() }
+                            }
+                        }
+                    }
+                }
+                if let updateReport {
+                    PrivacyRow("", detail: updateReport) { EmptyView() }
                 }
             }
+        }
+    }
+
+    /// Asks GitHub now, and says what came back.
+    ///
+    /// `force: true` because the daily limit exists to stop the appliance
+    /// pestering GitHub unprompted, and this is not unprompted — somebody
+    /// pressed a button. Without it the first press of the day answers and
+    /// every press after it says "hasn't managed to check yet", which reads as
+    /// a broken control rather than a rate limit.
+    private func checkNow() async {
+        isChecking = true
+        defer { isChecking = false }
+        let answer = await UpdateCheck(preferencesFile: UpdatePreferences.defaultFileURL())
+            .run(force: true)
+        switch answer {
+        case .upToDate:
+            updateReport = "You are on the newest version."
+        case .newer(let version, let page):
+            updateReport = "Version \(version) is available — \(page.absoluteString)"
+        case .cannotTell(let problem):
+            // The problem type already writes one sentence for the owner, and
+            // every one of them says "could not tell" rather than "up to date".
+            updateReport = problem.spokenDescription
         }
     }
 

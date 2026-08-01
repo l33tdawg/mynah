@@ -561,6 +561,11 @@ public final class ToolLoop: @unchecked Sendable {
     /// buys nothing and spends real quota.
     public var backendIsLocal: Bool { backend.isLocal }
 
+    /// Whether the brain currently answering does anything with an attached
+    /// photo. See `BrainBackend.seesImages` for why this has to be asked rather
+    /// than assumed.
+    public var backendSeesImages: Bool { backend.seesImages }
+
     public func setSystemPrompt(_ prompt: String) {
         promptLock.lock()
         defer { promptLock.unlock() }

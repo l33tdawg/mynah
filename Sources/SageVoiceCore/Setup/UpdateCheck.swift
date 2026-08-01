@@ -329,9 +329,23 @@ public struct UpdateCheck: Sendable {
     ///
     /// Never throws and never blocks anything: callers run it beside the screen
     /// they are drawing, and every failure lands in `.cannotTell`.
-    public func run() async -> UpdateAvailability {
+    ///
+    /// - Parameter force: ask now, whatever the daily limit and the switch say.
+    ///   For the "Check now" button and nothing else.
+    ///
+    ///   Both guards below exist to stop the appliance contacting GitHub
+    ///   *unprompted* — the daily limit so it does not pester, the switch so an
+    ///   owner can stop it entirely. Neither is a statement about what should
+    ///   happen when somebody presses a button asking the question themselves.
+    ///
+    ///   Without this, the first press of the day answers and every press after
+    ///   it reports "hasn't managed to check yet", which reads as a broken
+    ///   control rather than a rate limit; and with the daily check switched
+    ///   off, the button would answer "you turned that off" — the app declining
+    ///   to look because of a preference about *automatic* looking.
+    public func run(force: Bool = false) async -> UpdateAvailability {
         let preferences = UpdatePreferences.load(from: preferencesFile)
-        guard preferences.checksForUpdates else { return .cannotTell(.turnedOff) }
+        guard force || preferences.checksForUpdates else { return .cannotTell(.turnedOff) }
 
         // Before the network, not after. If this build cannot say what it is,
         // no answer from GitHub can be compared to it, and asking would be an
@@ -340,7 +354,7 @@ public struct UpdateCheck: Sendable {
             return .cannotTell(.unknownRunningVersion)
         }
 
-        guard isDue(preferences) else { return remembered(preferences, running: running) }
+        guard force || isDue(preferences) else { return remembered(preferences, running: running) }
 
         let answer = await ask()
         UpdatePreferences.amend(at: preferencesFile) { stored in
