@@ -110,6 +110,12 @@ bash scripts/provision-onnxruntime.sh
 step "provision espeak-ng for the native voice"
 bash scripts/provision-espeak-ng.sh
 
+# The document writers. Both stop early when already staged, so this costs
+# nothing on a repeat run.
+step "provision pandoc and typst for documents"
+bash scripts/provision-pandoc.sh
+bash scripts/provision-typst.sh
+
 step "package + sign"
 bash scripts/package-app.sh
 

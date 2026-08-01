@@ -281,3 +281,133 @@ final class NotesToolSourceTests: XCTestCase {
         XCTAssertEqual(directory[.posixPermissions] as? NSNumber, OwnerOnlyFileSecurity.directoryPermissions)
     }
 }
+
+// MARK: - Documents
+
+/// `write_note` with a format on it.
+///
+/// The rule being defended: **the markdown is always written and always kept.**
+/// Everything else is a conversion that may or may not be possible on this Mac,
+/// and every way it can fail has to leave the owner holding the note they asked
+/// for rather than an apology.
+final class NoteDocumentTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("note-docs-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func makeSource(exporter: DocumentExporter?) -> NotesToolSource {
+        NotesToolSource(
+            directory: root.appendingPathComponent("Notes", isDirectory: true),
+            delivery: .attachedToReply,
+            exporter: exporter
+        )
+    }
+
+    private func write(
+        _ source: NotesToolSource,
+        title: String = "Quarterly brief",
+        format: String? = nil
+    ) async throws -> String {
+        var arguments: [String: JSONValue] = [
+            "title": .string(title),
+            "content": .string("A paragraph.\n\n## What we found\n\n- One thing\n- Another\n")
+        ]
+        if let format { arguments["format"] = .string(format) }
+        return try await source.call(name: NotesToolSource.writeToolName, arguments: arguments)
+    }
+
+    func testWithoutAFormatItIsStillJustANote() async throws {
+        let source = makeSource(exporter: nil)
+        _ = try await write(source)
+
+        XCTAssertEqual(
+            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"]
+        )
+    }
+
+    func testAFormatThisMacCannotProduceLeavesTheOwnerHoldingTheNote() async throws {
+        let source = makeSource(exporter: nil)
+
+        let answer = try await write(source, format: "pdf")
+
+        XCTAssertTrue(
+            answer.contains("can't make a PDF"),
+            "the model has to be told, or it will say it sent a PDF: \(answer)"
+        )
+        XCTAssertEqual(
+            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"],
+            "the note is what gets attached when the document could not be made"
+        )
+    }
+
+    func testAFormatNobodyRecognisesIsSaidRatherThanGuessedAt() async throws {
+        let source = makeSource(exporter: nil)
+
+        let answer = try await write(source, format: "epub")
+
+        XCTAssertTrue(answer.contains("isn't a format"), answer)
+        XCTAssertEqual(source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"])
+    }
+
+    func testAFailedConversionKeepsTheNoteAndSaysWhy() async throws {
+        // A "pandoc" that exits non-zero, which is every real conversion
+        // failure: a malformed table, an image that is not there.
+        let source = makeSource(exporter: DocumentExporter(
+            pandoc: URL(fileURLWithPath: "/usr/bin/false"),
+            pdfEngine: URL(fileURLWithPath: "/usr/bin/false")
+        ))
+
+        let answer = try await write(source, format: "docx")
+
+        XCTAssertTrue(answer.contains("failed"), answer)
+        XCTAssertEqual(
+            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"],
+            "a failed conversion must not cost the owner the note as well"
+        )
+    }
+
+    func testTheSchemaOnlyOffersWhatThisMacCanDo() async throws {
+        let withoutPandoc = makeSource(exporter: nil)
+        XCTAssertEqual(withoutPandoc.offeredFormats, [.markdown])
+
+        let withoutPDF = makeSource(exporter: DocumentExporter(
+            pandoc: URL(fileURLWithPath: "/usr/bin/true"),
+            pdfEngine: nil
+        ))
+        XCTAssertEqual(
+            withoutPDF.offeredFormats, [.markdown, .docx, .pptx],
+            "a model told `pdf` is available will use it and say it did"
+        )
+    }
+
+    /// The whole errand, on a Mac where the converter is staged.
+    func testARealDocumentIsWhatGetsAttached() async throws {
+        guard let exporter = DocumentExporter.locate() else {
+            throw XCTSkip("pandoc is not staged; run scripts/provision-pandoc.sh")
+        }
+        let source = makeSource(exporter: exporter)
+
+        let answer = try await write(source, format: "docx")
+
+        XCTAssertTrue(answer.contains("Word document"), answer)
+        let attached = source.drainWrittenNotes()
+        XCTAssertEqual(attached.map(\.lastPathComponent), ["quarterly-brief.docx"])
+        XCTAssertEqual(
+            attached.first?.deletingLastPathComponent().lastPathComponent, "documents",
+            "converted files live beside the notes, not among them — list_notes and "
+                + "read_note work on the markdown"
+        )
+        // And the note itself is still there, which is what read_note reads.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: source.notesDirectory.appendingPathComponent("quarterly-brief.md").path
+        ))
+    }
+}

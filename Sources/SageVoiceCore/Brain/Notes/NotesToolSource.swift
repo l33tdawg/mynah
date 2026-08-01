@@ -89,6 +89,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
 
     private let directory: URL
     private let delivery: Delivery
+    private let exporter: DocumentExporter?
     private let fileManager: FileManager
     private let log: @Sendable (String) -> Void
 
@@ -99,16 +100,33 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
 
     /// - Parameter delivery: defaults to the honest-anywhere answer. A host that
     ///   actually ships the file has to say so explicitly.
+    /// - Parameter exporter: what turns a note into a PDF, a Word document or a
+    ///   deck. `nil` on a Mac where Pandoc was never staged — a development
+    ///   checkout without `vendor/pandoc`, which is every fresh clone — and the
+    ///   tool then offers markdown only rather than promising a file it cannot
+    ///   produce.
     public init(
         directory: URL = NotesToolSource.defaultDirectory(),
         delivery: Delivery = .savedOnDisk,
+        exporter: DocumentExporter? = DocumentExporter.locate(),
         fileManager: FileManager = .default,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.directory = directory
         self.delivery = delivery
+        self.exporter = exporter
         self.fileManager = fileManager
         self.log = log
+    }
+
+    /// Where converted documents go.
+    ///
+    /// Beside the notes rather than among them: `list_notes` and `read_note`
+    /// work on the markdown, and a folder holding both `budget.md` and
+    /// `budget.pdf` would list the same document twice and read back the wrong
+    /// one.
+    public var documentsDirectory: URL {
+        directory.appendingPathComponent("documents", isDirectory: true)
     }
 
     /// Alongside the provider keys and the OAuth token, for the same reason they
@@ -133,6 +151,17 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     /// Draining rather than reading is deliberate: the daemon attaches these to
     /// one reply, and a note that rode along with a second reply because nobody
     /// cleared the list would be a confusing bug to chase from the phone.
+    /// Records a file for the reply to carry.
+    ///
+    /// Its own synchronous method because taking a lock inside an async
+    /// function is a suspension point away from a deadlock, and the compiler
+    /// says so.
+    private func noteWritten(_ file: URL) {
+        lock.lock()
+        written.append(file)
+        lock.unlock()
+    }
+
     public func drainWrittenNotes() -> [URL] {
         lock.lock()
         defer { lock.unlock() }
@@ -154,9 +183,9 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             MCPTool(
                 name: Self.writeToolName,
                 description: """
-                Save a markdown document and send it to the owner as a file. Use this when they \
-                ask for notes, a written summary, a document or a list they want to keep. Not \
-                for ordinary answers, which you just speak.
+                Save a document and send it to the owner as a file. Use this when they ask for \
+                notes, a written summary, a document, a PDF, a Word file, a deck or a list they \
+                want to keep. Not for ordinary answers, which you just speak.
                 """,
                 inputSchema: .object([
                     "type": .string("object"),
@@ -168,6 +197,19 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                         "content": .object([
                             "type": .string("string"),
                             "description": .string("The document itself. Markdown is fine here.")
+                        ]),
+                        // Offered only where it can be honoured. A model told
+                        // `pdf` is available on a Mac with no converter will use
+                        // it, say it has, and be wrong — and the owner would go
+                        // looking for a file that was never made.
+                        "format": .object([
+                            "type": .string("string"),
+                            "enum": .array(offeredFormats.map { .string($0.rawValue) }),
+                            "description": .string(
+                                "markdown for a plain note. pdf, docx or pptx when the owner "
+                                    + "asked for that kind of file. For pptx write each slide as "
+                                    + "a `## Heading` with a few short bullets under it."
+                            )
                         ])
                     ]),
                     "required": .array([.string("title"), .string("content")])
@@ -202,10 +244,21 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
         ]
     }
 
+    /// The formats this Mac can actually produce, markdown always first.
+    ///
+    /// Read off the exporter rather than listed: a bundle with Pandoc but no
+    /// Typst can write a deck and cannot write a PDF, and the schema should say
+    /// so rather than leave the model to find out.
+    var offeredFormats: [DocumentFormat] {
+        DocumentFormat.allCases.filter { format in
+            format == .markdown || (exporter?.canProduce(format) ?? false)
+        }
+    }
+
     public func call(name: String, arguments: [String: JSONValue]) async throws -> String {
         switch name {
         case Self.writeToolName:
-            return try write(arguments: arguments)
+            return try await write(arguments: arguments)
         case Self.readToolName:
             return try read(arguments: arguments)
         case Self.listToolName:
@@ -217,7 +270,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
 
     // MARK: - write_note
 
-    private func write(arguments: [String: JSONValue]) throws -> String {
+    private func write(arguments: [String: JSONValue]) async throws -> String {
         let content = arguments["content"]?.stringValue ?? ""
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "No content was given, so no note was written."
@@ -251,10 +304,6 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
         try Data(document.utf8).write(to: destination, options: [.atomic])
         try OwnerOnlyFileSecurity.protectFile(destination)
 
-        lock.lock()
-        written.append(destination)
-        lock.unlock()
-
         log("[notes] wrote \(filename) (\(document.count) characters)\(isReplacement ? ", replacing an earlier note" : "")")
 
         var sentences = [
@@ -265,11 +314,71 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
         if body.count < content.count {
             sentences.append("It was too long and was cut at \(Self.maximumContentCharacters) characters — tell the owner that.")
         }
+
+        // The markdown is always written first and always kept. It is what
+        // `read_note` reads back, what survives a converter that is not there,
+        // and what the owner can still open in ten years — a `.docx` is a
+        // format, a note is the thing they asked for.
+        let (delivered, note) = await export(
+            source: destination,
+            slug: slug,
+            title: title,
+            asked: arguments["format"]?.stringValue ?? ""
+        )
+        if let note { sentences.append(note) }
+
+        noteWritten(delivered)
+
         // Says what already happened to the file, so the model does not go on to
         // offer a delivery it cannot perform. Which host is speaking matters:
         // see `Delivery`.
         sentences.append(delivery.sentence)
         return sentences.joined(separator: " ")
+    }
+
+    /// Turns the note into whatever was asked for, or explains why it did not.
+    ///
+    /// - Returns: the file to hand the owner, and a sentence for the model when
+    ///   something is worth saying. The markdown is the fallback in every
+    ///   failing case, because a note the owner did not quite ask for is worth
+    ///   more than an apology with no file attached.
+    private func export(
+        source: URL,
+        slug: String,
+        title: String,
+        asked: String
+    ) async -> (URL, String?) {
+        guard let format = DocumentFormat.named(asked) else {
+            return (source, "\"\(asked)\" isn't a format Mynah writes, so it saved a note "
+                + "instead — say so, and offer a PDF, a Word document or a deck.")
+        }
+        guard format != .markdown else { return (source, nil) }
+
+        guard let exporter, exporter.canProduce(format) else {
+            return (source, "This Mynah can't make \(format.spokenName) — the converter isn't "
+                + "installed on this Mac — so it saved a note instead. Tell the owner that "
+                + "plainly rather than pretending.")
+        }
+
+        let destination = documentsDirectory
+            .appendingPathComponent(slug + "." + format.fileExtension, isDirectory: false)
+        do {
+            try OwnerOnlyFileSecurity.prepareDirectory(documentsDirectory)
+            try await exporter.convert(
+                source: source,
+                to: format,
+                at: destination,
+                title: title
+            )
+            return (destination, "It was made into \(format.spokenName): "
+                + destination.lastPathComponent + ".")
+        } catch {
+            log("[notes] could not convert \(slug) to \(format.rawValue): \(error)")
+            let reason = (error as? DocumentExporter.Failure)?.description
+                ?? error.localizedDescription
+            return (source, "Making \(format.spokenName) failed — \(reason) — so the note itself "
+                + "is what the owner gets. Say so in one sentence.")
+        }
     }
 
     // MARK: - read_note

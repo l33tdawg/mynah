@@ -100,6 +100,16 @@ ESPEAK_DATA_SOURCE="${SAGE_VOICE_ESPEAK_DATA:-$ESPEAK_ROOT/share/espeak-ng-data}
 # reaches an owner.
 REQUIRE_NATIVE_VOICE="${SAGE_VOICE_REQUIRE_NATIVE_VOICE:-1}"
 
+# The document writers. Same posture as the voice: required, because a build
+# without them answers "make me a PDF" with a markdown file and a sentence
+# explaining that this Mynah cannot — which is honest, and is still a downgrade
+# nobody asked for.
+PANDOC_ROOT="${SAGE_VOICE_PANDOC_ROOT:-$ROOT/vendor/pandoc}"
+PANDOC_SOURCE="${SAGE_VOICE_PANDOC:-$PANDOC_ROOT/bin/pandoc}"
+TYPST_ROOT="${SAGE_VOICE_TYPST_ROOT:-$ROOT/vendor/typst}"
+TYPST_SOURCE="${SAGE_VOICE_TYPST:-$TYPST_ROOT/bin/typst}"
+REQUIRE_DOCUMENTS="${SAGE_VOICE_REQUIRE_DOCUMENTS:-1}"
+
 # An ad-hoc signature cannot ship the dylib, and the failure is total.
 #
 # The hardened runtime enforces library validation, which requires a loaded
@@ -398,6 +408,54 @@ elif [[ "$REQUIRE_NATIVE_VOICE" == "1" || "$REQUIRE_NATIVE_VOICE" == "true" ]]; 
 Run scripts/provision-espeak-ng.sh before packaging."
 fi
 
+# Pandoc and Typst, which are how a note becomes a PDF, a Word document or a
+# deck.
+#
+# In Resources rather than MacOS for the same reason espeak-ng is: they are not
+# our helpers, they are programs we ship alongside and invoke as subprocesses.
+# `DocumentExporter.searchRoots` looks in exactly these two directories.
+#
+# Pandoc is GPL-2.0-or-later. The licence check further down is fatal, and this
+# is why: shipping a copyleft binary with no licence text near it is not an
+# oversight that can be fixed after the fact — the build has already gone out.
+if [[ -x "$PANDOC_SOURCE" ]]; then
+  PANDOC_ARCH="$(lipo -info "$PANDOC_SOURCE" 2>/dev/null || echo unknown)"
+  case "$PANDOC_ARCH" in
+    *arm64*) ;;
+    *) die "Bundled pandoc is not arm64: $PANDOC_ARCH" ;;
+  esac
+  mkdir -p "$APP/Contents/Resources/pandoc/bin"
+  cp "$PANDOC_SOURCE" "$APP/Contents/Resources/pandoc/bin/pandoc"
+  chmod +x "$APP/Contents/Resources/pandoc/bin/pandoc"
+  # What was staged, so a corresponding-source request is answerable years
+  # later. See provision-pandoc.sh.
+  [[ ! -f "$PANDOC_ROOT/SOURCE" ]] \
+    || cp "$PANDOC_ROOT/SOURCE" "$APP/Contents/Resources/pandoc/SOURCE"
+elif [[ "$REQUIRE_DOCUMENTS" == "1" || "$REQUIRE_DOCUMENTS" == "true" ]]; then
+  die "Required pandoc is missing: $PANDOC_SOURCE
+Run scripts/provision-pandoc.sh before packaging."
+fi
+
+if [[ -x "$TYPST_SOURCE" ]]; then
+  TYPST_ARCH="$(lipo -info "$TYPST_SOURCE" 2>/dev/null || echo unknown)"
+  case "$TYPST_ARCH" in
+    *arm64*) ;;
+    *) die "Bundled typst is not arm64: $TYPST_ARCH" ;;
+  esac
+  mkdir -p "$APP/Contents/Resources/typst/bin"
+  cp "$TYPST_SOURCE" "$APP/Contents/Resources/typst/bin/typst"
+  chmod +x "$APP/Contents/Resources/typst/bin/typst"
+  # Apache 2.0 section 4 wants LICENSE and NOTICE conveyed with the work.
+  for file in LICENSE NOTICE SOURCE; do
+    [[ ! -f "$TYPST_ROOT/$file" ]] \
+      || cp "$TYPST_ROOT/$file" "$APP/Contents/Resources/typst/$file"
+  done
+elif [[ "$REQUIRE_DOCUMENTS" == "1" || "$REQUIRE_DOCUMENTS" == "true" ]]; then
+  die "Required typst is missing: $TYPST_SOURCE
+Run scripts/provision-typst.sh before packaging.
+It is what turns a document into a PDF; without it pandoc would need LaTeX."
+fi
+
 if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
   if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
     cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
@@ -458,10 +516,17 @@ if [[ -d "$ROOT/resources/licences" ]]; then
   mkdir -p "$APP/Contents/Resources/licences"
   cp "$ROOT/resources/licences/"* "$APP/Contents/Resources/licences/"
 fi
-# The GPL component is the one with a legal requirement attached, so its absence
-# is fatal rather than a warning.
+# The GPL components are the ones with a legal requirement attached, so their
+# absence is fatal rather than a warning. Two licences, two versions: signal-cli
+# and espeak-ng are GPL 3.0, pandoc is GPL 2.0-or-later, and "we shipped the
+# other one" is not a defence.
 [[ -f "$APP/Contents/Resources/licences/GPL-3.0.txt" ]] \
   || die "signal-cli is GPL 3.0 and ships in this bundle, but its licence text was not staged."
+if [[ -x "$APP/Contents/Resources/pandoc/bin/pandoc" ]]; then
+  [[ -f "$APP/Contents/Resources/licences/GPL-2.0.txt" ]] \
+    || die "pandoc is GPL 2.0-or-later and ships in this bundle, but its licence text was not staged.
+Put the licence at resources/licences/GPL-2.0.txt."
+fi
 
 if [[ "$BUNDLE_SAGE" != "0" && "$BUNDLE_SAGE" != "false" ]]; then
   [[ -d "$SAGE_APP_SOURCE" ]] || die "SAGE.app not vendored at $SAGE_APP_SOURCE — run scripts/vendor-sage.sh first."
@@ -512,6 +577,13 @@ fi
   || sign "$APP/Contents/Frameworks/libonnxruntime.dylib"
 [[ ! -f "$APP/Contents/Resources/espeak-ng/bin/espeak-ng" ]] \
   || sign "$APP/Contents/Resources/espeak-ng/bin/espeak-ng"
+# The document writers, launched as subprocesses exactly like espeak-ng. Both
+# are code; an unsigned executable anywhere in the bundle is a notarization
+# rejection that arrives minutes after the upload.
+[[ ! -f "$APP/Contents/Resources/pandoc/bin/pandoc" ]] \
+  || sign "$APP/Contents/Resources/pandoc/bin/pandoc"
+[[ ! -f "$APP/Contents/Resources/typst/bin/typst" ]] \
+  || sign "$APP/Contents/Resources/typst/bin/typst"
 sign "$APP/Contents/MacOS/$CLI_PRODUCT"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
@@ -541,7 +613,9 @@ for binary in \
   "$APP/Contents/MacOS/whisper-cli" \
   "$APP/Contents/MacOS/signal-cli" \
   "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-gui" \
-  "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-tray"
+  "$APP/Contents/Resources/SAGE.app/Contents/MacOS/sage-tray" \
+  "$APP/Contents/Resources/pandoc/bin/pandoc" \
+  "$APP/Contents/Resources/typst/bin/typst"
 do
   [[ -f "$binary" ]] || continue
   DESCRIBED="$(capture codesign --display --verbose=2 "$binary")"
