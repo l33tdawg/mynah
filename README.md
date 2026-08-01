@@ -353,7 +353,10 @@ screens.
 - **Search** sends the words the search is made of, and not the rest of what you
   said.
 - **The update check** asks GitHub's releases API once a day whether there is a
-  newer version.
+  newer version. Nothing is fetched on its own. Press Update and Mynah downloads
+  that release, refuses it unless the bundle identifier, the Developer ID team
+  and Gatekeeper all agree it is this app from the same signer, and puts it in
+  place — while going on running the copy you have until you restart it.
 
 ## Build
 
