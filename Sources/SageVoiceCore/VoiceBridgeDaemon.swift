@@ -217,13 +217,58 @@ public actor VoiceBridgeDaemon {
     /// not state worth surviving a restart.
     private var lastWorkingLines: [String: String] = [:]
 
-    /// Whether this turn already said something when the message arrived.
+    // MARK: - Lines that are only worth saying if the answer is slow
+
+    /// How long the appliance stays quiet before admitting it is working.
     ///
-    /// Turn-scoped rather than per-thread: it exists only to stop the
-    /// tool-decision line repeating news the arrival line already gave, and that
-    /// question is answered and finished within one turn. Safe as a single value
-    /// because turns are answered sequentially — see the intake loop.
-    private var spokeOnArrival = false
+    /// The reasoning is on `WorkingLineGate`, which holds the rule. This is only
+    /// the number, and it is the one thing here a clock is needed for.
+    static let quietBeforeWorkingLine: TimeInterval = 2.5
+
+    private var workingLines = WorkingLineGate()
+
+    /// Cancelled when the answer beats it.
+    private var quietPeriod: Task<Void, Never>?
+
+    /// Whether this turn already said something specific when the message
+    /// arrived. Stops the tool-decision line repeating news the opener gave.
+    private var spokeOnArrival: Bool { workingLines.saidArrivalOpener }
+
+    private func beginQuietPeriod(to recipient: SignalRecipient, thread: String) {
+        quietPeriod?.cancel()
+        workingLines.beginTurn()
+        quietPeriod = Task { [weak self] in
+            try? await Task.sleep(
+                for: .seconds(VoiceBridgeDaemon.quietBeforeWorkingLine)
+            )
+            guard !Task.isCancelled else { return }
+            await self?.endQuietPeriod(to: recipient, thread: thread)
+        }
+    }
+
+    /// The turn is taking a while after all. Say whatever was held.
+    private func endQuietPeriod(to recipient: SignalRecipient, thread: String) async {
+        guard let line = workingLines.quietPeriodEnded() else { return }
+        lastWorkingLines[thread] = line
+        await reply(line, to: recipient, isWorkingLine: true)
+    }
+
+    /// Offers a "still working" line. It goes out, waits, or is dropped.
+    private func working(
+        _ line: String,
+        isArrivalOpener: Bool = false,
+        thread: String,
+        to recipient: SignalRecipient
+    ) async {
+        let decision = workingLines.offer(
+            line,
+            isArrivalOpener: isArrivalOpener,
+            previous: lastWorkingLines[thread]
+        )
+        guard decision == .say else { return }
+        lastWorkingLines[thread] = line
+        await reply(line, to: recipient, isWorkingLine: true)
+    }
 
     /// Whether this thread has already been told the appliance is paused.
     ///
@@ -623,18 +668,24 @@ public actor VoiceBridgeDaemon {
             return .failed("transcript of \(transcript.count) characters exceeds the limit")
         }
 
-        // Before the model, not after it. Everything else the appliance says
-        // while working is gated on a tool decision, and deciding costs a whole
-        // model call — which is why "Having a look." landed most of a minute
-        // after the question. This is derived from the owner's own sentence, so
-        // it needs nothing from the model and is not a prediction about it.
-        spokeOnArrival = false
+        // Decided before the model, said only if the model is slow.
+        //
+        // Decided here because everything else the appliance says while working
+        // is gated on a tool decision, and deciding costs a whole model call —
+        // which is why "Having a look." used to land most of a minute after the
+        // question. This line is derived from the owner's own sentence, so it
+        // needs nothing from the model and is not a prediction about it.
+        //
+        // Held rather than sent, because on a fast brain the answer beats it and
+        // "On it." a second before the answer is noise. See `working`.
         let threadKey = recipient.description
+        beginQuietPeriod(to: recipient, thread: threadKey)
         if let opener = WorkingReply.opening(
             forRequest: transcript,
             previous: lastWorkingLines[threadKey]
         ) {
-            // Only a *specific* opener suppresses the tool-decision line.
+            // Only a *specific* opener suppresses the tool-decision line, and
+            // only once it has actually been said.
             //
             // Suppressing behind any opener at all silently killed every
             // hand-written per-tool line in production: the catch-all matches
@@ -642,9 +693,12 @@ public actor VoiceBridgeDaemon {
             // turn and the ~25 lines in `lines(forTools:)` were unreachable. A
             // generic "On it." has told the owner nothing except that the
             // message arrived, so "Looking that up online" is still news.
-            spokeOnArrival = opener.isSpecific
-            lastWorkingLines[threadKey] = opener.line
-            await reply(opener.line, to: recipient)
+            await working(
+                opener.line,
+                isArrivalOpener: opener.isSpecific,
+                thread: threadKey,
+                to: recipient
+            )
         }
 
         // Anything left over from a turn that failed after writing a note. The
@@ -665,8 +719,13 @@ public actor VoiceBridgeDaemon {
         let kept = keepAttachments(in: batch)
 
         if configuration.sendsThinkingAcknowledgement {
-            await reply(
+            // Through the same gate as everything else the appliance says while
+            // it works. This one is pure filler — it carries an estimate and
+            // nothing about the request — so it is the first thing that should
+            // be dropped when the answer is quick.
+            await working(
                 WaitingPhrases.acknowledgement(estimatedSeconds: estimator.typicalSeconds),
+                thread: threadKey,
                 to: recipient
             )
         }
@@ -690,8 +749,12 @@ public actor VoiceBridgeDaemon {
                     guard let line = WorkingReply.line(forTools: chosen, previous: previous) else {
                         return
                     }
-                    await self.rememberWorkingLine(line, for: key)
-                    await self.reply(line, to: recipient)
+                    // Held, like the opener, and for the same reason: a tool
+                    // call that comes back in a second does not need announcing.
+                    // If it is still held when this one lands, it replaces the
+                    // opener — "Looking that up online" is better news than
+                    // "On it", and there is no reason to say both.
+                    await self.working(line, thread: key, to: recipient)
                 },
                 onProgress: { [weak self] update in
                     guard let self, let line = update.line else { return }
@@ -699,11 +762,9 @@ public actor VoiceBridgeDaemon {
                     // by "Looking online for the rest of it." is two true
                     // sentences and one piece of news. Varying the wording was
                     // supposed to stop the appliance sounding mechanical; a
-                    // stutter puts that back.
-                    let previous = await self.lastWorkingLine(for: key)
-                    guard !WorkingReply.saysTheSameThing(line, as: previous) else { return }
-                    await self.rememberWorkingLine(line, for: key)
-                    await self.reply(line, to: recipient)
+                    // stutter puts that back. `working` holds that rule now, so
+                    // it applies to a held line as well as a said one.
+                    await self.working(line, thread: key, to: recipient)
                 }
             )
             histories[key] = Self.trimmed(
@@ -1090,12 +1151,27 @@ public actor VoiceBridgeDaemon {
         )
     }
 
+    /// - Parameter isWorkingLine: whether this is the appliance saying it is
+    ///   busy rather than answering.
+    ///
+    ///   Anything that is *not* one closes the quiet period for good: a line a
+    ///   tool loop is still trying to say after the owner has been answered is
+    ///   not news, it is an echo. Done here rather than at each call site
+    ///   because there are five ways a turn can end — the answer, four kinds of
+    ///   failure — and the one that gets forgotten is the one that produces
+    ///   "Here's your answer" followed by "On it."
     private func reply(
         _ text: String,
         to recipient: SignalRecipient,
         attaching attachments: [URL] = [],
-        allowSpeaking: Bool = true
+        allowSpeaking: Bool = true,
+        isWorkingLine: Bool = false
     ) async {
+        if !isWorkingLine {
+            workingLines.answered()
+            quietPeriod?.cancel()
+            quietPeriod = nil
+        }
         // On the way out only. The model writes bare domains — "check their
         // website mamaison.com.my" — and Signal linkifies nothing without a
         // scheme, so the owner gets a phone screen of addresses to retype.
