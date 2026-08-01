@@ -45,12 +45,12 @@
        notarize.sh labels the submission with it, and the tag is expected to
        match. Change it here and nowhere else. -->
   <key>CFBundleShortVersionString</key>
-  <string>1.2.2</string>
+  <string>1.2.3</string>
   <!-- Monotonic build number, independent of the marketing version. macOS uses
        it to decide which of two copies is newer, so it must never go backwards
        even when the version string does. -->
   <key>CFBundleVersion</key>
-  <string>15</string>
+  <string>16</string>
 
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
