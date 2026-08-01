@@ -137,7 +137,16 @@ final class KokoroVoicesTests: XCTestCase {
     // MARK: Refusing
 
     func testAnUnknownVoiceIsNamedRatherThanGuessedAt() throws {
-        XCTAssertThrowsError(try archive().style(for: "am_nobody", tokenCount: 10)) { error in
+        // `archive()` outside the assertion, deliberately.
+        //
+        // It throws `XCTSkip` when `voices-v1.0.bin` is not on the machine —
+        // and inside `XCTAssertThrowsError` that skip is caught as "an error
+        // was thrown", so the closure then compared `XCTSkip` against
+        // `.unknownVoice` and failed. The test reported a broken product on
+        // every machine without the 28 MB asset, which is every fresh clone and
+        // every CI runner.
+        let voices = try archive()
+        XCTAssertThrowsError(try voices.style(for: "am_nobody", tokenCount: 10)) { error in
             XCTAssertEqual(error as? KokoroVoices.Failure, .unknownVoice("am_nobody"))
         }
     }

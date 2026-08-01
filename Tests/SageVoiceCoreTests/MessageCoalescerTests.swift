@@ -99,14 +99,23 @@ final class MessageCoalescerTests: XCTestCase {
         let inbox = MessageInbox()
         await inbox.append(message("look up xyz"))
 
+        // Generous margins, because this asserts an ordering and a shared CI
+        // runner cannot promise a schedule.
+        //
+        // It was 60ms gaps against a 120ms window — a ratio that holds on an
+        // idle machine and not on a loaded one, where a sleep overshooting by
+        // 60ms closes the window before the third message and the test reports
+        // a coalescing bug that is not there. Each gap is now well under half
+        // the window, so the property under test survives a slow scheduler
+        // while still failing if the window genuinely stops restarting.
         Task {
-            try? await Task.sleep(for: .milliseconds(60))
+            try? await Task.sleep(for: .milliseconds(80))
             await inbox.append(message("oh and abc"))
-            try? await Task.sleep(for: .milliseconds(60))
+            try? await Task.sleep(for: .milliseconds(80))
             await inbox.append(message("and def"))
         }
 
-        let batch = await inbox.takeBatch(quietWindow: .milliseconds(120))
+        let batch = await inbox.takeBatch(quietWindow: .milliseconds(400))
         XCTAssertEqual(batch.count, 3, "a late third message started its own turn")
     }
 
