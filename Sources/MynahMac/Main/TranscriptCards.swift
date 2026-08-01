@@ -139,12 +139,10 @@ struct AnsweredText: View {
     let text: String
 
     var body: some View {
-        Text(ChatLinks.attributed(text))
-            .mynahFont(.body)
-            .foregroundStyle(Palette.ink.primary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("Mynah said: \(text)")
+        // One `Text` for the whole reply is what made a list of four tasks read
+        // as a paragraph with hyphens in it. `AnswerLayout` keeps the shapes the
+        // model wrote in — see its type comment.
+        AnswerLayout(text: text)
     }
 }
 
