@@ -402,6 +402,15 @@ private struct TaskCard: View {
                 // Long enough for a real sentence, short enough that one
                 // rambling task cannot own the column.
                 .lineLimit(5)
+                // Room for the remove control, kept whether or not it is
+                // showing.
+                //
+                // It is an overlay, so it sits *on top* of whatever is under it
+                // — and a two-line title filling the card ran straight under the
+                // cross. Reserving the space unconditionally rather than only
+                // while hovering also stops the text reflowing under the
+                // pointer, which is its own small horror.
+                .padding(.trailing, onRemove == nil ? 0 : 24)
             if hasFootnote { footnote }
         }
         .mynahCard(density: .compact)

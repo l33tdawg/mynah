@@ -278,7 +278,14 @@ struct PrivacyView: View {
                         if isChecking {
                             ProgressView().controlSize(.small).tint(Palette.accent.fill)
                         } else {
-                            MynahButton("Check now", kind: .quiet) {
+                            // `.secondary`, matching "See it" two rows up.
+                            //
+                            // `.quiet` is the style for "Not now" and "Skip" —
+                            // it draws no border, so beside a filled status pill
+                            // this read as a second label rather than something
+                            // to press. The two pressable things on this page
+                            // should look alike.
+                            MynahButton("Check now", kind: .secondary) {
                                 Task { await checkNow() }
                             }
                         }
