@@ -33,13 +33,61 @@ import Foundation
 ///    of the answer we feed our own model.
 public enum VoiceToolBudget {
 
-    /// The most any single tool result may contribute to a turn.
+    /// The most a *directory-shaped* result may contribute on a local model.
     ///
     /// 2,000 bytes ≈ 0.7 s of prefill at the measured rate — a cost worth paying
     /// for an answer, where 31 KB (~11 s) is not. It is deliberately generous
     /// against what a spoken reply can carry: a voice answer is a sentence or
     /// two, and this allows far more than that so the model has room to choose.
     public static let resultByteBudget = 2_000
+
+    // MARK: - Not every result is a directory
+
+    /// Tools whose answer *is* the owner's content rather than a listing of it.
+    ///
+    /// **One number for every tool was wrong, and it showed on the owner's
+    /// phone.** He asked what his agents had sent; Codex had written two long
+    /// messages; the second was cut at 2 KB and Mynah reported *"the second
+    /// message got truncated by the system, so I may have missed its tail
+    /// end."* Honest, and useless — the message was the errand.
+    ///
+    /// The distinction that matters is not size, it is what the bytes are.
+    /// `sage_status` truncated loses 839 subject names nobody could hear read
+    /// aloud, and the trim keeps the stated totals so the answer stays true. An
+    /// agent's message truncated loses the thing the owner asked for, and there
+    /// is nothing left to state instead.
+    static let contentTools: Set<String> = [
+        // Another agent's own words, arbitrary length, no summary possible.
+        "sage_inbox",
+        // The owner's own memories, already capped to four by `clamp`.
+        "sage_recall",
+        // The owner's own document, which they asked to have read back.
+        "read_note",
+        // Pages the model went and fetched because the answer is in them.
+        "web_search"
+    ]
+
+    /// The budget for one result.
+    ///
+    /// Two axes, because two different things were being conflated:
+    ///
+    /// - **What the result is.** Content gets three times a directory's room.
+    /// - **Which brain is reading it.** The 2 KB figure is prefill arithmetic
+    ///   for `qwen3.5:4b` *on this Mac*: 0.36 ms per byte, so 31 KB is eleven
+    ///   seconds of silence before it can speak. Against a hosted model that
+    ///   arithmetic does not hold — the prefill happens on somebody else's
+    ///   hardware, in parallel, and the honest cost is a few tokens. Holding a
+    ///   cloud brain to a local model's latency budget buys nothing and loses
+    ///   the tail of every long answer.
+    public static func budget(forTool tool: String, onLocalBrain isLocal: Bool) -> Int {
+        let carriesContent = contentTools.contains(tool)
+        switch (isLocal, carriesContent) {
+        case (true, false): return resultByteBudget
+        case (true, true): return resultByteBudget * 3
+        case (false, false): return resultByteBudget * 8
+        case (false, true): return resultByteBudget * 16
+        }
+    }
 
     /// The most any tool may be asked to return.
     ///
@@ -95,15 +143,22 @@ public enum VoiceToolBudget {
     /// model is then able to say "about thirteen thousand memories across eight
     /// hundred and fifty-one subjects" — which is both shorter *and* more
     /// accurate than reciting a directory it could never finish.
-    public static func fit(_ result: String) -> String {
-        guard result.utf8.count > resultByteBudget else { return result }
+    /// - Parameters:
+    ///   - tool: which tool answered, because a directory and the owner's own
+    ///     content do not deserve the same room. See `contentTools`.
+    ///   - isLocal: whether the brain reading this runs on the owner's Mac. The
+    ///     whole budget is prefill arithmetic, and that arithmetic is about a
+    ///     local model.
+    public static func fit(_ result: String, tool: String = "", onLocalBrain isLocal: Bool = true) -> String {
+        let allowance = budget(forTool: tool, onLocalBrain: isLocal)
+        guard result.utf8.count > allowance else { return result }
 
         if let trimmed = fitCountedEntries(result) { return trimmed }
 
         // Unrecognised shape: keep the head, and be explicit about the tail
         // rather than letting the model treat a severed sentence as the whole
         // answer.
-        let head = String(decoding: result.utf8.prefix(resultByteBudget), as: UTF8.self)
+        let head = String(decoding: result.utf8.prefix(allowance), as: UTF8.self)
         let dropped = result.utf8.count - head.utf8.count
         return head + "\n\n[Mynah kept the first \(head.utf8.count) characters of this result and "
             + "left \(dropped) unread, to answer sooner. Say so if the answer looks incomplete.]"

@@ -1073,7 +1073,15 @@ public final class ToolLoop: @unchecked Sendable {
             // SAGE appends a turn-discipline nudge aimed at an agent that drives
             // its own `sage_turn`. This appliance's daemon does that instead, so
             // the nudge only ever reaches a model that cannot act on it.
-            let output = VoiceToolBudget.fit(Self.withoutServerNudge(raw))
+            // Which tool and which brain, both of which change how much room
+            // the answer deserves — a directory read by a 4B model on this Mac
+            // and another agent's message read by a hosted one are not the same
+            // trade. See `VoiceToolBudget.budget(forTool:onLocalBrain:)`.
+            let output = VoiceToolBudget.fit(
+                Self.withoutServerNudge(raw),
+                tool: call.name,
+                onLocalBrain: backend.isLocal
+            )
             return ToolCallRecord(
                 iteration: iteration,
                 name: call.name,
