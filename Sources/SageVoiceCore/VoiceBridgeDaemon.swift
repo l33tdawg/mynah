@@ -47,10 +47,24 @@ public actor VoiceBridgeDaemon {
         ///
         /// Which way the bird faces is the one part that cannot be done. A
         /// Signal message is text, so the app's own mark cannot go here and the
-        /// only birds available are the ones Unicode ships — `🐦‍⬛` is the black
-        /// one, and every emoji font draws it facing left. There is no
-        /// right-facing variant and no way for a sender to request one.
-        public static let defaultReplyPrefix = "🐦‍⬛>> "
+        /// only birds available are the ones Unicode ships — and every emoji
+        /// font draws them facing left. There is no right-facing variant and no
+        /// way for a sender to request one.
+        ///
+        /// ## Why a dove and not the black bird
+        ///
+        /// *"make the bird white - can't see it against blue."*
+        ///
+        /// Correct, and not fixable by styling: Mynah's replies land in Signal's
+        /// **blue outgoing bubble**, an emoji carries its own colours, and
+        /// `🐦‍⬛` is near-black. It was legible in this file and invisible in the
+        /// thread it actually ships to.
+        ///
+        /// There is no white mynah in Unicode. `🕊️` is the one pale bird
+        /// available, so this is a dove standing in for the mark rather than a
+        /// change of mark — the app's own bird is unchanged everywhere it can
+        /// actually be drawn.
+        public static let defaultReplyPrefix = "🕊️>> "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String
