@@ -133,8 +133,16 @@ struct MynahMark: View {
     /// lighter one in dark; on a tile that never darkens, the light value is the
     /// only one that stays right.
     private enum Paint {
-        static let plumageLight = Color(nsColor: .mynahHex(0x333E46))
-        static let plumageDark = Color(nsColor: .mynahHex(0x101315))
+        // Black, asked for directly. It was a slate blue-grey (0x333E46 →
+        // 0x101315) — the common mynah's actual plumage is nearer that than it
+        // is to black, and at 26pt on a white tile it read as washed out rather
+        // than as ornithology.
+        //
+        // Still a gradient rather than one flat fill: the silhouette has no
+        // internal lines, so a single value turns the breast and the shoulder
+        // into one shape. The range is just narrow enough now to read as black.
+        static let plumageLight = Color(nsColor: .mynahHex(0x232323))
+        static let plumageDark = Color(nsColor: .mynahHex(0x000000))
         static let tileTop = Color(nsColor: .mynahHex(0xFFFFFF))
         static let tileBottom = Color(nsColor: .mynahHex(0xF1F0ED))
         static let eyePatch = Color(nsColor: .mynahHex(0xF0A020))

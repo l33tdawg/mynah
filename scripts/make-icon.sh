@@ -49,8 +49,8 @@ let tile = CGRect(x: 100, y: 90, width: 824, height: 824)
 let tileRadius: CGFloat = 185
 
 // Plumage, and the one accent. `accent.fill` from the app's palette.
-let plumageLight: UInt32 = 0x333E46
-let plumageDark: UInt32 = 0x101315
+let plumageLight: UInt32 = 0x232323
+let plumageDark: UInt32 = 0x000000
 let eyePatch: UInt32 = 0xF0A020
 
 extension Color {
