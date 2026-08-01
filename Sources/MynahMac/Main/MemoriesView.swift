@@ -39,15 +39,12 @@ struct Memory: Identifiable, Hashable, Sendable {
             }
         }
 
-        /// The detail line. A sentence, because a one-word verdict on its own
-        /// invites the owner to wonder what the other words would have been.
-        var sentence: String {
-            switch self {
-            case .certain: return "Mynah is certain about this."
-            case .fairlySure: return "Mynah is fairly sure about this."
-            case .unsure: return "Mynah isn't sure about this one — it may have misheard."
-            }
-        }
+        // There was a `sentence` here too — "Mynah is fairly sure about this." —
+        // shown directly under the row that already said "How sure Mynah is:
+        // Fairly sure". The argument was that a one-word verdict invites the
+        // owner to wonder what the other words would have been. Whatever that is
+        // worth, it does not survive being printed twice in a row: *"remove this
+        // fairly sure nonsense bro"*. The word carries it.
     }
 
     let id: String
@@ -597,6 +594,10 @@ final class MemoriesModel {
     /// that a pause feels like an answer rather than a delay.
     private static let searchDelay = Duration.milliseconds(280)
 
+    /// The one the app uses. Lives longer than the screen so that leaving
+    /// Memories and coming back is free — see `MemoriesView.init`.
+    @MainActor static let shared = MemoriesModel(store: SageMemoryStore.shared)
+
     private let store: any MemoryStoring
     private let log = MynahLog(category: "memories")
 
@@ -604,6 +605,11 @@ final class MemoriesModel {
     private(set) var memories: [Memory] = []
     private(set) var hasMore = false
     private(set) var isLoadingMore = false
+
+    /// A refresh running behind rows that are already on screen. Not rendered as
+    /// a spinner anywhere on purpose — the owner did not ask for it, and the
+    /// answer usually is "nothing changed".
+    private(set) var isRefreshing = false
 
     /// Topics offered in the filter, taken from what has been loaded. It is
     /// only ever a superset of nothing — a topic cannot appear here unless a
@@ -675,9 +681,73 @@ final class MemoriesModel {
 
     // MARK: Loading
 
+    /// **The one place the Memories screen decides whether to cost anything.**
+    ///
+    /// The model used to be `@State` on the view, so leaving the pane destroyed
+    /// it and coming back built an empty one — which meant a full round trip to
+    /// the node, a blank screen, and every card redrawn, every single time:
+    /// *"we should also cache the memory page so we don't fucking refresh each
+    /// and every time"*. The model is shared now, so what was on screen is still
+    /// on screen when they come back.
+    ///
+    /// A cache that never notices anything is a different bug though, so
+    /// re-entry still asks the node — quietly, behind what is already drawn, and
+    /// changing only what actually changed.
     func loadIfNeeded() async {
-        guard memories.isEmpty, phase == .loading else { return }
-        await load()
+        guard !memories.isEmpty || phase != .loading else {
+            await load()
+            return
+        }
+        await refresh()
+    }
+
+    /// Ask again without taking anything off the screen.
+    ///
+    /// Deliberately not `load()`. That sets `phase = .loading`, which empties the
+    /// list and replaces it with a spinner — correct the first time, and the
+    /// whole of what the owner was complaining about on every visit after.
+    func refresh() async {
+        guard phase == .ready, !isRefreshing, !isSearching else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        let page: MemoryPage
+        do {
+            page = try await fetchFirstPage()
+        } catch {
+            // A background refresh that fails changes nothing. The owner did not
+            // ask for this and is looking at a list that still works; an error
+            // banner over good rows would be reporting our problem as theirs.
+            // A real failure still surfaces through `load()`, which is what a
+            // filter change, a search or Reload goes through.
+            log.error("background refresh failed, keeping what is on screen: \(error)")
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        if memories.count <= Self.pageSize {
+            // Everything on screen is inside the window this page speaks for, so
+            // it is the whole truth: new ones in, forgotten ones out.
+            //
+            // Guarded on inequality because assigning an equal array still
+            // invalidates the view and redraws every card — which is the flicker
+            // this method exists to remove, reintroduced by the fix for it.
+            guard page.memories != memories else { return }
+            memories = page.memories
+            hasMore = page.memories.count < page.total
+            mergeTopics(from: page.memories)
+        } else {
+            // The owner has pressed "Show more", so they are holding rows this
+            // page was never asked about. Additive only: anything genuinely new
+            // goes on top, and nothing is removed, because a first page cannot
+            // testify about the two hundred rows below it. Dropping them here
+            // would delete the bottom of the list on every visit.
+            let known = Set(memories.map(\.id))
+            let fresh = page.memories.filter { !known.contains($0.id) }
+            guard !fresh.isEmpty else { return }
+            memories.insert(contentsOf: fresh, at: 0)
+            mergeTopics(from: fresh)
+        }
     }
 
     func load() async {
@@ -865,9 +935,20 @@ struct MemoriesView: View {
 
     /// `@MainActor` because `MemoriesModel` is, and a `View`'s initialiser is
     /// not isolated by default even though SwiftUI only ever calls it here.
+    ///
+    /// **The default store path shares one model, and that is the caching.**
+    /// `RootView` builds this view fresh out of a `switch` every time the owner
+    /// selects Memories, so a model owned by the view was thrown away on the way
+    /// out and rebuilt empty on the way in — a node round trip and a full redraw
+    /// per visit. Nothing was wrong with the loading code; it was being asked to
+    /// start from nothing each time.
+    ///
+    /// An injected store still gets its own model, because that is the seam the
+    /// tests and previews drive and they must not share state with each other or
+    /// with the owner's real screen.
     @MainActor
-    init(store: any MemoryStoring = SageMemoryStore.shared) {
-        _model = State(initialValue: MemoriesModel(store: store))
+    init(store: (any MemoryStoring)? = nil) {
+        _model = State(initialValue: store.map { MemoriesModel(store: $0) } ?? .shared)
     }
 
     var body: some View {
@@ -1199,21 +1280,24 @@ private struct MemoryEntry: View {
             .pointingHandCursor()
 
             if isSelected {
-                // **Unrolls rather than appears.** `move(edge: .top)` slides the
-                // detail out from under the header while the card's own height
-                // grows to meet it, and the `clipShape` below is what makes
-                // that read as opening — without it the detail is drawn outside
-                // the card for the length of the animation and the whole thing
-                // looks like a second view landing on top of the first.
+                // **One motion, not two.** This had `move(edge: .top)` as well,
+                // on the theory that sliding the detail out from under the
+                // header is what makes it read as unrolling. It is not, and the
+                // owner saw the seam immediately: *"the animation slide down is
+                // a bit weird - text slides down then the box"*.
                 //
-                // Asymmetric because closing should not be a performance. Going
-                // is a fade at `Motion.fade`; arriving gets the spring.
-                detail.transition(
-                    .asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .opacity
-                    )
-                )
+                // The card's height is already animating on the same spring, so
+                // `move` was a second, independent motion of the same content —
+                // the text travelling down inside a box that was travelling
+                // down too, at a different visual rate, with a spring's
+                // overshoot on both. Text arriving ahead of its container is
+                // exactly what that looks like.
+                //
+                // The `clipShape` below is what does the unrolling: the detail
+                // sits still and the card uncovers it. All this has to add is
+                // the fade, so the text is not briefly legible through a gap
+                // that has not opened yet.
+                detail.transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1229,7 +1313,7 @@ private struct MemoryEntry: View {
         .mynahAnimation(Motion.fade, value: isHovering)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(memory.text)
-        .accessibilityValue("Learned \(memory.learned.formatted(.relative(presentation: .named))), \(memory.topic)")
+        .accessibilityValue("Stored \(memory.learned.formatted(.relative(presentation: .named))), \(memory.topic)")
     }
 
     /// Three states, told apart by one edge: resting, under the pointer, open.
@@ -1282,18 +1366,13 @@ private struct MemoryEntry: View {
                 // see everything. It says so rather than inventing a date or
                 // quietly vanishing from the list.
                 factLine(
-                    "Learned",
+                    "Stored",
                     memory.learned == .distantPast
                         ? "Not recorded"
                         : memory.learned.formatted(date: .long, time: .shortened)
                 )
                 factLine("How sure Mynah is", memory.certainty.word)
             }
-
-            Text(memory.certainty.sentence)
-                .mynahFont(.callout)
-                .foregroundStyle(Palette.ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: s4) {
                 Spacer(minLength: 0)
