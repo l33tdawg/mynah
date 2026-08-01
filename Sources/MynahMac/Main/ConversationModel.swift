@@ -66,6 +66,10 @@ struct Exchange: Identifiable, Equatable, Sendable {
         /// What Mynah did, already translated into the owner's words. Empty when
         /// it answered from what it already had.
         var activity: [String]
+        /// Documents this turn wrote, drawn under the answer as something to
+        /// open. The phone gets these as attachments; the window has no
+        /// attachment channel, so it offers the file itself.
+        var files: [URL] = []
     }
 
     enum Outcome: Equatable, Sendable {
@@ -141,6 +145,15 @@ struct TurnResult: Sendable {
     /// The full message list `ToolLoop` produced. Never stored as-is — see
     /// `ConversationModel.conversationOnly(_:)`.
     var messages: [BrainMessage]
+
+    /// Documents this turn wrote, for the screen to offer.
+    ///
+    /// The window has no attachment channel — that is the whole reason
+    /// `NotesToolSource` takes a `Delivery` — so a PDF written here would
+    /// otherwise be a file the owner is told about and cannot reach. *"if you
+    /// send the same message in the app it would send back a clickable pdf that
+    /// it has saved to its 'directory'."*
+    var files: [URL] = []
 }
 
 /// Where a turn is actually run.
@@ -234,6 +247,7 @@ actor ToolLoopTurnEngine: TurnEngine {
     private let loop: ToolLoop
     private let ritual: SageRitual
     private let localProvisioner: LocalBrainInstaller?
+    private let notes: NotesToolSource
     private var catalogue: [MCPTool]?
     private var isPrepared = false
 
@@ -259,6 +273,8 @@ actor ToolLoopTurnEngine: TurnEngine {
             arguments: ["mcp"],
             environment: memoryEnvironment
         )
+        let notes = NotesToolSource()
+        self.notes = notes
         var sources: [CompositeToolSource.Source] = [
             CompositeToolSource.Source(
                 label: "memory",
@@ -274,9 +290,13 @@ actor ToolLoopTurnEngine: TurnEngine {
             // attachment channel, so the appliance's "the file is attached to
             // your reply" would be a lie here, and one the owner would only
             // discover by looking for a file that never arrived.
+            //
+            // Held rather than built inline, because the window offers what it
+            // wrote as something to click — which means somebody has to ask it
+            // afterwards what it wrote.
             CompositeToolSource.Source(
                 label: "notes",
-                provider: NotesToolSource(),
+                provider: notes,
                 isRequired: true,
                 expectedToolNames: NotesToolSource.toolNames
             )
@@ -378,7 +398,10 @@ actor ToolLoopTurnEngine: TurnEngine {
             reply: result.reply,
             toolNames: result.trace.toolNames,
             seconds: Date().timeIntervalSince(started),
-            messages: result.messages
+            messages: result.messages,
+            // Drained, not read: a document that rode along with a second answer
+            // because nobody cleared the list is a confusing thing to chase.
+            files: notes.drainWrittenNotes()
         )
     }
 
@@ -486,7 +509,13 @@ final class ConversationModel {
     /// whoever owns the record. A window with neither — a preview, a test — is a
     /// conversation that lasts as long as it is on screen, which is the right
     /// behaviour for both.
-    var recordTurn: @MainActor (_ question: String, _ answer: String, _ askedAt: Date, _ answeredAt: Date) -> Void = { _, _, _, _ in }
+    var recordTurn: @MainActor (
+        _ question: String,
+        _ answer: String,
+        _ askedAt: Date,
+        _ answeredAt: Date,
+        _ files: [URL]
+    ) -> Void = { _, _, _, _, _ in }
     private var activeTurn: (id: UUID, task: Task<Void, Never>)?
     private var levelSampler: Task<Void, Never>?
     /// The connect that is already running, held so a second caller can *wait*
@@ -901,7 +930,8 @@ final class ConversationModel {
                     Exchange.Answer(
                         text: result.reply,
                         seconds: result.seconds,
-                        activity: ToolActivity.phrases(for: result.toolNames)
+                        activity: ToolActivity.phrases(for: result.toolNames),
+                        files: result.files
                     )
                 )
             )
@@ -931,7 +961,8 @@ final class ConversationModel {
             exchanges[index].question,
             answer.text,
             asked,
-            asked.addingTimeInterval(answer.seconds)
+            asked.addingTimeInterval(answer.seconds),
+            answer.files
         )
     }
 

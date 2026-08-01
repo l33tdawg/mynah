@@ -26,6 +26,13 @@ struct TranscriptMessage: Identifiable, Equatable, Sendable {
     let text: String
     /// When it was said. Drawn beneath the message.
     var at: Date?
+
+    /// Documents this message produced, drawn under it as something to open.
+    ///
+    /// The window has no attachment channel, so a PDF Mynah writes here is a
+    /// file it can only *mention* — and a mentioned file in a folder nobody
+    /// names is a file the owner does not have. One click is the difference.
+    var files: [URL] = []
 }
 
 /// One turn as this window keeps it.
@@ -41,10 +48,20 @@ struct RecordedTurn: Codable, Equatable, Sendable {
     /// fast the appliance answers, which a guess would misreport convincingly.
     var at: Date?
 
-    init(role: String, content: String, at: Date? = nil) {
+    /// Paths of documents this turn wrote.
+    ///
+    /// Paths rather than bookmarks, and optional so every record written before
+    /// this existed still decodes. A file the owner has since moved or deleted
+    /// is simply not offered — see `TranscriptMessage.files`, which drops the
+    /// ones that are no longer there rather than drawing a chip that does
+    /// nothing.
+    var files: [String]?
+
+    init(role: String, content: String, at: Date? = nil, files: [String]? = nil) {
         self.role = role
         self.content = content
         self.at = at
+        self.files = files
     }
 
     var speaker: TranscriptMessage.Speaker { role == "user" ? .owner : .mynah }
@@ -112,9 +129,20 @@ struct WindowRecord: Codable, Equatable, Sendable {
     var turns: [RecordedTurn] = []
 
     /// Adds a finished turn, oldest falling off the front once the cap is hit.
-    mutating func append(question: String, answer: String, askedAt: Date?, answeredAt: Date?) {
+    mutating func append(
+        question: String,
+        answer: String,
+        askedAt: Date?,
+        answeredAt: Date?,
+        files: [URL] = []
+    ) {
         turns.append(RecordedTurn(role: "user", content: question, at: askedAt))
-        turns.append(RecordedTurn(role: "assistant", content: answer, at: answeredAt))
+        turns.append(RecordedTurn(
+            role: "assistant",
+            content: answer,
+            at: answeredAt,
+            files: files.isEmpty ? nil : files.map(\.path)
+        ))
         if turns.count > Self.maximumTurns {
             turns = Array(turns.suffix(Self.maximumTurns))
         }
@@ -231,9 +259,21 @@ final class WindowConversation {
     /// there at the next launch, and `priorMessages` reads the record rather
     /// than this list precisely so the engine is never told a shorter history
     /// than actually happened.
-    func record(question: String, answer: String, askedAt: Date?, answeredAt: Date?) {
+    func record(
+        question: String,
+        answer: String,
+        askedAt: Date?,
+        answeredAt: Date?,
+        files: [URL] = []
+    ) {
         guard !isFixture else { return }
-        record.append(question: question, answer: answer, askedAt: askedAt, answeredAt: answeredAt)
+        record.append(
+            question: question,
+            answer: answer,
+            askedAt: askedAt,
+            answeredAt: answeredAt,
+            files: files
+        )
         persist()
     }
 
@@ -268,7 +308,18 @@ final class WindowConversation {
     /// what is shown and what the engine is told, so the two cannot drift.
     private var recordedMessages: [TranscriptMessage] {
         record.turns.enumerated().map { index, turn in
-            TranscriptMessage(id: index, speaker: turn.speaker, text: turn.content, at: turn.at)
+            TranscriptMessage(
+                id: index,
+                speaker: turn.speaker,
+                text: turn.content,
+                at: turn.at,
+                // Only the ones still there. The owner may have moved the file
+                // into a project folder or thrown it away, and a button that
+                // opens nothing is worse than no button.
+                files: (turn.files ?? [])
+                    .map { URL(fileURLWithPath: $0) }
+                    .filter { FileManager.default.fileExists(atPath: $0.path) }
+            )
         }
     }
 

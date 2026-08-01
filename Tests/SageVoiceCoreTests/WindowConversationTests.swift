@@ -513,3 +513,73 @@ final class TranscriptExchangeGroupingTests: XCTestCase {
         XCTAssertEqual(regrouped, messages)
     }
 }
+
+// MARK: - Documents in the window's own record
+
+/// A PDF Mynah wrote, still openable after a relaunch.
+///
+/// The window has no attachment channel, so the file *is* the delivery here —
+/// which makes the path in the record load-bearing rather than decoration. Two
+/// things can go wrong and both are silent: an older record that predates the
+/// field failing to decode at all, and a chip that opens nothing because the
+/// owner moved the file.
+final class WindowDocumentRecordTests: XCTestCase {
+
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("window-docs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func recordURL() -> URL { directory.appendingPathComponent("window.json") }
+
+    func testADocumentSurvivesARelaunch() throws {
+        let file = directory.appendingPathComponent("quarterly-brief.pdf")
+        try Data("%PDF-1.7".utf8).write(to: file)
+
+        var record = WindowRecord()
+        record.append(
+            question: "make me a PDF about the quarter",
+            answer: "Made you one.",
+            askedAt: nil,
+            answeredAt: nil,
+            files: [file]
+        )
+        try record.save(to: recordURL())
+
+        let reopened = WindowRecord.load(from: recordURL())
+        XCTAssertEqual(reopened.turns.last?.files, [file.path])
+    }
+
+    func testARecordWrittenBeforeDocumentsExistedStillOpens() throws {
+        // The field is optional for exactly this reason: every record on every
+        // Mac was written without it, and a decoder that refuses one is an
+        // owner whose entire conversation disappears on upgrade.
+        let older = """
+        {"turns":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]}
+        """
+        try Data(older.utf8).write(to: recordURL())
+
+        let loaded = WindowRecord.load(from: recordURL())
+
+        XCTAssertEqual(loaded.turns.count, 2)
+        XCTAssertNil(loaded.turns.last?.files)
+    }
+
+    func testAQuestionCarriesNoDocuments() throws {
+        let file = directory.appendingPathComponent("brief.pdf")
+        try Data("%PDF".utf8).write(to: file)
+
+        var record = WindowRecord()
+        record.append(question: "q", answer: "a", askedAt: nil, answeredAt: nil, files: [file])
+
+        XCTAssertNil(record.turns.first?.files, "the owner did not write a document")
+        XCTAssertEqual(record.turns.last?.files, [file.path])
+    }
+}

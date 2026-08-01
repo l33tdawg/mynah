@@ -160,12 +160,13 @@ struct TalkView: View {
             // And the other direction, so what is said here survives a relaunch.
             // Nothing else writes this file, which is the whole reason the
             // digests and the overlap matcher could go.
-            model.recordTurn = { [record] question, answer, askedAt, answeredAt in
+            model.recordTurn = { [record] question, answer, askedAt, answeredAt, files in
                 record.record(
                     question: question,
                     answer: answer,
                     askedAt: askedAt,
-                    answeredAt: answeredAt
+                    answeredAt: answeredAt,
+                    files: files
                 )
             }
             await model.connect()
@@ -870,6 +871,10 @@ private struct ExchangeView: View {
         case .answered(let answer):
             AnsweredCard(inset: inset) {
                 AnsweredText(text: answer.text)
+                // Between the words and the provenance line, because it is part
+                // of the answer rather than a note about it: Mynah said it made
+                // a document, and this is the document.
+                DocumentChips(files: answer.files)
                 // Unconditional now. It used to appear only when there was a
                 // duration or a tool to name, so a fast answer with no tool call
                 // — the ones the owner most wants to see the clock on — was the

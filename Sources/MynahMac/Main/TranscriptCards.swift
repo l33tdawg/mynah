@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - The two cards a transcript is made of
@@ -241,6 +242,7 @@ struct TranscriptExchangeView: View {
                     ForEach(exchange.answered) { message in
                         AnsweredCard(inset: inset) {
                             AnsweredText(text: message.text)
+                            DocumentChips(files: message.files)
                             // No duration on this side: the daemon records when
                             // a turn was written, never how long it took. A
                             // number derived from two stamps here would be the
@@ -253,5 +255,90 @@ struct TranscriptExchangeView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - A document Mynah wrote
+
+/// The file itself, under the answer that mentions it.
+///
+/// **The window has no attachment channel, and that gap was the whole problem.**
+/// The phone gets a PDF as a Signal attachment; here, `write_note` saves into
+/// `Notes/documents` and the answer says so — which leaves the owner reading
+/// "I've made you a PDF" with nowhere to press. *"if you send the same message
+/// in the app it would send back a clickable pdf that it has saved to its
+/// 'directory'."*
+///
+/// One click opens it in whatever the Mac uses for that kind of file. The
+/// second, quiet control reveals it in the Finder, because the first thing
+/// somebody wants after reading a generated document is to put it somewhere of
+/// their own.
+struct DocumentChip: View {
+    let file: URL
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: s3) {
+            Image(systemName: Self.symbol(for: file))
+                .mynahIcon(.inline)
+                .foregroundStyle(Palette.ink.secondary)
+            Text(file.lastPathComponent)
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if isHovering {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([file])
+                } label: {
+                    Image(systemName: "folder")
+                        .mynahIcon(.inline)
+                        .foregroundStyle(Palette.ink.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Show in Finder")
+            }
+        }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s3)
+        .background(Palette.surface.sunken, in: RoundedRectangle.mynah(r.control))
+        .mynahBorder(r.control)
+        .contentShape(RoundedRectangle.mynah(r.control))
+        .onTapGesture { NSWorkspace.shared.open(file) }
+        .onHover { isHovering = $0 }
+        .mynahAnimation(Motion.fade, value: isHovering)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Open \(file.lastPathComponent)")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// The icon macOS itself would use, near enough. A generic page for anything
+    /// unrecognised rather than a guess — a Word icon on a PDF is a small lie
+    /// that makes the owner distrust the rest of the row.
+    static func symbol(for file: URL) -> String {
+        switch file.pathExtension.lowercased() {
+        case "pdf": return "doc.richtext"
+        case "docx", "doc": return "doc.text"
+        case "pptx", "ppt": return "rectangle.on.rectangle"
+        case "md", "txt": return "text.alignleft"
+        default: return "doc"
+        }
+    }
+}
+
+/// Every document a turn produced, or nothing at all.
+struct DocumentChips: View {
+    let files: [URL]
+
+    var body: some View {
+        if !files.isEmpty {
+            VStack(alignment: .leading, spacing: s3) {
+                ForEach(files, id: \.path) { file in
+                    DocumentChip(file: file)
+                }
+            }
+            .padding(.top, s2)
+        }
     }
 }
