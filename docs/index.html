@@ -617,7 +617,7 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
       </p>
 
       <div class="get">
-        <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
+        <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
         <span class="aside">
           macOS 14 or later &middot; free and open source &middot;
           <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
@@ -801,7 +801,7 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
     choice. The model and the memory come with it.
   </p>
   <div class="get">
-    <a class="button" id="download" href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
+    <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
     <span class="aside">
       Free and open source &middot;
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
@@ -869,8 +869,16 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
       asset => /^Mynah-\d[\w.]*-macOS-arm64\.dmg$/i.test(asset.name || "")
     );
     if (versioned?.browser_download_url) {
-      const button = document.getElementById("download");
-      if (button) button.href = versioned.browser_download_url;
+      // Every download button, not one of them.
+      //
+      // This was `getElementById("download")`, and an id has to be unique — so
+      // it could only ever repoint a single button. The page has two, the
+      // masthead and the closing call to action, and the masthead is the one
+      // people press. It was the one still handing over a file called
+      // `Mynah-macOS-arm64.dmg`, which says nothing about which version it is.
+      document.querySelectorAll("[data-download]").forEach(button => {
+        button.href = versioned.browser_download_url;
+      });
     }
 
     // Every release, not just the newest: "downloads" means how many copies
