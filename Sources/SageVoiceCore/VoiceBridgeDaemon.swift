@@ -1104,6 +1104,30 @@ public actor VoiceBridgeDaemon {
     /// A text turn has always done both — `histories[key]` then
     /// `persistConversations()` — and a spoken one now does the same, so the
     /// two ways of talking to it end up in one record rather than two.
+    /// Says something the owner did not ask for.
+    ///
+    /// The one message this appliance sends that is not an answer, and it is
+    /// gated three ways before it reaches here: the owner switched it on, the
+    /// interval they chose has elapsed, and something has actually changed. See
+    /// `ProactiveWatch`.
+    ///
+    /// **Text, never a voice note.** A recording that starts playing on a phone
+    /// on a bedside table is a different kind of interruption from a line of
+    /// text, and the owner asked for one of those.
+    ///
+    /// Recorded in the thread's history like any other turn, because the next
+    /// thing they say is usually about it — "yes, do that", "read it out" — and
+    /// a model that never heard itself speak would have no idea what "it" is.
+    public func announce(_ text: String, to recipient: SignalRecipient) async {
+        let key = recipient.description
+        histories[key] = Self.trimmed(
+            (histories[key] ?? []) + [BrainMessage(role: .assistant, content: text)],
+            keepingLastTurns: configuration.historyTurnLimit
+        )
+        persistConversations()
+        await reply(text, to: recipient, allowSpeaking: false)
+    }
+
     public func postCallTranscript(_ text: String) async {
         guard let recipient = lastCallRecipient else { return }
         recordFromCall(text, for: recipient.description)

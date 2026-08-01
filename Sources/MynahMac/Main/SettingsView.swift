@@ -213,6 +213,19 @@ enum PrivacyClaim {
         + "this copy, and puts it in place — and goes on running the copy you have until you "
         + "restart it."
 
+    /// The second thing that can happen without the owner speaking, and the
+    /// only one that puts a message on their phone.
+    ///
+    /// Written as a claim rather than left to the Settings row because the
+    /// Privacy screen's whole promise is that everything unprompted is listed
+    /// there. A feature that sends Signal messages on a timer and is described
+    /// only on the screen where it is switched on would break that promise on
+    /// the day it shipped.
+    static let checkingOnThings = "Mynah can check your agent inbox and its own task list on a "
+        + "timer and message you when something has changed. It is off until you turn it on, it "
+        + "stays quiet overnight, and it says nothing when nothing has changed. Everything it "
+        + "looks at is on this Mac or on your own SAGE node."
+
     /// The About caption, composed rather than written out.
     ///
     /// This is the enrolment half of the guarantee, and it is the half that was
@@ -376,11 +389,15 @@ final class SettingsModel {
         helperState = await backgroundServices.state()
     }
     private let updatePreferences: URL
+    private let proactivePreferences: URL
+    private let proactiveLedger: URL
 
     init(
         defaults: UserDefaults = .standard,
         callPreferences: URL = CallPreferences.defaultFileURL(),
         updatePreferences: URL = UpdatePreferences.defaultFileURL(),
+        proactivePreferences: URL = ProactivePreferences.defaultFileURL(),
+        proactiveLedger: URL = ProactiveLedger.defaultFileURL(),
         phoneLink: any PhoneLinking = SignalPhoneLink(),
         backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared
     ) {
@@ -399,6 +416,11 @@ final class SettingsModel {
         self.sendsCallTranscript = calls.sendsTranscript
         self.updatePreferences = updatePreferences
         self.checksForUpdates = UpdatePreferences.load(from: updatePreferences).checksForUpdates
+        self.proactivePreferences = proactivePreferences
+        self.proactiveLedger = proactiveLedger
+        let proactive = ProactivePreferences.load(from: proactivePreferences)
+        self.checksOnThings = proactive.isOn
+        self.checksEveryMinutes = proactive.clampedMinutes
     }
 
     var canUnlinkPhone: Bool { phoneLink.canUnlink }
@@ -559,6 +581,41 @@ final class SettingsModel {
         }
         update = nil
         Task { await checkForUpdate() }
+    }
+
+    // MARK: Checking on things unasked
+
+    private(set) var checksOnThings: Bool
+    private(set) var checksEveryMinutes: Int
+
+    /// The intervals offered. Not a free-text field: the useful range is narrow,
+    /// and the two ends of it — a phone that buzzes all day, and a check so rare
+    /// it might as well be off — are both worse than any option here.
+    static let checkIntervals = [15, 30, 60, 120, 240]
+
+    static func intervalName(_ minutes: Int) -> String {
+        switch minutes {
+        case ..<60: return "Every \(minutes) minutes"
+        case 60: return "Every hour"
+        default: return "Every \(minutes / 60) hours"
+        }
+    }
+
+    func setChecksOnThings(_ isOn: Bool) {
+        checksOnThings = isOn
+        ProactivePreferences.amend(at: proactivePreferences) { $0.isOn = isOn }
+        if isOn {
+            // A fresh start each time it is switched on. The ledger remembers
+            // what was already there so the first check after this is silent —
+            // otherwise flicking the switch would dump every open task and a
+            // fortnight of inbox into one message.
+            try? ProactiveLedger().save(to: proactiveLedger)
+        }
+    }
+
+    func setChecksEveryMinutes(_ minutes: Int) {
+        checksEveryMinutes = minutes
+        ProactivePreferences.amend(at: proactivePreferences) { $0.everyMinutes = minutes }
     }
 
     // MARK: Fetching a newer Mynah
@@ -2014,6 +2071,49 @@ struct SettingsView: View {
             SettingsRow("Pause answering", detail: "Mynah stays open but stops replying.") {
                 Toggle("", isOn: $app.isPaused).labelsHidden().mynahToggle()
             }
+            MynahDivider()
+            checkingOnThingsRow
+            if model.checksOnThings {
+                MynahDivider()
+                checkingIntervalRow
+            }
+        }
+    }
+
+    /// The one switch that lets Mynah message first.
+    ///
+    /// Everything else this appliance sends is an answer to something the owner
+    /// said. This is not, which is why it is off until somebody turns it on and
+    /// why the sentence says exactly what would arrive rather than describing a
+    /// capability.
+    private var checkingOnThingsRow: some View {
+        SettingsRow(
+            "Check on things and tell me",
+            detail: "Mynah looks at what your other agents have sent and what's on its task "
+                + "list, and messages you on Signal only when something has changed. It says "
+                + "nothing overnight."
+        ) {
+            Toggle("", isOn: Binding(
+                get: { model.checksOnThings },
+                set: { model.setChecksOnThings($0) }
+            ))
+            .labelsHidden()
+            .mynahToggle()
+        }
+    }
+
+    private var checkingIntervalRow: some View {
+        SettingsRow("How often it looks", detail: "Nothing is sent unless something changed.") {
+            Picker("", selection: Binding(
+                get: { model.checksEveryMinutes },
+                set: { model.setChecksEveryMinutes($0) }
+            )) {
+                ForEach(SettingsModel.checkIntervals, id: \.self) { minutes in
+                    Text(SettingsModel.intervalName(minutes)).tag(minutes)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 180)
         }
     }
 

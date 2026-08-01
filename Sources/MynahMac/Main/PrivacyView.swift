@@ -134,6 +134,10 @@ struct PrivacyView: View {
     /// source for what leaves when the owner speaks to their phone.
     @State private var appliance: ApplianceStatus?
     @State private var checksForUpdates = UpdatePreferences.load().checksForUpdates
+    /// Read on appear like the update switch, and for the same reason: this
+    /// screen reports state it does not own, and the owner may have changed it
+    /// on the Settings screen a moment ago.
+    @State private var checksOnThings = ProactivePreferences.load().isOn
     @State private var isChecking = false
     /// What the last press found, in one sentence. Nil until asked.
     @State private var updateReport: String?
@@ -158,6 +162,7 @@ struct PrivacyView: View {
             brain = BrainChoiceStore.current()
             appliance = ApplianceStatus.current()
             checksForUpdates = UpdatePreferences.load().checksForUpdates
+            checksOnThings = ProactivePreferences.load().isOn
             sendsCallTranscript = CallPreferences.load().transcript
         }
     }
@@ -293,6 +298,17 @@ struct PrivacyView: View {
                 }
                 if let updateReport {
                     PrivacyRow("", detail: updateReport) { EmptyView() }
+                }
+                MynahDivider()
+                // The other one, and the only thing Mynah does that puts a
+                // message on the owner's phone by itself. Listed here whether it
+                // is on or off, because a screen that only mentions a feature
+                // once it is switched on cannot be read as a complete list.
+                PrivacyRow("Checking on things by itself", detail: PrivacyClaim.checkingOnThings) {
+                    StatusPill(
+                        checksOnThings ? "On" : "Turned off",
+                        tone: checksOnThings ? .neutral : .good
+                    )
                 }
             }
         }

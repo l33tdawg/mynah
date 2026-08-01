@@ -112,6 +112,7 @@ final class PrivacyClaimTests: XCTestCase {
             PrivacyClaim.webSearch,
             PrivacyClaim.calling,
             PrivacyClaim.callTranscript,
+            PrivacyClaim.checkingOnThings,
             PrivacyClaim.thinkingOnThePhone(model: "claude-sonnet-4-5", staysOnDevice: false),
             PrivacyClaim.thinkingOnThePhone(model: "qwen3.5:4b", staysOnDevice: true),
             PrivacyClaim.thinkingOnThePhone(model: nil, staysOnDevice: false),
@@ -128,7 +129,8 @@ final class PrivacyClaimTests: XCTestCase {
             PrivacyClaim.memories,
             PrivacyClaim.webSearch,
             PrivacyClaim.calling,
-            PrivacyClaim.callTranscript
+            PrivacyClaim.callTranscript,
+            PrivacyClaim.checkingOnThings
         ] {
             XCTAssertFalse(claim.isEmpty)
             XCTAssertTrue(
@@ -233,5 +235,39 @@ final class PrivacyClaimTests: XCTestCase {
         ] {
             XCTAssertFalse(claim.lowercased().contains("domain"))
         }
+    }
+}
+
+// MARK: - Speaking first
+
+/// The claim covering the one thing Mynah does that puts a message on the
+/// owner's phone without them having said anything.
+///
+/// Its own suite because the risk is specific: a feature that messages on a
+/// timer, described only on the screen where it is switched on, would leave the
+/// Privacy screen — whose whole promise is to list everything unprompted —
+/// quietly incomplete from the day it shipped.
+final class ProactiveClaimTests: XCTestCase {
+
+    func testItSaysItIsOffUntilTheOwnerTurnsItOn() {
+        let claim = PrivacyClaim.checkingOnThings.lowercased()
+
+        XCTAssertTrue(claim.contains("off until you turn it on"))
+        XCTAssertTrue(
+            claim.contains("nothing has changed"),
+            "the reassurance that stops this reading as an hourly notification"
+        )
+    }
+
+    func testItSaysWhereTheThingsItLooksAtLive() {
+        // The question anybody reading a privacy screen has about a feature
+        // that reaches out on a timer: reaches out to what.
+        XCTAssertTrue(PrivacyClaim.checkingOnThings.contains("your own SAGE node"))
+    }
+
+    func testTheDefaultMatchesWhatTheClaimPromises() {
+        // A claim that says "off until you turn it on" and a default of `true`
+        // is the worst possible pair, and nothing else would catch it.
+        XCTAssertFalse(ProactivePreferences().isOn)
     }
 }

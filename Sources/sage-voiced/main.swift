@@ -997,6 +997,38 @@ func runDaemon(_ arguments: [String]) -> Never {
             await daemon?.postCallTranscript(transcript)
         }
 
+        // Checking on things without being asked.
+        //
+        // Off unless the owner switched it on, and the loop is started
+        // regardless so that switching it on takes effect without a restart —
+        // `ProactiveSchedule.isDue` reads the preference every minute and
+        // answers false until then. A loop that only existed when the setting
+        // was on would mean a control that appears to do nothing until the next
+        // time somebody reboots the Mac.
+        //
+        // Detached like the call server: a node that will not answer must not
+        // stop Signal working.
+        let watchTask = Task { [weak daemon] in
+            // The owner's own thread — Note to Self, which is where every other
+            // reply lands. `--account` when it was given, otherwise the number
+            // they allowlisted, which for this appliance is the same person by
+            // definition: it refuses to serve anyone else.
+            let owner = flags["account"] ?? allowlist.identities.compactMap {
+                if case .phoneNumber(let number) = $0 { return number }
+                return nil
+            }.sorted().first
+            guard let owner else { return }
+
+            await runProactiveWatch(
+                source: SageProactiveSource(tools: mcp),
+                say: { message in
+                    await daemon?.announce(message, to: .account(owner))
+                },
+                log: { note($0) }
+            )
+        }
+        defer { watchTask.cancel() }
+
         await daemon.run()
         mcp.stop()
         return 0
@@ -1032,6 +1064,48 @@ default:            usage()
 /// because the binary had been copied into the SAGE bundle by hand. Every
 /// packaged build would have answered //call with "the call endpoint is not
 /// installed".
+/// The loop behind "check on things every so often".
+///
+/// Sleeps a minute at a time rather than for the owner's whole interval, so
+/// switching the setting on, changing it, or switching it off takes effect
+/// within a minute instead of at the end of an hour nobody can see the start
+/// of. The cost of a tick that decides to do nothing is one file read.
+///
+/// Every failure here is swallowed on purpose. This runs unattended on a Mac
+/// that is expected to be up for months; a node restarting, a key rotating or
+/// a network dropping is an ordinary Tuesday, and none of it is worth putting
+/// an error on the owner's phone about something they did not ask for.
+func runProactiveWatch(
+    source: any ProactiveSource,
+    say: @escaping @Sendable (String) async -> Void,
+    log: @escaping @Sendable (String) -> Void
+) async {
+    let watch = ProactiveWatch(source: source)
+    let ledgerURL = ProactiveLedger.defaultFileURL()
+
+    while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(ProactiveSchedule.tick))
+        guard !Task.isCancelled else { return }
+
+        let preferences = ProactivePreferences.load()
+        var ledger = ProactiveLedger.load(from: ledgerURL)
+        guard ProactiveSchedule.isDue(
+            now: Date(),
+            lastChecked: ledger.lastCheckedAt,
+            preferences: preferences
+        ) else { continue }
+
+        let report = await watch.check(against: ledger)
+        ledger = report.ledger
+        ledger.lastCheckedAt = Date()
+        try? ledger.save(to: ledgerURL)
+
+        guard let message = report.message else { continue }
+        log("[watch] something changed; telling the owner")
+        await say(message)
+    }
+}
+
 func callEndpointURL(sagePath: String) -> URL {
     let candidates = [
         Bundle.main.executableURL?.deletingLastPathComponent(),
