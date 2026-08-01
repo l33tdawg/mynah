@@ -32,8 +32,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# $2 is where the bundle came from: "vendored" for the copy already in the repo,
+# "downloaded" for one just fetched. The checks are identical; only the advice
+# differs, and the advice is the whole value of the message.
 require_sage_app() {
   local sage_app="$1"
+  local origin="${2:-downloaded}"
   local executable="$sage_app/Contents/MacOS/sage-gui"
   local plist="$sage_app/Contents/Info.plist"
 
@@ -52,7 +56,25 @@ require_sage_app() {
     version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null || true)"
     expected_version="${TAG#v}"
     if [[ "$version" != "$TAG" && "$version" != "$expected_version" ]]; then
-      echo "Unexpected SAGE version '$version'; expected '$TAG'." >&2
+      if [[ "$origin" == "vendored" ]]; then
+        # The common case, and the one whose old wording sent the reader off to
+        # check the release. Nothing was downloaded: this script found a SAGE
+        # already in the repo and stopped, because re-downloading every build
+        # would make it non-reproducible. The bundle is simply the previous
+        # version, and one variable replaces it.
+        cat >&2 <<EOF
+The SAGE already vendored at $sage_app is $version, and $TAG was asked for.
+
+Nothing was downloaded — this script keeps an existing vendored SAGE rather than
+re-fetching it on every build. To replace it with $TAG:
+
+  SAGE_RELEASE_TAG=$TAG SAGE_FORCE_DOWNLOAD=1 scripts/vendor-sage.sh
+EOF
+      else
+        echo "The SAGE downloaded for $TAG reports version '$version'." >&2
+        echo "That is the release's own contents, so check the assets on $TAG"\
+             "before vendoring it." >&2
+      fi
       exit 1
     fi
   fi
@@ -68,7 +90,7 @@ require_sage_app() {
 # Already vendored: verify and stop. Re-downloading on every build would make
 # the build non-reproducible and would rate-limit CI.
 if [[ -d "$OUT" && "${SAGE_FORCE_DOWNLOAD:-0}" != "1" ]]; then
-  require_sage_app "$OUT"
+  require_sage_app "$OUT" vendored
   echo "$OUT"
   exit 0
 fi
