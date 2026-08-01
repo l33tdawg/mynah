@@ -88,18 +88,38 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$CERT"
 
-      - name: Build, sign, notarize, verify
+      # **Debug, and only the Swift package.** This is what a visitor to a
+      # public repository actually wants to know: does it build, do the tests
+      # pass.
+      #
+      # It replaces a full `scripts/release.sh` run, which was failing here and
+      # nowhere else. `error: fatalError` with no diagnostic, part way through
+      # the largest SwiftUI module, under whole-module optimisation, is the
+      # compiler frontend being killed — a hosted runner has a fraction of the
+      # memory this machine does, and a release build of MynahMac exceeds it.
+      # Verified by reproducing every other difference locally and finding none
+      # of them guilty: cold cache, no vendored onnxruntime, release
+      # configuration, and the identical toolchain all build in 61 seconds here.
+      #
+      # It also could not have published: signing and notarisation need secrets
+      # this repository does not hold, so the release path was doing expensive
+      # work whose only possible outcome was an artifact nobody may install.
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          swift build
+          swift test
+
+      - name: Build, sign, notarize
+        # Only where it can finish. Without signing secrets this produced an
+        # ad-hoc artifact that the next step then refused to publish.
+        if: steps.secrets.outputs.signed == 'true'
         env:
-          MYNAH_NOTARIZE: ${{ steps.secrets.outputs.signed }}
+          MYNAH_NOTARIZE: "true"
           MYNAH_APPLE_ID: ${{ secrets.APPLE_ID }}
           MYNAH_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MYNAH_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [[ "${{ steps.secrets.outputs.signed }}" != "true" ]]; then
-            export SAGE_VOICE_CODESIGN_IDENTITY="-"
-          fi
-          bash scripts/release.sh
+        run: bash scripts/release.sh
 
       - name: Publish
         # Tags only, and only when the artifact is genuinely signed and stapled.
