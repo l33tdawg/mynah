@@ -639,348 +639,95 @@ footer .eyebrow { color: rgba(255,255,255,0.42); margin-bottom: var(--s2); }
 <!-- ===================================================================== -->
 
 <section>
-  <p class="eyebrow">What it is</p>
-  <h2 class="title1 column">Not a chat window. Something that stays.</h2>
+  <h2 class="title1 column">Stop introducing yourself to your assistant.</h2>
   <p class="lede">
-    You tell it things. It keeps them, and it keeps them across conversations
-    rather than inside one. Ask it three weeks later and it still knows.
+    You tell it once. Your dad&rsquo;s appointment moved to the 12th. The ferry
+    leaves Donsak at 14:30. Sarah is allergic to shellfish, not fish.
   </p>
-
-  <div class="cards">
-    <div class="card">
-      <div class="glyph" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>
-        </svg>
-      </div>
-      <h3 class="title3">It runs on your Mac</h3>
-      <p>One Mac, left switched on. No account, nothing to sign into, and no server of ours between your phone and your Mac when you message it.</p>
-    </div>
-
-    <div class="card">
-      <div class="glyph" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>
-        </svg>
-      </div>
-      <h3 class="title3">Your phone reaches it</h3>
-      <p>Message yourself on Signal and it answers in that thread. Send a voice note when your hands are busy.</p>
-    </div>
-
-    <div class="card">
-      <div class="glyph" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2.4"/>
-        </svg>
-      </div>
-      <h3 class="title3">It remembers</h3>
-      <p>Its own memory, not a chat log. You can read every line of it, and delete any line you want gone.</p>
-    </div>
-
-    <div class="card">
-      <div class="glyph" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="7" height="16" rx="1.6"/><rect x="14" y="4" width="7" height="10" rx="1.6"/>
-        </svg>
-      </div>
-      <h3 class="title3">It keeps a board</h3>
-      <p>The work you have handed it, in the open. Planned, and in progress.</p>
-    </div>
-  </div>
-
-  <!-- SCREENSHOT SLOT 1 -----------------------------------------------------
-       Home — the conversation view, with the task board ("What's on your
-       plate") open above it. Full app window, light mode, sidebar visible.
-       Use invented conversation text. Never the owner's real thread.
-  ---------------------------------------------------------------------- -->
-  <figure>
-    <div class="shot window filled">
-      <img src="screenshots/home.png" width="1600" height="1383"
-           alt="The Mynah window. An empty conversation reading &ldquo;Say something to Mynah&rdquo;, with a status line saying your words stay on this Mac.">
-    </div>
-    <figcaption>Home. The board beside the conversation. Either half folds away, and the fold is still there when you come back.</figcaption>
-  </figure>
+  <p class="lede">
+    Ask in three weeks and it knows — because it remembers across conversations
+    instead of inside one. No re-briefing, no pasted context, no starting again
+    because you closed a tab.
+  </p>
 </section>
 
 <!-- ===================================================================== -->
 
 <section>
-  <p class="eyebrow">Where it thinks</p>
-  <h2 class="title1 column">It runs with nothing switched on but your Mac.</h2>
-  <p class="lede">
-    The thinking, listening, speaking and remembering all run here, and that is
-    what a fresh install sets up — you are not asked to choose. Nothing you say
-    goes to a company to be thought about; what still leaves is on the
-    &ldquo;Where your words go&rdquo; list below.
-  </p>
-
-  <div class="rows">
-    <div class="row">
-      <div class="text">
-        <p class="title3">The thinking</p>
-        <p>A model running on your Mac. Mynah downloads it and starts it for you — you do not open a terminal. It is a few gigabytes, once, and then it is yours.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">The listening</p>
-        <p>Voice notes and anything you say into the Mac are turned into words on this Mac. The recording itself is never sent anywhere.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">The speaking</p>
-        <p>On a call, the answer is spoken here too, by a voice that runs on the machine. If that voice is not installed it falls back to the one macOS already has.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">The remembering</p>
-        <p>Kept on this Mac, in a folder only your account can read. Same for the notes it writes.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-  </div>
-
-  <div class="note">
-    <p style="margin:0 0 var(--s4)"><strong>Or point it at a bigger brain, and know that you did.</strong></p>
-    <p style="margin:0 0 var(--s4)">
-      You can send the thinking to a company instead — Anthropic, OpenAI,
-      DeepSeek, Kimi or Groq. It is a setting you go and change afterwards, not a
-      reinstall: the same conversation, the same tools, the same memory, with
-      something else doing the thinking.
-    </p>
-    <p style="margin:0">
-      What changes is where your words go, and Mynah does not soften it. Its own
-      privacy screen names the company rather than saying &ldquo;a provider&rdquo;, and it
-      keeps the phone and the desktop on separate lines, because nothing forces
-      those two to agree.
-    </p>
-  </div>
-</section>
-
-<!-- ===================================================================== -->
-
-<section>
-  <p class="eyebrow">Your phone</p>
-  <h2 class="title1 column">Message yourself. It answers.</h2>
-  <p class="lede">
-    Mynah links to your existing Signal account as a second device, the same way
-    Signal Desktop does. No new number. No bot. No business account. Your phone
-    stays in charge.
-  </p>
+  <h2 class="title1 column">It is already in a thread you open every day.</h2>
 
   <div class="shots">
-    <!-- SCREENSHOT SLOT 2 ---------------------------------------------------
-         The Signal Note-to-Self thread on a phone: one question from the owner
-         and Mynah's reply, which carries a bracketed brain prefix. Invent the
-         message text. No real phone number anywhere in frame, no real
-         conversation, no contact list.
-    ------------------------------------------------------------------ -->
     <figure>
       <div class="shot phone filled">
         <img src="screenshots/signal.png" width="900" height="1649"
-             alt="A Signal Note-to-Self thread. The question &ldquo;Tell me what your capabilities are&rdquo; is answered by a message beginning &ldquo;&gt;&gt;&rdquo;, listing what Mynah can do.">
+             alt="A Signal Note-to-Self thread, with a question answered by a message beginning &ldquo;&gt;&gt;&rdquo;.">
       </div>
-      <figcaption>Every reply starts with <code>&gt;&gt;</code>, because Signal draws Note to Self as one column of your own messages and there would otherwise be no way to tell who said what.</figcaption>
     </figure>
-
     <div>
-      <ul class="claims">
-        <li>
-          <span class="what">Text or a voice note</span>
-          <span class="why">Both work. A voice note is transcribed on the Mac, using words it has learned from you, so a name only you use comes out right.</span>
-        </li>
-        <li>
-          <span class="what">It answers the moment you send</span>
-          <span class="why">A line lands straight away so you know it heard you, and it tells you when it has gone to look something up rather than going quiet for two minutes.</span>
-        </li>
-        <li>
-          <span class="what">Two messages in a row are one thought</span>
-          <span class="why">&ldquo;Make me a list&rdquo; then &ldquo;oh, and add this&rdquo; is answered once, properly, instead of twice, badly.</span>
-        </li>
-        <li>
-          <span class="what">Only you, only your thread</span>
-          <span class="why">Group messages are refused. Messages you sent to other people are refused. It never starts a conversation.</span>
-        </li>
-        <li>
-          <span class="what">It stays up</span>
-          <span class="why">Reboot, log out, close the app — your phone still gets answered. No admin password was needed to arrange that.</span>
-        </li>
-      </ul>
+      <p class="lede" style="margin-top:0">
+        You message yourself on Signal. It answers in that thread. Nothing new on
+        your phone, no app to open, no account to make — you already have the
+        habit, and it just starts replying.
+      </p>
+      <p class="lede">
+        Hands full? Send a voice note. Want to talk? Send <code>//call</code>,
+        tap the link, and speak to it — interrupting mid-sentence like you would
+        anyone else.
+      </p>
     </div>
-  </div>
-
-  <div class="note">
-    <p style="margin:0 0 var(--s4)">
-      Linking is a QR code on the screen, not a command line. Mynah installs the
-      small helper it needs and drives it for you. The code is good for about a
-      minute, and the screen tells you that before the clock starts.
-    </p>
-    <p style="margin:0">
-      A newly linked device gets no history. Mynah cannot see anything you sent
-      before you linked it — only what you send from then on.
-    </p>
   </div>
 </section>
 
 <!-- ===================================================================== -->
 
 <section>
-  <p class="eyebrow">Talking out loud</p>
-  <h2 class="title1 column">Send <code>//call</code>, tap the link, talk.</h2>
+  <h2 class="title1 column">It keeps track, so you can stop.</h2>
   <p class="lede">
-    A real conversation, in the browser you already have. Nothing to install on
-    the phone, and you can cut it off mid-sentence the way you would a person.
+    Hand it something and it stays handed over — the booking to chase, the thing
+    to renew before the 30th, the question you asked it to go and answer. You see
+    what is planned, what it is working on, and what is done.
   </p>
-
-  <div class="rows">
-    <div class="row">
-      <div class="text">
-        <p class="title3">Your side is heard here</p>
-        <p>What you say on a call is turned into words on your Mac, and the answer is spoken there too.</p>
-      </div>
-      <span class="pill stays">Stays here</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">A relay makes the introduction</p>
-        <p>A Mac at home has no address your phone can dial, so the link is served by a relay that passes the two ends&rsquo; details along. It is not in the call itself.</p>
-      </div>
-      <span class="pill">Not in the call</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">The link is the key</p>
-        <p>It carries an unguessable path, registered with the relay so it can serve the page, and it travels to you inside Signal. Asking for a new call stops the old one — a call link is a live microphone, so only the last one you were sent works, and there is never more than one.</p>
-      </div>
-      <span class="pill">One at a time</span>
-    </div>
-    <div class="row">
-      <div class="text">
-        <p class="title3">It starts talking before it has finished thinking</p>
-        <p>The answer is spoken sentence by sentence as each one is ready, so it begins about as fast as a person would. Whether the thinking happens here or at a provider is the same choice you made for everything else.</p>
-      </div>
-      <span class="pill">Spoken as it goes</span>
-    </div>
-  </div>
-
-  <div class="note">
-    Calling sets itself up the moment you link your phone — no port to forward, no
-    certificate to install, nothing to configure. On a Mac that was never set up
-    for it, Mynah says so in a sentence you can act on instead of failing halfway
-    through a call. And a call it has just had is remembered: follow up in writing
-    afterwards and it knows what you said out loud.
-  </div>
-
-  <div class="gap"></div>
-
-  <div class="column">
-    <div class="cmd">
-      <span class="key">//help</span>
-      <span class="says">Lists what you can say, and tells you up front whether calling will work on this Mac. Answered by Mynah itself — asking a language model which commands it supports gets you a confident guess.</span>
-    </div>
-    <div class="cmd">
-      <span class="key">//call</span>
-      <span class="says">Sets up the call and sends back the link.</span>
-    </div>
-    <p class="callout dim" style="margin-top:var(--s5)">
-      Both have to be the whole message. Typing &ldquo;how do I use //call&rdquo; is a
-      question, and gets answered as one — not treated as an instruction to open a
-      microphone on your phone.
-    </p>
-  </div>
-</section>
-
-
-
-<!-- ===================================================================== -->
-
-<section>
-  <p class="eyebrow">The board</p>
-  <h2 class="title1 column">What&rsquo;s on its plate, above the conversation.</h2>
   <p class="lede">
-    The open work assigned to Mynah, in two columns: Planned, and In progress.
-    It sits on the Home screen so you see it before you type anything.
+    And if you run other <a href="https://github.com/l33tdawg/sage">SAGE</a>
+    agents, <strong>they become people you can talk to</strong>. Ask Mynah to
+    find one, hand it the job, and tell you what came back. One place to ask,
+    instead of a tab for each.
   </p>
-
-  <div class="note">
-    <p style="margin:0 0 var(--s4)">
-      <strong>There is no Done column, and that is on purpose.</strong>
-      What Mynah can ask for is open work — finished and abandoned tasks are not
-      in the answer at all. A Done column fed from it would read
-      &ldquo;Nothing finished yet.&rdquo; for ever, over work you know you completed.
-    </p>
-    <p style="margin:0">
-      So it is not drawn, and one quiet line under the board says why. A task the
-      board was handed with no status is counted in a footnote rather than guessed
-      into a column.
-    </p>
-  </div>
 </section>
-
-
-
-
 
 <!-- ===================================================================== -->
 
 <section>
-  <p class="eyebrow">Before you start</p>
-  <h2 class="title1 column">What you need.</h2>
-
-  <div class="cards">
-    <div class="card">
-      <h3 class="title3">A Mac, left switched on</h3>
-      <p>Apple silicon, macOS 14 or later. A Mac mini is the usual choice. It has to be awake to answer, so a laptop that sleeps in a bag is the wrong machine for it.</p>
-    </div>
-    <div class="card">
-      <h3 class="title3">Signal on your phone</h3>
-      <p>Your existing account. Mynah links as a second device; your number does not change and you register nothing new.</p>
-    </div>
-    <div class="card">
-      <h3 class="title3">A brain</h3>
-      <p>Either the local one, which Mynah downloads and runs for you, or an API key from a provider you pick. The setup screen tells you, per option, where your words end up.</p>
-    </div>
-  </div>
-
-  <!-- SCREENSHOT SLOT 5 -----------------------------------------------------
-       Setup — the phone-linking screen with the QR panel. IMPORTANT: replace or
-       blur the QR itself; a real one is a live device-pairing secret. A drawn
-       placeholder square is better than a redacted photograph.
-  ---------------------------------------------------------------------- -->
-  <figure>
-    <div class="shot window">
-      <div>
-        <p class="eyebrow">Screenshot</p>
-        <p class="what">Setup — linking your phone. The QR must be a drawn placeholder, never a real pairing code.</p>
-      </div>
-    </div>
-    <figcaption>Setup never says &ldquo;daemon&rdquo;, &ldquo;socket&rdquo; or an exit code at you. It describes one small free add-on that only handles messages.</figcaption>
-  </figure>
-
-  <div class="shots">
-    <figure>
-      <div class="shot window filled">
-        <img src="screenshots/voice.png" width="1600" height="1383"
-             alt="Settings, Voice tab. Rows for what you speak into, turning your voice into words on this Mac, the voice on a call, how fast it talks, and whether a call transcript is sent to your Signal thread.">
-      </div>
-      <figcaption>Which voice answers, how fast it talks, and whether a call is written back to your thread.</figcaption>
-    </figure>
-    <figure>
-      <div class="shot window filled">
-        <img src="screenshots/general.png" width="1600" height="1383"
-             alt="Settings, General tab. The linked Signal account with its number partly hidden, whether Mynah keeps answering with the window closed, and appearance options.">
-      </div>
-      <figcaption>The phone it answers, and the helper that keeps it answering with the window shut.</figcaption>
-    </figure>
-  </div>
+  <h2 class="title1 column">And none of it is anyone else&rsquo;s.</h2>
+  <p class="lede">
+    It runs on a Mac you own. A fresh install downloads a model and thinks on
+    that machine, so your words, your memories and your notes never leave the
+    house. No account, no sign-in, no server of ours in the middle.
+  </p>
+  <p class="lede">
+    Point it at a company&rsquo;s model if you want the extra power — and it will
+    name the company rather than let you assume. Everything it remembers is
+    yours to read, search and delete, line by line.
+  </p>
 </section>
 
 <!-- ===================================================================== -->
+
+<section>
+  <h2 class="title1 column">Give it a Mac and your Signal. That is it.</h2>
+  <p class="lede">
+    Apple silicon, macOS 14 or later, left switched on — a Mac mini is the usual
+    choice. The model and the memory come with it.
+  </p>
+  <div class="get">
+    <a class="button" href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download for Apple silicon</a>
+    <span class="aside">
+      Free and open source &middot;
+      <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
+      built on <a href="https://github.com/l33tdawg/sage">SAGE</a>
+    </span>
+  </div>
+</section>
 
 <footer>
   <p>
