@@ -221,17 +221,22 @@ final class CallVoicePreview {
         // `sage-voiced/main.swift` builds `KokoroSpeechSynthesizer` in-process.
         // The preview now uses the same engine, so what you audition is what a
         // call actually sounds like — which was the entire point of the button.
+        // **The whole body is inside the `#if`, not just the binding.**
+        //
+        // It used to declare `synthesizer` in the `#if` branch, throw in the
+        // `#else`, and then use `synthesizer` after the `#endif` — which does
+        // not compile without the engine, because that name does not exist on
+        // that path. A `throw` on the line above does not excuse it: the code
+        // after is unreachable, and unreachable code still has to type-check.
+        //
+        // Invisible here, because this machine has `vendor/onnxruntime` staged
+        // and `canImport` is therefore always true. It fails on a fresh clone,
+        // which is every clone — `vendor/` is gitignored — and that is exactly
+        // what CI is for.
         #if canImport(KokoroEngine)
         guard let synthesizer = KokoroSpeechSynthesizer.ifReady(voice: voice) else {
             throw Unavailable.voiceNotInstalled
         }
-        #else
-        // No `vendor/onnxruntime` in this checkout, so the engine was not
-        // compiled in. Same sentence as a missing model: from the owner's side
-        // it is the same fact.
-        throw Unavailable.voiceNotInstalled
-        #endif
-
         let speech = try await synthesizer.synthesize(
             SpeechRequest(text: Self.sample, voice: voice, speed: speed)
         )
@@ -243,6 +248,12 @@ final class CallVoicePreview {
         // needs no delegate and no polling.
         try? await Task.sleep(for: .seconds(max(speech.duration, 0.1)))
         stop()
+        #else
+        // No `vendor/onnxruntime` in this checkout, so the engine was not
+        // compiled in. Same sentence as a missing model: from the owner's side
+        // it is the same fact.
+        throw Unavailable.voiceNotInstalled
+        #endif
     }
 
     func stop() {
