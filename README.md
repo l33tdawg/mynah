@@ -1,432 +1,443 @@
 # Mynah
 
-Mynah keeps track of your thinking, and it can act on it.
+Mynah is a macOS app that runs a personal agent on a Mac you own and answers you
+from your phone: you message your own Signal Note-to-Self thread, or you send
+`//call` and talk to it out loud. Its memory lives in a
+[SAGE](https://github.com/l33tdawg/sage) node it drives over MCP.
 
-You tell it things — half-formed ideas, what you decided and why, something to
-come back to on Thursday — and it keeps them. You ask it things, and it answers
-out of what you already told it, searching the web when the answer was never
-yours to begin with. And it puts your other agents to work: it finds agents on
-your SAGE node by name, hands them a job, and tells you what came back. It writes
-notes, keeps a backlog and a task list, and it remembers across conversations
-rather than within one.
+**It runs fully offline and privacy-preserving by default.** A fresh install
+downloads Ollama and `qwen3.5:4b` and runs the model on your Mac — you are not
+asked to choose, because a default nobody is given is not a default. Pointing it
+at a cloud provider instead is something you go and do afterwards, in Settings,
+deliberately. On a Mac that cannot run a model locally — an Intel chip, too
+little memory, too little disk — it says which of those it is, and *then* asks.
 
-It runs on a Mac you already own — a Mac mini left switched on, typically — and
-you reach it from your phone two ways: by messaging yourself on Signal, and by
-calling it.
+Nothing about it is a service: no account, no sign-in, no server of ours in the
+message path. Where anything does leave the Mac, the app says so — the Privacy
+screen names the model your words go to rather than leaving you to infer it, and
+lists the other two things that leave: the words a web search is made of, and a
+once-a-day update check against GitHub.
 
-Running on your own machine is the precondition and not a feature bolted on. It
-is what makes it reasonable to tell the thing what you actually think. Nothing
-about it is a service: no account, no server of ours, nothing to sign into. The
-one place your words can leave the Mac is the model that answers. That is a
-choice you make at setup and can change afterwards, and the setup screen says
-per option where they go.
+## What it does
+
+- Answers text messages and voice notes in your Signal Note-to-Self thread.
+- Takes a live voice call. You send `//call`, tap the link you get back, and
+  talk; you can cut it off mid-sentence and it stops.
+- Remembers across conversations rather than within one, in SAGE. The Memories
+  screen lists what it remembers, searches by meaning, and forgets one on
+  request.
+- Searches the web when the answer was never yours to begin with — Brave when
+  `BRAVE_SEARCH_API_KEY` is set, DuckDuckGo otherwise, so it works with no key.
+- Writes, reads and lists notes as real files on the Mac.
+- Looks at a photo you send with a message (on the Ollama backend — see
+  [What the model can do](#what-the-model-can-do)).
+- Finds another agent on your SAGE node by name, hands it a job, and tells you
+  what came back.
+- Shows the work assigned to it on Home, read from `sage_backlog`.
 
 ## The two ways in
 
 **Signal Note-to-Self.** You message yourself; Mynah answers in the same thread.
-The thread is end-to-end encrypted between your own devices, and Mynah is a
-linked device on your own Signal account — the same mechanism Signal Desktop
-uses. Nothing is exposed to the internet.
+It links as a secondary device on your own Signal account, the same mechanism
+Signal Desktop uses — no new number, no business account, no bot. A newly linked
+device receives nothing sent before the link, so it cannot see your history.
+Group messages are refused, and so is a message you sent from your phone to
+somebody else; only the thread addressed to the linked account counts as a
+command. It never opens a conversation on its own.
 
-Text and voice notes work on any model. Photos are sent with the turn and are
-ignored by a model without vision; nothing in the app checks first, and the
-system prompt separately forbids the model from saying it cannot look at
-pictures. Those two together are a hole, not a feature.
+**Calls.** `//call` starts a call endpoint on this Mac, which dials out to a
+relay, registers an unguessable 128-bit token and hands you back a link. The link
+opens a web page, so there is nothing to install on the phone. Recognition, the
+model and synthesis all run on this Mac; the relay carries the offer and the
+answer and is not in the call itself. The link is not sent until the relay
+actually serves it, and issuing one revokes the previous one — a call link is a
+live microphone.
 
-**Calls.** You send `//call`, get a link back, tap it, and talk. It is a real
-conversation: full duplex, you can cut it off mid-sentence and it stops. The link
-opens a web page, so there is nothing to install on the phone. Calling needs an
-API model, for a reason set out under [Calls](#calls) below.
+Calling needs a relay credential, minted automatically when you link a phone.
+Enrolment sends nothing that identifies anybody: no phone number, no hash of one,
+no name. The secret is `HMAC(rootKey, id)`, so the relay recomputes it from the id
+and stores no record of the Mac at all.
+
+**The Mac does not serve the call page**, and that is not an oversight. It did,
+and that is exactly what failed: a Mac on a home network has no name a
+certificate authority will sign, so serving the page from it means a self-signed
+certificate. Browsers do not merely warn about those — they refuse to persist a
+media permission for the origin, and without a persisted permission Chrome
+replaces the phone's real ICE candidates with random `.local` names. Two machines
+on the same Wi-Fi, unable to name each other: a page that says *Connected* and
+carries no audio. The certificate warning was never the cost; the broken call
+was. So the page comes from a host with a real certificate, the Mac dials out and
+waits, and nothing has to be forwarded, installed or kept reachable.
 
 ## Commands
 
-Two, both intercepted before the model ever sees them. Everything else you send
-is just a question.
+Two, both handled before the model sees the message. Everything else you send is
+just a question.
 
     //help     what you can say. Also //commands and //?
     //call     set up a voice call and send back a link
 
-`//help` exists because nothing else discovers a slash command. You are in a
-Signal thread, not reading this file, and a command nobody has told you about
-does not exist as far as you are concerned. It is also why `//help` is answered
-by the daemon rather than the model: asking a language model which commands it
-supports gets a confident guess, which is worse than no answer.
-
-`//help` describes what calling needs as part of the list rather than as a
-footnote, so on a local model you learn why `//call` will refuse before you try
-it and get told no.
+`//help` exists because nothing else discovers a slash command — you are in a
+Signal thread, not reading this file. It is answered by the daemon rather than
+the model because asking a language model which commands it supports gets a
+confident guess. It also states what calling needs as part of the list, so a Mac
+that cannot place a call says why before you try.
 
 Both are anchored. A message that merely mentions `//call` — "how do I use
-//call" — is a question, not a command. That matters more than it looks: the cost
-of getting it wrong is a microphone opening on your phone.
+//call" — is a question, not a command. The cost of getting that wrong is a
+microphone opening on your phone.
 
 ## What it runs on
 
 - macOS 14 or later, Apple Silicon.
-- Signal, on a phone. Mynah links as a secondary device; your number and your
-  primary phone are unchanged.
+- Signal, on a phone.
 - A model. Either local, via Ollama on the same Mac, or an API key you provide.
-  Messages and voice notes work on either. Calls need the API one.
-- [SAGE](https://github.com/l33tdawg/sage), which is where its memory lives. The
-  app bundles a copy.
-
-Calls additionally need a small relay on a host you rent. See below for why, and
-for what it does and does not see.
+  Messages, voice notes and calls work on either.
+- [SAGE](https://github.com/l33tdawg/sage), where its memory lives. The app
+  bundles a copy and uses an already-installed node in preference to it.
 
 ## How the pieces fit
 
-    Mynah.app          setup, status, pause, memories. Installs and supervises
-                       the two background services below.
+    Mynah.app          setup, and four screens: Home, Memories, Privacy,
+                       Settings. Installs and supervises the two background
+                       services below.
 
     signal-cli         a linked Signal device, run as a LaunchAgent. Speaks
-                       JSON-RPC to sage-voiced over a unix socket.
+                       JSON-RPC to sage-voiced over a unix socket. Third-party,
+                       pinned at 0.14.6, staged into the bundle by a script.
 
-    sage-voiced        the appliance itself. Signal in, recognition, the agent
-                       loop, speech, Signal out.
+    sage-voiced        the appliance itself: Signal in, recognition, the agent
+                       loop, speech, Signal out. Also the debugging CLI.
 
-    SAGE.app           memory, tasks, backlog. Driven over MCP as a child
+    SAGE.app           memory, tasks, backlog. Driven over stdio MCP as a child
                        process. Vendored into the bundle.
 
     sage-voice-webrtc  the call endpoint. Started on demand by //call, dials out
                        to the relay, owns the audio.
 
-    sage-call-relay    serves the call page and introduces the two ends. Runs on
-                       a host you rent. Not in the call.
+    sage-call-relay    serves the call page and introduces the two ends.
+                       Not in the call.
 
-    sage-turn          relays call media when no direct path exists. Optional,
-                       and effectively required on cellular.
+    sage-turn          relays call media when no direct path exists.
 
-The Swift half is one library, `SageVoiceCore`, with two front ends: the app and
-`sage-voiced`. Neither is a reimplementation of the other. The Go half is
-separate because there is no WebRTC in Foundation and vendoring libwebrtc is a
-build system unto itself; Pion is pure Go and already in this project's
-dependency graph through SAGE.
+Two per-user LaunchAgents run the first two of those —
+`local.sage.voicebridge.signal` and `local.sage.voicebridge` — both `RunAtLoad`
+and `KeepAlive` with a 30-second throttle, so the appliance survives a crash, a
+logout or a reboot. They run as the signed-in owner and need no privilege prompt.
+The app asks launchd what is actually running rather than reporting what it last
+wrote.
+
+The Swift half is one library, `SageVoiceCore`, with two front ends: `MynahMac`
+(the app's screens, a library so they are testable) and `sage-voiced`. Neither is
+a reimplementation of the other. The Go half is separate because there is no
+WebRTC in Foundation and vendoring libwebrtc is a build system unto itself; Pion
+is pure Go.
 
 ## A turn, in detail
 
 1. signal-cli receives the message and hands it over the socket. The sender is
    checked before anything else looks at it. The allowlist cannot be constructed
-   empty, and a sync envelope with no account is denied rather than falling back
-   to a weaker check. It fails closed.
-2. Voice notes are transcribed on this Mac.
-3. Messages arriving within 2.5 seconds of each other are merged, up to five, so
-   a thought sent as three messages is answered once. Order is preserved: a later
-   message qualifies an earlier one.
-4. An opening line goes back immediately — "Let me have a look" — derived from
-   your own words rather than from the model, because the model has not been
-   called yet. Short messages and small talk get no opener. A reply that arrives
-   in two seconds does not need one.
-5. The agent loop runs: at most 10 iterations, a 300-second wall clock, three
-   tool calls honoured per iteration, tool output truncated at 6,000 characters.
-   The deadline is checked between iterations and predicts from the turn's own
-   worst model call, so the turn stops in time to say something rather than being
-   cut off mid-thought.
-6. If the turn is slow, a progress line goes out at most every 45 seconds and at
-   most three times. Each one has to have something new to say; a tick with no
-   news does not spend one of the three.
-7. The answer is sent, with any notes written during the turn attached to the
-   same message.
-8. The turn is recorded in SAGE, and every tenth turn it reflects on what worked
-   and what did not.
+   empty and has no "allow everything" case, so misconfiguring it is a compile
+   error or a throw at startup rather than a silently open door.
+2. Voice notes are transcribed on this Mac, then run through the same dictation
+   vocabulary the app window uses, built from remembered text — so a coined word
+   comes out the same whether it was spoken into the phone or the Mac.
+3. Messages arriving within 2.5 seconds of each other are merged into one turn,
+   up to five. Order is preserved: a later message qualifies an earlier one.
+4. Something goes back immediately, derived from your own sentence rather than
+   from the model, because the model has not been called yet.
+5. The agent loop runs: at most 10 iterations, a 300-second wall clock, 3 tool
+   calls honoured per iteration, tool results truncated at 6,000 characters. The
+   deadline is a prediction rather than a subtraction — before each iteration it
+   estimates one more model call from the turn's own worst observed one, plus the
+   wrap-up it already owes, and stops while there is still time to say something.
+6. If the turn is slow, a progress line goes out every 45 seconds, at most three
+   times, and only when there is something new to say.
+7. The answer is sent, with any note written during the turn attached to the same
+   message.
+8. The turn is recorded in SAGE with `sage_turn`, and every tenth turn triggers
+   `sage_reflect`.
 
 Every reply carries a short bracketed label, because Signal draws Note-to-Self as
-one column of your own outgoing bubbles — there is no incoming side to render on
-the left, so no styling or alignment trick can separate the two speakers. The
-real fix is giving the appliance its own number.
+one column of your own outgoing bubbles — there is no incoming side to render on,
+so no styling trick can separate the two speakers. If a second Mynah is linked to
+the same thread, the daemon sees its own prefix coming back, warns once and
+stops.
 
-History is 16 turns or six hours, persisted after every turn. Tool calls and
-their results are stripped from it, deliberately: retaining them made later turns
-call no tools and recycle a stale answer. URLs survive, so "send me those links
-again" works.
+History is 16 turns or six hours, written to disk after every turn. Tool calls
+and their results are stripped from it: retaining them made later turns call no
+tools and recycle a stale answer. URLs found during a turn survive, so "send me
+those links again" works without searching again.
 
-## Calls
-
-You send `//call`, you get a link, you tap it and talk. What that costs, and what
-it takes to make it work, is below.
-
-### Calling needs an API model
-
-This is a constraint with a reason, not a preference, and the appliance refuses
-rather than degrading.
-
-A model running on this Mac is competing with the appliance itself for the same
-GPU, and the measured floor is tens of seconds to a first token — 40 to 60
-seconds for a 4B. In a message thread that is a wait, and the whole progress
-apparatus above exists to make it a bearable one. In a conversation it is a dead
-line. A reader will tolerate a pause that a caller will not. Nothing else in the
-pipeline can absorb it either: the model is where the seconds are.
-
-So `//call` on a local model replies saying which model is running, why it will
-not work, and that switching the backend in Mynah's settings fixes it. Voice
-notes and messages still work either way, and it says that too — the point is to
-leave you with something to do rather than a refusal.
-
-The test is whether the backend is local, not a list of model names. The property
-that actually matters is time to first token; `isLocal` is a proxy for it that
-happens to be exactly right on this hardware today. A local model that got fast
-enough would need this revisited.
-
-### What happens when you send `//call`
-
-1. The Mac starts the call endpoint, which dials the relay and registers an
-   unguessable 128-bit token. Issuing a link revokes the previous one — a call
-   link is a live microphone, and you assume the last link you were sent is the
-   only one that works.
-2. The link is not sent to you until the relay actually serves it. A link that
-   arrives half a second early is a 404 in your hand, which reads as a broken
-   appliance rather than as being early.
-3. While you are reading the message and tapping, the appliance builds its
-   opening line through the same brain and tools as any other turn, so it can say
-   what is actually open rather than something generic. `//call` is several
-   seconds of warning, and it spends them.
-4. The page asks for the microphone with echo cancellation, noise suppression and
-   automatic gain. Those three constraints are most of the argument for using a
-   browser at all: without echo cancellation the appliance hears its own voice
-   through your phone's speaker and interrupts itself.
-5. One offer, one answer, no trickle ICE. The answer is withheld until candidate
-   gathering finishes, so every candidate travels inside the SDP. That costs a
-   second of setup and removes a whole class of handshake failure.
-6. ICE picks a route. On a home network that is phone-to-Mac across the room.
-
-From there the endpoint owns everything with a deadline measured in milliseconds
-and the appliance owns everything measured in seconds. A pause on the endpoint
-side is a pause you hear; a pause on the appliance side is a delay in answering.
-
-- **Hearing you.** Opus decoded at 48 kHz, then energy-based segmentation.
-  Speech is 2.5x above a tracked noise floor; 40 ms opens an utterance, 700 ms of
-  silence closes it, and 300 ms of audio from before detection is kept so the
-  first consonant is not shaved off. Anything under 400 ms is a door or a breath,
-  and is dropped. The floor is tracked rather than assumed because the phone's
-  own gain control means the residual level differs per room and drifts within a
-  single call.
-- **Interrupting.** Cutting the appliance off costs more than starting to speak:
-  three times the threshold, sustained for 240 ms. Browser echo cancellation is
-  good and not perfect, and on speakerphone enough of the appliance's own voice
-  returns to clear the ordinary bar — every reply was followed by an interruption
-  the caller never made. When you do interrupt, queued audio is dropped within
-  one frame and the appliance is told, so the model and the synthesiser stop too.
-  Otherwise the rest of the abandoned answer arrives seconds later and is spoken
-  over your new question.
-- **Answering.** Each sentence is synthesised and spoken as it is ready rather
-  than the whole answer at once, so it starts talking about as fast as a person
-  would. Audio is paced out in 20 ms frames in real time; handing WebRTC the
-  whole answer at once gets it delivered in a burst the phone plays as a
-  chipmunk.
-
-A call survives its brain restarting. If the daemon goes away mid-call the
-endpoint redials for a few seconds rather than dropping a call that is otherwise
-perfectly healthy.
-
-### Why the page comes from a relay
-
-The Mac served its own page first, and that is exactly what failed. A Mac on a
-home network has no name a certificate authority will sign, so serving the page
-from it means a self-signed certificate. Browsers do not merely warn about those.
-They refuse to persist a media permission for the origin, and without a persisted
-permission Chrome replaces the phone's real ICE candidates with random `.local`
-names. Two machines on the same Wi-Fi, unable to name each other: a page that
-says *Connected* and carries no audio. The certificate warning was never the
-cost. The broken call was.
-
-So the page comes from a host with a real certificate, and the Mac dials out and
-waits. No port forwarded, no certificate to install, no address that has to stay
-reachable.
-
-One relay hostname serves every appliance and nothing is provisioned per owner.
-Each appliance authenticates with its own secret, as a signed timestamp rather
-than a replayable token. One shared secret across every copy would mean a second
-holder could poll somebody else's token and take delivery of their call.
-
-## What it can do
-
-The model sees eighteen tools, and the number is deliberate. SAGE publishes 27;
-measured over a fixed set of twelve utterances, the full catalogue routed
-correctly 5–6 times out of 12 and a curated subset scored 12/12. So the loop
-filters to a named allowlist and fails closed when nothing matches, rather than
-widening to everything. That measurement is at short context; accuracy after
-sixteen turns of history has not been measured.
-
-- **Memory** — `sage_recall`, `sage_remember`, `sage_forget`, `sage_list`,
-  `sage_timeline`, `sage_status`.
-- **Work** — `sage_task`, `sage_backlog`, `sage_inbox`, `sage_reflect`.
-- **Other agents** — `sage_find_agent`, `sage_pipe`, `sage_pipe_result`,
-  `sage_federation`.
-- **Notes** — `write_note`, `read_note`, `list_notes`. Stored on the Mac under
-  `~/Library/Application Support/SAGE Voice Bridge/Notes`, owner-only. The model
-  supplies a title and never a path, so traversal is unrepresentable rather than
-  blocked — the same context holds transcription errors and text written by
-  strangers on the internet.
-- **The web** — `web_search`. Brave when `BRAVE_SEARCH_API_KEY` is set,
-  DuckDuckGo otherwise, so it works with no key at all. Results are labelled to
-  the model as third-party text to summarise and never as instructions. That
-  raises the bar; it does not close the hole. What actually contains it is that a
-  hijacked turn is visible to you, reading the reply.
-
-The memory discipline itself — inception at boot, recording each turn, periodic
-reflection — is performed by the daemon and not offered to the model. Those tools
-are not in the allowlist. A model that forgets to record a turn produces a
-failure that surfaces days later as "web search broke".
+Transcripts over 4,000 characters are refused with an explanation rather than
+run. Phone numbers are scrubbed from every log line at one seam inside the
+daemon. Only one daemon can run at a time; a second refuses to start rather than
+letting you receive every reply twice.
 
 ## Which model answers
 
-Chosen at install time, not compile time, and changeable afterwards in Mynah's
-settings. The setup screen probes what this Mac can offer, ranks the options, and
-says per option where your words go.
+Local, unless you change it. Setup does not ask.
 
-The choice decides two things: where your words go, and whether you can call.
-Messages and voice notes work on anything.
+- **Local (the default)** — Ollama, `qwen3.5:4b`, with `nomic-embed-text` beside
+  it for memory search. A fresh install downloads the runtime and pulls both
+  models itself; you do not open a terminal. If the download fails it offers to
+  resume it — Ollama keeps the partial layers — or to use a provider instead.
+- **API** — Anthropic, OpenAI, DeepSeek, Moonshot (shown as Kimi), Groq, or an
+  OpenAI-compatible endpoint including LM Studio, which is local. You go and pick
+  one in Settings; setup only offers this list when the Mac genuinely cannot run
+  a model on its own, and then it says which reason applies. Keys are read from
+  the environment or typed once and stored at `0600`, deliberately not in the
+  Keychain: a Keychain item prompts on first access after a restart, and this
+  appliance restarts unattended on a machine nobody is sitting at.
 
-- **Local** — Ollama, `qwen3.5:4b` by default. The app can install the runtime
-  and pull the model. Needs Apple Silicon and at least 8 GB of memory; 16 GB or
-  more is comfortable. This is what the setup screen recommends, because privacy
-  is the product default. It is also the one option that cannot hold a call.
-- **API** — Anthropic, OpenAI, Google Gemini, DeepSeek, Moonshot/Kimi, Groq, LM
-  Studio, or any OpenAI-compatible endpoint. Keys are read from the environment
-  or typed once and stored on disk at `0600`, deliberately not in the Keychain: a
-  Keychain item prompts on first access after a restart, and this appliance
-  restarts unattended on a machine nobody is sitting at. That would turn a reboot
-  into a silent outage.
+Each provider offers two models — a quick one, which is the default, and a
+careful one — from one table (`CloudBrainModelCatalog`) with the reasoning in
+[docs/MODEL-CHOICES.md](docs/MODEL-CHOICES.md). A provider with no verified model
+id is not offered at all, because the alternative is an owner buying credit and
+then being refused; GLM is currently out for exactly that reason. Every id in the
+table is expected to be retired by its vendor eventually, so a stale one is
+designed to be survivable: availability is established against the account's own
+model list, and the owner is told at connect time and offered another provider
+rather than a retry that cannot work.
 
-An API key already present in the environment ranks *below* a subscription you
-are already paying for. Recommending a metered path over a flat-rate one is a
-quiet way to spend your money.
+Backend availability is six distinct states — ready, no credential, credential
+refused, model not offered, unreachable, indeterminate — because a single Bool
+made "your provider retired this model" indistinguishable from "your Wi-Fi is
+down". "I could not tell" gets its own case rather than being laundered into
+"yes".
 
-The ranking is guidance and never a selection. A recommendation cannot be turned
-into a choice; only you can make one, and only from options that are actually
-available. Unavailable options stay on screen with the reason — "needs at least
-8.6 GB of memory, this Mac has 4.3 GB" tells you what to buy.
+Photos are attached only on the Ollama backend today: it is the one wire encoder
+that emits image content. The Anthropic and OpenAI-compatible encoders build
+their messages from text, tool calls and tool results.
+
+## What the model can do
+
+The loop filters the composed tool catalogue against a named allowlist of 20 —
+16 `sage_` tools, `web_search`, and three note tools — and throws rather than
+falling back to everything when the allowlist matches nothing. A test fails the
+build if a twenty-first is added without re-measuring routing.
+
+- **Memory** — `sage_recall`, `sage_remember`, `sage_forget`, `sage_list`,
+  `sage_timeline`, `sage_status`, `sage_corroborate`, `sage_link`.
+- **Work** — `sage_task`, `sage_backlog`, `sage_inbox`, `sage_reflect`.
+- **Other agents** — `sage_find_agent`, `sage_pipe`, `sage_pipe_result`,
+  `sage_federation`. An address cannot be built from a name outside the resolver,
+  and more than one match is refused rather than guessed at. Anything another
+  agent says arrives as `UntrustedAgentContent` rather than a String, so
+  rendering it as if Mynah had said it is a visible act at the call site.
+- **Notes** — `write_note`, `read_note`, `list_notes`. Stored under
+  `~/Library/Application Support/SAGE Voice Bridge/Notes`, owner-only. The model
+  supplies a title and never a path, and the filename is derived from a
+  restricted alphabet, so traversal is unrepresentable rather than blocked.
+- **The web** — `web_search`. Results are labelled to the model as third-party
+  text to summarise and never as instructions. That raises the bar; it does not
+  close the hole. What actually contains it is that the reply goes back to a
+  person who can read it. Search runs on a session with cookies disabled, and
+  can be switched off entirely with `--no-web`.
+
+Eleven SAGE tools are deliberately withheld, each with a stated reason in
+`BrainPrompts.swift` — `sage_turn` and `sage_inception` because the daemon calls
+them itself, `sage_rename`, `sage_register` and `sage_reinstate` because
+identity administration is hard to undo by voice, the governance-vote pair
+because a 4B should not cast a vote on your chain, and the scope tools because
+they only answer for a node operator.
+
+The routing measurement behind the curated catalogue is a file rather than a
+memory: 12 utterances, 3 of which must call nothing, in
+`Tests/SageVoiceCoreTests/VoiceRoutingUtterances.swift`, driven by
+`scripts/measure-tool-routing.py`. The numbers and their three caveats are in the
+doc comment above `voiceToolAllowlist`; read them there before quoting any of
+them, because the earlier figures did not reproduce.
+
+## Memory and identity
+
+Mynah signs SAGE requests with its own Ed25519 key at
+`~/Library/Application Support/SAGE Voice Bridge/appliance-agent.key`, and its
+agent id is derived from the key bytes rather than read out of the file, so a
+truncated file yields no id instead of a plausible wrong one. It refuses to
+become the node operator: `~/.sage/agent.key` is rejected by inode and by path,
+as is any key outside its own directory, and a refused override is logged rather
+than silently ignored.
+
+One appliance is one agent — the window and the daemon sign with the same key.
+Every boot backs up the existing key, adopts the identity an upgrading appliance
+was already using, and mints one only if there was nothing to adopt, so an update
+cannot leave the appliance with a new identity and no memories.
+
+Everything it remembers goes into one subject it owns, `voice-interface`, with
+the topic carried in tags rather than in an invented per-topic subject. SAGE's
+own word for a subject is "domain"; every owner-facing string says subject, and
+`MemorySubjectNameTests` enforces it.
+
+If a SAGE node is already installed — `/Applications/SAGE.app` or
+`~/Applications/SAGE.app` — Mynah uses it and changes nothing about it. Only a
+node it vendored itself may be managed by it.
 
 ## Speech
 
-**Recognition** runs on this Mac. WhisperKit large-v3 via a bundled helper on a
-loopback port, with whisper.cpp as a fallback. The transcriber refuses any
-endpoint that is not loopback, and refuses to follow redirects: URLSession
+**Recognition** runs on this Mac: WhisperKit `large-v3` via a bundled helper on a
+loopback port, with a `whisper.cpp` `small.en` fallback. The transcriber refuses
+any endpoint that is not loopback and refuses to follow redirects — URLSession
 re-sends the body on a 3xx, so a hostile local process answering `307` would be
-handed your transcript.
-
-Whisper fills silence with confabulation, and on a call it did — a silent moment
-came back as Japanese and the appliance answered it. Known filler is discarded:
-"thanks for watching", "subtitles by the Amara.org community", and the Japanese
-equivalents, guarded by audio length so someone who genuinely says one is not
+handed your transcript. Known Whisper confabulation ("thanks for watching",
+"subtitles by the Amara.org community", and the Japanese equivalents) is
+discarded, guarded by audio length so someone who genuinely says one is not
 ignored.
 
-**Synthesis** is Kokoro, an 82M-parameter Apache-2.0 model, spoken over loopback
-HTTP. It is not bundled and nothing in this repository starts it; see *Not
-shipped* below. When it is not running, macOS `say` answers instead. A robotic
-voice is a complaint; silence is a fault.
-
-The voice is `am_michael`, after `am_puck` read as irritated on ordinary
-sentences. An appliance that answers questions all day should sound even, because
-the expression is not tracking anything real.
+**Synthesis** is Kokoro, an 82M-parameter Apache-2.0 model. The appliance speaks
+it in process through ONNX Runtime, with espeak-ng for phonemes, so there is no
+separate voice service to run. Its weights are downloaded when the phone is
+linked rather than shipped in the DMG, and on a checkout with no
+`vendor/onnxruntime` the engine is not compiled in at all; in both cases macOS
+`say` answers instead. A robotic voice is a complaint, silence is a fault. The
+voice is `am_michael`.
 
 ## Privacy
 
 The argument for this product is that your words stay on your machine, so the
-places where that is not exactly true are worth stating precisely.
+places where that is not exactly true are worth stating precisely. The app's
+Privacy screen states these to the owner, composed from a registry of claims that
+`PrivacyClaimTests` checks against the screens.
 
 - **Signal messages** are end-to-end encrypted and stay within your own account.
-  Mynah is a linked device, Note-to-Self only, enforced in the client before the
-  daemon sees anything. Group messages are refused.
+  Mynah is a linked device, Note-to-Self only, enforced before the daemon sees
+  anything.
 - **Recognition and synthesis** run on this Mac. Audio does not leave it.
-- **The model** is where it depends on your choice. Local means your words stay
-  here. An API means your words go to that provider under their terms. The setup
-  screen says which, per option, rather than making you infer it.
-- **Calls: the page and the signalling** go through the relay. It carries the
-  offer and the answer, and an SDP describes routes — so the relay learns that a
-  call happened, when, and between which addresses. That is a real cost, and it
-  is why the relay is a binary you run on a host you rent rather than a service
-  anyone is asked to trust.
-- **Calls: the media** never reaches the relay, on any call. ICE negotiates a
-  direct path, and on a home network that is your phone and the Mac across the
-  room. Even a relayed call is carried by TURN and stays sealed under DTLS-SRTP,
-  so the signalling relay does not see media in either case.
-- **When no direct path exists** — symmetric NAT, which is common on cellular —
-  the TURN server carries the audio. That is a second, separate server, though
-  in practice you will run it on the same host. It cannot read what it carries,
-  but it does see that a call happened, for how long, and between which
-  addresses. Running your own keeps even that metadata in your hands, which is
-  why the endpoint takes a URL rather than shipping someone else's.
-- **STUN defaults to Google's public server.** Point it elsewhere if that matters
-  to you.
-- **The call page** loads nothing external — no CDN, no font, no analytics —
-  under a policy that permits connections only back to the relay and to the ICE
-  servers.
-- **Search** goes to Brave or DuckDuckGo, and it is a plain search query.
+- **The model** depends on your choice. Local means your words stay here. An API
+  means they go to that provider under their terms, and the Privacy screen names
+  the company. The phone and the app window are stated as two separate rows,
+  because nothing makes them agree: the daemon builds its backend from its launch
+  flags and never consults the window's stored choice.
+- **Calls** — your side is turned into words on this Mac and the answer is spoken
+  here. The relay serves the page and passes the two ends' details along; the
+  candidates inside them describe routes between the phone and this Mac, and on a
+  shared network the audio crosses the room without touching it. No claim is made
+  here about what happens when the two ends cannot reach each other directly: the
+  ICE configuration is served with the page and is not in this repository.
+- **Call transcripts** are posted back into the Signal thread when a call ends,
+  if you have that turned on.
+- **Search** sends the words the search is made of, and not the rest of what you
+  said.
+- **The update check** asks GitHub's releases API once a day whether there is a
+  newer version.
 
 ## Build
 
-Swift, with no external dependencies. Go, for the audio.
+Swift, with no package dependencies. Go, for the audio.
 
     swift build -c release --arch arm64
-    swift test
 
-The call endpoint links a static libopus, so it needs cgo and must be built for
-the architecture it runs on:
+The native voice is built only where its runtime has been provisioned —
+`vendor/` is gitignored, so on a fresh clone the `KokoroEngine` target does not
+exist and the appliance speaks through the system voice. Run
+`scripts/provision-onnxruntime.sh` and `scripts/provision-espeak-ng.sh` and the
+target appears.
 
-    webrtc/scripts/build-opus.sh
+The call endpoint links a static libopus, so it needs cgo and is built one
+architecture at a time:
+
     webrtc/scripts/build-endpoint.sh
 
 The relay and the TURN server are plain Go builds:
 
     cd webrtc && go build ./cmd/sage-call-relay && go build ./cmd/sage-turn
 
-Packaging into a signed app and a DMG:
-
-    scripts/vendor-sage.sh            # fetches SAGE.app
-    scripts/provision-asr-assets.sh   # builds the ASR helpers, fetches the model
-    scripts/provision-signal-cli.sh   # stages signal-cli 0.14.6
-    scripts/release.sh                # test, build, package, sign, dmg
-
-Signing runs inside out — helpers first, then the nested SAGE.app, then the app —
-because signing an outer bundle first invalidates it the moment anything inside
-is touched. The bundle carries exactly one entitlement, `device.audio-input`, and
-the packaging script asserts it survived signing rather than discovering
-otherwise on a stranger's Mac.
-
-Running the relay and TURN, on the host you rent:
+Run them on the host serving the call page:
 
     sage-call-relay -domain call.example.com \
       -secret-file /etc/sage/relay.secret \
+      -root-key-file /etc/sage/relay.rootkey \
       -turn turn.example.com:3478 -turn-secret-file /etc/sage/turn.secret
 
     sage-turn -public-ip 203.0.113.10 -secret "$(openssl rand -hex 32)"
 
-The relay obtains its own certificate. The appliance reads its own secret from
-`~/.sage/call-relay.secret`.
+The relay obtains its own certificate. One hostname serves every appliance and
+nothing is provisioned per owner: each authenticates with its own secret, as a
+signed timestamp rather than a replayable token. Without `-root-key-file` the
+relay refuses `/appliance/enrol` and appliances have to be provisioned by hand.
+The appliance reads its own secret from `~/.sage/call-relay.secret`.
 
 `sage-voiced` is the debugging surface for all of it — `transcribe`, `brain`,
-`search`, `setup`, `verify-sage`, `key`, `daemon`. Run it with no arguments for
-usage.
+`search`, `setup`, `verify-sage`, `key`, `google`, `daemon`. Run it with no
+arguments for usage.
 
-## Not shipped
+## Tests
+
+    arch -arm64 swift test
+
+**`arch -arm64` is not optional.** Plain `swift test` on an Apple Silicon Mac
+where the xctest runner resolves to x86_64 fails to load the arm64 test bundle,
+reports "Test run with 0 tests in 0 suites passed", and **exits 0**. Measured
+here, not theorised: the whole suite became 0 tests and the step went green.
+`--arch arm64` does not fix it, because it changes what is built rather than what
+loads it.
+
+`scripts/release.sh` therefore checks the output for an executed-test count
+rather than trusting the exit code — it puts tests before the build precisely so
+a failing suite never reaches a signing key, and a step that passes without
+executing anything hands that key over while looking like it did its job.
+
+The Go tests live beside their packages:
+
+    cd webrtc && go test ./...
+
+`webrtc/integration_test.go` places a real call through a live relay and is
+skipped unless `SAGE_CALL_LINK` is set.
+
+Tests cannot reach the real launchd: `SignalBackgroundServices` refuses to
+install or remove anything when it detects XCTest pointed at the real home
+directory, after `swift test` twice uninstalled the developer's own phone bridge.
+
+## Release
+
+One command, from a clean checkout to a notarized, verified DMG:
+
+    MYNAH_NOTARIZE=1 \
+    SAGE_VOICE_CODESIGN_IDENTITY="Developer ID Application: …" \
+    MYNAH_NOTARY_PROFILE=… \
+      scripts/release.sh
+
+It runs the tests, builds, builds the call endpoint, provisions the speech
+assets, the Signal helper, ONNX Runtime and espeak-ng, packages and signs,
+notarizes and staples the app, then builds the disk image around the stapled
+bundle and verifies it. The order is documented in the script's header and none
+of it is arbitrary.
+
+`.github/workflows/release.yml` runs the same script on a `v*` tag and publishes
+the DMG as a GitHub release when signing secrets are present; `workflow_dispatch`
+is a dry run that builds and verifies but publishes nothing.
+
+**[docs/RELEASE.md](docs/RELEASE.md)** is the reference for everything around
+that: the Developer ID certificate, notarization credentials, what each script
+guarantees, why the bundle identifier is `local.sage.voicebridge` and must not
+change, the single entitlement, and what to do when Gatekeeper rejects a build.
+Its step-by-step predates `scripts/release.sh` and names a zip artifact; the
+published artifact is the DMG.
+
+Version and build come from `resources/Info.plist` unless `SAGE_VOICE_VERSION`
+and `SAGE_VOICE_BUILD` override them, and everything that displays a version
+reads it back out of the bundle. Do not write one into source or into copy: two
+places that state a version are two places that can disagree.
+
+## Known gaps
 
 Stated plainly, because "builds and has tests" is not the same as "works":
 
-- **No release has been published.** There are no tags and no releases on the
-  repository. The DMG is built locally by `scripts/release.sh` and has not been
-  uploaded anywhere.
-- **Notarisation has never been submitted to Apple.** `scripts/notarize.sh` is
-  written and its preflight checks are verified; the submission itself has never
-  run.
-- **`package-app.sh` does not stage the call endpoint into the bundle.** The
-  daemon looks for `sage-voice-webrtc` beside `sage-gui` inside the vendored
-  SAGE.app, and nothing in the release path puts it there. On a bundle built by
-  these scripts, `//call` reports that the endpoint is not installed rather than
-  pretending. Build it and place it there by hand until this is fixed.
-- **Kokoro's model weights are downloaded, not bundled.** The voice now runs in
-  process — there is no server, no port and no launchd job — but the 325 MB model
-  and 28 MB voice file are fetched when Signal is linked rather than shipped in
-  the DMG. Until that download finishes, replies are spoken by macOS `say`.
-  Release machines need `scripts/provision-onnxruntime.sh` and
-  `scripts/provision-espeak-ng.sh` before packaging; `package-app.sh` refuses to
-  build without them rather than quietly shipping the robotic voice.
+- **The repository is private and no GitHub release has been published.** The
+  update check treats the resulting 404 as "cannot tell" rather than as "nothing
+  newer", which is the right reading but means it cannot tell anyone anything
+  yet.
+- **Kokoro's weights are not in the DMG.** 353 MB is fetched when Signal is
+  linked, because code downloaded after installation is unsigned and quarantined
+  while model weights are opaque data Gatekeeper has no opinion about. Until that
+  download finishes, replies are spoken by macOS `say`.
+- **The Go tests are not run by CI.** `scripts/release.sh` runs the Swift suite
+  only.
 - **The relay and the TURN server have no deployment tooling** — no unit file, no
-  deploy script. What they need is documented in their own package comments.
-- **The Go tests are not run by CI.** The release script runs `swift test` only.
-  There is an end-to-end test that places a real call through a live relay
-  (`webrtc/integration_test.go`); it is skipped unless `SAGE_CALL_LINK` is set.
-- **`docs/RELEASE.md` describes an older pipeline** — a zip artifact and a
-  version number that no longer match what the scripts produce.
+  deploy script. What they need is documented in their own package comments and
+  flags.
+- **Routing accuracy at 16 turns of history is not measured.** The measurement
+  behind the tool allowlist is at short context.
 
 ## Layout
 
@@ -438,9 +449,11 @@ Stated plainly, because "builds and has tests" is not the same as "works":
       Transport/              signal-cli client, sender allowlist, SETUP.md
     Sources/MynahMac          the app's screens, as a library so they are testable
     Sources/Mynah             @main, and nothing else
+    Sources/KokoroEngine      the native voice, built only when provisioned
     Sources/sage-voiced       the daemon and the debugging CLI
     webrtc/                   the call endpoint, the relay, TURN, Opus, the VAD
     scripts/                  provisioning, packaging, signing, notarisation
+    docs/                     release process, model choices
     Tests/                    Swift tests; the Go tests live beside their packages
 
 Setting Signal up by hand, without the app, is documented in
@@ -450,4 +463,6 @@ Setting Signal up by hand, without the app, is documented in
 
 Apache 2.0. The speech-to-text code is lifted from
 [QuietType](https://github.com/l33tdawg/quiettype), same author. The ASR runtime
-depends on argmax-oss-swift (WhisperKit), MIT.
+depends on argmax-oss-swift (WhisperKit), MIT. signal-cli is GPL 3.0 and ships in
+the bundle; its licence text is staged into `Contents/Resources/licences` and the
+packaging script refuses to build without it.

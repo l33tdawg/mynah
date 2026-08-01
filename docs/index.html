@@ -3,618 +3,919 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mynah</title>
-<meta name="description" content="Mynah keeps track of your thinking, answers questions about it, and puts your other agents to work. It runs on a Mac you own. You reach it on Signal, and you can call it.">
-<meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0c0e14" media="(prefers-color-scheme: dark)">
-<meta name="robots" content="noindex">
+<title>Mynah — a personal AI that lives on your Mac</title>
+<meta name="description" content="Mynah runs on a Mac you own. Talk to it at your desk or from your phone on Signal. It remembers what you tell it, and it tells you plainly whenever your words leave the machine.">
+<meta name="theme-color" content="#F4F4F6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)">
 <style>
-  /* Nothing is loaded from anywhere. No fonts, no scripts, no analytics.
-     A page about a private appliance has no business phoning home. */
+/* ---------------------------------------------------------------------------
+   Nothing is loaded from anywhere. No fonts, no scripts, no analytics, no CDN.
+   A page about an appliance that runs on your own machine has no business
+   phoning home, and this one renders identically with the network unplugged.
 
+   Every value below is lifted from Sources/MynahMac/Style/MynahTheme.swift so
+   the site and the app are the same object. Palette, type scale, radii and the
+   4pt spacing ramp are the app's, unchanged.
+--------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces — the elevation ramp. */
+  --canvas:  #F4F4F6;
+  --raised:  #FFFFFF;
+  --sunken:  #EDEDF0;
+  --overlay: #FFFFFF;
+  --well:    rgba(0,0,0,0.05);
+
+  /* Ink. Sentences never go below --ink-2. */
+  --ink-1: rgba(0,0,0,0.88);
+  --ink-2: rgba(0,0,0,0.56);
+  --ink-3: rgba(0,0,0,0.34);
+  --ink-4: rgba(0,0,0,0.16);
+
+  /* Lines. */
+  --hairline: rgba(0,0,0,0.09);
+  --strong:   rgba(0,0,0,0.16);
+  --divider:  rgba(0,0,0,0.07);
+
+  /* The accent is ink, not a hue. */
+  --accent-fill: #1C1C1F;
+  --accent-ink:  #151517;
+  --accent-wash: rgba(0,0,0,0.07);
+  --on-fill:     #FFFFFF;
+
+  /* Two meanings, and only these two.
+     good    = stays on this Mac
+     caution = words leave this Mac  */
+  --good:         #1D8A4E;
+  --good-wash:    rgba(29,138,78,0.10);
+  --caution:      #9A6212;
+  --caution-wash: rgba(154,98,18,0.10);
+
+  --shadow-card: 0 3px 12px rgba(0,0,0,0.06);
+
+  /* Radii. */
+  --r-chip: 9px;
+  --r-control: 12px;
+  --r-card: 18px;
+  --r-sheet: 26px;
+
+  /* Spacing — 4pt base, nine steps. */
+  --s1: 2px;  --s2: 4px;  --s3: 8px;  --s4: 12px; --s5: 16px;
+  --s6: 20px; --s7: 24px; --s8: 32px; --s9: 48px;
+
+  --column: 720px;
+  --stage: 880px;
+}
+
+@media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: light dark;
-    --bg: #f7f7f9;
-    --surface: #ffffff;
-    --ink: #10121a;
-    --dim: #5c6370;
-    --faint: #8b929e;
-    --line: #e3e5ea;
-    --accent: #2f6bff;
-    --stays: #1f7a4d;
-    --leaves: #a8541c;
+    --canvas:  #161618;
+    --raised:  #1F1F23;
+    --sunken:  #111113;
+    --overlay: #26262B;
+    --well:    rgba(255,255,255,0.08);
+
+    --ink-1: rgba(255,255,255,0.93);
+    --ink-2: rgba(255,255,255,0.62);
+    --ink-3: rgba(255,255,255,0.38);
+    --ink-4: rgba(255,255,255,0.20);
+
+    --hairline: rgba(255,255,255,0.11);
+    --strong:   rgba(255,255,255,0.20);
+    --divider:  rgba(255,255,255,0.09);
+
+    --accent-fill: #F2F2F4;
+    --accent-ink:  #F5F5F7;
+    --accent-wash: rgba(255,255,255,0.11);
+    --on-fill:     #151517;
+
+    --good:         #3FD07E;
+    --good-wash:    rgba(63,208,126,0.12);
+    --caution:      #E0A54A;
+    --caution-wash: rgba(224,165,74,0.13);
+
+    --shadow-card: 0 3px 12px rgba(0,0,0,0.32);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c0e14;
-      --surface: #12151d;
-      --ink: #f2f3f6;
-      --dim: #a3aab6;
-      --faint: #767d8a;
-      --line: #242936;
-      --accent: #7ba1ff;
-      --stays: #6fce9c;
-      --leaves: #e0a26a;
-    }
-  }
+}
 
-  * { box-sizing: border-box; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
 
-  html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink-1);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;          /* MynahFont.body */
+  line-height: 1.55;
+  letter-spacing: 0;
+  overflow-wrap: break-word;
+  padding:
+    0
+    max(var(--s6), env(safe-area-inset-right))
+    var(--s9)
+    max(var(--s6), env(safe-area-inset-left));
+}
 
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    padding:
-      max(2.5rem, env(safe-area-inset-top))
-      max(1.25rem, env(safe-area-inset-right))
-      max(3rem, env(safe-area-inset-bottom))
-      max(1.25rem, env(safe-area-inset-left));
-  }
+.stage  { max-width: var(--stage);  margin: 0 auto; }
+.column { max-width: var(--column); }
 
-  main { max-width: 38rem; margin: 0 auto; }
+/* --- Type scale ---------------------------------------------------------- */
 
-  /* Masthead */
+.display  { font-size: 44px; font-weight: 700; letter-spacing: -1.1px; line-height: 1.14; margin: 0; }
+.title1   { font-size: 30px; font-weight: 700; letter-spacing: -0.6px; line-height: 1.24; margin: 0; }
+.title2   { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; line-height: 1.34; margin: 0; }
+.title3   { font-size: 17px; font-weight: 600; letter-spacing: -0.15px; line-height: 1.4; margin: 0; }
+.callout  { font-size: 13px; font-weight: 400; letter-spacing: 0.05px; line-height: 1.5; }
+.label    { font-size: 12px; font-weight: 500; letter-spacing: 0.15px; line-height: 1.4; }
+.eyebrow  {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.8px;
+  text-transform: uppercase; line-height: 1.3;
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px; font-weight: 500;
+}
 
-  .mark {
-    display: block;
-    color: var(--accent);
-    margin-bottom: 1.25rem;
-  }
+p { margin: 0 0 var(--s5); }
+p:last-child { margin-bottom: 0; }
+strong { font-weight: 600; color: var(--ink-1); }
+.dim { color: var(--ink-2); }
+.faint { color: var(--ink-3); }
 
-  h1 {
-    font-size: 2.25rem;
-    line-height: 1.1;
-    letter-spacing: -0.025em;
-    margin: 0 0 0.5rem;
-  }
+a { color: var(--ink-1); text-decoration-color: var(--ink-4); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--ink-2); }
 
-  .standfirst {
-    font-size: 1.1875rem;
-    line-height: 1.5;
-    color: var(--dim);
-    margin: 0 0 3rem;
-    max-width: 30rem;
-  }
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+  font-weight: 500;
+  background: var(--well);
+  border-radius: 5px;
+  padding: 0.12em 0.36em;
+}
 
-  /* Sections */
+/* --- Masthead ------------------------------------------------------------ */
 
-  section { margin: 0 0 3rem; }
+header { padding: var(--s9) 0 var(--s8); }
 
-  h2 {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--faint);
-    margin: 0 0 1rem;
-    padding-bottom: 0.625rem;
-    border-bottom: 1px solid var(--line);
-  }
+.wordmark {
+  /* .rounded is permitted in exactly two places in the app. This is one. */
+  font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.35px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s4);
+}
 
-  h3 {
-    font-size: 1.0625rem;
-    font-weight: 600;
-    margin: 2rem 0 0.5rem;
-  }
+/* An abstract waveform tile, not the app icon — the icon is a drawn bird and
+   this page ships no image assets. Ink only, so it carries no second meaning. */
+.tile {
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  background: var(--accent-fill);
+  color: var(--on-fill);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.tile svg { width: 15px; height: 15px; display: block; }
 
-  p { margin: 0 0 1rem; }
-  p:last-child { margin-bottom: 0; }
+h1.display { margin-top: var(--s8); max-width: 15ch; }
 
-  strong { font-weight: 600; }
+.standfirst {
+  font-size: 19px;
+  line-height: 1.5;
+  letter-spacing: -0.2px;
+  color: var(--ink-2);
+  max-width: 34rem;
+  margin: var(--s6) 0 0;
+}
 
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.9em;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 0.1em 0.35em;
-  }
+/* --- Sections ------------------------------------------------------------ */
 
-  /* Plain lists */
+section { padding: var(--s9) 0; border-top: 1px solid var(--divider); }
+section > .eyebrow { color: var(--ink-3); margin: 0 0 var(--s5); }
+section h2 { margin-bottom: var(--s5); }
+section h2 + p.lede { font-size: 17px; line-height: 1.5; color: var(--ink-2); max-width: 34rem; }
 
-  ul.plain {
-    list-style: none;
-    margin: 0 0 1rem;
-    padding: 0;
-  }
-  ul.plain > li {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-  ul.plain > li:last-child { border-bottom: 0; padding-bottom: 0; }
-  ul.plain .what { display: block; font-weight: 600; }
-  ul.plain .why { display: block; color: var(--dim); }
+.gap { height: var(--s7); }
 
-  /* Numbered walk-through */
+/* --- Cards --------------------------------------------------------------- */
 
-  ol.steps {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    counter-reset: step;
-  }
-  ol.steps > li {
-    counter-increment: step;
-    position: relative;
-    padding: 0 0 1.25rem 2.5rem;
-  }
-  ol.steps > li:last-child { padding-bottom: 0; }
-  ol.steps > li::before {
-    content: counter(step);
-    position: absolute;
-    left: 0;
-    top: 0.0625rem;
-    width: 1.625rem;
-    height: 1.625rem;
-    border: 1px solid var(--line);
-    border-radius: 50%;
-    background: var(--surface);
-    color: var(--dim);
-    font-size: 0.8125rem;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.5rem;
-    text-align: center;
-  }
+.cards {
+  display: grid;
+  gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: var(--s7);
+}
 
-  /* Commands */
+.card {
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  padding: var(--s6);
+}
+.card h3 { margin: 0 0 var(--s3); }
+.card p { font-size: 13px; line-height: 1.5; color: var(--ink-2); margin: 0; }
 
-  .cmds {
-    margin: 0 0 1rem;
-    border-top: 1px solid var(--line);
-  }
-  .cmds > div {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0 0.75rem;
-    align-items: baseline;
-    padding: 0.75rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .cmds .cmd {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.9375rem;
-    font-weight: 600;
-    color: var(--accent);
-    flex: 0 0 auto;
-  }
-  .cmds .says {
-    flex: 1 1 14rem;
-    color: var(--dim);
-  }
+.glyph {
+  width: 44px; height: 44px;
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--s5);
+}
+.glyph svg { width: 22px; height: 22px; }
 
-  /* The privacy ledger */
+/* --- Rows (the app's list-row grammar) ----------------------------------- */
 
-  .ledger {
-    margin: 0;
-    border-top: 1px solid var(--line);
-  }
-  .ledger > div {
-    padding: 0.875rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .ledger dt {
-    font-weight: 600;
-    margin-bottom: 0.125rem;
-  }
-  .ledger dd {
-    margin: 0;
-    color: var(--dim);
-  }
-  .tag {
-    display: inline-block;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    vertical-align: 0.1em;
-    margin-left: 0.5rem;
-    padding: 0.15em 0.5em;
-    border-radius: 3px;
-    border: 1px solid currentColor;
-    white-space: nowrap;
-  }
-  .tag.stays { color: var(--stays); }
-  .tag.leaves { color: var(--leaves); }
-  .tag.depends { color: var(--faint); }
+.rows {
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  margin-top: var(--s7);
+  overflow: hidden;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s3) var(--s5);
+  padding: var(--s6);
+  border-top: 1px solid var(--divider);
+}
+.row:first-child { border-top: 0; }
+.row .text { flex: 1 1 18rem; min-width: 0; }
+.row .text p { font-size: 13px; line-height: 1.5; color: var(--ink-2); margin: 0; }
+/* Beats the rule above on specificity — a row heading is title3, not body. */
+.row .text p.title3 {
+  font-size: 17px; font-weight: 600; letter-spacing: -0.15px; line-height: 1.4;
+  color: var(--ink-1); margin: 0 0 var(--s2);
+}
 
-  /* Pull-aside for the things worth stopping on */
+/* --- Pills --------------------------------------------------------------- */
 
-  .aside {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-left: 2px solid var(--accent);
-    border-radius: 0 6px 6px 0;
-    padding: 1rem 1.125rem;
-    margin: 1.5rem 0;
-  }
-  .aside p:last-child { margin-bottom: 0; }
+.pill {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.15px;
+  padding: 3px 10px;
+  border-radius: var(--r-chip);
+  white-space: nowrap;
+  background: var(--well);
+  color: var(--ink-2);
+}
+.pill.stays  { background: var(--good-wash);    color: var(--good); }
+.pill.leaves { background: var(--caution-wash); color: var(--caution); }
 
-  footer {
-    margin-top: 3.5rem;
-    padding-top: 1.25rem;
-    border-top: 1px solid var(--line);
-    color: var(--faint);
-    font-size: 0.9375rem;
-  }
+/* --- Screenshot placeholders --------------------------------------------- */
 
-  a { color: var(--accent); }
+figure { margin: var(--s8) 0 0; }
 
-  @media (max-width: 30rem) {
-    body { font-size: 16px; }
-    h1 { font-size: 1.875rem; }
-    .standfirst { font-size: 1.0625rem; margin-bottom: 2.25rem; }
-    section { margin-bottom: 2.5rem; }
-  }
+.shot {
+  background: var(--sunken);
+  border: 1px dashed var(--strong);
+  border-radius: var(--r-card);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: var(--s6);
+  color: var(--ink-3);
+}
+.shot .eyebrow { color: var(--ink-3); }
+.shot .what { font-size: 13px; color: var(--ink-2); margin-top: var(--s3); max-width: 30rem; }
+
+.shot.window { aspect-ratio: 16 / 10; }
+.shot.phone  { aspect-ratio: 9 / 16; max-width: 300px; }
+
+figcaption {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  margin-top: var(--s4);
+}
+
+.shots {
+  display: grid;
+  gap: var(--s6);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
+  margin-top: var(--s8);
+}
+.shots figure { margin-top: 0; }
+
+/* --- Commands ------------------------------------------------------------ */
+
+.cmd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s5);
+  align-items: baseline;
+  padding: var(--s5) 0;
+  border-top: 1px solid var(--divider);
+}
+.cmd:first-of-type { border-top: 0; }
+.cmd .key {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--well);
+  border-radius: var(--r-chip);
+  padding: 3px 9px;
+  flex: 0 0 auto;
+}
+.cmd .says { flex: 1 1 16rem; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+
+/* --- Note panel ---------------------------------------------------------- */
+
+.note {
+  background: var(--sunken);
+  border-radius: var(--r-card);
+  padding: var(--s6);
+  margin-top: var(--s7);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.note strong { color: var(--ink-1); }
+
+/* --- Plain claim list ---------------------------------------------------- */
+
+ul.claims { list-style: none; margin: var(--s7) 0 0; padding: 0; }
+ul.claims li {
+  padding: var(--s5) 0;
+  border-top: 1px solid var(--divider);
+}
+ul.claims li:first-child { border-top: 0; padding-top: 0; }
+ul.claims .what { display: block; font-weight: 600; margin-bottom: var(--s1); }
+ul.claims .why  { display: block; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+
+/* --- Footer -------------------------------------------------------------- */
+
+footer {
+  border-top: 1px solid var(--divider);
+  padding: var(--s8) 0 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+footer p { max-width: 34rem; }
+
+/* --- Narrow -------------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .display { font-size: 34px; letter-spacing: -0.8px; }
+  .title1 { font-size: 25px; letter-spacing: -0.45px; }
+  .standfirst { font-size: 17px; }
+  section { padding: var(--s8) 0; }
+  header { padding: var(--s8) 0 var(--s7); }
+  .card, .row, .note { padding: var(--s5); }
+  .shot.window { aspect-ratio: 4 / 3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
-<main>
 
-  <!-- Drawn inline, because a logo fetched from somewhere else is a page that
-       tells somewhere else you opened it. -->
-  <svg class="mark" width="34" height="34" viewBox="0 0 34 34" fill="none"
-       stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-    <path d="M3 17h3M10 10v14M17 5v24M24 10v14M31 17h-3"/>
-  </svg>
+<div class="stage">
 
-  <h1>Mynah</h1>
+<header>
+  <span class="wordmark">
+    <span class="tile" aria-hidden="true">
+      <svg viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <path d="M1.5 7.5h1M5 4v7M8 1.8v11.4M11 5.2v4.6M13.5 7.5h1"/>
+      </svg>
+    </span>Mynah</span>
+
+  <h1 class="display">A personal AI that lives on your Mac.</h1>
+
   <p class="standfirst">
-    Mynah keeps track of your thinking, and it can act on it. It runs on a Mac
-    you own. You reach it by messaging yourself on Signal, and you can call it
-    and talk.
+    Talk to it at your desk, or from your phone on Signal. It remembers what you
+    tell it. It runs fully offline on your own machine by default — and if you
+    ever point it somewhere else, it says so in plain words.
+  </p>
+</header>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">What it is</p>
+  <h2 class="title1 column">Not a chat window. Something that stays.</h2>
+  <p class="lede">
+    You tell it things. It keeps them, and it keeps them across conversations
+    rather than inside one. Ask it three weeks later and it still knows.
   </p>
 
-  <section>
-    <h2>What it is</h2>
-    <p>
-      <strong>You tell it things.</strong> Half-formed ideas, what you decided
-      and why, something to come back to on Thursday. It keeps them, and it
-      keeps them across conversations rather than within one.
-    </p>
-    <p>
-      <strong>You ask it things.</strong> It answers out of what you already
-      told it, and searches the web when the answer was never yours to begin
-      with. It writes notes, keeps a backlog and a task list, and reads all of
-      it back to you when you ask.
-    </p>
-    <p>
-      <strong>It puts your other agents to work.</strong> If you run agents on a
-      SAGE node, Mynah can find one by name, hand it a job, and tell you what
-      came back. Ask it to pass a question to your research agent and it does.
-    </p>
-    <p>
-      It runs on one Mac, and that is the precondition rather than a feature
-      bolted on: it is what makes it reasonable to tell the thing what you
-      actually think. It is not a service. There is no account and nothing to
-      sign into. The Mac it runs on is yours, the Signal account is yours, and
-      the model that answers is either running on that same Mac or on an API key
-      you supply — which is the one decision that determines whether anything
-      you say leaves the machine, and it is set out
-      <a href="#words">below</a>.
-    </p>
-  </section>
-
-  <section>
-    <h2>What you need</h2>
-    <ul class="plain">
-      <li>
-        <span class="what">A Mac, left switched on</span>
-        <span class="why">
-          Apple Silicon, macOS 14 or later. A Mac mini is the usual choice. It
-          has to be awake to answer, so a laptop that sleeps in a bag is the
-          wrong machine for it.
-        </span>
-      </li>
-      <li>
-        <span class="what">Signal, on your phone</span>
-        <span class="why">
-          Mynah links to your existing account as a secondary device — the same
-          way Signal Desktop does. Your number does not change, your phone stays
-          the primary device, and you do not register anything new.
-        </span>
-      </li>
-      <li>
-        <span class="what">A model</span>
-        <span class="why">
-          Either one running on the Mac itself, which the app can install for
-          you, or an API key from a provider you choose. The setup screen tells
-          you, for each option, where your words end up. Messages and voice notes
-          work with either. Calling needs the API one, for a reason worth reading
-          under <a href="#calls">Calling it</a>.
-        </span>
-      </li>
-    </ul>
-    <p>
-      Calling needs one further thing — a small relay you run — also described
-      under <a href="#calls">Calling it</a>.
-    </p>
-  </section>
-
-  <section>
-    <h2>Messaging it</h2>
-    <p>
-      Open Signal and message yourself. Note to Self. Mynah reads that thread and
-      answers in it, so the whole conversation sits in the one place you already
-      keep things you write to yourself.
-    </p>
-    <p>
-      Text works. Voice notes work — they are transcribed on the Mac. Photos are
-      sent along with the message, and whether anything can be done with one
-      depends on the model you chose: a model that cannot see images will answer
-      the words and not the picture. If you send three messages in quick
-      succession it waits a moment and answers the thought rather than each
-      fragment.
-    </p>
-    <p>
-      Slow answers say so. If it has gone to look something up, you get a line
-      telling you that, and then another only if there is something new to
-      report. Silence past a certain point is a failure, and the appliance is
-      built to not be silent.
-    </p>
-    <p>
-      Every reply is marked with a small label. Signal draws Note to Self as a
-      single column of your own messages, so without one there is no way to see
-      at a glance which lines are yours.
-    </p>
-
-    <h3>What that sounds like</h3>
-    <p>
-      There is no syntax and nothing to memorise. These are ordinary sentences,
-      and they are here because the third one is the thing nobody guesses is
-      possible.
-    </p>
-    <ul class="plain">
-      <li>
-        <span class="what">“Remind me the pricing page still needs rewriting.”</span>
-        <span class="why">It keeps it, and you don't have to say it again.</span>
-      </li>
-      <li>
-        <span class="what">“What did I say about the pricing page?”</span>
-        <span class="why">
-          It answers from what you told it, not from a search.
-        </span>
-      </li>
-      <li>
-        <span class="what">“Ask my research agent to look into that and tell me what it says.”</span>
-        <span class="why">
-          It finds that agent by name on your SAGE node, sends it the work, and
-          comes back with the answer.
-        </span>
-      </li>
-      <li>
-        <span class="what">“Write that up as a note.”</span>
-        <span class="why">
-          It writes a document and attaches it to the reply.
-        </span>
-      </li>
-    </ul>
-
-    <h3>Two things you can type</h3>
-    <p>
-      Anything else you send is just a question. These two are instructions to
-      the program, and it answers them itself rather than passing them to the
-      model.
-    </p>
-    <div class="cmds">
-      <div>
-        <span class="cmd">//help</span>
-        <span class="says">
-          Lists what you can say, and tells you whether calling will work on the
-          model you are running. Also answers to <code>//commands</code> and
-          <code>//?</code>.
-        </span>
+  <div class="cards">
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>
+        </svg>
       </div>
+      <h3 class="title3">It runs on your Mac</h3>
+      <p>One Mac, left switched on. No account, no server of ours, nothing to sign into.</p>
+    </div>
+
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>
+        </svg>
+      </div>
+      <h3 class="title3">Your phone reaches it</h3>
+      <p>Message yourself on Signal and it answers in that thread. Send a voice note when your hands are busy.</p>
+    </div>
+
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2.4"/>
+        </svg>
+      </div>
+      <h3 class="title3">It remembers</h3>
+      <p>Its own memory, not a chat log. You can read every line of it, and delete any line you want gone.</p>
+    </div>
+
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="7" height="16" rx="1.6"/><rect x="14" y="4" width="7" height="10" rx="1.6"/>
+        </svg>
+      </div>
+      <h3 class="title3">It keeps a board</h3>
+      <p>The work you have handed it, in the open. Planned, and in progress.</p>
+    </div>
+  </div>
+
+  <!-- SCREENSHOT SLOT 1 -----------------------------------------------------
+       Home — the conversation view, with the task board ("What's on your
+       plate") open above it. Full app window, light mode, sidebar visible.
+       Use invented conversation text. Never the owner's real thread.
+  ---------------------------------------------------------------------- -->
+  <figure>
+    <div class="shot window">
       <div>
-        <span class="cmd">//call</span>
-        <span class="says">
-          Sets up a voice call and sends back a link.
-        </span>
+        <p class="eyebrow">Screenshot</p>
+        <p class="what">Home — the conversation view, with the task board open above it.</p>
       </div>
     </div>
-    <p>
-      If you remember one thing, make it <code>//help</code>. You are in a
-      message thread and not reading a manual, and a command nobody has mentioned
-      to you does not exist as far as you are concerned — so that is the one that
-      goes and finds the others.
+    <figcaption>Home. The board on top, the conversation underneath. Either half folds away, and the fold is still there when you come back.</figcaption>
+  </figure>
+</section>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">Where it thinks</p>
+  <h2 class="title1 column">It runs with nothing switched on but your Mac.</h2>
+  <p class="lede">
+    Every part of a turn stays here, and that is what a fresh install sets up —
+    you are not asked to choose. Your words leave this machine only if you go
+    and tell it to.
+  </p>
+
+  <div class="rows">
+    <div class="row">
+      <div class="text">
+        <p class="title3">The thinking</p>
+        <p>A model running on your Mac. Mynah downloads it and starts it for you — you do not open a terminal. It is a few gigabytes, once, and then it is yours.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">The listening</p>
+        <p>Voice notes and anything you say into the Mac are turned into words on this Mac, and never sent anywhere.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">The speaking</p>
+        <p>On a call, the answer is spoken here too, by a voice that runs on the machine. If that voice is not installed it falls back to the one macOS already has.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">The remembering</p>
+        <p>Kept on this Mac, in a folder only your account can read. Same for the notes it writes.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+  </div>
+
+  <div class="note column">
+    <p style="margin:0 0 var(--s4)"><strong>Or point it at a bigger brain, and know that you did.</strong></p>
+    <p style="margin:0 0 var(--s4)">
+      You can send the thinking to a company instead — Anthropic, OpenAI, DeepSeek,
+      Kimi or Groq. It is a setting you go and change afterwards, not a reinstall:
+      the same conversation, the same tools, the same memory, with something else
+      doing the thinking.
     </p>
-    <p>
-      Both have to be the whole message. Writing <em>how do I use //call</em> is a
-      question and gets answered as one, not treated as an instruction to open a
+    <p style="margin:0">
+      What changes is where your words go, and Mynah does not soften it. Its own
+      privacy screen names the company rather than saying &ldquo;a provider&rdquo;, and it
+      keeps the phone and the desktop on separate lines, because nothing forces
+      those two to agree.
+    </p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">Your phone</p>
+  <h2 class="title1 column">Message yourself. It answers.</h2>
+  <p class="lede">
+    Mynah links to your existing Signal account as a second device, the same way
+    Signal Desktop does. No new number. No bot. No business account. Your phone
+    stays in charge.
+  </p>
+
+  <div class="shots">
+    <!-- SCREENSHOT SLOT 2 ---------------------------------------------------
+         The Signal Note-to-Self thread on a phone: one question from the owner
+         and Mynah's reply, which carries a bracketed brain prefix. Invent the
+         message text. No real phone number anywhere in frame, no real
+         conversation, no contact list.
+    ------------------------------------------------------------------ -->
+    <figure>
+      <div class="shot phone">
+        <div>
+          <p class="eyebrow">Screenshot</p>
+          <p class="what">The Signal Note-to-Self thread, with a question and Mynah&rsquo;s reply.</p>
+        </div>
+      </div>
+      <figcaption>Every reply is marked, because Signal draws Note to Self as one column of your own messages and there would otherwise be no way to tell who said what.</figcaption>
+    </figure>
+
+    <div>
+      <ul class="claims">
+        <li>
+          <span class="what">Text or a voice note</span>
+          <span class="why">Both work. A voice note is transcribed on the Mac, using words it has learned from you, so a name only you use comes out right.</span>
+        </li>
+        <li>
+          <span class="what">It answers the moment you send</span>
+          <span class="why">A line lands straight away so you know it heard you, and it tells you when it has gone to look something up rather than going quiet for two minutes.</span>
+        </li>
+        <li>
+          <span class="what">Two messages in a row are one thought</span>
+          <span class="why">&ldquo;Make me a list&rdquo; then &ldquo;oh, and add this&rdquo; is answered once, properly, instead of twice, badly.</span>
+        </li>
+        <li>
+          <span class="what">Only you, only your thread</span>
+          <span class="why">Group messages are refused. Messages you sent to other people are refused. It never starts a conversation.</span>
+        </li>
+        <li>
+          <span class="what">It stays up</span>
+          <span class="why">Reboot, log out, close the app — your phone still gets answered. No admin password was needed to arrange that.</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note column">
+    <p style="margin:0 0 var(--s4)">
+      Linking is a QR code on the screen, not a command line. Mynah installs the
+      small helper it needs and drives it for you. The code is good for about a
+      minute, and the screen tells you that before the clock starts.
+    </p>
+    <p style="margin:0">
+      A newly linked device gets no history. Mynah cannot see anything you sent
+      before you linked it — only what you send from then on.
+    </p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">Talking out loud</p>
+  <h2 class="title1 column">Send <code>//call</code>, tap the link, talk.</h2>
+  <p class="lede">
+    A real conversation, in the browser you already have. Nothing to install on
+    the phone, and you can cut it off mid-sentence the way you would a person.
+  </p>
+
+  <div class="rows">
+    <div class="row">
+      <div class="text">
+        <p class="title3">Your side is heard here</p>
+        <p>What you say on a call is turned into words on your Mac, and the answer is spoken there too.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">A relay makes the introduction</p>
+        <p>A Mac at home has no address your phone can dial, so the link is served by a relay that passes the two ends&rsquo; details along. It is not in the call itself.</p>
+      </div>
+      <span class="pill leaves">Leaves this Mac</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">The link is the key</p>
+        <p>It carries an unguessable one-time path and travels inside Signal. Asking for a new call stops the old one — a call link is a live microphone, so the last one you were sent is the only one that works.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">It starts talking before it has finished thinking</p>
+        <p>The answer is spoken sentence by sentence as each one is ready, so it begins about as fast as a person would.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+  </div>
+
+  <div class="note column">
+    Calling sets itself up the moment you link your phone — no port to forward, no
+    certificate to install, nothing to configure. On a Mac that was never set up
+    for it, Mynah says so in a sentence you can act on instead of failing halfway
+    through a call. And a call it has just had is remembered: follow up in writing
+    afterwards and it knows what you said out loud.
+  </div>
+
+  <div class="gap"></div>
+
+  <div class="column">
+    <div class="cmd">
+      <span class="key">//help</span>
+      <span class="says">Lists what you can say, and tells you up front whether calling will work on this Mac. Answered by Mynah itself — asking a language model which commands it supports gets you a confident guess.</span>
+    </div>
+    <div class="cmd">
+      <span class="key">//call</span>
+      <span class="says">Sets up the call and sends back the link.</span>
+    </div>
+    <p class="callout dim" style="margin-top:var(--s5)">
+      Both have to be the whole message. Typing &ldquo;how do I use //call&rdquo; is a
+      question, and gets answered as one — not treated as an instruction to open a
       microphone on your phone.
     </p>
-  </section>
+  </div>
+</section>
 
-  <section id="calls">
-    <h2>Calling it</h2>
-    <p>
-      Send <code>//call</code> and you get a link back. Tap it, allow the
-      microphone, and you are talking to it. There is nothing to install: the
-      link opens a web page, and the page is the whole client.
-    </p>
-    <p>
-      It is a real conversation. You can cut it off mid-sentence and it stops —
-      not at the end of its answer, within a fraction of a second. An assistant
-      you cannot interrupt is just a slower voice note.
-    </p>
+<!-- ===================================================================== -->
 
-    <h3>What happens when you tap the link</h3>
-    <ol class="steps">
-      <li>
-        The page asks your browser for the microphone. The browser is doing real
-        work here: it cancels the echo of Mynah's own voice coming back through
-        your speaker, suppresses room noise, and levels your volume. Without the
-        first of those, full duplex is impossible — the appliance hears itself
-        and talks over its own answer.
-      </li>
-      <li>
-        Your phone and the Mac describe to each other how they can be reached.
-        That description goes through a relay, because it has to go somewhere
-        both of them can see.
-      </li>
-      <li>
-        They connect directly. On your home network that is your phone and the
-        Mac across the room, and nothing in between. On a network where a direct
-        path cannot be found, the audio is relayed instead — still sealed, and
-        still unreadable to the relay.
-      </li>
-      <li>
-        You talk. It waits until you have actually finished a sentence rather
-        than cutting in on the pause before you name something, and it starts
-        speaking its answer as soon as the first sentence of it is ready.
-      </li>
-    </ol>
+<section>
+  <p class="eyebrow">Memory</p>
+  <h2 class="title1 column">You can read everything it remembers. And delete it.</h2>
+  <p class="lede">
+    Not a transcript you scroll back through. A list of things it learned, newest
+    first, each one a sentence you can read, search by meaning, and remove.
+  </p>
 
-    <div class="aside">
-      <p>
-        <strong>Calling needs an API model.</strong> A model running on the Mac
-        itself takes the better part of a minute to begin answering, because it
-        is sharing the machine with everything else Mynah is doing. In a message
-        thread that is a wait, and Mynah is built to make waiting bearable — it
-        tells you it has gone to look, and tells you again if it is taking a
-        while. In a conversation none of that helps. You would be listening to
-        silence on an open line, and a caller will not sit through a pause a
-        reader barely notices.
-      </p>
-      <p>
-        So Mynah refuses the call rather than letting you discover this halfway
-        through one. It tells you which model is running, why it will not do, and
-        that changing the model in its settings fixes it. Messages and voice
-        notes keep working on either kind, and it says that too.
-      </p>
+  <!-- SCREENSHOT SLOT 3 -----------------------------------------------------
+       Memories — "What Mynah remembers": the list of memories newest first,
+       with the search field and the subject filter chips visible, and one
+       memory's confidence word showing. Invent every memory line. Nothing from
+       the owner's real memory store.
+  ---------------------------------------------------------------------- -->
+  <figure>
+    <div class="shot window">
+      <div>
+        <p class="eyebrow">Screenshot</p>
+        <p class="what">What Mynah remembers — the memory list, with search and the subject filter.</p>
+      </div>
     </div>
+    <figcaption>Each memory is four things: the sentence, when it learned it, what it is about, and how sure it is — in words, never a number.</figcaption>
+  </figure>
 
-    <div class="aside">
-      <p>
-        <strong>Calling also needs a relay you run.</strong> It is a small program
-        on a rented host with a real domain name. The reason is unglamorous: a Mac
-        on a home network has no name a certificate authority will sign, and a
-        browser that distrusts the page it is holding will quietly refuse to
-        connect the call. So the page is served from somewhere with a proper
-        certificate, and the Mac dials out to it. Nothing is forwarded to your
-        home network and no port is opened.
-      </p>
+  <ul class="claims column">
+    <li>
+      <span class="what">Search by meaning, not spelling</span>
+      <span class="why">Describe the thing rather than quoting it. If nothing matches, the screen says what it actually searched rather than telling you to try again.</span>
+    </li>
+    <li>
+      <span class="what">Forgetting asks first, and is honest about it</span>
+      <span class="why">&ldquo;Mynah won&rsquo;t be able to use this again, and it can&rsquo;t be brought back.&rdquo; If the removal is still going through, the row says so instead of pretending it is gone.</span>
+    </li>
+    <li>
+      <span class="what">It files everything under one subject it owns</span>
+      <span class="why">It does not invent a new pile per topic, and it does not write into anybody else&rsquo;s.</span>
+    </li>
+    <li>
+      <span class="what">It will not quietly invent a number</span>
+      <span class="why">When a result has been shortened to fit, it says it was shortened — and it refuses to add up figures the answer already gave.</span>
+    </li>
+    <li>
+      <span class="what">If it is not allowed to remember, you find out on day one</span>
+      <span class="why">It checks at startup whether it may write anything at all, rather than after a week of being told things.</span>
+    </li>
+  </ul>
+</section>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">The board</p>
+  <h2 class="title1 column">What&rsquo;s on its plate, above the conversation.</h2>
+  <p class="lede">
+    The open work assigned to Mynah, in two columns: Planned, and In progress.
+    It sits on the Home screen so you see it before you type anything.
+  </p>
+
+  <div class="note column">
+    <p style="margin:0 0 var(--s4)">
+      <strong>There is no Done column, and that is on purpose.</strong>
+      What Mynah can ask for is open work — finished and abandoned tasks are not
+      in the answer at all. A Done column fed from it would read
+      &ldquo;Nothing finished yet.&rdquo; for ever, over work you know you completed.
+    </p>
+    <p style="margin:0">
+      So it is not drawn, and one quiet line under the board says why. A task the
+      board was handed with no status is counted in a footnote rather than guessed
+      into a column.
+    </p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">The whole argument</p>
+  <h2 class="title1 column">Where your words go.</h2>
+  <p class="lede">
+    Almost everything Mynah does happens on this Mac. These are the exceptions,
+    and what each one tells somebody else. The app has this same page inside it,
+    filled in with the choices you actually made.
+  </p>
+
+  <div class="rows">
+    <div class="row">
+      <div class="text">
+        <p class="title3">Thinking, on a brain that runs here</p>
+        <p>Answered by a model on this Mac. Nothing you say goes anywhere else to be thought about.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
     </div>
-  </section>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Thinking, on a brain you rent</p>
+        <p>What you say goes to that company so it can work out an answer — and so does anything Mynah recalls in order to answer it, because a remembered fact has to be in front of the model to be used. That is the one thing this product cannot do without.</p>
+      </div>
+      <span class="pill leaves">Leaves this Mac</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Your recordings</p>
+        <p>They are turned into words on this Mac and never sent anywhere.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">What Mynah remembers</p>
+        <p>Kept on this Mac, in a folder only you can read.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Looking something up on the web</p>
+        <p>When a question needs the internet, the words Mynah searches for go to a search engine. The rest of what you said does not. You can switch web search off entirely and keep everything else working.</p>
+      </div>
+      <span class="pill leaves">Leaves this Mac</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Talking to it out loud</p>
+        <p>Your side of a call is turned into words on this Mac, and Mynah&rsquo;s answer is spoken here too. The link you tap is served by a relay, which passes the two ends&rsquo; details along and is not in the call itself.</p>
+      </div>
+      <span class="pill stays">Stays here</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">After a call</p>
+        <p>If you have transcripts turned on, what was said in a call is posted back into your Signal thread when it ends. It is a switch, and it is yours.</p>
+      </div>
+      <span class="pill">Your choice</span>
+    </div>
+    <div class="row">
+      <div class="text">
+        <p class="title3">Checking for a newer Mynah</p>
+        <p>Once a day it asks GitHub whether a newer version exists. That request tells GitHub a Mac asked — the one thing Mynah does that you did not ask for by speaking. Nothing is downloaded or installed on its own, and turning the check off means it never contacts GitHub at all.</p>
+      </div>
+      <span class="pill leaves">Leaves this Mac</span>
+    </div>
+  </div>
 
-  <section id="words">
-    <h2>Where your words go</h2>
-    <p>
-      This is the product's whole argument, so it is worth being exact about it
-      rather than reassuring.
-    </p>
+  <!-- SCREENSHOT SLOT 4 -----------------------------------------------------
+       Privacy — "What leaves this Mac": the rows with their pills, showing a
+       green "Stays here" row and a row naming a cloud company. Any model or
+       company name in frame is fine; no phone number, no memory content.
+  ---------------------------------------------------------------------- -->
+  <figure>
+    <div class="shot window">
+      <div>
+        <p class="eyebrow">Screenshot</p>
+        <p class="what">What leaves this Mac — the privacy screen, with a pill on every row.</p>
+      </div>
+    </div>
+    <figcaption>Nothing on that screen is a setting. It is a list of facts, and the update check is the only one of them you can turn off.</figcaption>
+  </figure>
+</section>
 
-    <dl class="ledger">
-      <div>
-        <dt>Signal messages <span class="tag stays">stays</span></dt>
-        <dd>
-          End-to-end encrypted, between your own devices, in your own Note to
-          Self thread. Mynah answers only there. Messages from anyone else, and
-          messages in groups, are refused before anything reads them.
-        </dd>
-      </div>
-      <div>
-        <dt>Voice notes and speech recognition <span class="tag stays">stays</span></dt>
-        <dd>
-          Transcribed on your Mac. The audio is not uploaded anywhere, and the
-          transcriber refuses to send it anywhere but the local machine.
-        </dd>
-      </div>
-      <div>
-        <dt>The voice you hear <span class="tag stays">stays</span></dt>
-        <dd>
-          Synthesised on your Mac.
-        </dd>
-      </div>
-      <div>
-        <dt>Notes and memory <span class="tag stays">stays</span></dt>
-        <dd>
-          Written to disk on your Mac, readable only by your account. Mynah can
-          also pass something to another agent if you ask it to — but only if you
-          have connected one, and only when you ask.
-        </dd>
-      </div>
-      <div>
-        <dt>The model <span class="tag depends">depends</span></dt>
-        <dd>
-          If you chose a local model, your words stay on the Mac. If you chose an
-          API, your words go to that provider and are handled under their terms —
-          and so does anything Mynah recalls in order to answer them, because a
-          remembered fact has to be in front of the model to be used. That is a
-          real difference and the setup screen states it per option rather than
-          leaving you to infer it.
-        </dd>
-      </div>
-      <div>
-        <dt>Web searches <span class="tag leaves">leaves</span></dt>
-        <dd>
-          When it looks something up, the search terms go to a search engine, as
-          searches do.
-        </dd>
-      </div>
-      <div>
-        <dt>Call audio, on a direct path <span class="tag stays">stays</span></dt>
-        <dd>
-          Usually there is one. Your phone and the Mac work out how to reach each
-          other, and on a home network that is the two of them across the room.
-          The audio goes straight between them and never touches the relay.
-        </dd>
-      </div>
-      <div>
-        <dt>Call audio, when there is no direct path <span class="tag leaves">leaves</span></dt>
-        <dd>
-          Some networks — mobile networks especially — allow no direct route at
-          all. The audio is then carried by a separate relay server, so the
-          packets do cross a rented machine. They stay sealed end to end the whole
-          way and cannot be listened to there. Running that server yourself is
-          what keeps even the fact of it in your hands.
-        </dd>
-      </div>
-      <div>
-        <dt>That a call happened <span class="tag leaves">leaves</span></dt>
-        <dd>
-          The relay sets the call up, so it necessarily learns that a call
-          occurred, when, and between which network addresses — that is what the
-          setup messages contain. It cannot hear the call. This is the honest
-          cost of calls working at all, and it is why the relay is a program you
-          run on a host you rent rather than a service you are asked to trust.
-        </dd>
-      </div>
-    </dl>
-  </section>
+<!-- ===================================================================== -->
 
-  <section>
-    <h2>What it is not</h2>
-    <p>
-      It does not listen. Nothing is recorded and nothing is transcribed until
-      you send it something. There is no wake word and no microphone open on the
-      Mac.
-    </p>
-    <p>
-      It does not start conversations. It answers the thread you wrote to, and
-      that is the only thing it does unprompted — nothing.
-    </p>
-    <p>
-      It is not always right. It is a language model with tools, and it can
-      misread a voice note, misjudge a search result, or be confidently wrong.
-      Everything it did during a turn ends up in the reply you read, which is the
-      point: you are the one checking it.
-    </p>
-    <p>
-      It is not finished. It works, it is in daily use, and there are rough
-      edges. If something breaks, say so — the logs on the Mac usually know
-      exactly where it stopped.
-    </p>
-  </section>
+<section>
+  <p class="eyebrow">Small print that matters</p>
+  <h2 class="title1 column">What it will not do.</h2>
 
-  <footer>
-    Mynah is free software under the Apache 2.0 licence. This page is served as
-    plain HTML with nothing loaded from anywhere else.
-  </footer>
+  <ul class="claims column">
+    <li>
+      <span class="what">It does not listen</span>
+      <span class="why">The microphone opens only while you hold the record button. There is no wake word, and nothing is recorded on its own.</span>
+    </li>
+    <li>
+      <span class="what">It does not message anyone first</span>
+      <span class="why">It replies into a thread that was already addressed to it, and that is all it ever does unprompted — nothing.</span>
+    </li>
+    <li>
+      <span class="what">It cannot write outside its own notes folder</span>
+      <span class="why">Ask it to write something down and you get a real document. It takes a title, never a path, so writing somewhere else is not something it refuses — it is something it cannot express.</span>
+    </li>
+    <li>
+      <span class="what">It cannot rename or deregister itself, or vote on anything</span>
+      <span class="why">Those tools are deliberately kept away from the model, because a speech transcript can contain a mishearing and some verbs do not undo.</span>
+    </li>
+    <li>
+      <span class="what">A page it reads on the web is not an instruction</span>
+      <span class="why">Search results are handed to the model as somebody else&rsquo;s text to summarise, and the code is honest that this raises the bar rather than closing the hole. The real safeguard is that the answer comes back to you, where you can see it.</span>
+    </li>
+    <li>
+      <span class="what">It is not always right</span>
+      <span class="why">It is a model with tools. It can mishear a voice note, misread a search result, or be confidently wrong. What it did during a turn is in the answer you read, which is the point — you are the one checking it.</span>
+    </li>
+  </ul>
+</section>
 
-</main>
+<!-- ===================================================================== -->
+
+<section>
+  <p class="eyebrow">Before you start</p>
+  <h2 class="title1 column">What you need.</h2>
+
+  <div class="cards">
+    <div class="card">
+      <h3 class="title3">A Mac, left switched on</h3>
+      <p>Apple silicon, macOS 14 or later. A Mac mini is the usual choice. It has to be awake to answer, so a laptop that sleeps in a bag is the wrong machine for it.</p>
+    </div>
+    <div class="card">
+      <h3 class="title3">Signal on your phone</h3>
+      <p>Your existing account. Mynah links as a second device; your number does not change and you register nothing new.</p>
+    </div>
+    <div class="card">
+      <h3 class="title3">A brain</h3>
+      <p>Either the local one, which Mynah downloads and runs for you, or an API key from a provider you pick. The setup screen tells you, per option, where your words end up.</p>
+    </div>
+  </div>
+
+  <!-- SCREENSHOT SLOT 5 -----------------------------------------------------
+       Setup — the phone-linking screen with the QR panel. IMPORTANT: replace or
+       blur the QR itself; a real one is a live device-pairing secret. A drawn
+       placeholder square is better than a redacted photograph.
+  ---------------------------------------------------------------------- -->
+  <figure>
+    <div class="shot window">
+      <div>
+        <p class="eyebrow">Screenshot</p>
+        <p class="what">Setup — linking your phone. The QR must be a drawn placeholder, never a real pairing code.</p>
+      </div>
+    </div>
+    <figcaption>Setup never says &ldquo;daemon&rdquo;, &ldquo;socket&rdquo; or an exit code at you. It describes one small free add-on that only handles messages.</figcaption>
+  </figure>
+</section>
+
+<!-- ===================================================================== -->
+
+<footer>
+  <p>
+    Mynah is free software under the Apache 2.0 licence. Signal is a trademark of
+    the Signal Foundation; Mynah is not affiliated with it and uses your own
+    account, as a linked device.
+  </p>
+  <p>
+    This page loads nothing from anywhere — no fonts, no scripts, no analytics.
+    It renders the same with the network unplugged, which is rather the point.
+  </p>
+</footer>
+
+</div>
 </body>
 </html>
