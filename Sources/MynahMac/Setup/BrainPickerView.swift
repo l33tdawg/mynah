@@ -39,12 +39,19 @@ struct BrainStage: View {
             selection: $model.selectedOptionID,
             canContinue: model.canContinue,
             whyYouAreBeingAsked: model.whyYouAreBeingAsked,
-            // Offered only when the private brain was possible and the owner
-            // stepped away from it after a failure. When this Mac genuinely
-            // cannot run one, a button back to it would be a door into a wall.
-            onReturnToPrivate: model.choices?.freshInstallDefault == nil
-                ? nil
-                : { model.returnToPrivateSetup() },
+            // **The way back, and it has to exist.** "Use a provider instead" on
+            // the failure screen was a one-way door: it set
+            // `ownerAskedToChooseInstead`, which nothing cleared, so an owner
+            // whose download failed once could never reach the private setup
+            // again — not even by going back to Welcome and forward. A default
+            // you can be knocked out of permanently is not a default.
+            //
+            // Offered only when the private brain is actually possible. When
+            // this Mac cannot run one, a button back to it is a door into a wall.
+            onReturnToPrivate: model.ownerAskedToChooseInstead
+                && model.choices?.freshInstallDefault != nil
+                ? { model.returnToPrivateSetup() }
+                : nil,
             onBack: { model.goBack() },
             onContinue: {
                 // Choosing a brain that needs no key settles any key the owner
@@ -269,18 +276,30 @@ private struct BrainPicker: View {
                 // is missing on this Mac, and an owner who is shown a menu with
                 // no account of why they are being made to choose has been given
                 // a decision and denied its context.
+                // `.info`, not `.critical`, in both cases. Nothing has failed
+                // here — this Mac is what it is, or the owner made a choice.
+                // Drawing either as a failure would tell somebody on an Intel
+                // Mac that they had broken something.
                 if let whyYouAreBeingAsked {
-                    // `.info`, not `.critical`. Nothing has failed — this Mac is
-                    // what it is, and the owner is being told a fact and handed
-                    // a next step. Drawing it as a failure would tell somebody
-                    // on an Intel Mac that they had broken something.
                     InlineBanner(
                         headline: "Mynah can't run its own brain on this Mac.",
                         explanation: whyYouAreBeingAsked
                             + "\n\nSo it needs to borrow one. Everything below sends what you "
                             + "say to a company you hold an account with — pick whichever you "
-                            + "already use, or the one you'd rather trust.",
-                        actionTitle: onReturnToPrivate == nil ? nil : "Try the private one again",
+                            + "already use, or the one you'd rather trust."
+                    )
+                } else if let onReturnToPrivate {
+                    // The owner stepped away from the private install after it
+                    // failed. They know why they are here; what they need is the
+                    // door back, because the download that beat them was very
+                    // possibly a dropped connection.
+                    InlineBanner(
+                        headline: "Pick where your words should go.",
+                        explanation: "Everything below sends what you say to a company you "
+                            + "hold an account with. Mynah can still run its own brain on this "
+                            + "Mac instead — the download picks up where it stopped, so trying "
+                            + "it again is cheaper than it was the first time.",
+                        actionTitle: "Set up the private one instead",
                         action: onReturnToPrivate
                     )
                 }

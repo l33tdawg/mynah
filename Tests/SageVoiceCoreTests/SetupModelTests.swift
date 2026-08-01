@@ -66,3 +66,66 @@ final class OnboardingGateTests: XCTestCase {
         }
     }
 }
+
+/// **That the private default cannot be a one-way door.**
+///
+/// The failure screen's "Use a provider instead" set a flag nothing cleared, so
+/// an owner whose 3.4 GB download dropped once could never reach the private
+/// setup again — not by retrying, not by going back to Welcome and forward.
+/// A default you can be knocked permanently out of is not a default, and the
+/// most likely cause of that first failure is a dropped connection.
+@MainActor
+final class PrivateSetupIsNotAOneWayDoorTests: XCTestCase {
+
+    /// A capable Mac, planned the way the app plans it.
+    private func modelOnACapableMac() -> SetupModel {
+        let choices = BrainSetupPlanner().plan(
+            for: .machine(hardware: .appleSilicon16GB)
+        )
+        let model = SetupModel(initialChoices: choices)
+        model.selectedOptionID = choices.freshInstallDefault?.option.id
+        return model
+    }
+
+    func testACapableMacStartsOnThePrivatePathWithoutBeingAsked() {
+        let model = modelOnACapableMac()
+        XCTAssertTrue(
+            model.setsUpPrivatelyWithoutAsking,
+            "a 16 GB Apple Silicon Mac is being shown the menu"
+        )
+        XCTAssertNil(model.whyYouAreBeingAsked, "and being given a reason for a question it isn't asked")
+    }
+
+    func testSteppingAwayFromThePrivatePathIsReversible() {
+        let model = modelOnACapableMac()
+
+        model.chooseBrainInstead()
+        XCTAssertFalse(model.setsUpPrivatelyWithoutAsking, "the owner asked for the menu and did not get it")
+        XCTAssertNil(model.selectedOptionID, "the option that just failed is still selected and ready to fail again")
+        XCTAssertTrue(model.ownerAskedToChooseInstead)
+
+        model.returnToPrivateSetup()
+        XCTAssertTrue(
+            model.setsUpPrivatelyWithoutAsking,
+            "the owner cannot get back to the private brain — this is the one-way door"
+        )
+        XCTAssertEqual(model.selectedOptionID, .fullyLocal)
+        XCTAssertNil(model.localBrainPhase, "the old failure is still on screen after starting over")
+    }
+
+    /// On a Mac that cannot run one, there is nothing to step away from and
+    /// nothing to go back to — the menu is the whole screen, and it explains
+    /// itself rather than offering a door into a wall.
+    func testAMacThatCannotRunLocallyIsAskedAndTold() {
+        let choices = BrainSetupPlanner().plan(for: .machine(hardware: .intel32GB))
+        let model = SetupModel(initialChoices: choices)
+
+        XCTAssertFalse(model.setsUpPrivatelyWithoutAsking)
+        let reason = model.whyYouAreBeingAsked
+        XCTAssertNotNil(reason, "asked to choose with no account of why")
+        XCTAssertTrue(
+            reason?.contains("Apple Silicon") == true,
+            "the reason does not name the obstacle: \(reason ?? "")"
+        )
+    }
+}

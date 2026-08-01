@@ -355,15 +355,45 @@ final class CloudBrainModelCatalogTests: XCTestCase {
     /// offered catalogue rather than a list written out here, so a provider
     /// added to setup without a model pick fails without anyone remembering to
     /// update a test.
+    /// **This `continue` is what let GLM ship broken**, and it is kept rather
+    /// than removed because it is still correct — but it is no longer load-
+    /// bearing. A provider with no model pick is legitimately unsettled; what
+    /// was missing was anything checking that unsettled also meant *unoffered*.
+    /// `FreshInstallDefaultTests.testNoOfferedProviderIsMissingAModelToAskFor`
+    /// is that check, and it walks the planner's real output rather than this
+    /// inventory of instructions.
     func testEveryOfferableProviderHasAModelToAskFor() {
         for provider in APIKeyOnboarding.keyedProviders {
-            // `nil` is legitimate for providers we have not settled on — they
-            // are not offered in setup. What must never happen is a provider
-            // being offered with no model behind it.
             guard let model = CloudBrainModelCatalog.model(forProvider: provider) else { continue }
             XCTAssertFalse(
                 model.trimmingCharacters(in: .whitespaces).isEmpty,
                 "\(provider) has an empty model name, which reaches the provider as a 400"
+            )
+        }
+    }
+
+    /// **Nothing may be offered that we cannot explain how to get a key for.**
+    ///
+    /// *"if we have providers we don't know how to get the key for, remove them
+    /// from the list."* The planner already refuses one — the guard has been
+    /// there since "Google Gemini API key" shipped for months with no
+    /// instructions behind it, which meant the key screen was skipped and Ready
+    /// declared success for a brain with no credential.
+    ///
+    /// What was missing is anybody asserting it against the menu the owner
+    /// actually sees, rather than against the inventory the instructions live
+    /// in. Those are different lists and only one of them is a promise.
+    func testNothingIsOfferedWithoutInstructionsForGettingItsKey() {
+        let choices = BrainSetupPlanner().plan(
+            for: .machine(ambientKeys: AmbientAPIKeyReport(providers: APIKeyProvider.allCases))
+        )
+
+        for option in choices.options where !option.keepsWordsOnDevice {
+            guard let provider = option.keyProviderIdentifier else { continue }
+            XCTAssertNotNil(
+                APIKeyOnboarding.instructions(forProvider: provider),
+                "\(option.label) is on the menu and this app cannot tell anyone how to get a "
+                    + "key for it — so setup skips the key screen and calls it ready"
             )
         }
     }
