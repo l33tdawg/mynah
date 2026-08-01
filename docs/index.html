@@ -88,6 +88,12 @@
 
   --column: 720px;
   --stage: 880px;
+
+  /* The masthead band. Dark in both schemes, so its ink is fixed rather than
+     following --ink-1, which inverts. */
+  --hero: #17171A;
+  --hero-ink: #FFFFFF;
+  --hero-ink-2: rgba(255,255,255,0.66);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -180,7 +186,40 @@ code {
 
 /* --- Masthead ------------------------------------------------------------ */
 
-header { padding: var(--s9) 0 var(--s8); }
+/* A black band, full width, with the page's light grey below it.
+   ==========================================================================
+   The masthead used to be the same canvas as everything under it, so the page
+   opened with no edge — the wordmark, the headline and the first section all
+   sat on one flat field and nothing said where the introduction stopped.
+
+   Full-bleed rather than a rounded card inset in the column: the band has to
+   reach both edges of the window or it reads as the first item in a list of
+   cards rather than as the top of the page. `body` carries the horizontal
+   padding, so the bleed is done with a viewport-width box-shadow — no wrapper
+   element, and no negative margins that fight the safe-area insets on a
+   notched display. */
+header {
+  padding: var(--s9) var(--s6) var(--s8);
+  margin-bottom: var(--s9);
+  background: var(--hero);
+  box-shadow: 0 0 0 100vmax var(--hero);
+  clip-path: inset(0 -100vmax);
+  border-radius: 0;
+}
+
+/* Ink inside the band is fixed, not theme-dependent: the band is dark in both
+   colour schemes, so text that followed `--ink-1` would turn near-black on
+   black the moment somebody switched to light mode. */
+header .display { color: var(--hero-ink); }
+header .standfirst { color: var(--hero-ink-2); }
+header .wordmark { color: var(--hero-ink); }
+header .tile { background: var(--hero-ink); color: var(--hero); }
+header .get .button {
+  background: var(--hero-ink);
+  color: var(--hero);
+}
+header .get .aside { color: var(--hero-ink-2); }
+header .get .aside a { color: var(--hero-ink); text-decoration-color: var(--hero-ink-2); }
 
 .wordmark {
   /* .rounded is permitted in exactly two places in the app. This is one. */
