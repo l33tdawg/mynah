@@ -51,27 +51,37 @@ public actor VoiceBridgeDaemon {
         /// font draws them facing left. There is no right-facing variant and no
         /// way for a sender to request one.
         ///
-        /// ## Why there is no bird here at all
+        /// ## Why there is no bird here, and no profile picture either
         ///
-        /// Three were tried — `🐦‍⬛`, then `🕊️` — against *"make the bird white"*
-        /// and then *"EXACTLY THE SAME BRO — looking to the right, yellow eye
-        /// patch"*. None of them could be right, and the reason is not
-        /// aesthetic:
+        /// Three emoji were tried — `🐦‍⬛`, then `🕊️` — against *"make the bird
+        /// white"* and then *"EXACTLY THE SAME BRO — looking to the right,
+        /// yellow eye patch"*. None could be right: a Signal message is plain
+        /// Unicode, the glyph is drawn by the recipient's emoji font in its own
+        /// colours and orientation, and of the sixteen birds Unicode ships every
+        /// one faces left and none has a yellow eye mask. **A white
+        /// right-facing mynah is not a character that exists.**
         ///
-        /// A Signal message is plain Unicode. The glyph is drawn by the
-        /// recipient's emoji font, in its own colours, at its own orientation.
-        /// Unicode ships sixteen birds; every one faces left, none carries a
-        /// yellow eye mask, and there is no variation selector for direction or
-        /// colour. **A white right-facing mynah is not a character that exists**,
-        /// so every choice here was a different wrong bird.
+        /// The mark was then moved to the account's Signal profile picture,
+        /// which *was* our own PNG at avatar size — and that was a mistake with
+        /// a cost outside this app. A linked device does not have its own
+        /// profile: it edits **the owner's**, so Mynah's bird became their face
+        /// to every contact they have. Reverted, and not to be tried again;
+        /// signal-cli does not keep a copy of your own previous avatar, so
+        /// undoing it could not restore what was there.
         ///
-        /// So the mark moved to where an image is actually allowed: the
-        /// account's Signal profile picture, which is our own PNG at avatar
-        /// size, shown once beside the thread instead of repeated in front of
-        /// every sentence. What is left in the text is the marker the owner
-        /// asked for and nothing else — *"add >> after (no need anything at the
-        /// start so no < or anything)"*.
-        public static let defaultReplyPrefix = ">> "
+        /// What is left is the only surface that is actually ours: the words.
+        /// So the marker says the name.
+        ///
+        /// *"whatever makes it easier for the user to see when its Mynah
+        /// replying in the notes to self."*
+        ///
+        /// `MYNAH >>` rather than a bolder Unicode trick like `𝗠𝗬𝗡𝗔𝗛`, which
+        /// renders as tofu in any font missing the mathematical alphanumerics
+        /// and is read out character by character by a screen reader. Plain
+        /// capitals survive every client, every font and every reader, and in a
+        /// column of the owner's own blue bubbles a name is what separates the
+        /// two speakers — which is the entire job.
+        public static let defaultReplyPrefix = "MYNAH >> "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String

@@ -63,7 +63,9 @@ struct TaskBoardView: View {
                 tone: .neutral,
                 count: board.planned.count,
                 tasks: board.planned,
-                emptyLine: "Nothing planned."
+                emptyLine: "Nothing planned.",
+                accepts: .planned,
+                onDrop: move
             )
             columnRule
             BoardColumnView(
@@ -71,7 +73,9 @@ struct TaskBoardView: View {
                 tone: .accent,
                 count: board.inProgress.count,
                 tasks: board.inProgress,
-                emptyLine: "Nothing under way."
+                emptyLine: "Nothing under way.",
+                accepts: .inProgress,
+                onDrop: move
             )
             // **Absent, not empty.** `sage_backlog` answers with open work only,
             // so finished and abandoned tasks are not in its reply at all. A
@@ -87,7 +91,9 @@ struct TaskBoardView: View {
                     count: board.done.count,
                     tasks: board.recent(board.done, showingAll: model.showsOlderFinished),
                     emptyLine: "Nothing finished yet.",
-                    isHistory: true
+                    isHistory: true,
+                    accepts: .done,
+                    onDrop: move
                 )
                 columnRule
                 BoardColumnView(
@@ -100,11 +106,26 @@ struct TaskBoardView: View {
                     count: board.dropped.count,
                     tasks: board.recent(board.dropped, showingAll: model.showsOlderFinished),
                     emptyLine: "Nothing dropped.",
-                    isHistory: true
+                    isHistory: true,
+                    accepts: .dropped,
+                    onDrop: move
                 )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Carries a dropped card to its new column.
+    ///
+    /// The animation is on the board's own value, so SwiftUI moves the card
+    /// between the two `ForEach`s rather than removing it from one and inserting
+    /// it into the other — a card that vanishes and reappears is a repaint, and
+    /// a card that travels is a move. `TaskBoardModel.move` updates the board
+    /// before the write lands and puts it back if the node refuses, so the
+    /// gesture never waits on consensus and never lies about the outcome.
+    private func move(_ taskID: String, to status: BoardTask.Progress) {
+        guard let task = model.board?.task(withID: taskID) else { return }
+        Task { await model.move(task, to: status) }
     }
 
     /// The two lines under the board, and both are conditional.
@@ -246,6 +267,12 @@ private struct BoardColumnView: View {
     /// Finished work is history: it stays legible and stops competing with the
     /// two columns that still need something from the owner.
     var isHistory = false
+    /// Which status a card dropped here becomes, and who to tell.
+    var accepts: BoardTask.Progress?
+    var onDrop: ((String, BoardTask.Progress) -> Void)?
+
+    /// A card is over this column right now.
+    @State private var isTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: s5) {
@@ -263,6 +290,17 @@ private struct BoardColumnView: View {
                     LazyVStack(alignment: .leading, spacing: s4) {
                         ForEach(tasks) { task in
                             TaskCard(task: task, isHistory: isHistory)
+                                // The card itself is the payload: its id is the
+                                // memory id, which is all `sage_task` needs.
+                                .draggable(task.id) {
+                                    // What follows the cursor. Narrower than the
+                                    // card and slightly transparent, so the
+                                    // column underneath stays readable while
+                                    // deciding where to put it.
+                                    TaskCard(task: task, isHistory: isHistory)
+                                        .frame(width: 240)
+                                        .opacity(0.9)
+                                }
                         }
                     }
                     .padding(.bottom, s5)
@@ -270,6 +308,30 @@ private struct BoardColumnView: View {
                 .scrollBounceBehavior(.basedOnSize)
             }
         }
+        // The whole column is the target, not the list — dropping into the gap
+        // below the last card is the same gesture and has to mean the same
+        // thing.
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { ids, _ in
+            guard let accepts, let id = ids.first else { return false }
+            onDrop?(id, accepts)
+            return true
+        } isTargeted: { targeted in
+            // Animated on the way in *and* out. A highlight that appears
+            // instantly and vanishes instantly reads as a flicker rather than as
+            // the column saying "here".
+            withAnimation(Motion.snap) { isTargeted = targeted }
+        }
+        .background(
+            RoundedRectangle.mynah(r.card)
+                .fill(isTargeted ? tone.wash : .clear)
+                .padding(.horizontal, s3)
+        )
+        .overlay(
+            RoundedRectangle.mynah(r.card)
+                .strokeBorder(isTargeted ? tone.ink.opacity(0.5) : .clear, lineWidth: 1.5)
+                .padding(.horizontal, s3)
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, s6)
         .padding(.vertical, s6)

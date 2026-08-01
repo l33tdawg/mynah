@@ -250,6 +250,7 @@ final class MCPTaskSourceTests: XCTestCase {
         struct Flaky: TaskSource {
             let answers: @Sendable () async throws -> TaskBoard
             func board() async throws -> TaskBoard { try await answers() }
+            func move(taskID: String, to status: BoardTask.Progress) async throws {}
         }
         let good = TaskBoard.from(
             rows: [BoardTask(id: "a", title: "One", progress: .planned)],

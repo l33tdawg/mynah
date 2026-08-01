@@ -74,6 +74,31 @@ actor MCPTaskSource: TaskSource {
     /// MCP failures, mapped the way the rest of the app maps them — one for a
     /// node that is not there and a different one for a node that is there and
     /// did not answer, because they send somebody to two different places.
+    /// Writes one status change, with the same signed identity the read uses.
+    ///
+    /// `sage_task` takes `memory_id` and `status` and is the exact call the
+    /// model makes when the owner asks it to move something. Calling it here
+    /// means dragging a card costs a JSON-RPC round trip instead of a model
+    /// turn — which is why the owner asked for the gesture: *"rather than asking
+    /// mynah to move it (wasting tokens / turns)"*.
+    ///
+    /// `BoardTask.id` is the memory id, so nothing has to be looked up first.
+    func move(taskID: String, to status: BoardTask.Progress) async throws {
+        do {
+            _ = try await SageMemoryStore.shared.callTool(
+                "sage_task",
+                arguments: [
+                    "memory_id": .string(taskID),
+                    "status": .string(status.rawValue)
+                ]
+            )
+        } catch let error as MCPClientError {
+            throw Self.failure(for: error)
+        } catch {
+            throw TaskSourceFailure.refused
+        }
+    }
+
     static func failure(for error: MCPClientError) -> TaskSourceFailure {
         switch error {
         case .missingExecutable: return .notInstalled

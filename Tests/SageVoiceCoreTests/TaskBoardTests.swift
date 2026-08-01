@@ -484,6 +484,8 @@ final class TaskBoardModelTests: XCTestCase {
 /// A source that hands back a prepared sequence of answers, so a test can put
 /// the node's failure exactly where it wants it.
 private final class ScriptedTaskSource: TaskSource, @unchecked Sendable {
+    func move(taskID: String, to status: BoardTask.Progress) async throws {}
+
     private var results: [Result<TaskBoard, Error>]
     private let lock = NSLock()
 

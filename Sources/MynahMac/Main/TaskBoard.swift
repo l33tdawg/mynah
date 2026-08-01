@@ -161,6 +161,25 @@ struct TaskBoard: Equatable, Sendable {
     }
 
     /// Splits what the node returned into columns.
+    /// Moves a card between columns without asking the node.
+    ///
+    /// For the moment between the owner letting go and the write landing. The
+    /// node is the authority and `TaskBoardModel.move` re-reads from it
+    /// immediately afterwards — this exists so the card arrives at the speed of
+    /// the gesture rather than the speed of consensus.
+    /// One card, wherever it currently sits.
+    func task(withID id: String) -> BoardTask? {
+        (planned + inProgress + done + dropped + unclassified).first { $0.id == id }
+    }
+
+    mutating func move(taskID: String, to status: BoardTask.Progress) {
+        var all = planned + inProgress + done + dropped + unclassified
+        guard let index = all.firstIndex(where: { $0.id == taskID }) else { return }
+        all[index].progress = status
+        let moved = TaskBoard.from(rows: all, coversFinishedWork: coversFinishedWork)
+        self = moved
+    }
+
     static func from(rows: [BoardTask], coversFinishedWork: Bool = true) -> TaskBoard {
         // Newest first within a column. For open work that is when it was
         // asked for; for finished work it is when it finished, which is the
@@ -188,6 +207,14 @@ struct TaskBoard: Equatable, Sendable {
 /// that can put a task on the board.
 protocol TaskSource: Sendable {
     func board() async throws -> TaskBoard
+
+    /// Moves one task to a new status.
+    ///
+    /// Separate from `board()` because it is the first thing this screen has
+    /// ever *written*. Everything else here reads and redraws; this changes the
+    /// node, and a source that cannot write should fail loudly rather than
+    /// pretend by returning.
+    func move(taskID: String, to status: BoardTask.Progress) async throws
 }
 
 /// What went wrong, in the owner's words.
@@ -228,6 +255,16 @@ enum TaskBoardTrouble {
             + "that only answers a signed-in operator, and this window isn't one. "
             + "Open CEREBRUM to see them.",
         canRetry: true
+    )
+
+    /// A refused move. Names the card's own way back, because the owner is
+    /// looking straight at the card that snapped home and the one thing they
+    /// need to know is whether to try again or go somewhere else.
+    static let cannotMove = Exchange.Failure(
+        headline: "Mynah couldn't move that card.",
+        explanation: "The card is back where it was. Try again, or change it in "
+            + "CEREBRUM if it keeps refusing.",
+        isSevere: false
     )
 
     static let cannotReach = Exchange.Failure(
@@ -294,6 +331,13 @@ enum TaskBoardTrouble {
 actor CerebrumTaskSource: TaskSource {
 
     static let shared = CerebrumTaskSource()
+
+    /// Refuses. This source reads an unsigned dashboard endpoint that answers
+    /// `401` on a real node — it has never opened, let alone written — so a
+    /// `move` that returned would be claiming to have changed something.
+    func move(taskID: String, to status: BoardTask.Progress) async throws {
+        throw TaskSourceFailure.refused
+    }
 
     /// The backend's own maximum. Asking for more is silently clamped, so this
     /// is the honest number rather than an optimistic one.
@@ -556,6 +600,40 @@ final class TaskBoardModel {
         }
     }
 
+    /// Moves a card, and puts it back if the node refuses.
+    ///
+    /// **Optimistically, and that is the point.** The owner dragged a card; the
+    /// card has to arrive where they dropped it, at the speed of the gesture,
+    /// not after a round trip to a consensus write. So the board is updated
+    /// first and reverted if the write fails — and a revert is loud, because a
+    /// card that silently slides back is indistinguishable from a dropped
+    /// gesture and the owner will simply try again.
+    ///
+    /// The write is `sage_task` with `memory_id` and `status`, which is the same
+    /// call the model makes when asked to move something — the owner is doing it
+    /// directly instead of spending a turn asking. That was the whole request.
+    func move(_ task: BoardTask, to status: BoardTask.Progress) async {
+        guard task.progress != status else { return }
+        let previous = board
+
+        if var optimistic = board {
+            optimistic.move(taskID: task.id, to: status)
+            board = optimistic
+        }
+
+        do {
+            try await source.move(taskID: task.id, to: status)
+            // Read back rather than trusting the local edit: the node decides
+            // what a status change means for assignment and timestamps, and the
+            // card should show what it actually said.
+            await refresh()
+        } catch {
+            boardLog.error("could not move \(task.id) to \(status): \(String(describing: error))")
+            board = previous
+            trouble = TaskBoardTrouble.cannotMove
+        }
+    }
+
     func refresh() async {
         do {
             let read = try await source.board()
@@ -577,6 +655,8 @@ final class TaskBoardModel {
 /// one, because a board that can be told what to say is not a board.
 private struct FixtureTaskSource: TaskSource {
     let fixture: TaskBoard?
+
+    func move(taskID: String, to status: BoardTask.Progress) async throws {}
 
     func board() async throws -> TaskBoard {
         guard let fixture else { throw TaskSourceFailure.unreachable }
