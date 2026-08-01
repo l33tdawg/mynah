@@ -118,11 +118,11 @@ place("MYNAH", .systemFont(ofSize: 22, weight: .semibold), ink2,
       x: margin + birdSide + 24, topDown: margin + birdSide / 2 - 16, width: 400)
 
 var cursor = margin + birdSide + 56
-cursor = place("A personal AI that lives on your Mac.",
+cursor = place("Tell it once. Reach it anywhere.",
                .systemFont(ofSize: 64, weight: .bold), ink1,
                x: margin, topDown: cursor, width: CGFloat(width) - margin * 2)
 
-place("Runs on a Mac you own. Answers you on Signal. Remembers what you tell it.",
+place("Runs on your Mac. Remembers across conversations. Answers in Signal.",
       .systemFont(ofSize: 26, weight: .regular), ink2,
       x: margin, topDown: cursor + 26, width: 880)
 
