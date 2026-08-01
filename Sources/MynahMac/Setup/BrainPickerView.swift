@@ -18,6 +18,19 @@ struct BrainStage: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        // Two screens behind one stage. A fresh install on a Mac that can run a
+        // brain locally never sees the menu — it watches the private brain being
+        // installed, because that is the default and a default nobody is given
+        // is a preference. The menu is what is left when that is impossible, and
+        // when it appears it opens by saying why.
+        if model.setsUpPrivatelyWithoutAsking {
+            PrivateSetupStage(titles: titles, model: model)
+        } else {
+            picker
+        }
+    }
+
+    private var picker: some View {
         BrainPicker(
             titles: titles,
             choices: model.choices,
@@ -25,6 +38,13 @@ struct BrainStage: View {
             installPhase: model.localBrainPhase,
             selection: $model.selectedOptionID,
             canContinue: model.canContinue,
+            whyYouAreBeingAsked: model.whyYouAreBeingAsked,
+            // Offered only when the private brain was possible and the owner
+            // stepped away from it after a failure. When this Mac genuinely
+            // cannot run one, a button back to it would be a door into a wall.
+            onReturnToPrivate: model.choices?.freshInstallDefault == nil
+                ? nil
+                : { model.returnToPrivateSetup() },
             onBack: { model.goBack() },
             onContinue: {
                 // Choosing a brain that needs no key settles any key the owner
@@ -52,6 +72,133 @@ struct BrainStage: View {
     }
 }
 
+// MARK: - Stage 2, the default path
+
+/// What a fresh install actually does: fetch the private brain and get on with
+/// it.
+///
+/// **There is no question on this screen, and that is the change.** The product
+/// said privacy by default in its README while the flow opened with a menu whose
+/// cheapest path was whatever cloud key happened to be in the owner's
+/// environment. A default nobody is given is a preference.
+///
+/// So this screen reports rather than asks — with one exception, which is the
+/// whole of the rest of the file. A 3.4 GB download can fail, and when it does
+/// the owner is holding an app that cannot answer. Telling them why, on a screen
+/// whose only control is the button that just failed, is the dead end this
+/// product keeps being asked to stop producing. Every failure here therefore
+/// carries two live doors: try it again, or go and pick something else.
+private struct PrivateSetupStage: View {
+    let titles: [String]
+    @Bindable var model: SetupModel
+
+    /// Belt and braces against the install being kicked off twice — `.task` runs
+    /// again if the view is rebuilt, and a second concurrent `ollama pull` is a
+    /// confusing progress bar at best.
+    @State private var hasStarted = false
+
+    private var phase: LocalBrainInstaller.Phase? { model.localBrainPhase }
+
+    private var failure: String? {
+        if case .failed(let reason) = phase { return reason }
+        return nil
+    }
+
+    var body: some View {
+        StageShell(
+            stageTitles: titles,
+            currentIndex: SetupModel.Stage.brain.rawValue,
+            glyph: StageIllustration.mark(.brain),
+            title: "Setting Mynah up on this Mac",
+            subtitle: "Mynah runs its own brain here, so what you say never leaves this "
+                + "machine. There's nothing to sign into and nothing to pay for. You can "
+                + "switch it to a cloud provider later in Settings if you'd rather."
+        ) {
+            content
+        } actions: {
+            actions
+        }
+        .task {
+            guard !hasStarted else { return }
+            hasStarted = true
+            await model.continueFromBrain()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        VStack(alignment: .leading, spacing: s6) {
+            if let failure {
+                InlineBanner(
+                    tone: .critical,
+                    headline: "The download didn't finish.",
+                    // The reason, then what to do about it. A failure sentence
+                    // with no verb in it is the complaint this screen exists to
+                    // answer: the owner does not need a better description of
+                    // being stuck, they need the next thing to press.
+                    explanation: failure + "\n\nTry again picks up where it left off rather "
+                        + "than starting the download over. If this Mac can't finish it, "
+                        + "you can point Mynah at a provider instead — you'll need an "
+                        + "account with one, and what you say will be sent to them."
+                )
+            } else {
+                progress
+            }
+        }
+        .frame(maxWidth: MynahWidth.stageColumn, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var progress: some View {
+        VStack(alignment: .leading, spacing: s4) {
+            HStack(spacing: s4) {
+                if phase?.isFinished != true { ThinkingIndicator() }
+                Text(phase?.sentence ?? "Getting ready…")
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let fraction = phase?.fraction, phase?.isFinished != true {
+                ProgressView(value: fraction).progressViewStyle(.linear)
+            }
+            // Said once, here, because this is the screen with the wait on it.
+            // Somebody watching a multi-gigabyte bar deserves to know it is a
+            // one-off rather than what using the app is like.
+            Text("This happens once. Afterwards Mynah answers without downloading anything.")
+                .mynahFont(.callout)
+                .foregroundStyle(Palette.ink.secondary)
+                .mynahProse()
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if failure != nil {
+            ActionRow(
+                quietTitle: "Back",
+                quietAction: { model.goBack() },
+                helper: "Nothing has been sent anywhere, and nothing is set up yet."
+            ) {
+                MynahButton("Use a provider instead", kind: .secondary) {
+                    model.chooseBrainInstead()
+                }
+                MynahButton("Try again", isDefault: true) {
+                    Task { await model.continueFromBrain() }
+                }
+            }
+        } else {
+            ActionRow(
+                quietTitle: "Back",
+                quietAction: { model.goBack() },
+                helper: "You can leave this running and come back to it."
+            ) {
+                EmptyView()
+            }
+        }
+    }
+}
+
 // MARK: - Picker
 
 /// The stage as pure presentation: a plan in, a chosen id out.
@@ -67,6 +214,12 @@ private struct BrainPicker: View {
     let installPhase: LocalBrainInstaller.Phase?
     @Binding var selection: BrainSetupOptionID?
     let canContinue: Bool
+    /// Why this screen is in front of them, when it is not the default path.
+    /// Nil on the path the owner opened themselves from the failure screen,
+    /// where they already know.
+    var whyYouAreBeingAsked: String?
+    /// Back to the private install, or `nil` when this Mac cannot run one.
+    var onReturnToPrivate: (() -> Void)?
     let onBack: () -> Void
     let onContinue: () -> Void
     let onLookAgain: () -> Void
@@ -108,6 +261,30 @@ private struct BrainPicker: View {
     private var content: some View {
         if let choices, !choices.options.isEmpty {
             VStack(alignment: .leading, spacing: s7) {
+                // **Why there is a question at all**, before the question.
+                //
+                // This screen used to open straight onto two groups of cards,
+                // which was fine when everyone saw it. Now that it is the
+                // fallback, arriving here means something specific went wrong or
+                // is missing on this Mac, and an owner who is shown a menu with
+                // no account of why they are being made to choose has been given
+                // a decision and denied its context.
+                if let whyYouAreBeingAsked {
+                    // `.info`, not `.critical`. Nothing has failed — this Mac is
+                    // what it is, and the owner is being told a fact and handed
+                    // a next step. Drawing it as a failure would tell somebody
+                    // on an Intel Mac that they had broken something.
+                    InlineBanner(
+                        headline: "Mynah can't run its own brain on this Mac.",
+                        explanation: whyYouAreBeingAsked
+                            + "\n\nSo it needs to borrow one. Everything below sends what you "
+                            + "say to a company you hold an account with — pick whichever you "
+                            + "already use, or the one you'd rather trust.",
+                        actionTitle: onReturnToPrivate == nil ? nil : "Try the private one again",
+                        action: onReturnToPrivate
+                    )
+                }
+
                 if choices.availableOptions.isEmpty {
                     // The cards stay on screen underneath this. Each one says in
                     // plain words what would make it work, and that is the only

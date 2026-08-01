@@ -130,10 +130,24 @@ public enum BrainSetupAvailability: Sendable, Equatable, Codable {
     }
 }
 
-/// Coarse grouping that drives the order of the list.
+/// Coarse grouping that drives the order of the **fallback list** — the screen
+/// an owner only reaches when this Mac cannot run a brain locally.
 ///
-/// Priority intent, in the product's terms: zero-friction first, then API key,
-/// then fully-local — with fully-local always present when the hardware allows.
+/// **This ranking is not the product default and must not be read as one.** It
+/// orders by friction: how little the owner has to do to get answering. On that
+/// axis fully-local genuinely is last, because it downloads several gigabytes
+/// and installs a runtime, while a key already sitting in the environment costs
+/// nothing at all.
+///
+/// The default is decided by `BrainSetupChoices.freshInstallDefault`, which
+/// ignores this ordering entirely and picks local whenever the hardware allows.
+/// The two disagree on purpose: least-work and least-exposure are different
+/// questions, and the product answers the second one first.
+///
+/// The sentence here used to read *"zero-friction first, then API key, then
+/// fully-local"* with nothing distinguishing an ordering rule from a product
+/// intent — which is how a file that ranked privacy last sat under a README
+/// promising privacy by default.
 public enum BrainSetupTier: Int, Sendable, Codable, CaseIterable, Comparable {
     /// An agent CLI the owner is already signed into. Nothing to do, and it
     /// rides a flat-rate subscription they already pay for.
@@ -304,6 +318,53 @@ public struct BrainSetupChoices: Sendable, Equatable, Codable {
             return nil
         }
         return BrainSetupSelection(option: option)
+    }
+
+    /// What a fresh install sets up without asking anybody, or `nil` when this
+    /// Mac cannot run it.
+    ///
+    /// **This is the one auto-selection in the product, and it is deliberately
+    /// the only one that can be.**
+    ///
+    /// Everything else here exists to stop code choosing a brain on the owner's
+    /// behalf: `BrainSetupSelection`'s initialiser is internal, there is no
+    /// conversion from a recommendation, and `select(_:)` demands an id only a
+    /// person can supply. That guard is not about auto-selection being untidy.
+    /// It is about the two things a wrong default actually does — **spend the
+    /// owner's money**, and **send their words to a company** — neither of which
+    /// they agreed to and both of which are hard to notice and hard to undo.
+    ///
+    /// `.fullyLocal` cannot do either. It has no credential to bill, and its
+    /// whole definition is that speech stays on the machine. So defaulting to it
+    /// is not a weaker version of the rule; it is the only choice that satisfies
+    /// what the rule was protecting, which is why this property names one
+    /// specific option rather than taking an id.
+    ///
+    /// It also makes a claim the product has been making anyway finally true.
+    /// The planner already *recommended* local, the install screen already put
+    /// it first, and the README said privacy by default — while the flow made
+    /// every new owner pick from a menu, where the fastest path was whatever
+    /// cloud key happened to be in their environment. A default nobody is given
+    /// is a preference, not a default.
+    ///
+    /// `nil` is not a failure to handle quietly. It means this Mac genuinely
+    /// cannot run a brain locally, and the owner now has to make a decision they
+    /// were never going to be asked to make — so whoever reads this `nil` owes
+    /// them the reason from `option(withID: .fullyLocal)?.availability`, which
+    /// carries a specific obstacle and not a shrug.
+    public var freshInstallDefault: BrainSetupSelection? {
+        guard let option = option(withID: .fullyLocal), option.isAvailable else { return nil }
+        return BrainSetupSelection(option: option)
+    }
+
+    /// Why the private default is not on offer, when it is not.
+    ///
+    /// Exists so a caller cannot report "you need to choose" without being able
+    /// to say what happened — the reason is one accessor away from the `nil`
+    /// that makes it necessary.
+    public var freshInstallDefaultObstacle: String? {
+        guard freshInstallDefault == nil else { return nil }
+        return option(withID: .fullyLocal)?.availability.reason
     }
 }
 

@@ -170,14 +170,88 @@ final class SetupModel {
         let planned = BrainSetupPlanner().plan(for: result)
         choices = planned
 
-        // The recommendation is shown, never applied. `BrainSetupSelection`'s
-        // initialiser is internal precisely so nothing can auto-select a brain
-        // on the owner's behalf — where their words go is their decision, and a
-        // default that quietly sends speech to a cloud provider is the exact
-        // failure this product exists to avoid.
+        // **The private brain is the default, and a default has to actually be
+        // applied to be one.**
+        //
+        // This used to select nothing and explain why at length: a recommendation
+        // is shown, never applied, because a default that quietly sends speech to
+        // a cloud provider is the failure this product exists to avoid. The
+        // reasoning was right and the conclusion overshot — it protected against
+        // defaulting to *any* brain when the danger was defaulting to a brain
+        // that bills the owner or ships their words. Fully-local does neither.
+        //
+        // See `BrainSetupChoices.freshInstallDefault`, which is the only thing
+        // in the product that may hand back a selection nobody chose, and can
+        // only ever hand back that one.
+        //
+        // Guarded on `selectedOptionID == nil` so re-probing — which
+        // `continueFromBrain` does to confirm what actually answered — cannot
+        // pull an owner who steered to a cloud provider back to local.
+        if selectedOptionID == nil, let fallback = planned.freshInstallDefault {
+            selectedOptionID = fallback.option.id
+        }
+
         if planned.availableOptions.isEmpty {
             probeFailure = "This Mac can't run any of the options, and no cloud provider is reachable."
         }
+    }
+
+    // MARK: The default path
+
+    /// True when setup will install the private brain without asking.
+    ///
+    /// The owner is not shown a menu in this case — see
+    /// `BrainSetupChoices.freshInstallDefault`. They change brains afterwards in
+    /// Settings, which is where a decision with money and privacy attached
+    /// belongs: made deliberately, not while they are still trying to get the
+    /// thing running.
+    var setsUpPrivatelyWithoutAsking: Bool {
+        choices?.freshInstallDefault != nil
+            && selectedOptionID == .fullyLocal
+            && !ownerAskedToChooseInstead
+    }
+
+    private(set) var ownerAskedToChooseInstead = false
+
+    /// The way out of the default path, offered **only after it has failed**.
+    ///
+    /// Not a "skip" button on a working install. A first run that opens with
+    /// "install privately, or pick something else" is the menu again with extra
+    /// steps, and the owner asked for the menu to be gone.
+    ///
+    /// But a download that will not finish — a Mac that is offline, a disk that
+    /// filled up mid-pull — leaves somebody holding an app that cannot answer
+    /// and a screen with nothing on it but the same failing button. That is the
+    /// dead end this product keeps being told about, and the fix is not a better
+    /// sentence describing the failure. It is a second door.
+    func chooseBrainInstead() {
+        ownerAskedToChooseInstead = true
+        // Their choice again from here, so nothing stays preselected: the picker
+        // must open with Continue disabled rather than with the option that just
+        // failed sitting selected and ready to fail again.
+        selectedOptionID = nil
+        localBrainPhase = nil
+    }
+
+    /// Back to the default path after taking the other door, so "choose
+    /// instead" is not a one-way trip out of the private install.
+    func returnToPrivateSetup() {
+        ownerAskedToChooseInstead = false
+        selectedOptionID = choices?.freshInstallDefault?.option.id
+        localBrainPhase = nil
+    }
+
+    /// Why the owner is being asked to choose, when they are.
+    ///
+    /// Never `nil` on the picker's default path: reaching the picker at all
+    /// means `freshInstallDefault` was `nil`, and the planner records an
+    /// obstacle whenever it withholds the local option. Falls back to a sentence
+    /// rather than an empty string because a heading that silently disappears is
+    /// how a screen ends up asking for a decision it never justified.
+    var whyYouAreBeingAsked: String? {
+        guard let choices, choices.freshInstallDefault == nil else { return nil }
+        return choices.freshInstallDefaultObstacle
+            ?? "Mynah couldn't work out whether this Mac can run a brain on its own."
     }
 
     // MARK: Navigation
