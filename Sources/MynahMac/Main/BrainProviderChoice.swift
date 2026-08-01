@@ -112,19 +112,59 @@ struct BrainProviderChoice: Equatable {
     ///
     /// Carrying a selection that is no longer visible would let "Use this brain"
     /// commit something the owner cannot see.
+    /// **A destination and a model are one decision.**
+    ///
+    /// This used to move the side and leave the model wherever it was, which is
+    /// how "On this Mac" arrived with nothing selected and the way back to a
+    /// provider arrived with no model at all:
+    ///
+    /// > *"OBVIOUSLY the model must be changed to the last used local model OR
+    /// > qwen by default — you can't change one without the other; same when you
+    /// > go back the other way... if it's a new key, never selected model, we
+    /// > always select the fastest / cheapest option."*
+    ///
+    /// So each side now arrives carrying a model: last used, then the sensible
+    /// default for that side, and never nothing. `hasSavedKey` decides which
+    /// provider the cloud side lands on, because a provider whose key is already
+    /// on the disk is one the owner can commit without typing anything.
     mutating func moved(
         to destination: Destination,
         localOption: BrainSetupOption?,
         cloudOptions: [BrainSetupOption],
-        current: BrainSetupOption?
+        current: BrainSetupOption?,
+        installedLocalModels: [String] = [],
+        hasSavedKey: (String) -> Bool = { _ in false },
+        defaults: UserDefaults = .standard
     ) {
         self.destination = destination
         self.typedKey = ""
         switch destination {
         case .thisMac:
             selected = localOption
+            localModel = LastBrainModelStore.localModel(
+                installed: installedLocalModels,
+                defaults: defaults
+            )
         case .cloud:
-            selected = cloudOptions.contains { $0.id == current?.id } ? current : nil
+            // Staying on the provider they are already on if it is one of these,
+            // then the last provider they have a key for, then nothing — which
+            // leaves the sheet asking rather than guessing at whose account to
+            // spend.
+            let landing = cloudOptions.first { $0.id == current?.id }
+                ?? cloudOptions.first { option in
+                    option.keyProviderIdentifier.map(hasSavedKey) ?? false
+                }
+            selected = landing.map { option in
+                var option = option
+                if let provider = option.keyProviderIdentifier {
+                    option.modelName = LastBrainModelStore.cloudModel(
+                        for: option.id,
+                        provider: provider,
+                        defaults: defaults
+                    )
+                }
+                return option
+            }
         }
     }
 }

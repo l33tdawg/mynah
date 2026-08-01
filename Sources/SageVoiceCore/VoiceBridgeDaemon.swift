@@ -33,7 +33,14 @@ public actor VoiceBridgeDaemon {
         /// Bracketed rather than bare: one glyph alone reads as punctuation
         /// while scrolling, and three in a row read as shouting. Delimiters do
         /// the work instead — they say "label", which is what this is.
-        public static let defaultReplyPrefix = "‹🧠› "
+        /// The brain was SAGE's glyph, chosen when this was a bridge to a memory
+        /// node and the appliance had no face of its own. It has one now, and it
+        /// is a bird — so a brain in the thread labels the replies as coming
+        /// from something other than the app the owner just installed.
+        ///
+        /// Still bracketed, and still a label, for the reason above: the phone
+        /// has no second column to put these in.
+        public static let defaultReplyPrefix = "‹🐦› "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String

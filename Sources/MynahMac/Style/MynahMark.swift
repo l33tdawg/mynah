@@ -216,3 +216,43 @@ private struct MynahMarkGallery: View {
         .background(Palette.surface.canvas)
     }
 }
+
+// MARK: - Menu bar
+
+/// The mark as a menu-bar template image.
+///
+/// *"we also don't have a system tray icon"* — there was one, drawing
+/// `waveform`, `moon` or `exclamationmark.circle` depending on what the
+/// appliance was doing. Which is to say there was an icon nobody recognised as
+/// Mynah: a generic waveform in a bar full of generic glyphs is indistinguishable
+/// from some other app's, so the owner looked for their bird, did not find it,
+/// and reasonably concluded it was missing.
+///
+/// So it is the bird, always, and the state moved to where there is room for a
+/// word — the menu's first line already reads "Mynah — listening". A silhouette
+/// at 16pt cannot carry four states legibly anyway; it was three symbols
+/// pretending to.
+///
+/// `isTemplate` is the whole trick: AppKit then tints it for a light bar, a dark
+/// bar, and the inverted state while the menu is open, which is why this is a
+/// filled silhouette with no eye patch and no colour. A mark that keeps its own
+/// colours in the menu bar is the one that looks wrong there.
+enum MynahMenuBarIcon {
+
+    /// 16pt is the conventional menu-bar glyph box; the bird is drawn to the
+    /// tile, so it fills it the way an SF Symbol would.
+    static let image: NSImage = render(side: 16)
+
+    static func render(side: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let path = MynahBird().path(in: rect)
+            NSColor.black.setFill()
+            NSBezierPath(cgPath: path.cgPath).fill()
+            return true
+        }
+        // Without this the bird is drawn in literal black and stays black on a
+        // dark menu bar, which is a hole where the icon should be.
+        image.isTemplate = true
+        return image
+    }
+}

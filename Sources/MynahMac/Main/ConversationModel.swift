@@ -205,6 +205,10 @@ enum BrainSelectionStore {
     static func save(_ option: BrainSetupOption, defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(option) else { return }
         defaults.set(data, forKey: storageKey)
+        // Every save is also a fact worth keeping past the next switch — see
+        // `LastBrainModelStore`. Recorded here because this is the one choke
+        // point every brain change goes through, so a caller cannot forget.
+        LastBrainModelStore.remember(option, defaults: defaults)
     }
 
     static func current(_ defaults: UserDefaults = .standard) -> BrainSetupOption? {

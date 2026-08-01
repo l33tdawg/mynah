@@ -812,11 +812,12 @@ struct SettingsView: View {
                 BrainProviderSheet(
                     choices: BrainSetupPlanner().plan(for: probe),
                     current: model.brainOption,
-                    // What Ollama has actually pulled. The sheet lists these and
-                    // offers no way to type a name — a model named by hand is a
-                    // typo that becomes a failure two screens later, and the
-                    // machine already knows the answer.
-                    installedLocalModels: localModels
+                    // What Ollama has actually pulled, whatever the brain is
+                    // now — this is the sheet somebody uses to *become* local.
+                    // The sheet lists these and offers no way to type a name: a
+                    // model named by hand is a typo that becomes a failure two
+                    // screens later, and the machine already knows the answer.
+                    installedLocalModels: installedLocalModels
                 ) { outcome in
                     isChangingProvider = false
                     switch outcome {
@@ -1288,9 +1289,30 @@ struct SettingsView: View {
     ///
     /// Empty for a cloud brain, whose two choices come from the catalogue
     /// instead — see `offeredModels`.
+    ///
+    /// **Only for "change the model".** For "change where the words go", use
+    /// `installedLocalModels`, and see why below.
     private var localModels: [String] {
         guard model.brain?.keepsWordsOnDevice == true else { return [] }
         return model.probe?.localRuntime.installedModels.sorted() ?? []
+    }
+
+    /// Everything the local runtime has pulled, whatever the brain is now.
+    ///
+    /// **The gate on `localModels` above is right there and wrong here**, and
+    /// shipping it on both was a bug the owner hit within the hour: on DeepSeek,
+    /// opening "where your words go", picking "On this Mac" and being told *"No
+    /// local model has finished downloading"* — with qwen3.5:4b sitting on the
+    /// disk, pulled by this app.
+    ///
+    /// The gate exists because offering an owner's Ollama models while they are
+    /// on DeepSeek would let them store a local model name against a cloud
+    /// provider. That reasoning holds for the sheet that changes the *model*
+    /// within a provider. It inverts here: this sheet is how somebody on a cloud
+    /// brain moves *to* local, so requiring them to already be local shuts the
+    /// door from the only side anybody needs to open it from.
+    private var installedLocalModels: [String] {
+        model.probe?.localRuntime.installedModels.sorted() ?? []
     }
 
     /// The provider identifier the model catalogue is keyed by, or `nil` for a
@@ -2475,12 +2497,11 @@ private struct BrainModelSheet: View {
     }
 
     private var list: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(choices.enumerated()), id: \.element) { index, candidate in
-                if index > 0 { MynahDivider() }
+        VStack(spacing: s3) {
+            ForEach(Array(choices.enumerated()), id: \.element) { _, candidate in
                 Button { name = candidate } label: {
                     HStack(alignment: .firstTextBaseline, spacing: s3) {
-                        StatusDot(candidate == trimmed ? .accent : .neutral)
+                        StatusDot(candidate == trimmed ? .good : .neutral)
                         VStack(alignment: .leading, spacing: 2) {
                             // The tier name leads for a cloud provider because
                             // it is the part the owner is actually choosing
@@ -2507,14 +2528,34 @@ private struct BrainModelSheet: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.vertical, s3)
-                    .contentShape(Rectangle())
+                    .padding(s5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // **The picked one is a green card, not a dot.**
+                    //
+                    // These were two rows in one bordered group separated by a
+                    // divider, with a small filled dot as the only difference
+                    // between chosen and not: *"make it obvious which is
+                    // highlighted - use a green card"*. A 6pt dot carrying the
+                    // whole answer to "which am I on" is the same mistake as a
+                    // one-word toolbar button carrying "pause what".
+                    //
+                    // Green is the palette's "this is the good, settled state",
+                    // which is what the model you are actually using is.
+                    .background(
+                        candidate == trimmed ? Palette.state.goodWash : Palette.surface.raised,
+                        in: RoundedRectangle.mynah(r.card)
+                    )
+                    .mynahBorder(
+                        r.card,
+                        candidate == trimmed ? Palette.state.good.opacity(0.55) : Palette.line.hairline
+                    )
+                    .contentShape(RoundedRectangle.mynah(r.card))
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
             }
         }
-        .mynahGroupCard()
+        .mynahAnimation(Motion.snap, value: trimmed)
     }
 
     /// The tier a candidate belongs to, or `nil` for a local model and for a

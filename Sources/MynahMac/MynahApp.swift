@@ -782,7 +782,7 @@ public struct MynahApp: App {
             MenuBarContent()
                 .environment(app)
         } label: {
-            Image(systemName: app.effectivePresence.menuBarSymbol)
+            Image(nsImage: MynahMenuBarIcon.image)
                 .accessibilityLabel("Mynah — \(app.effectivePresence.verb)")
         }
         .menuBarExtraStyle(.menu)

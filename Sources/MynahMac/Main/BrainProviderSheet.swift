@@ -136,7 +136,9 @@ struct BrainProviderSheet: View {
                     to: new,
                     localOption: localOption,
                     cloudOptions: cloudOptions,
-                    current: current
+                    current: current,
+                    installedLocalModels: installedLocalModels,
+                    hasSavedKey: { KeyStorage.key(forProvider: $0) != nil }
                 )
             }
 

@@ -806,22 +806,53 @@ struct MainShell: View {
             GeometryReader { proxy in
                 detail.frame(width: proxy.size.width, height: proxy.size.height)
             }
+
                 .background(Palette.surface.canvas)
                 // Exactly one toolbar control, and it is the one verb the owner
                 // might want without opening a pane.
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button(app.isPaused ? "Resume" : "Pause") { app.isPaused.toggle() }
-                            // A one-word toolbar button is where a Mac owner
-                            // expects to hover for the sentence. Without it,
-                            // "Pause" is a verb with no object — pause what?
-                            .help(app.isPaused
-                                  ? "Start answering your phone again"
-                                  : "Stop answering until you resume")
+                        // **A bare word in a floating capsule, jammed against
+                        // the window edge, saying a verb with no object.**
+                        //
+                        // *"the pause button on the top right looks weird; not
+                        // as well designed as everything else and its sitting
+                        // very close to the edge; there is also no tool tip when
+                        // you mouse over so you have no idea what it does."*
+                        //
+                        // Three separate things, and the tooltip is the
+                        // interesting one: `.help` *was* here, on the `Button`.
+                        // On a toolbar item SwiftUI hands the button to AppKit
+                        // and the help string does not survive the trip. It has
+                        // to sit on the label content, which is what actually
+                        // becomes the tracked view.
+                        Button { app.isPaused.toggle() } label: {
+                            Label(
+                                app.isPaused ? "Resume" : "Pause",
+                                systemImage: app.isPaused ? "play.fill" : "pause.fill"
+                            )
+                            .labelStyle(.titleAndIcon)
+                            .help(helpText)
+                        }
+                        .help(helpText)
+                        .accessibilityLabel(helpText)
+                        // Off the edge. A toolbar item sits flush against the
+                        // window's right inset, which on a titleless window with
+                        // no other controls reads as something that fell out of
+                        // the layout.
+                        .padding(.trailing, s2)
                     }
                 }
         }
         .navigationTitle("")
+    }
+
+    /// The sentence the word is short for. "Pause" alone is a verb with no
+    /// object — pause what, the app, the window, the phone?
+    private var helpText: String {
+        app.isPaused
+            ? "Start answering your phone again"
+            : "Stop answering your phone until you resume"
     }
 
     @ViewBuilder
