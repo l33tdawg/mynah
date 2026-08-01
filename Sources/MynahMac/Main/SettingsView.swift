@@ -222,9 +222,9 @@ enum PrivacyClaim {
     /// only on the screen where it is switched on would break that promise on
     /// the day it shipped.
     static let checkingOnThings = "Mynah can check your agent inbox and its own task list on a "
-        + "timer and message you when something has changed. It is off until you turn it on, it "
-        + "stays quiet overnight, and it says nothing when nothing has changed. Everything it "
-        + "looks at is on this Mac or on your own SAGE node."
+        + "timer and message you when something has changed. It is off until you turn it on, and "
+        + "it says nothing when nothing has changed. Everything it looks at is on this Mac or on "
+        + "your own SAGE node."
 
     /// The About caption, composed rather than written out.
     ///
@@ -2090,8 +2090,8 @@ struct SettingsView: View {
         SettingsRow(
             "Check on things and tell me",
             detail: "Mynah looks at what your other agents have sent and what's on its task "
-                + "list, and messages you on Signal only when something has changed. It says "
-                + "nothing overnight."
+                + "list, and messages you on Signal only when something has changed. It answers "
+                + "in your own Note to Self, so nothing it sends makes your phone ring."
         ) {
             Toggle("", isOn: Binding(
                 get: { model.checksOnThings },

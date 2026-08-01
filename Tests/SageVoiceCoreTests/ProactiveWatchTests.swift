@@ -284,7 +284,42 @@ final class ProactiveScheduleTests: XCTestCase {
         ))
     }
 
-    func testItStaysQuietAtNight() {
+    func testItRunsAllDayUnlessSomebodySaysOtherwise() {
+        // Mynah answers in Note to Self as the owner's own account, and Signal
+        // does not notify anybody about their own sent messages. The night
+        // default was solving a problem this appliance does not have.
+        let preferences = ProactivePreferences(isOn: true)
+
+        XCTAssertFalse(preferences.isQuiet(at: at(3)))
+        XCTAssertTrue(ProactiveSchedule.isDue(
+            now: at(3),
+            lastChecked: nil,
+            preferences: preferences
+        ))
+    }
+
+    func testTheNightDefaultNobodyChoseIsCleared() {
+        // 1.2.8 wrote 22:00–08:00 the moment the switch was touched, and there
+        // has never been a control for it — so leaving it in place would be a
+        // silence the owner cannot lift from inside the app.
+        let stored = ProactivePreferences(isOn: true, quietFrom: 22, quietUntil: 8)
+
+        let loaded = ProactivePreferences.withoutTheOldNightDefault(stored)
+
+        XCTAssertFalse(loaded.isQuiet(at: at(23)))
+    }
+
+    func testAnEditedQuietWindowIsLeftAlone() {
+        // Anything other than the old default is a decision somebody made in
+        // the file, and a decision is not a migration.
+        let stored = ProactivePreferences(isOn: true, quietFrom: 23, quietUntil: 7)
+
+        let loaded = ProactivePreferences.withoutTheOldNightDefault(stored)
+
+        XCTAssertTrue(loaded.isQuiet(at: at(2)))
+    }
+
+    func testAQuietWindowStillWorksWhenOneIsSet() {
         let preferences = ProactivePreferences(isOn: true, quietFrom: 22, quietUntil: 8)
 
         XCTAssertTrue(preferences.isQuiet(at: at(23)))

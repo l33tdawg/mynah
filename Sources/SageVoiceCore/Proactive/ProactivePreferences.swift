@@ -26,9 +26,24 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
 
     /// The hour it stops for the night, and the hour it starts again.
     ///
-    /// A phone on a bedside table is the reason this exists. Nothing is lost to
-    /// a quiet hour: the check simply does not run, and whatever accumulated is
-    /// still there in the morning.
+    /// **Both zero by default, which means it never stops.** These shipped at
+    /// 22:00–08:00 on the assumption that a message landing overnight wakes
+    /// somebody — and on this appliance it does not. Mynah answers in Note to
+    /// Self *as the owner's own account*, from a linked device, so what arrives
+    /// is one of their own sent messages and Signal does not notify anybody
+    /// about their own sent messages. The owner's reading: *"i think its ok to
+    /// have it run 24/7 - notes to self does not make a sound."*
+    ///
+    /// The setting stays because the assumption behind the new default is
+    /// configuration-specific: an appliance pointed at a thread that is not
+    /// Note to Self would notify, and then somebody will want their nights
+    /// back. There is no control for it — it is two numbers in
+    /// `proactive-preferences.json` — because inventing a screen for a case
+    /// nobody has yet is how settings pages become unreadable.
+    ///
+    /// Nothing is lost to a quiet hour when one is set: the check does not run,
+    /// the ledger is untouched, and whatever accumulated is still new in the
+    /// morning.
     public var quietFrom: Int
     public var quietUntil: Int
 
@@ -40,8 +55,8 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
     public init(
         isOn: Bool = false,
         everyMinutes: Int = 60,
-        quietFrom: Int = 22,
-        quietUntil: Int = 8
+        quietFrom: Int = 0,
+        quietUntil: Int = 0
     ) {
         self.isOn = isOn
         self.everyMinutes = everyMinutes
@@ -88,7 +103,26 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
               let stored = try? JSONDecoder().decode(ProactivePreferences.self, from: data) else {
             return ProactivePreferences()
         }
-        return stored
+        return withoutTheOldNightDefault(stored)
+    }
+
+    /// Clears 22:00–08:00 when it was written by the version that shipped it as
+    /// the default.
+    ///
+    /// 1.2.8 stored those two numbers the moment the owner touched the switch,
+    /// and there has never been a control for them — so a file carrying exactly
+    /// that pair carries a default nobody chose, and after 1.2.9 it would leave
+    /// them silent all night with nothing in the app able to change it. A dead
+    /// end made out of a preference is worse than the preference.
+    ///
+    /// Only that exact pair. Anything else is somebody who edited the file, and
+    /// an edit is a decision.
+    static func withoutTheOldNightDefault(_ stored: ProactivePreferences) -> ProactivePreferences {
+        guard stored.quietFrom == 22, stored.quietUntil == 8 else { return stored }
+        var updated = stored
+        updated.quietFrom = 0
+        updated.quietUntil = 0
+        return updated
     }
 
     public func save(to url: URL = ProactivePreferences.defaultFileURL()) throws {
