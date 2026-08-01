@@ -51,20 +51,27 @@ public actor VoiceBridgeDaemon {
         /// font draws them facing left. There is no right-facing variant and no
         /// way for a sender to request one.
         ///
-        /// ## Why a dove and not the black bird
+        /// ## Why there is no bird here at all
         ///
-        /// *"make the bird white - can't see it against blue."*
+        /// Three were tried — `🐦‍⬛`, then `🕊️` — against *"make the bird white"*
+        /// and then *"EXACTLY THE SAME BRO — looking to the right, yellow eye
+        /// patch"*. None of them could be right, and the reason is not
+        /// aesthetic:
         ///
-        /// Correct, and not fixable by styling: Mynah's replies land in Signal's
-        /// **blue outgoing bubble**, an emoji carries its own colours, and
-        /// `🐦‍⬛` is near-black. It was legible in this file and invisible in the
-        /// thread it actually ships to.
+        /// A Signal message is plain Unicode. The glyph is drawn by the
+        /// recipient's emoji font, in its own colours, at its own orientation.
+        /// Unicode ships sixteen birds; every one faces left, none carries a
+        /// yellow eye mask, and there is no variation selector for direction or
+        /// colour. **A white right-facing mynah is not a character that exists**,
+        /// so every choice here was a different wrong bird.
         ///
-        /// There is no white mynah in Unicode. `🕊️` is the one pale bird
-        /// available, so this is a dove standing in for the mark rather than a
-        /// change of mark — the app's own bird is unchanged everywhere it can
-        /// actually be drawn.
-        public static let defaultReplyPrefix = "🕊️>> "
+        /// So the mark moved to where an image is actually allowed: the
+        /// account's Signal profile picture, which is our own PNG at avatar
+        /// size, shown once beside the thread instead of repeated in front of
+        /// every sentence. What is left in the text is the marker the owner
+        /// asked for and nothing else — *"add >> after (no need anything at the
+        /// start so no < or anything)"*.
+        public static let defaultReplyPrefix = ">> "
 
         /// Spoken to the owner when a turn fails in a way we cannot explain.
         public var genericFailureReply: String

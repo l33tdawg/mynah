@@ -201,60 +201,51 @@ struct TalkView: View {
                     .foregroundStyle(Palette.ink.secondary)
             }
             Spacer(minLength: s5)
+            boardToggle
         }
         .padding(.horizontal, s8)
         .padding(.vertical, s5)
         .mynahAnimation(Motion.fade, value: health)
     }
 
-    // MARK: The seam between the two halves
-
-    /// The divider, and the only way to fold either half away.
+    /// Folds the board column away, and brings it back.
     ///
-    /// **One affordance, two directions.** The chevrons move the seam rather
-    /// than naming a half: up folds the board away, down folds the transcript
-    /// away, and whichever half is hidden shows the one chevron that brings it
-    /// back. That mapping is worth the two glyphs — a single button would have
-    /// to cycle through three states, and a control whose next effect you have
-    /// to remember is a control you stop using.
+    /// **This went missing and the loss was not recoverable from the
+    /// interface.** The board used to sit above the conversation and
+    /// `splitControl` folded it with up/down chevrons. Moving it beside the
+    /// conversation left that control orphaned — defined, compiled, referenced
+    /// by nothing — so there was no way to collapse the board and, worse, no way
+    /// to bring it back: `homeSplit` is persisted, so anyone whose last session
+    /// ended on `.conversationOnly` opened Home to a missing column and no
+    /// control to restore it. Which is what happened.
     ///
-    /// No drag handle beside it. A draggable split is a second way to do the
-    /// same thing, with a position the owner then has to maintain.
-    private var splitControl: some View {
-        VStack(spacing: 0) {
-            // Only when something sits above it. With the board folded away the
-            // health line's own rule is already there, and two hairlines
-            // touching read as one thick badly-drawn one.
-            if app.homeSplit.showsBoard { MynahDivider() }
-            HStack(spacing: s3) {
-                collapsedSummary
-                Spacer(minLength: s4)
-                if app.homeSplit != .conversationOnly {
-                    seamButton(
-                        "chevron.up",
-                        label: app.homeSplit == .boardOnly ? "Show the conversation" : "Hide the board",
-                        to: app.homeSplit == .boardOnly ? .both : .conversationOnly
-                    )
-                }
-                if app.homeSplit != .boardOnly {
-                    seamButton(
-                        "chevron.down",
-                        label: app.homeSplit == .conversationOnly ? "Show the board" : "Hide the conversation",
-                        to: app.homeSplit == .conversationOnly ? .both : .boardOnly
-                    )
-                }
+    /// Left/right rather than up/down, because the fold is now horizontal and a
+    /// chevron that points the wrong way is a control you have to think about.
+    /// `.boardOnly` is deliberately not reachable from here: a column of tasks
+    /// with the conversation gone made sense stacked and does not side by side,
+    /// where the composer is the other two thirds of the window.
+    private var boardToggle: some View {
+        let shown = app.homeSplit.showsBoard
+        return HStack(spacing: s3) {
+            // What is behind the fold, so collapsing the board does not also
+            // hide the fact that there is anything on it. Only when folded —
+            // beside the open board it would be saying twice what the columns
+            // already say.
+            if !shown {
+                Text(boardSummary)
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, s8)
-            .padding(.vertical, s2)
-            MynahDivider()
+            boardChevron(shown: shown)
         }
     }
 
-    private func seamButton(_ glyph: String, label: String, to split: AppModel.HomeSplit) -> some View {
+    private func boardChevron(shown: Bool) -> some View {
         Button {
-            app.homeSplit = split
+            app.homeSplit = shown ? .conversationOnly : .both
         } label: {
-            Image(systemName: glyph)
+            Image(systemName: shown ? "chevron.left" : "chevron.right")
                 .mynahIcon(.inline)
                 .foregroundStyle(Palette.ink.secondary)
                 .frame(width: 22, height: 18)
@@ -262,50 +253,10 @@ struct TalkView: View {
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help(label)
-        .accessibilityLabel(label)
+        .help(shown ? "Hide what's on its plate" : "Show what's on its plate")
+        .accessibilityLabel(shown ? "Hide the task board" : "Show the task board")
     }
 
-    /// What is behind the fold, so the owner knows what a click gets back.
-    ///
-    /// A bare rule with a chevron on it is a mystery. The counts are the same
-    /// three numbers the column headers carry.
-    ///
-    /// **There used to be an amber dot here when the board had trouble, and the
-    /// owner misread it as the appliance having stopped.** He reported "signal
-    /// crashed again — see it's yellow now (paused mode colour)". Signal had not
-    /// crashed; both processes were up and both plists intact. He was reading
-    /// the colour correctly and the colour was wrong.
-    ///
-    /// Amber everywhere else in this product means *Mynah is not doing what you
-    /// think* — paused, restricted, needs the owner. So amber **on a folded
-    /// bar** reads as a state of the appliance whatever it is attached to, and a
-    /// dot with no subject is ambiguous by construction: it could belong to
-    /// anything behind the fold.
-    ///
-    /// The distinction that matters is subject, not severity. A property of the
-    /// *product* earns caution ink; a property of a *view* — this list cannot be
-    /// opened — does not, however annoying it is. The summary text says it
-    /// instead, and says whose problem it is.
-    @ViewBuilder
-    private var collapsedSummary: some View {
-        switch app.homeSplit {
-        case .both:
-            EmptyView()
-        case .conversationOnly:
-            HStack(spacing: s3) {
-                Text(boardSummary)
-                    .mynahFont(.label)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .lineLimit(1)
-            }
-        case .boardOnly:
-            Text(conversationSummary)
-                .mynahFont(.label)
-                .foregroundStyle(Palette.ink.secondary)
-                .lineLimit(1)
-        }
-    }
 
     private var boardSummary: String {
         guard let plate = board.board else {
@@ -327,14 +278,6 @@ struct TalkView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var conversationSummary: String {
-        let count = model.exchanges.count + record.messages.count
-        switch count {
-        case 0: return "Conversation"
-        case 1: return "Conversation — 1 message"
-        default: return "Conversation — \(count) messages"
-        }
-    }
 
     private var canClear: Bool { !model.exchanges.isEmpty || !record.messages.isEmpty }
 

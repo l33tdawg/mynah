@@ -44,7 +44,7 @@ func usage() -> Never {
       sage-voiced key [--provider gemini] [--key <key>]   instructions, then verify
       sage-voiced google [--provision] [--sign-out]        sign in with Google
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
-                         [--reply-prefix "🕊️>> "] [--acknowledge]
+                         [--reply-prefix ">> "] [--acknowledge]
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
     Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
