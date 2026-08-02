@@ -778,16 +778,25 @@ public actor VoiceBridgeDaemon {
                     // "On it", and there is no reason to say both.
                     await self.working(line, thread: key, to: recipient)
                 },
-                onProgress: { [weak self] update in
-                    guard let self, let line = update.line else { return }
-                    // "Looking that up online — give me a few seconds." followed
-                    // by "Looking online for the rest of it." is two true
-                    // sentences and one piece of news. Varying the wording was
-                    // supposed to stop the appliance sounding mechanical; a
-                    // stutter puts that back. `working` holds that rule now, so
-                    // it applies to a held line as well as a said one.
-                    await self.working(line, thread: key, to: recipient)
-                }
+                // **One message, then quiet.** Deliberately not wired.
+                //
+                // A thread is not a progress bar. Every update here is a
+                // notification on the owner's phone, and three of them across
+                // one turn is the appliance talking about itself while he waits
+                // for the thing he actually asked for.
+                //
+                // The owner, after watching a long turn narrate itself: *"make
+                // the messages sound more useful and not just 'noise' - esp when
+                // replying on text - its better we send 1 message that says, i'm
+                // working on it - gimme a couple of minutes and i'll get back to
+                // you when everything's ready for you to review' - then stfu
+                // until agent comes back"*.
+                //
+                // `onToolDecision` above is that one message, and it is already
+                // held so a turn that finishes quickly says nothing at all. What
+                // it needed was not company but a promise to return, which is
+                // now in the wording rather than in a second notification.
+                onProgress: nil
             )
             histories[key] = Self.trimmed(
                 Self.conversationOnly(result.messages),

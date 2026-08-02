@@ -136,7 +136,27 @@ public enum WorkingReply {
 
     /// The catch-all pool, named once so `opening` can recognise it rather than
     /// re-deriving which branch fired."""
-    static let catchAllOptions = ["Let me have a look.", "One moment.", "On it."]
+    /// **These now promise a return, because they are the only thing said.**
+    ///
+    /// They were "Let me have a look.", "One moment." and "On it." — true, and
+    /// each one a sentence that expires in about fifteen seconds. They were
+    /// written when a turn narrated itself two or three more times, so no single
+    /// line had to carry the whole wait. Nothing follows them now.
+    ///
+    /// The owner: *"its better we send 1 message that says, i'm working on it -
+    /// gimme a couple of minutes and i'll get back to you when everything's
+    /// ready for you to review' - then stfu until agent comes back"*.
+    ///
+    /// So each one sets an expectation and commits to coming back. "A couple of
+    /// minutes" is deliberately vague and deliberately generous — the budget is
+    /// five, and a line that promised one would be wrong more often than it was
+    /// right. These are only ever said after the hold, so a turn that finishes
+    /// quickly never claims it needed minutes.
+    static let catchAllOptions = [
+        "On it — give me a couple of minutes and I'll come back when it's all done.",
+        "Working on it now. I'll come back to you once everything's ready.",
+        "Give me a couple of minutes — I'll send it over when it's ready to look at."
+    ]
 
     /// Classifies the request from its wording alone. Deliberately conservative:
     /// every branch here has to be true of *any* turn that reaches it.

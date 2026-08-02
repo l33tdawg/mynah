@@ -417,4 +417,27 @@ final class TitleWithoutDateTests: XCTestCase {
     func testCapitalisationSurvives() {
         XCTAssertEqual(stripped("Dentist August 5 2026"), "Dentist")
     }
+
+    /// **The preposition that outlived its object.** Shipped, and read badly on
+    /// the owner's phone: "Call Amy — at — in about 2 hours, at 10 am."
+    ///
+    /// Every removal was individually right — the date went, then the time, then
+    /// the weekday — and the "at" joining the sentence to the time it no longer
+    /// had was owned by none of them.
+    func testNoDanglingPreposition() {
+        XCTAssertEqual(stripped("Call Amy — Monday 3 August 2026 at 10:00"), "Call Amy")
+        XCTAssertEqual(stripped("Dentist appointment — Tuesday 4 August 2026, 2pm"), "Dentist appointment")
+        XCTAssertEqual(stripped("Send Cayenne to Prestige — Tuesday 4 August 2026, 11:00"), "Send Cayenne to Prestige")
+    }
+
+    /// The exact sentence the owner saw, rebuilt end to end.
+    func testTheReminderReadsAsASentence() {
+        let task = WatchedTask(id: "t", title: "Call Amy — Monday 3 August 2026 at 10:00", status: "planned")
+        let at0740 = calendar.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 7, minute: 40))!
+
+        guard let nudge = ReminderLadder.nudge(for: task, now: at0740, calendar: calendar) else {
+            return XCTFail("no nudge")
+        }
+        XCTAssertEqual(nudge.text, "Call Amy — in about 2 hours, at 10 am.")
+    }
 }

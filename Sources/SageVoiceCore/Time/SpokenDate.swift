@@ -254,6 +254,25 @@ public enum SpokenDate {
             }
         }
 
+        // **The preposition outlives its object.** Shipped once and read badly:
+        // "Call Amy — Monday 3 August 2026 at 10:00" lost the date, then the
+        // time, then the weekday — each correctly — and left "Call Amy — at",
+        // which the reminder rendered as "Call Amy — at — in about 2 hours".
+        //
+        // Each removal above is right on its own; the word joining them to what
+        // was removed is what nothing owned. Run to a fixed point, because
+        // stripping one can expose another ("… on at").
+        var settled = false
+        while !settled {
+            settled = true
+            for pattern in [#"\s+(at|on|for|by)\s*$"#, #"\s*[,–—-]\s*$"#, #"\s{2,}"#] {
+                if let range = kept.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                    kept.replaceSubrange(range, with: pattern == #"\s{2,}"# ? " " : "")
+                    settled = false
+                }
+            }
+        }
+
         let tidied = kept
             .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+([,.])"#, with: "$1", options: .regularExpression)
