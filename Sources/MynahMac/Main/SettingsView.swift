@@ -679,6 +679,10 @@ final class SettingsModel {
     /// notices at launch that the bytes changed and re-installs the job. See
     /// `SignalBackgroundServiceManager.executableStamp`.
     func restartIntoNewVersion(bundleURL: URL = Bundle.main.bundleURL) {
+        // Before the shell is even arranged, because what this changes is what
+        // `applicationShouldTerminate` does — and without it that method spends
+        // up to thirty seconds removing LaunchAgents the next launch will put
+        // straight back. See `RestartIntent`.
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done; "
             + "/usr/bin/open \"$1\""
@@ -697,6 +701,14 @@ final class SettingsModel {
             installState = .failed(.couldNotRestart)
             return
         }
+        // **After the relaunch is arranged and never before.** This changes
+        // what quitting does — `applicationShouldTerminate` skips removing the
+        // LaunchAgents while it is set, because the next launch would put them
+        // straight back. Setting it first and then failing to start the shell
+        // would leave the flag on with no restart coming, so the owner's next
+        // ordinary Quit would leave their phone still being answered: exactly
+        // the bug that method was written to fix.
+        RestartIntent.shared.begin()
         NSApplication.shared.terminate(nil)
     }
 

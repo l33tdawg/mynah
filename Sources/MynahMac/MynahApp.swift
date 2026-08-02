@@ -679,6 +679,27 @@ final class MynahAppDelegate: NSObject, NSApplicationDelegate {
     /// what releases a `.terminateLater`, so getting it wrong leaves Mynah
     /// unquittable by the owner who just asked it to quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // **A restart is not a quit, and treating it as one broke the button.**
+        //
+        // *"the restart mynah button doesn't close the app and reopen - have to
+        // manually close it; it will automatically reopen."* Both halves of that
+        // sentence are this branch missing. Everything below is the quit path:
+        // two `launchctl bootout` calls, each capped at 15 seconds, before the
+        // reply that actually releases `.terminateLater`. So pressing Restart
+        // appeared to do nothing for up to half a minute; the owner quit by
+        // hand, and the relaunch script — which waits for this process to be
+        // gone and then opens the app — did its half correctly, which is why it
+        // came back on its own afterwards.
+        //
+        // Skipping the teardown is right rather than merely quicker. The app is
+        // coming straight back, and `enable()` on the next launch would put the
+        // same two jobs back — so the round trip buys nothing and spends a
+        // window in which the owner's phone is not answered. The daemon keeps
+        // running from the old bundle for those few seconds and the new
+        // instance moves it onto the new build by itself, because its
+        // LaunchAgent carries a stamp of the executable it was written for.
+        guard !RestartIntent.shared.isUnderway else { return .terminateNow }
+
         Task { @MainActor in
             await SignalBackgroundServiceManager.shared.disable(because: "the owner quit Mynah")
             NSApp.reply(toApplicationShouldTerminate: true)

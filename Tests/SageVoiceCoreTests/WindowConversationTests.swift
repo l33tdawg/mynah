@@ -583,3 +583,47 @@ final class WindowDocumentRecordTests: XCTestCase {
         XCTAssertEqual(record.turns.last?.files, [file.path])
     }
 }
+
+// MARK: - Restarting is not quitting
+
+/// The flag that decides which of two very different things a termination is.
+///
+/// *"the restart mynah button doesn't close the app and reopen - have to
+/// manually close it; it will automatically reopen."* Both halves of that
+/// sentence were one missing branch: `applicationShouldTerminate` runs the quit
+/// path — two `launchctl bootout` calls at up to 15 seconds each, behind
+/// `.terminateLater` — so pressing Restart looked like it did nothing, and the
+/// relaunch script, which waits for this process to be gone before opening the
+/// app, correctly did its half once the owner quit by hand.
+final class RestartIntentTests: XCTestCase {
+
+    override func tearDown() {
+        RestartIntent.shared.resetForTesting()
+        super.tearDown()
+    }
+
+    func testAnOrdinaryQuitIsStillAQuit() {
+        RestartIntent.shared.resetForTesting()
+
+        XCTAssertFalse(
+            RestartIntent.shared.isUnderway,
+            "quitting has to keep meaning what quitting means everywhere else on the Mac: "
+                + "the phone stops being answered"
+        )
+    }
+
+    func testARestartSaysSoBeforeItTerminates() {
+        RestartIntent.shared.begin()
+
+        XCTAssertTrue(RestartIntent.shared.isUnderway)
+    }
+
+    func testNothingClearsIt() {
+        // One-way on purpose: the only thing that happens after it is set is
+        // the process ending. A flag that could be cleared would invite a code
+        // path that quits for real while it is still on.
+        RestartIntent.shared.begin()
+        XCTAssertTrue(RestartIntent.shared.isUnderway)
+        XCTAssertTrue(RestartIntent.shared.isUnderway)
+    }
+}
