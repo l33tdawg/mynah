@@ -828,6 +828,24 @@ public actor VoiceBridgeDaemon {
                     reply: result.reply,
                     usedTools: result.trace.toolNames
                 )
+                // Anything another agent sent back, said out loud.
+                //
+                // `sage_turn` is the only channel these arrive on — a reply to
+                // work Mynah piped out is not an inbox item, by SAGE's own
+                // definition — and the ritual is the only place this appliance
+                // calls it. So this is where a result becomes something the
+                // owner hears about, or it is nowhere.
+                //
+                // Sent after the answer rather than folded into it: the owner
+                // asked one thing and this is a different thing arriving, and
+                // two messages is the honest shape of that. It goes out
+                // whatever the proactive setting says, because this is not the
+                // appliance volunteering news on a timer — it is the result of
+                // an errand the owner themselves sent.
+                for reply in await ritual.drainReplies() {
+                    log("[daemon] a reply came back from \(reply.from)")
+                    await announce(reply.spokenDescription, to: recipient)
+                }
             }
 
             // **`replied in Xs` measures more than replying, and that is why 13

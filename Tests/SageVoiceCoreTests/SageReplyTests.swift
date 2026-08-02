@@ -143,3 +143,100 @@ final class SageReplyCallersTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Replies to work Mynah sent out
+
+/// The channel that was being thrown away.
+///
+/// The owner had Mynah send a test note to another agent. It was delivered and
+/// acknowledged within seconds. He then asked *"anything in the inbox?"* and
+/// Mynah answered *"Inbox is clear."* — truthfully, because it had checked the
+/// one place the answer could not be. `sage_inbox` says so itself: *"This does
+/// not return results for pipes you sent; completed results arrive separately
+/// in sage_turn.pipe_results, so a clean inbox is not evidence that no reply
+/// exists."*
+///
+/// `SageRitual` is the only place this appliance calls `sage_turn`, and it
+/// discarded the answer. So every reply any agent ever sent back was dropped.
+final class PipeReplyTests: XCTestCase {
+
+    private func ritual() -> SageRitual {
+        SageRitual(tools: SilentTools(), displayName: "Mynah")
+    }
+
+    private func turnAnswer(_ results: String) -> String {
+        """
+        {"stored": true, "topic": "agents",
+         "pipe_results": [\(results)]}
+
+        [SAGE] Reminder: call sage_turn with the current topic + observation.
+        """
+    }
+
+    func testAReplyBecomesSomethingToSay() async {
+        let ritual = ritual()
+
+        await ritual.noteResults(in: turnAnswer(
+            #"{"pipe_id":"p1","from":"Claude","result":"Acknowledged — the pipeline works."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.count, 1)
+        XCTAssertEqual(
+            replies.first?.spokenDescription,
+            "Claude replied: Acknowledged — the pipeline works."
+        )
+    }
+
+    func testDrainingClearsThem() async {
+        let ritual = ritual()
+        await ritual.noteResults(in: turnAnswer(#"{"from":"Claude","result":"Done."}"#))
+
+        _ = await ritual.drainReplies()
+
+        let second = await ritual.drainReplies()
+        XCTAssertTrue(second.isEmpty, "a reply said twice is a confusing thing to chase from a phone")
+    }
+
+    func testA64CharacterAgentIdIsNotReadOutInFull() async {
+        let ritual = ritual()
+        let id = String(repeating: "a1b2c3d4", count: 8)
+
+        await ritual.noteResults(in: turnAnswer(#"{"from":"\#(id)","result":"Done."}"#))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.first?.from, "a1b2c3d4…")
+    }
+
+    func testTheFieldNamesAreReadLeniently() async {
+        // The exact shape is not documented. A reply whose text is under
+        // `payload` rather than `result` must not vanish — that would silently
+        // reproduce the bug this fixes.
+        let ritual = ritual()
+
+        await ritual.noteResults(in: turnAnswer(
+            #"{"agent":"Kestrel","payload":"Looked it up: 4,200."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.first?.from, "Kestrel")
+        XCTAssertTrue(replies.first?.text.contains("4,200") ?? false)
+    }
+
+    func testATurnWithNoRepliesSaysNothing() async {
+        let ritual = ritual()
+
+        await ritual.noteResults(in: #"{"stored": true, "pipe_results": []}"#)
+        await ritual.noteResults(in: #"{"stored": true}"#)
+        await ritual.noteResults(in: "Error: node unavailable")
+
+        let replies = await ritual.drainReplies()
+        XCTAssertTrue(replies.isEmpty)
+    }
+}
+
+/// A node that answers nothing, for the parsing tests above.
+private struct SilentTools: ToolProviding {
+    func listTools() async throws -> [MCPTool] { [] }
+    func call(name: String, arguments: [String: JSONValue]) async throws -> String { "{}" }
+}

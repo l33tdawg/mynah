@@ -433,7 +433,7 @@ public actor SageRitual {
         guard writeDenial == nil else { return }
 
         do {
-            _ = try await tools.call(
+            let answer = try await tools.call(
                 name: Tool.turn,
                 arguments: [
                     "topic": .string(topic),
@@ -445,6 +445,22 @@ public actor SageRitual {
                     "domain": .string(Self.memoryDomain)
                 ]
             )
+            // **This answer used to be `_`, and that discarded every reply the
+            // owner's other agents ever sent back.**
+            //
+            // A reply to work Mynah piped out does not arrive in the inbox.
+            // `sage_inbox` says so itself: *"This does not return results for
+            // pipes you sent; completed results arrive separately in
+            // sage_turn.pipe_results, so a clean inbox is not evidence that no
+            // reply exists."* This is the only place this appliance calls
+            // `sage_turn`, so this was the only place a result could have been
+            // seen — and it was thrown away.
+            //
+            // The owner watched it happen: he had Mynah send a test note, it
+            // was delivered and acknowledged within seconds, and when he asked
+            // *"anything in the inbox?"* Mynah answered *"Inbox is clear."*
+            // Truthfully. It had checked the one place the answer could not be.
+            noteResults(in: answer)
         } catch {
             note(error, whileDoing: "turn")
         }
@@ -453,6 +469,79 @@ public actor SageRitual {
             turnsSinceReflect = 0
             await reflect()
         }
+    }
+
+    // MARK: - Replies to work this appliance sent out
+
+    /// A reply from another agent to work Mynah piped to it.
+    public struct PipeReply: Sendable, Equatable {
+        /// Who answered, as the node names them.
+        public let from: String
+        /// What they said. Untrusted, like everything else that arrives from
+        /// another agent — see `UntrustedAgentContent`.
+        public let text: String
+
+        /// One sentence for the owner, attributed.
+        public var spokenDescription: String {
+            "\(from) replied: \(text)"
+        }
+    }
+
+    private var arrivedReplies: [PipeReply] = []
+
+    /// Replies that have come back since this was last called, and clears them.
+    ///
+    /// Draining rather than reading, for the reason `NotesToolSource` drains:
+    /// the caller says these out loud once, and a reply that rode along with a
+    /// second message because nobody cleared the list is a confusing thing to
+    /// chase from a phone.
+    public func drainReplies() -> [PipeReply] {
+        let drained = arrivedReplies
+        arrivedReplies = []
+        return drained
+    }
+
+    /// Pulls any `pipe_results` out of a `sage_turn` answer.
+    ///
+    /// **Read tolerantly and logged the first time, because the exact shape is
+    /// not documented and this appliance cannot afford to be wrong about it in
+    /// either direction.** A key that turns out to be named something else
+    /// would silently reproduce the very bug this fixes, so the raw payload is
+    /// logged whenever the field is present — one line, once per arrival, and
+    /// the log then says what the real keys are rather than this comment
+    /// guessing.
+    func noteResults(in answer: String) {
+        guard let root = SageReply.object(in: answer) else { return }
+        guard let results = root["pipe_results"] as? [[String: Any]], !results.isEmpty else {
+            return
+        }
+        log("[sage] \(results.count) pipe result(s) came back: \(String(describing: results).prefix(300))")
+
+        for result in results {
+            let from = Self.text(result, ["from", "from_name", "agent", "responder"])
+                ?? "one of your agents"
+            guard let said = Self.text(result, ["result", "payload", "content", "text", "message"]) else {
+                continue
+            }
+            arrivedReplies.append(PipeReply(from: Self.shortened(from), text: said))
+        }
+    }
+
+    private static func text(_ object: [String: Any], _ keys: [String]) -> String? {
+        for key in keys {
+            if let value = object[key] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    /// A 64-character hex agent id is not a name anybody can hear read out.
+    private static func shortened(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > 24, trimmed.allSatisfy({ $0.isHexDigit }) else { return trimmed }
+        return String(trimmed.prefix(8)) + "…"
     }
 
     private func reflect() async {
