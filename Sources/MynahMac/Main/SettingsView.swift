@@ -87,6 +87,25 @@ struct PhoneStatus: Sendable, Equatable {
     var socketPath: String
 
     static let unknown = PhoneStatus(isReachable: false, linkedNumber: nil, socketPath: "")
+
+    /// What "Can Mynah reach it" says, and the reason it is a function.
+    ///
+    /// It had two branches for three states. Not reachable *and no account
+    /// linked* is the state a new owner is in, and it was told to turn answering
+    /// off and on — advice that cannot work, because nothing is broken and
+    /// nothing is starting. The switch has no account to connect.
+    ///
+    /// Out of the view so the third branch can be asserted rather than trusted.
+    var reachabilityDetail: String {
+        if isReachable {
+            return "The link between this Mac and your phone is up."
+        }
+        if linkedNumber == nil {
+            return "It can't yet — link your phone above first."
+        }
+        return "Mynah is starting the private Signal link. If this does not change, "
+            + "turn answering off and on once."
+    }
 }
 
 /// How the app reads, and one day changes, which phone Mynah answers.
@@ -1938,7 +1957,20 @@ struct SettingsView: View {
                 if model.phone.linkedNumber != nil {
                     StatusPill("Linked", tone: .good)
                 } else {
-                    StatusPill("Not set", tone: .neutral)
+                    // **A status is not an instruction.** "Not set" told a new
+                    // owner what was wrong and nothing about what to do, and the
+                    // only button that opens the QR screen was two groups away
+                    // in Unfinished — which renders solely when
+                    // `deferredSetupSteps` is non-empty. An owner who was never
+                    // offered the step, or whose step was resolved, saw the
+                    // problem stated on a row that could not fix it.
+                    //
+                    // Same sheet the Unfinished row opens, so linking from here
+                    // clears that step too and the two cannot disagree. The pill
+                    // goes rather than sitting beside the button: the detail
+                    // line already says it is not set, and no other row in this
+                    // window puts a status and a control in the same slot.
+                    MynahButton("Link my phone", kind: .secondary) { isLinkingPhone = true }
                 }
             }
             MynahDivider()
@@ -1974,12 +2006,13 @@ struct SettingsView: View {
             ) { EmptyView() }
             MynahDivider()
 
+            // The advice was written for an owner who *has* a phone linked, and
+            // a new owner does not. Told to turn answering off and on, they get
+            // Not connected again, because nothing is missing except the account
+            // named two rows up — and toggling a switch cannot supply one.
             SettingsRow(
                 "Can Mynah reach it",
-                detail: model.phone.isReachable
-                    ? "The link between this Mac and your phone is up."
-                    : "Mynah is starting the private Signal link. If this does not change, "
-                        + "turn answering off and on once."
+                detail: model.phone.reachabilityDetail
             ) {
                 StatusPill(
                     model.phone.isReachable ? "Connected" : "Not connected",
