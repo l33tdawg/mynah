@@ -108,24 +108,42 @@ struct PhoneStatus: Sendable, Equatable {
     }
 }
 
-/// How the app reads, and one day changes, which phone Mynah answers.
+/// How the app reads, and changes, which phone Mynah answers.
 ///
-/// A protocol because the second half does not exist yet. Nothing in
-/// `SageVoiceCore` can *unlink* a phone: the allowlist is read once from the
-/// environment at daemon start (`SignalSenderAllowlist.fromEnvironment`) and
-/// there is no writer. So `canUnlink` is `false` today and the settings screen
-/// renders no button — an "Unlink" that quietly does nothing is the single
-/// worst thing in the app this one is replacing.
+/// **The note that used to be here said unlinking was impossible, and it had
+/// gone stale.** It claimed the allowlist was read once from the environment
+/// with no writer — true when it was written, and no longer: the daemon is
+/// handed `--allow <account>` in a plist that `SignalServiceConfiguration`
+/// regenerates from `SignalTooling.linkedNumber()` every time answering is
+/// reconciled. signal-cli's own account store is the single source of truth, so
+/// removing the account from it is a complete unlink rather than half of one.
 protocol PhoneLinking: Sendable {
     var status: PhoneStatus { get }
     var canUnlink: Bool { get }
-    func unlink() async throws
+    /// - Returns: what to tell the owner afterwards, or nil when it went
+    ///   cleanly. Not `throws`: the two halves of an unlink fail independently
+    ///   and "it worked, but finish it on your phone" is not an error.
+    func unlink() async throws -> String?
 }
 
 /// Reads the real state of the messaging bridge on this Mac.
 struct SignalPhoneLink: PhoneLinking {
 
-    enum Failure: Error { case notSupportedYet }
+    enum Failure: LocalizedError {
+        case noAccount
+        case noHelper
+        /// It ran and the keys are still there. Carries its own wording, because
+        /// the caller cannot tell from the outside which half failed.
+        case stillLinked(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noAccount: return "There is no Signal account on this Mac to unlink."
+            case .noHelper: return "Mynah could not find signal-cli, so it cannot unlink the account."
+            case .stillLinked(let why): return why
+            }
+        }
+    }
 
     var homeDirectory: String = NSHomeDirectory()
     var environment: [String: String] = ProcessInfo.processInfo.environment
@@ -139,11 +157,24 @@ struct SignalPhoneLink: PhoneLinking {
         )
     }
 
-    /// Nothing writes the allowlist, so nothing can un-write it.
-    var canUnlink: Bool { false }
+    /// Only when there is something to unlink and something to do it with. A
+    /// button that appears and then reports a missing binary is worse than no
+    /// button.
+    var canUnlink: Bool {
+        SignalTooling.linkedNumber() != nil && SignalTooling.helper(environment: environment) != nil
+    }
 
-    func unlink() async throws {
-        throw Failure.notSupportedYet
+    func unlink() async throws -> String? {
+        guard let account = SignalTooling.linkedNumber() else { throw Failure.noAccount }
+        guard let helper = SignalTooling.helper(environment: environment) else { throw Failure.noHelper }
+
+        let outcome = await SignalUnlink(helper: helper).run(account: account)
+        // The keys are still on disk, so nothing was unlinked and saying
+        // otherwise would leave the owner believing they can link a new phone.
+        guard outcome.canRelink else {
+            throw Failure.stillLinked(outcome.note ?? "Mynah could not unlink this Mac.")
+        }
+        return outcome.note
     }
 
     private var socketPath: String {
@@ -358,6 +389,9 @@ final class SettingsModel {
     /// One sentence for the owner when a preview will not play. The reason goes
     /// to the log; the synthesizer's own wording names ports and Python scripts.
     private(set) var callVoiceProblem: String?
+
+    /// What the last unlink attempt left the owner to do, if anything.
+    private(set) var unlinkNote: String?
 
     // MARK: Updates
     //
@@ -807,12 +841,21 @@ final class SettingsModel {
         }
     }
 
+    /// Takes this Mac off the owner's Signal account.
+    ///
+    /// The outcome reaches the screen either way. A failure logged and swallowed
+    /// left the owner pressing a button that appeared to do nothing, and a
+    /// *partial* success — unlinked here, still listed on their phone — has an
+    /// action attached to it that only they can take.
     func unlinkPhone() async {
+        unlinkNote = nil
         do {
-            try await phoneLink.unlink()
+            unlinkNote = try await phoneLink.unlink()
             phone = phoneLink.status
         } catch {
             log.error("unlink failed: \(String(describing: error))")
+            unlinkNote = error.localizedDescription
+            phone = phoneLink.status
         }
     }
 
@@ -1021,6 +1064,7 @@ struct SettingsView: View {
     /// then restarts the wizard is a five-screen detour to reach the one screen
     /// the owner asked for.
     @State private var isLinkingPhone = false
+    @State private var isConfirmingUnlink = false
     @State private var isPastingKey = false
     @State private var isChangingModel = false
     @State private var isChangingProvider = false
@@ -1087,6 +1131,28 @@ struct SettingsView: View {
         .task {
             await model.refreshHelperState()
             if let state = model.helperState { app.noteHelperObserved(state) }
+        }
+        // Asked before doing it, because it cannot be undone from this screen:
+        // relinking means getting the phone out and scanning a new code. The
+        // destructive verb is on the button rather than on "OK", so the choice
+        // is readable without reading the sentence above it.
+        .confirmationDialog(
+            "Unlink this Mac from Signal?",
+            isPresented: $isConfirmingUnlink,
+            titleVisibility: .visible
+        ) {
+            Button("Unlink", role: .destructive) {
+                Task {
+                    await model.unlinkPhone()
+                    await app.reconcileAnsweringService()
+                    model.refresh()
+                }
+            }
+            Button("Keep it linked", role: .cancel) { isConfirmingUnlink = false }
+        } message: {
+            Text("Mynah will stop answering this number and forget it. To use it again — or a "
+                 + "different phone — you'll scan a new code from Signal. Nothing on your phone "
+                 + "is deleted.")
         }
         .sheet(isPresented: $isLinkingPhone) {
             PhoneLinkSheet {
@@ -2026,12 +2092,21 @@ struct SettingsView: View {
             if model.canUnlinkPhone, model.phone.linkedNumber != nil {
                 MynahDivider()
                 SettingsRow(
-                    "Stop answering this phone",
-                    detail: "Mynah will ignore voice notes until you link a phone again."
+                    "Link a different phone",
+                    detail: "Mynah stops answering this number and forgets it, so you can scan a "
+                        + "new code. Your messages stay on your phone."
                 ) {
-                    MynahButton("Unlink", kind: .secondary) {
-                        Task { await model.unlinkPhone() }
-                    }
+                    MynahButton("Unlink", kind: .secondary) { isConfirmingUnlink = true }
+                }
+                // Whatever the attempt left for the owner to do — most often
+                // "it worked, now remove Mynah from Linked Devices on your
+                // phone", which is a real step and not an error.
+                if let note = model.unlinkNote {
+                    Text(note)
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, s3)
                 }
             } else if model.phone.linkedNumber != nil {
                 MynahDivider()
@@ -3088,12 +3163,17 @@ private let settingsLog = MynahLog(category: "settings")
 // MARK: - Previews
 
 /// A phone link that reports a linked, reachable phone — and, in the second
-/// preview, one that can actually be unlinked, so the button that ships the day
-/// the engine grows that ability can be seen now.
+/// preview, one that can actually be unlinked.
 private struct PreviewPhoneLink: PhoneLinking {
     var status: PhoneStatus
     var canUnlink: Bool = false
-    func unlink() async throws {}
+    /// The partial outcome rather than the clean one, because it is the branch
+    /// with words in it and therefore the one a preview should be laying out.
+    func unlink() async throws -> String? {
+        "This Mac is unlinked and ready for a different phone. It may still be listed on your "
+            + "phone under Signal → Settings → Linked Devices — remove \"Mynah\" there when you "
+            + "get a moment."
+    }
 }
 
 /// Builds a throwaway defaults suite, model and `AppModel` in its own
