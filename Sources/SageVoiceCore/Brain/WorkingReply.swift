@@ -90,8 +90,52 @@ public enum WorkingReply {
         opening(forRequest: request, previous: previous, chooser: chooser)?.line
     }
 
+    /// The opener for a turn that cut another one off.
+    ///
+    /// **Being interrupted is a different event from being asked**, and until
+    /// now it produced the same sentence. The owner: *"if user starts speaking
+    /// half way, we have the agent say something when they end that
+    /// acknowledges the new ask before actually doing it."*
+    ///
+    /// On a call that matters more than in a thread. Cutting in stops the
+    /// audio instantly — the endpoint drops what is queued locally — so from
+    /// the caller's side the appliance goes abruptly silent, and the next thing
+    /// they hear decides whether it *heard* them or merely *stopped*. "Let me
+    /// have a look." is what it would have said anyway; it does not answer the
+    /// question the caller now has.
+    ///
+    /// So the line leads with the turn: the old answer is being dropped, on
+    /// purpose, in favour of what was just said. Where the request is specific
+    /// enough for a real opener, that opener is kept and prefixed — the caller
+    /// hears both that they were heard and what is now being done.
+    public static func interruptedOpening(
+        forRequest request: String,
+        previous: String? = nil,
+        chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
+    ) -> Opening? {
+        let acknowledgements = [
+            "Right —", "Okay —", "Sure —"
+        ]
+        let turn = acknowledgements[
+            min(max(chooser(acknowledgements.count), 0), acknowledgements.count - 1)
+        ]
+
+        // A specific opener names what is about to happen, so the two halves
+        // read as one sentence: "Right — looking that up online."
+        if let specific = opening(forRequest: request, previous: previous, chooser: chooser),
+           specific.isSpecific {
+            let lowered = specific.line.prefix(1).lowercased() + specific.line.dropFirst()
+            return Opening(line: "\(turn) \(lowered)", isSpecific: true)
+        }
+        // Nothing specific to name. Say only the true part: the previous answer
+        // is abandoned and this one is heard. Inventing a subject here would be
+        // the appliance guessing out loud on the one turn where the caller has
+        // just demonstrated it was heading the wrong way.
+        return Opening(line: "\(turn) let me get that instead.", isSpecific: false)
+    }
+
     /// The catch-all pool, named once so `opening` can recognise it rather than
-    /// re-deriving which branch fired.
+    /// re-deriving which branch fired."""
     static let catchAllOptions = ["Let me have a look.", "One moment.", "On it."]
 
     /// Classifies the request from its wording alone. Deliberately conservative:

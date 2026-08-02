@@ -491,15 +491,27 @@ public actor CallTurnServer {
         recognisedIn recognition: TimeInterval,
         over writer: CallFrameWriter
     ) {
+        // Whether this turn *cut another one off*, decided before the cancel
+        // that makes it untrue. A turn still running when words arrive is the
+        // caller talking over the appliance; one that finished a moment ago is
+        // the caller simply saying the next thing, and those deserve different
+        // opening words.
+        let cutIn = turn.map { !$0.isCancelled } ?? false
         turn?.cancel()
         turn = Task { [weak self] in
-            await self?.speak(heard, recognisedIn: recognition, over: writer)
+            await self?.speak(
+                heard,
+                recognisedIn: recognition,
+                interrupting: cutIn,
+                over: writer
+            )
         }
     }
 
     private func speak(
         _ heard: String,
         recognisedIn recognition: TimeInterval,
+        interrupting: Bool = false,
         over writer: CallFrameWriter
     ) async {
         let started = Date().addingTimeInterval(-recognition)
@@ -521,7 +533,15 @@ public actor CallTurnServer {
             // This costs nothing to produce. The opener is derived from the
             // caller's own sentence, so it needs no model call — which is the
             // only reason it can arrive before the model rather than after.
-            if let opener = WorkingReply.opening(forRequest: heard, previous: lastOpener) {
+            // Interrupting gets its own opening. Cutting in stops the audio
+            // instantly, so from the caller's side the appliance goes abruptly
+            // silent — and the next thing they hear is what tells them whether
+            // it *heard* them or merely *stopped*. See
+            // `WorkingReply.interruptedOpening`.
+            let chosen = interrupting
+                ? WorkingReply.interruptedOpening(forRequest: heard, previous: lastOpener)
+                : WorkingReply.opening(forRequest: heard, previous: lastOpener)
+            if let opener = chosen {
                 lastOpener = opener.line
                 if let audio = try? await synthesizer.synthesize(
                     SpeechRequest(text: opener.line, voice: configuration.voice, speed: configuration.speed)

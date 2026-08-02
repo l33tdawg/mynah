@@ -365,3 +365,80 @@ final class WorkingReplyTests: XCTestCase {
         XCTAssertFalse(WorkingReply.saysTheSameThing("anything", as: nil))
     }
 }
+
+// MARK: - Being cut off
+
+/// What the appliance says when the caller talks over it.
+///
+/// *"if user starts speaking half way, we have the agent say something when
+/// they end that acknowledges the new ask before actually doing it."*
+///
+/// On a call this is the moment that decides whether the thing feels like it is
+/// listening. Cutting in stops the audio instantly — the endpoint drops what is
+/// queued locally — so from the caller's side the appliance goes abruptly
+/// silent, and the next words they hear are the only evidence of whether it
+/// heard them or merely stopped.
+final class InterruptedOpeningTests: XCTestCase {
+
+    /// Deterministic: always the first option, so a wording change fails the
+    /// test rather than the random pick doing it one run in three.
+    private let first: (Int) -> Int = { _ in 0 }
+
+    func testItLeadsWithTheTurnRatherThanTheTask() {
+        let opening = WorkingReply.interruptedOpening(
+            forRequest: "actually look up the flight times instead",
+            chooser: first
+        )
+
+        XCTAssertTrue(opening?.line.hasPrefix("Right —") ?? false, opening?.line ?? "nil")
+    }
+
+    func testASpecificRequestKeepsItsOwnOpener() {
+        // Both halves in one sentence: heard you, and here is what I am doing.
+        let opening = WorkingReply.interruptedOpening(
+            forRequest: "search online for the ferry timetable",
+            chooser: first
+        )
+
+        let line = opening?.line ?? ""
+        XCTAssertEqual(opening?.isSpecific, true)
+        XCTAssertTrue(line.hasPrefix("Right — "), line)
+        // Joined into one sentence rather than bolted together: the opener's
+        // own capital would read as two sentences with a dash between them.
+        let second = line.dropFirst("Right — ".count).first
+        XCTAssertEqual(second?.isLowercase, true, line)
+    }
+
+    func testAVagueRequestSaysOnlyTheTruePart() {
+        // Nothing specific to name. Inventing a subject here would be the
+        // appliance guessing out loud on the one turn where the caller has just
+        // demonstrated it was heading the wrong way.
+        let opening = WorkingReply.interruptedOpening(forRequest: "no wait", chooser: first)
+
+        XCTAssertEqual(opening?.line, "Right — let me get that instead.")
+        XCTAssertEqual(opening?.isSpecific, false)
+    }
+
+    func testItNeverSoundsLikeAnUninterruptedTurn() {
+        // The bug this exists to remove: being interrupted and being asked
+        // produced the same sentence, which answers a question the caller did
+        // not have and not the one they did.
+        let plain = WorkingReply.opening(forRequest: "no wait", chooser: first)?.line
+        let cutIn = WorkingReply.interruptedOpening(forRequest: "no wait", chooser: first)?.line
+
+        XCTAssertNotEqual(plain, cutIn)
+    }
+
+    func testAlwaysSomethingToSay() {
+        // `opening` may return nil — a fast write answers before an
+        // acknowledgement would land. An interruption always gets a reply,
+        // because silence after cutting in is indistinguishable from a dropped
+        // call.
+        for request in ["add a note about the roof", "", "hmm", "no no no"] {
+            XCTAssertNotNil(
+                WorkingReply.interruptedOpening(forRequest: request, chooser: first),
+                "nothing said after \"\(request)\""
+            )
+        }
+    }
+}
