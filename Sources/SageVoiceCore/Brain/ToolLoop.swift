@@ -254,12 +254,48 @@ public struct ToolLoopTrace: Sendable, Equatable {
 
     public var generatedTokens: Int { modelCalls.reduce(0) { $0 + ($1.evalCount ?? 0) } }
 
+    /// Tools that *do* something, whose outcome the log has to record.
+    ///
+    /// **Reads evidence themselves and writes do not.** If `sage_recall` fails,
+    /// the answer visibly has no memories in it. If `sage_pipe` fails, the only
+    /// remaining account of what happened is the model's, and a model that has
+    /// just read "Error: …" will still tell the owner *"I've sent a message to
+    /// the Sage Voice Bridge agent — the pipeline is now pending."*
+    ///
+    /// That happened on 2 August. The turn logged `tools:
+    /// sage_find_agent,sage_pipe` and nothing else; the message was in neither
+    /// agent's inbox afterwards, and there was no way to tell from the record
+    /// whether it had been refused or had never been sent. A log that cannot
+    /// answer "did it send" about a send is not a log.
+    static let sendingTools: Set<String> = [
+        "sage_pipe", "sage_pipe_result", "sage_task", "sage_remember", "sage_forget",
+        "sage_reflect", "sage_turn", "write_note"
+    ]
+
+    /// What each acting call actually returned, short enough for one line.
+    public var receipts: [String] {
+        toolCalls
+            .filter { Self.sendingTools.contains($0.name) || $0.failed }
+            .map { call in
+                let head = call.result
+                    .prefix(120)
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                return "\(call.name) -> \(head.isEmpty ? "(nothing)" : head)"
+            }
+    }
+
     /// One-line log summary, e.g.
     /// `qwen3.5:4b 2 iters, tools: sage_find_agent,sage_pipe, 8.31s (model 6.02s / tools 2.29s), 71 tok`
+    ///
+    /// Plus, when the turn acted on anything, what each of those calls said
+    /// back. It makes the line longer and it is the difference between a record
+    /// and a rumour.
     public var summary: String {
         let tools = toolNames.isEmpty ? "none" : toolNames.joined(separator: ",")
+        let acted = receipts.isEmpty ? "" : " | " + receipts.joined(separator: " | ")
         return String(
-            format: "%@ %d iters, tools: %@, %.2fs (model %.2fs / tools %.2fs), %d tok%@",
+            format: "%@ %d iters, tools: %@, %.2fs (model %.2fs / tools %.2fs), %d tok%@%@",
             model,
             iterations,
             tools,
@@ -267,7 +303,8 @@ public struct ToolLoopTrace: Sendable, Equatable {
             modelSeconds,
             toolSeconds,
             generatedTokens,
-            stopNote
+            stopNote,
+            acted
         )
     }
 

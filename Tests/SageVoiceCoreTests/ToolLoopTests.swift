@@ -679,3 +679,86 @@ final class SpeakableLinkTests: XCTestCase {
         XCTAssertTrue(ToolLoop.speakable("Repo: \(url)").contains(url))
     }
 }
+
+// MARK: - What the log can answer afterwards
+
+/// A turn's record has to say what its *acting* calls returned.
+///
+/// On 2 August the owner asked Mynah to message another agent. It said *"I've
+/// sent a message to the Sage Voice Bridge agent — the pipeline is now
+/// pending."* The message was in neither agent's inbox afterwards, and the log
+/// line for that turn read `tools: sage_find_agent,sage_pipe` and nothing else
+/// — so there was no way to tell whether the node had refused it, whether it
+/// had gone somewhere unexpected, or whether the model had simply narrated an
+/// intention. A log that cannot answer "did it send" about a send is not a log.
+final class ToolTraceReceiptTests: XCTestCase {
+
+    private func call(_ name: String, result: String, failed: Bool = false) -> ToolCallRecord {
+        ToolCallRecord(
+            iteration: 1,
+            name: name,
+            arguments: [:],
+            result: result,
+            failed: failed,
+            durationSeconds: 0.1
+        )
+    }
+
+    private func trace(_ calls: [ToolCallRecord]) -> ToolLoopTrace {
+        ToolLoopTrace(
+            model: "qwen3.5:4b",
+            iterations: 2,
+            modelCalls: [],
+            toolCalls: calls,
+            toolsOffered: 14,
+            hitIterationCap: false,
+            hitDeadline: false,
+            totalDurationSeconds: 8.0
+        )
+    }
+
+    func testASendRecordsWhatItWasTold() {
+        let summary = trace([call("sage_pipe", result: "Error: recipient is not accepting work")])
+            .summary
+
+        XCTAssertTrue(summary.contains("sage_pipe -> Error: recipient is not accepting work"), summary)
+    }
+
+    func testASuccessfulSendIsRecordedToo() {
+        // Not only failures. "It said it sent and here is the pipe id" is the
+        // half that makes a later "no it did not" checkable.
+        let summary = trace([call("sage_pipe", result: "{\"pipe_id\":\"p-99\"}")]).summary
+
+        XCTAssertTrue(summary.contains("p-99"), summary)
+    }
+
+    func testReadsAreNotRecited() {
+        // A read evidences itself: a recall that failed produces an answer with
+        // no memories in it. Logging every retrieved memory would bury the line
+        // that matters.
+        let summary = trace([call("sage_recall", result: String(repeating: "memory. ", count: 50))])
+            .summary
+
+        XCTAssertFalse(summary.contains("memory."), summary)
+        XCTAssertTrue(summary.contains("tools: sage_recall"), summary)
+    }
+
+    func testAFailedReadIsStillRecorded() {
+        let summary = trace([call("sage_recall", result: "Error: vault is locked", failed: true)])
+            .summary
+
+        XCTAssertTrue(summary.contains("vault is locked"), summary)
+    }
+
+    func testATurnThatOnlyReadsKeepsItsOneLine() {
+        let summary = trace([call("sage_backlog", result: "{\"total_open\": 3}")]).summary
+
+        XCTAssertFalse(summary.contains("|"), summary)
+    }
+
+    func testAReceiptCannotRunAway() {
+        let summary = trace([call("sage_pipe", result: String(repeating: "x", count: 5_000))]).summary
+
+        XCTAssertLessThan(summary.count, 400, "one turn is one readable line")
+    }
+}
