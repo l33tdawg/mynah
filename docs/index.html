@@ -638,9 +638,37 @@ footer strong { color: var(--hero-ink); }
 footer a { color: var(--hero-ink); text-decoration-color: var(--hero-ink-2); }
 footer a:hover { text-decoration-color: var(--hero-ink); }
 footer .faint { color: rgba(255,255,255,0.58); }
-/* A small heading for each group, so the block reads as a footer rather than
-   three sentences that happen to be last. */
-footer .eyebrow { color: rgba(255,255,255,0.58); margin-bottom: var(--s2); }
+
+/* Centred, and stacked in falling order of who it is for.
+   ==========================================================================
+   Left-aligned, the footer was four sentences of equal weight in a band with
+   nothing else in it — the reader has to work out for themselves which line
+   is the project, which is navigation and which is small print. Centring it
+   under the mark makes the band read as a close rather than as one more
+   left-aligned section that happens to be last, and bookends the masthead
+   doing the same thing at the top.
+
+   Four levels, largest first: the mark, what the thing is, where to go, and
+   the two lines nobody reads unless they are looking for them. */
+footer .close {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--s5);
+}
+footer .close .wordmark { font-size: 20px; gap: var(--s3); }
+footer .close img.tile { width: 30px; height: 30px; border-radius: 9px; }
+
+/* A measure again here, and not the one the left-aligned version had. Centred
+   text is read by returning to a *moving* left edge, which is harder than
+   returning to a fixed one — so a centred line wants to be shorter than a
+   ranged-left line, not longer. */
+footer .close p { max-width: 44rem; margin: 0; }
+footer .close .what { font-size: 15px; color: var(--hero-ink-2); }
+footer .close .where { font-size: 14px; }
+footer .close .who { font-size: 13px; }
+footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 
 /* --- Narrow -------------------------------------------------------------- */
 
@@ -930,24 +958,32 @@ footer .eyebrow { color: rgba(255,255,255,0.58); margin-bottom: var(--s2); }
 </section>
 
 <footer>
-  <p>
-    <strong>Mynah</strong> — free software under the Apache&nbsp;2.0 licence.
-    Built on <a href="https://github.com/l33tdawg/sage">SAGE</a>, which is where
-    everything it remembers is kept.
-  </p>
-  <p>
-    <a href="https://github.com/l33tdawg/mynah">Source</a> &middot;
-    <a href="https://github.com/l33tdawg/mynah/releases">Releases</a> &middot;
-    <a href="https://github.com/l33tdawg/mynah/issues">Issues</a>
-  </p>
-  <p>
-    By <a href="https://github.com/l33tdawg">Dhillon Andrew Kannabhiran</a> &middot;
-    <a href="mailto:l33tdawg@hackinthebox.org">l33tdawg@hackinthebox.org</a>
-  </p>
-  <p class="faint">
-    Signal is a trademark of the Signal Foundation. Mynah is not affiliated with
-    it and uses your own account, as a linked device.
-  </p>
+  <div class="close">
+    <span class="wordmark">
+      <img class="tile" src="mark.png" width="256" height="256" alt="" aria-hidden="true">Mynah</span>
+
+    <p class="what">
+      Free software under the Apache&nbsp;2.0 licence, built on
+      <a href="https://github.com/l33tdawg/sage">SAGE</a> — which is where
+      everything it remembers is kept.
+    </p>
+
+    <p class="where">
+      <a href="https://github.com/l33tdawg/mynah">Source</a> &middot;
+      <a href="https://github.com/l33tdawg/mynah/releases">Releases</a> &middot;
+      <a href="https://github.com/l33tdawg/mynah/issues">Issues</a><span data-downloads></span>
+    </p>
+
+    <p class="who faint">
+      By <a href="https://github.com/l33tdawg">Dhillon Andrew Kannabhiran</a> &middot;
+      <a href="mailto:l33tdawg@hackinthebox.org">l33tdawg@hackinthebox.org</a>
+    </p>
+
+    <p class="legal faint">
+      Signal is a trademark of the Signal Foundation. Mynah is not affiliated with
+      it and uses your own account, as a linked device.
+    </p>
+  </div>
 </footer>
 
 <!-- The current download, its size and version, and nothing else.
@@ -1005,6 +1041,28 @@ footer .eyebrow { color: rgba(255,255,255,0.58); margin-bottom: var(--s2); }
           span.textContent = megabytes + " MB \u00B7 ";
         });
       }
+    }
+
+    /* How many copies have gone out.
+       ----------------------------------------------------------------------
+       Every release, not just the newest: "downloads" means how many copies
+       went out, and counting only the current one would reset the number to
+       nearly zero on the morning of every release — which is exactly when
+       somebody is most likely to look.
+
+       In the footer rather than under the button. Beside a download button it
+       is a nudge; at the foot of the page it is what it actually is, a fact
+       about the project. Absent entirely when it is zero or the request
+       failed, because a footer line reading "0 downloaded" is worse than one
+       that is not there. */
+    const downloaded = releases
+      .flatMap(release => release.assets || [])
+      .filter(asset => /\.dmg$/i.test(asset.name || ""))
+      .reduce((sum, asset) => sum + (asset.download_count || 0), 0);
+    if (downloaded > 0) {
+      document.querySelectorAll("[data-downloads]").forEach(span => {
+        span.textContent = " \u00B7 " + downloaded.toLocaleString() + " downloaded";
+      });
     }
 
     /* Which version the button hands over, and when it came out.
