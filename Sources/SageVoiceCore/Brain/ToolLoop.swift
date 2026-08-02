@@ -471,11 +471,18 @@ public final class ToolLoop: @unchecked Sendable {
     /// tool call can be an on-chain write, so "confused model" and "consensus
     /// load" are the same sentence.
     ///
-    /// Three, because the deepest chain this product actually needs is
-    /// find-then-pipe. The extras are dropped rather than the turn refused: the
-    /// model gets the results of what it asked for first and another iteration
-    /// to ask again, which is a worse plan executed than no plan at all.
-    public static let maximumToolCallsPerIteration = 3
+    /// A runaway backstop, not a work limit.
+    ///
+    /// It was three, justified by chain depth — "the deepest chain this product
+    /// needs is find-then-pipe" — while the number actually bounds how *wide*
+    /// one reply may be. Asked to correct four stored records, the model would
+    /// have its fourth refused, and depth had nothing to do with it. The owner
+    /// watched exactly that: a job half done, waiting to be asked again.
+    ///
+    /// Twelve is past anything a real reply has contained and still finite, so a
+    /// model looping on a write cannot put a hundred of them on-chain. The brake
+    /// that matters is the turn's own clock, checked between calls.
+    public static let maximumToolCallsPerIteration = 12
 
     /// How many times a turn will reject a promise and ask the model again.
     ///
@@ -982,13 +989,31 @@ public final class ToolLoop: @unchecked Sendable {
 
             progress.choosing(response.toolCalls.first?.name)
 
-            // The deadline is only checked between iterations, so a model that
-            // fans out inside one is unbounded by it: `defaultMaxIterations`
-            // went 5 -> 10 and nothing capped how many calls each iteration
-            // could make. Against SAGE those are on-chain writes.
+            // **The cap was three, and it was measuring the wrong thing.**
             //
-            // Three is generous for this tool surface — the deepest real chain
-            // is find-then-pipe — and dropping the tail beats refusing the turn.
+            // Its own reasoning was about chain *depth* — "the deepest chain
+            // this product actually needs is find-then-pipe" — while the number
+            // bounds fan-out *width*: how many calls one reply may contain. Ask
+            // for four records to be corrected and the fourth was refused, which
+            // has nothing to do with how deep anything nests.
+            //
+            // The owner, on watching it half-finish a job and wait to be asked
+            // again: *"we should queue them - its better the agent does all the
+            // jobs and takes longer than reply with a half done task only making
+            // the user request for it to finish - thats like a not very smart
+            // personal assistant"*.
+            //
+            // Queueing across iterations is not available, and the comment below
+            // is why: every `tool_call_id` in an assistant message must be
+            // answered before the next turn, so a call held over would have to be
+            // answered "not run" now and asked for again — which is the
+            // behaviour he is objecting to, wearing a different name. Doing all
+            // the jobs means running them in this iteration.
+            //
+            // So the count becomes a runaway backstop rather than a work limit,
+            // and the real brake moves to the clock, checked *between* calls
+            // below — which is what the old comment correctly identified as
+            // missing and then solved with an arbitrary number instead.
             let calls = Array(response.toolCalls.prefix(Self.maximumToolCallsPerIteration))
             trace.droppedToolCalls += response.toolCalls.count - calls.count
 
@@ -1019,7 +1044,46 @@ public final class ToolLoop: @unchecked Sendable {
                 )
             }
 
+            // Ran out of time partway through a wide fan-out. Everything still
+            // gets a result — the protocol above is not optional — but the ones
+            // that never ran say so rather than returning a stub the model would
+            // read as "the tool is empty".
+            var outOfTime = false
+
             for call in calls {
+                // **The brake the count used to stand in for.** A reply asking
+                // for eight writes is eight round trips inside one iteration,
+                // and the between-iterations check cannot see any of them. This
+                // is where a wide fan-out meets the turn's budget: it finishes
+                // the calls it has time for and stops, rather than running the
+                // whole list and blowing through a deadline the owner is
+                // actually waiting on.
+                //
+                // First call always runs. A turn that returns nothing because it
+                // was already late is worse than one that is a little later.
+                if !outOfTime,
+                   !trace.toolCalls.isEmpty,
+                   let deadline = configuration.deadlineSeconds {
+                    let elapsed = Date().timeIntervalSince(started)
+                    let slowestTool = trace.toolCalls.map(\.durationSeconds).max() ?? 0
+                    let wrapUp = configuration.summaryReserveSeconds
+                    outOfTime = elapsed + slowestTool + wrapUp > deadline
+                    if outOfTime { trace.hitDeadline = true }
+                }
+
+                guard !outOfTime else {
+                    trace.droppedToolCalls += 1
+                    messages.append(
+                        .toolResult(
+                            name: call.name,
+                            content: "Not run: this turn ran out of time. Ask for this again "
+                                + "and it will be done first.",
+                            id: call.id
+                        )
+                    )
+                    continue
+                }
+
                 let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
                 trace.toolCalls.append(record)
                 lastToolResult = record.result

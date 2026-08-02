@@ -658,6 +658,8 @@ final class MemoriesModel {
     var pendingForget: Memory?
     /// Presenting the confirmation for clearing everything Mynah owns.
     var isConfirmingClear = false
+    /// The second question, asked only when nothing is filtered.
+    var isConfirmingClearEverything = false
     var isClearing = false
     /// What the last bulk clear did, including what it deliberately did not do.
     var clearedReport: String?
@@ -676,6 +678,29 @@ final class MemoriesModel {
     /// The one number on this screen, and it counts rows the owner can see —
     /// not the node's total, which includes things filtered out on the way here.
     var visibleCount: Int { memories.count }
+
+    /// A search or a subject is narrowing the list.
+    ///
+    /// **This decides what "clear" means, which is why it is a named property
+    /// and not an inline check.** The owner: *"we should add a logic then when
+    /// its filtered, and i click clear all, it clears the ones filtered ONLY and
+    /// not everything"*, and unfiltered *"we should warn first to get double
+    /// confirmation they know the impact is it will wipe all tasks etc"*.
+    ///
+    /// The scoping half was already true and invisible: `mynahOwned` filters
+    /// `memories`, and `memories` is whatever the current filter loaded. What
+    /// was missing is that nothing on screen said so, and a destructive button
+    /// whose blast radius you have to infer from the implementation is one
+    /// nobody should press.
+    var isFiltered: Bool { isSearching || topic != nil }
+
+    /// Whether clearing needs a second question.
+    ///
+    /// Only when nothing is filtered. Narrowing to a subject and clearing it is
+    /// an ordinary, recoverable-sized act; clearing everything takes the task
+    /// list with it, because a task on this node *is* a memory — which is not
+    /// obvious from a page titled "What Mynah remembers".
+    var clearingNeedsSecondConfirmation: Bool { !isFiltered }
 
     // MARK: Loading
 
@@ -1077,13 +1102,20 @@ struct MemoriesView: View {
         .padding(.bottom, s8)
         .background(Palette.surface.canvas)
         .task { await model.loadIfNeeded() }
+        // Two dialogs, and which one runs depends on whether anything is
+        // filtered. Clearing a subject is a small, deliberate act; clearing
+        // everything takes the task list with it and gets asked twice.
         .confirmationDialog(
-            "Forget everything Mynah remembers?",
+            model.isFiltered ? "Forget the ones shown?" : "Forget everything Mynah remembers?",
             isPresented: $model.isConfirmingClear
         ) {
             Button("Forget them", role: .destructive) {
                 model.isConfirmingClear = false
-                Task { await model.forgetEverythingMynahOwns() }
+                if model.clearingNeedsSecondConfirmation {
+                    model.isConfirmingClearEverything = true
+                } else {
+                    Task { await model.forgetEverythingMynahOwns() }
+                }
             }
             Button("Keep them", role: .cancel) { model.isConfirmingClear = false }
         } message: {
@@ -1093,12 +1125,41 @@ struct MemoriesView: View {
             // promising something much larger than it does.
             let mine = model.mynahOwned.count
             let others = model.memories.count - mine
+            let scope = model.isFiltered
+                ? "This deprecates the \(mine) shown here that Mynah filed itself. "
+                    + "Anything the filter is hiding is left alone."
+                : "This deprecates the \(mine) memories Mynah filed itself."
             Text(
                 others > 0
-                    ? "This deprecates the \(mine) memories Mynah filed itself. "
-                        + "The \(others) belonging to other agents on this node are left alone."
-                    : "This deprecates the \(mine) memories Mynah filed itself."
+                    ? scope + " The \(others) belonging to other agents on this node are left alone."
+                    : scope
             )
+        }
+        // **The second question, and it names the thing that is not obvious.**
+        //
+        // A task on this node *is* a memory, so clearing everything empties the
+        // task list — from a page titled "What Mynah remembers", which mentions
+        // tasks nowhere. The owner asked for this by name: *"we should warn
+        // first to get double confirmation they know the impact is it will wipe
+        // all tasks etc"*.
+        //
+        // The affirmative button says what it does rather than "OK". A second
+        // dialog whose buttons read the same as the first is a second click, not
+        // a second thought.
+        .confirmationDialog(
+            "This clears your task list too",
+            isPresented: $model.isConfirmingClearEverything,
+            titleVisibility: .visible
+        ) {
+            Button("Forget everything", role: .destructive) {
+                model.isConfirmingClearEverything = false
+                Task { await model.forgetEverythingMynahOwns() }
+            }
+            Button("Cancel", role: .cancel) { model.isConfirmingClearEverything = false }
+        } message: {
+            Text("Every task, note and preference Mynah filed goes with it — appointments, "
+                 + "bookings, the lot. It can't be brought back. To clear only part of it, "
+                 + "close this, pick a subject or search first, then clear.")
         }
         .confirmationDialog(
             "Forget this?",
@@ -1475,6 +1536,34 @@ private struct MemoryEntry: View {
         // the owner came to read.
         .mynahBorder(r.card, borderColour)
         .clipShape(RoundedRectangle.mynah(r.card))
+        // **The one on the card, not the one inside it.**
+        //
+        // Forgetting a single memory has always been possible and always
+        // required opening the card first, so the owner read the screen as
+        // having "a button to clear all but not a 'x' for each". He was
+        // describing what he could see, which is the only thing that counts.
+        //
+        // Same treatment as the task board: on hover, not permanently. A cross
+        // on every card turns a list of what an appliance knows into a list of
+        // things to delete, which is the wrong invitation for a page somebody
+        // is reading.
+        .overlay(alignment: .topTrailing) {
+            if isHovering, !isForgetting, !isReleasing {
+                Button(action: onForget) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Palette.ink.secondary)
+                        .frame(width: 18, height: 18)
+                        .background(Palette.surface.sunken, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Forget this")
+                .accessibilityLabel("Forget this memory")
+                .padding(s3)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
+        }
         .modifier(MemoryCardLift(isRaised: isSelected || isHovering))
         .onHover { isHovering = $0 }
         .mynahAnimation(Motion.snap, value: isSelected)

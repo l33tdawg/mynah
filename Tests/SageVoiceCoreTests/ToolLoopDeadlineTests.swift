@@ -85,6 +85,23 @@ final class ToolLoopDeadlineTests: XCTestCase {
         func call(name: String, arguments: [String: JSONValue]) async throws -> String { "ok" }
     }
 
+    /// A tool that takes real time, so the brake inside an iteration has
+    /// something to brake against. Margins are generous on purpose — these
+    /// assert *which* brake fired, never a precise duration.
+    private final class SlowEchoToolSource: ToolProviding, @unchecked Sendable {
+        private let seconds: Double
+        init(seconds: Double) { self.seconds = seconds }
+
+        func listTools() async throws -> [MCPTool] {
+            [MCPTool(name: "sage_recall", description: "stub", inputSchema: .object(["type": .string("object")]))]
+        }
+
+        func call(name: String, arguments: [String: JSONValue]) async throws -> String {
+            try? await Task.sleep(for: .seconds(seconds))
+            return "ok"
+        }
+    }
+
     /// Deliberately generous margins. These assert *that* a brake exists and
     /// which one fired, never a precise duration — a test that pins wall clock
     /// on a shared CI box is a test that fails for reasons nobody caused.
@@ -421,27 +438,97 @@ final class ToolLoopDeadlineTests: XCTestCase {
 
     // MARK: Fan-out inside one iteration
 
-    /// The deadline is checked between iterations and never inside one, so
-    /// nothing bounded a model asking for twelve tools at once — and raising the
-    /// iteration cap from 5 to 10 doubled the ceiling on that. Against SAGE a
-    /// tool call can be an on-chain write.
-    func testAnIterationCannotFanOutWithoutBound() async throws {
+    /// **A job asked for in one go is done in one go.**
+    ///
+    /// The cap was three, and its reasoning was about chain *depth* — "the
+    /// deepest chain this product needs is find-then-pipe" — while the number
+    /// bounds fan-out *width*. Asked to correct four stored records, the model
+    /// had its fourth refused for a reason that had nothing to do with it. The
+    /// owner watched it half-finish and wait to be asked again: *"we should
+    /// queue them - its better the agent does all the jobs and takes longer than
+    /// reply with a half done task only making the user request for it to
+    /// finish - thats like a not very smart personal assistant"*.
+    func testAWideFanOutIsRunRatherThanHalfRefused() async throws {
         let backend = FanOutBackend(callsPerIteration: 8)
         let loop = ToolLoop(
             backend: backend,
             mcp: EchoToolSource(name: "sage_recall"),
-            configuration: ToolLoop.Configuration(maxIterations: 2, deadlineSeconds: nil, allowedToolNames: [])
+            configuration: ToolLoop.Configuration(maxIterations: 1, deadlineSeconds: nil, allowedToolNames: [])
+        )
+
+        let result = try await loop.run(transcript: "fix all four of those and save the preference")
+
+        XCTAssertEqual(result.trace.toolCalls.count, 8, "the job came back half done")
+        XCTAssertEqual(result.trace.droppedToolCalls, 0)
+    }
+
+    /// The backstop survives, because against SAGE a tool call can be an
+    /// on-chain write and a model looping on one must not put a hundred of them
+    /// through. It is a runaway guard now, not a work limit.
+    func testARunawayIsStillBounded() async throws {
+        let backend = FanOutBackend(callsPerIteration: 40)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: EchoToolSource(name: "sage_recall"),
+            configuration: ToolLoop.Configuration(maxIterations: 1, deadlineSeconds: nil, allowedToolNames: [])
         )
 
         let result = try await loop.run(transcript: "do everything at once")
 
-        XCTAssertLessThanOrEqual(
-            result.trace.toolCalls.count,
-            ToolLoop.maximumToolCallsPerIteration * 2,
-            "a single iteration executed every call the model asked for"
-        )
+        XCTAssertEqual(result.trace.toolCalls.count, ToolLoop.maximumToolCallsPerIteration)
         XCTAssertGreaterThan(result.trace.droppedToolCalls, 0)
         XCTAssertTrue(result.trace.summary.contains("[DROPPED"), "a capped fan-out was swallowed silently")
+    }
+
+    /// **What replaced the arbitrary number.** A wide fan-out is eight round
+    /// trips inside one iteration, and the between-iterations check cannot see
+    /// any of them. The clock now stops it partway rather than a count stopping
+    /// it at three.
+    func testAWideFanOutStopsWhenTheTurnRunsOutOfTime() async throws {
+        let backend = FanOutBackend(callsPerIteration: 8)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: SlowEchoToolSource(seconds: 0.15),
+            configuration: ToolLoop.Configuration(
+                maxIterations: 1,
+                deadlineSeconds: 0.4,
+                summaryReserveSeconds: 0.05,
+                allowedToolNames: []
+            )
+        )
+
+        let result = try await loop.run(transcript: "do all of it")
+
+        XCTAssertGreaterThan(result.trace.toolCalls.count, 0, "the first call must always run")
+        XCTAssertLessThan(result.trace.toolCalls.count, 8, "the clock never stopped it")
+        XCTAssertTrue(result.trace.hitDeadline)
+    }
+
+    /// **The invariant that a cap broke once already.** Every `tool_call_id` in
+    /// an assistant message must be answered before the next turn, or the API
+    /// refuses the whole thread — observed live as "Something went wrong talking
+    /// to the model" on a voice note, from a cap meant to bound fan-out that
+    /// corrupted the history instead. It holds however the turn ends.
+    func testEveryRequestedCallIsAnsweredEvenWhenTimeRunsOut() async throws {
+        let backend = FanOutBackend(callsPerIteration: 8)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: SlowEchoToolSource(seconds: 0.15),
+            configuration: ToolLoop.Configuration(
+                maxIterations: 1,
+                deadlineSeconds: 0.4,
+                summaryReserveSeconds: 0.05,
+                allowedToolNames: []
+            )
+        )
+
+        let result = try await loop.run(transcript: "do all of it")
+
+        XCTAssertEqual(
+            result.trace.toolCalls.count + result.trace.droppedToolCalls,
+            8,
+            "a requested call went unanswered, which poisons every later turn"
+        )
     }
 
     /// An ordinary turn must not be clipped. The cap is a guard against a
