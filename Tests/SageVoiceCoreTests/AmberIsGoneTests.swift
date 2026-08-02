@@ -67,9 +67,33 @@ final class AmberIsGoneTests: XCTestCase {
         model.draft = "ok"
         XCTAssertTrue(model.canSend)
 
+    }
+
+    /// **Waking up stopped being a reason to refuse.**
+    ///
+    /// It was one, on the theory that a turn must not be queued into a
+    /// half-built engine. The theory was already unfounded — `runTurn` awaits
+    /// `connect()`, which *joins* the start-up in flight rather than starting a
+    /// second one — and the cost was the owner's first impression: start-up is
+    /// ten seconds on a good day, and he opens the app specifically to ask
+    /// something. His words: *"this is when you straight send a message when
+    /// the app opens"*.
+    ///
+    /// The message now appears at once and answers as soon as the engine is up.
+    func testAMessageTypedWhileItWakesIsAccepted() {
         let waking = ConversationModel(readiness: .connecting)
         waking.draft = "ok"
-        XCTAssertFalse(waking.canSend, "a half-built engine should not be sent into")
+
+        XCTAssertTrue(waking.canSend, "the turn waits for the engine; the owner should not wait to type")
+    }
+
+    /// The distinction that survives: waking is a wait that ends by itself,
+    /// trouble is a wait that never ends without the owner doing something.
+    func testTroubleStillStopsIt() {
+        let blocked = ConversationModel(readiness: .blocked(Self.jammed))
+        blocked.draft = "ok"
+
+        XCTAssertFalse(blocked.canSend)
     }
 
     private static let working = ConversationModel.Readiness.ready(

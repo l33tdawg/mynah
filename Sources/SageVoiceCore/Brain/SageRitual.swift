@@ -377,8 +377,22 @@ public actor SageRitual {
     public func boot(onSignedIn: @Sendable () -> Void = {}) async -> String? {
         await register()
         await checkWhetherItCanSaveAnything()
-        await noteWhichDomainsItMaySearch()
         onSignedIn()
+        // **Deliberately not awaited, and this line is the reason.**
+        //
+        // Awaiting it shipped, for about an hour, and the owner watched it:
+        // registered at 16:11:00, nothing until he gave up and quit at
+        // 16:11:38. `sage_status` aggregates memory counts per domain, which on
+        // an agent with a real history is a bounded authorization scan over all
+        // of them — the node says as much in `counts_degraded_reason` — and
+        // start-up sat behind it for 38 seconds saying "Signing in".
+        //
+        // Nothing waits on the answer. `ScopedRecall` loads the file at the
+        // moment it needs it, so a discovery that lands ten seconds from now is
+        // in force for every recall after that. The only turn that can lose the
+        // race is a recall issued in the first seconds of the first launch
+        // ever, and it loses by being sent the way the model wrote it.
+        Task { [weak self] in await self?.noteWhichDomainsItMaySearch() }
         do {
             let reply = try await tools.call(name: Tool.inception, arguments: [:])
             let trimmed = Self.condense(reply, to: Self.maximumBootContextCharacters)
@@ -432,18 +446,27 @@ public actor SageRitual {
     /// could not enumerate its own permissions would be trading a degraded
     /// recall for no appliance at all.
     private func noteWhichDomainsItMaySearch(now: Date = Date()) async {
-        let existing = ReadableDomains.load(from: readableDomainsFile)
-        guard !existing.isFresh(now: now) else { return }
+        var record = ReadableDomains.load(from: readableDomainsFile)
+        guard !record.isFresh(now: now) else { return }
+        // Stamped before the call, not after, and kept whatever happens below.
+        // `sage_status` on this appliance's key does not return on 11.16.4 — it
+        // spends the client's full 90-second timeout — so an attempt that is
+        // only recorded on success is an attempt repeated at every launch for
+        // as long as that bug lives. What it costs to give up for a day is
+        // nothing: `ReadableDomains.wellKnown` already names the two domains
+        // this appliance uses, and discovery only ever adds to them.
+        record.checkedAt = now
+        defer { record.save(to: readableDomainsFile) }
         do {
             let reply = try await tools.call(name: Tool.status, arguments: [:])
             guard let discovered = ReadableDomains.fromStatus(reply, writesTo: Self.memoryDomain) else {
-                log("[sage] could not read searchable domains from sage_status")
+                log("[sage] sage_status did not name any searchable domains; using the known ones")
                 return
             }
-            discovered.save(to: readableDomainsFile)
+            record = discovered
             log("[sage] recall is scoped to \(discovered.domains.joined(separator: ", "))")
         } catch {
-            log("[sage] could not ask which domains are searchable: \(error)")
+            log("[sage] could not ask which domains are searchable, using the known ones: \(error)")
         }
     }
 

@@ -34,9 +34,34 @@ public struct ReadableDomains: Codable, Equatable, Sendable {
     /// anything else the node says it can read.
     public var domains: [String]
 
-    /// When the node was last asked. Nil for a record written before this
-    /// existed, which counts as stale.
+    /// When the node was last *asked*, whether or not it answered.
+    ///
+    /// Attempted rather than succeeded, and the difference is ninety seconds of
+    /// somebody's afternoon. `sage_status` signed as this appliance does not
+    /// return on 11.16.4 — it times out — so a record that only remembered
+    /// successes would spend a full timeout on every launch, forever, to learn
+    /// the same nothing. The fallback below is what makes that affordable to
+    /// give up on.
     public var checkedAt: Date?
+
+    /// What to search when the node has not said otherwise.
+    ///
+    /// Not a guess and not a default in the lazy sense — these are the two
+    /// domains this appliance is known to use, both established by evidence
+    /// rather than assumption and both already written down in `MemoriesView`
+    /// for the same reason: `SageRitual.memoryDomain` is where it files what it
+    /// is told, and `mynah-home` is where its own work lives on the owner's
+    /// node. Discovery exists to *add* to this when a shared domain has been
+    /// granted, not to establish it.
+    ///
+    /// **Recall has to work while `sage_status` does not.** With no fallback,
+    /// a node that never answers the question leaves recall unscoped, which
+    /// 11.16.4 refuses outright — so the owner's memory would be unreachable
+    /// for as long as that bug lives.
+    public static let wellKnown = [SageRitual.memoryDomain, "mynah-home"]
+
+    /// The search order, falling back when nothing has been discovered.
+    public var searchOrder: [String] { domains.isEmpty ? Self.wellKnown : domains }
 
     /// How long a discovered set is trusted.
     ///
@@ -51,8 +76,13 @@ public struct ReadableDomains: Codable, Equatable, Sendable {
         self.checkedAt = checkedAt
     }
 
+    /// Whether the node has been asked recently enough to leave it alone.
+    ///
+    /// Does not require `domains` to be non-empty. A failed attempt counts, or
+    /// the appliance pays a 90-second timeout at every single launch against a
+    /// node that has already shown it will not answer.
     public func isFresh(now: Date = Date()) -> Bool {
-        guard let checkedAt, !domains.isEmpty else { return false }
+        guard let checkedAt else { return false }
         return now.timeIntervalSince(checkedAt) < Self.freshFor
     }
 
@@ -137,14 +167,13 @@ public struct ScopedRecall: ToolProviding {
         // this wrapper is built before the ritual has run. Loading it here is
         // what makes the first turn after a discovery use the new set instead
         // of an empty snapshot taken at launch.
-        let known = ReadableDomains.load(from: domainsFile).domains
-        guard !known.isEmpty else {
-            // Nothing discovered yet — send it as the model wrote it. On a node
-            // that still answers unscoped recall this is correct, and on one
-            // that does not, the refusal is the node's own sentence rather than
-            // a guess of ours dressed up as an answer.
-            return try await wrapped.call(name: name, arguments: arguments)
-        }
+        // Falls back to the appliance's own two domains when discovery has not
+        // run or could not. Passing it through unscoped instead would be the
+        // more cautious-looking choice and the wrong one: 11.16.4 refuses the
+        // unscoped form, so "cautious" would mean the owner's memory is
+        // unreachable whenever `sage_status` is unwell — which, today, is
+        // always.
+        let known = ReadableDomains.load(from: domainsFile).searchOrder
 
         var lastReply: String?
         var lastError: Error?

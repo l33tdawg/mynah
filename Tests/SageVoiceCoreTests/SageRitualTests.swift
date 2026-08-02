@@ -72,12 +72,22 @@ final class SageRitualTests: XCTestCase {
 
         let context = await ritual.boot()
 
-        // `sage_status` sits between the two: it is how the appliance learns
-        // which domains it may search, which 11.16.4 made a precondition of
-        // recall answering at all. See `ScopedRecall`.
+        // **`sage_status` is deliberately not in this list.**
+        //
+        // It was, for one build, and the owner watched start-up sit on "Signing
+        // in" for three minutes: `sage_status` does not return for this
+        // appliance on 11.16.4, so boot spent the client's full 90-second
+        // timeout — twice, once per surface — before reaching inception.
+        //
+        // It runs unstructured now. Nothing waits on the answer: `ScopedRecall`
+        // loads the file when it needs it, and falls back to the domains this
+        // appliance is known to use until then.
+        // A prefix, not the whole list: `sage_status` runs unstructured and may
+        // land at any point after. What matters is that nothing but register
+        // gets in front of inception, because that is what the owner waits on.
         XCTAssertEqual(
-            tools.names,
-            [SageRitual.Tool.register, SageRitual.Tool.status, SageRitual.Tool.inception]
+            Array(tools.names.prefix(2)),
+            [SageRitual.Tool.register, SageRitual.Tool.inception]
         )
         XCTAssertEqual(context, "You were migrating the voice bridge.")
     }

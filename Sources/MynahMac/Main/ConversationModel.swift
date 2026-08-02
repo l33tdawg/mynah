@@ -702,10 +702,27 @@ final class ConversationModel {
     /// Send cannot be misread, it needs no legend, and it stops the thing it is
     /// warning about instead of merely colouring it. The banner above the
     /// composer already carries the sentence and the fix.
+    /// **Waking up is no longer a reason to refuse a message.**
+    ///
+    /// It was, and the owner named the cost: *"this is when you straight send a
+    /// message when the app opens"*. Start-up is ten seconds on a good day and
+    /// most of it is the node registering — so the person who opens Mynah
+    /// specifically to ask something spent that time looking at a dead Send
+    /// button, which is the whole of their first impression of the app.
+    ///
+    /// Safe because `runTurn` already awaits `connect()`, and `connect()` joins
+    /// the start-up already in flight rather than starting a second one. A turn
+    /// sent now appears on screen immediately, waits exactly as long as it was
+    /// going to wait anyway, and runs against a fully built engine. Nothing is
+    /// queued into a half-built one — that was the fear this guard encoded, and
+    /// the join is what makes it unfounded.
+    ///
+    /// `trouble` still blocks, and that distinction is the point: waking up is
+    /// a wait, being blocked is a wait that will never end without the owner
+    /// doing something.
     var canSend: Bool {
         !isBusy
             && !isRecording
-            && !isWakingUp
             && trouble == nil
             && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

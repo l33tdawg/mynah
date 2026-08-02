@@ -126,18 +126,38 @@ final class ScopedRecallTests: XCTestCase {
         XCTAssertEqual(reply, empty)
     }
 
-    /// Before the first discovery there is nothing to scope to, and inventing a
-    /// domain would be worse than passing the call through: on a node that
-    /// still answers unscoped recall this is simply correct, and on one that
-    /// does not, the owner gets the node's refusal rather than our guess.
-    func testWithNothingDiscoveredTheCallGoesThroughUntouched() async throws {
+    /// **Recall has to work while `sage_status` does not.**
+    ///
+    /// Discovery calls `sage_status`, and on 11.16.4 that does not return for
+    /// this appliance — it spends the client's full 90-second timeout. Passing
+    /// the call through unscoped would look like the cautious choice and would
+    /// mean the owner's memory is unreachable for as long as that bug lives,
+    /// because the unscoped form is exactly what the node refuses.
+    ///
+    /// So an undiscovered scope falls back to the two domains this appliance is
+    /// known to use. Discovery adds to them; it does not establish them.
+    func testWithNothingDiscoveredItFallsBackToTheDomainsItIsKnownToUse() async throws {
         let spy = RecallSpy()
-        spy.unscopedReply = full
+        spy.repliesByDomain["mynah-home"] = full
 
         let reply = try await recall(spy)
 
-        XCTAssertEqual(spy.calls.map(\.domain), [nil])
+        XCTAssertEqual(spy.calls.map(\.domain), ReadableDomains.wellKnown)
         XCTAssertEqual(reply, full)
+        XCTAssertTrue(ReadableDomains.wellKnown.contains(SageRitual.memoryDomain))
+        XCTAssertTrue(ReadableDomains.wellKnown.contains("mynah-home"))
+    }
+
+    /// A failed discovery still counts as having asked.
+    ///
+    /// It did not, for one build: `isFresh` required a non-empty result, so an
+    /// appliance whose node never answers would pay a 90-second timeout at
+    /// every single launch, forever, to learn the same nothing.
+    func testAFailedDiscoveryStillBacksOffForADay() {
+        let attemptedAndFailed = ReadableDomains(domains: [], checkedAt: Date())
+
+        XCTAssertTrue(attemptedAndFailed.isFresh())
+        XCTAssertEqual(attemptedAndFailed.searchOrder, ReadableDomains.wellKnown)
     }
 
     func testEveryOtherToolIsUntouched() async throws {
@@ -207,7 +227,7 @@ final class ReadableDomainsTests: XCTestCase {
         XCTAssertFalse(record.isFresh(now: Date().addingTimeInterval(day + 60)))
     }
 
-    func testAnEmptyRecordIsNeverFresh() {
-        XCTAssertFalse(ReadableDomains(domains: [], checkedAt: Date()).isFresh())
+    func testARecordThatWasNeverAskedIsNotFresh() {
+        XCTAssertFalse(ReadableDomains(domains: ["mynah-home"], checkedAt: nil).isFresh())
     }
 }
