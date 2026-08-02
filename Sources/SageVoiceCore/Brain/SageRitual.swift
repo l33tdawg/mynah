@@ -657,6 +657,48 @@ public actor SageRitual {
 
     private var arrivedReplies: [PipeReply] = []
 
+    /// Asks the node whether anything came back, without being asked to.
+    ///
+    /// **Nothing pushed a reply to the owner before this existed.** The owner:
+    /// *"we need it to proactively tell us when there's a reply not wait for us
+    /// to ask"*, and then the diagnosis in his own words: *"we need some kind
+    /// of background polling basically"*.
+    ///
+    /// He is right about the mechanism and the reason is structural.
+    /// `ProactiveWatch` polls `sage_inbox` and `sage_backlog` on a timer — and
+    /// `sage_inbox` is by SAGE's own definition the one place a reply to work
+    /// *you* sent never appears. `sage_turn.pipe_results` is the only channel,
+    /// and `sage_turn` only ran when the owner said something. So the appliance
+    /// checked for news every half hour, correctly, in the wrong place.
+    ///
+    /// This is a `sage_turn` with no conversation attached to it, which is the
+    /// honest description of what a poll is: one episodic write per tick, in
+    /// the appliance's own domain, saying that it looked. At the intervals on
+    /// offer that is a few dozen writes a day against a ledger that already
+    /// takes one per spoken turn.
+    public func collectArrivedReplies() async -> [PipeReply] {
+        guard writeDenial == nil else { return [] }
+        do {
+            let answer = try await tools.call(
+                name: Tool.turn,
+                arguments: [
+                    "topic": .string("checking whether other agents have replied"),
+                    "observation": .string(
+                        "Periodic check for results from work piped to other agents. "
+                            + "No conversation with the owner at this point."
+                    ),
+                    "domain": .string(Self.memoryDomain)
+                ]
+            )
+            noteResults(in: answer)
+        } catch {
+            // Silent by design, like every other proactive path: a check nobody
+            // asked for must not put a failure on the owner's phone.
+            note(error, whileDoing: "reply check")
+        }
+        return drainReplies()
+    }
+
     /// Replies that have come back since this was last called, and clears them.
     ///
     /// Draining rather than reading, for the reason `NotesToolSource` drains:

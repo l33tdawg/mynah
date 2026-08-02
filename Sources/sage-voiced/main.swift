@@ -958,6 +958,23 @@ func runDaemon(_ arguments: [String]) -> Never {
         }
         defer { callTask.cancel() }
 
+        // Held rather than built inline, because two things need it now: the
+        // daemon runs it after every turn, and the proactive loop asks it
+        // whether anything came back. One ritual, so both share the ledger that
+        // stops a reply being announced twice.
+        let ritual = arguments.contains("--no-sage-ritual")
+            ? nil
+            : SageRitual(
+                tools: mcp,
+                displayName: SageRitual.applianceDisplayName,
+                // The daemon's own ledger. The window keeps a separate one,
+                // so a reply is said once on the phone and once on the Mac
+                // rather than once in total, to whichever process happened
+                // to call `sage_turn` first.
+                alreadySaidFile: SageRitual.defaultAlreadySaidFile(surface: "daemon"),
+                log: { note($0) }
+            )
+
         let daemon = VoiceBridgeDaemon(
             signal: signal,
             transcriber: transcriber,
@@ -973,18 +990,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             // memory query. On a node that refuses reads this stays empty and
             // the transcript passes through untouched.
             dictationVocabulary: SageMemoryVocabularySource(tools: mcp).callAsFunction,
-            ritual: arguments.contains("--no-sage-ritual")
-                ? nil
-                : SageRitual(
-                    tools: mcp,
-                    displayName: SageRitual.applianceDisplayName,
-                    // The daemon's own ledger. The window keeps a separate one,
-                    // so a reply is said once on the phone and once on the Mac
-                    // rather than once in total, to whichever process happened
-                    // to call `sage_turn` first.
-                    alreadySaidFile: SageRitual.defaultAlreadySaidFile(surface: "daemon"),
-                    log: { note($0) }
-                ),
+            ritual: ritual,
             notes: notes,
             conversations: ConversationStore(),
             synthesizer: synthesizer,
@@ -1029,6 +1035,10 @@ func runDaemon(_ arguments: [String]) -> Never {
 
             await runProactiveWatch(
                 source: SageProactiveSource(tools: mcp),
+                arrivedReplies: {
+                    guard let ritual else { return [] }
+                    return await ritual.collectArrivedReplies().map(\.spokenDescription)
+                },
                 say: { message in
                     await daemon?.announce(message, to: .account(owner))
                 },
@@ -1182,8 +1192,14 @@ func runCheck(_ arguments: [String]) -> Never {
 /// that is expected to be up for months; a node restarting, a key rotating or
 /// a network dropping is an ordinary Tuesday, and none of it is worth putting
 /// an error on the owner's phone about something they did not ask for.
+/// - Parameter arrivedReplies: what other agents have sent back since the last
+///   look. Its own seam rather than part of `ProactiveSource`, because it is
+///   the only thing here that *writes*: replies arrive on `sage_turn` and
+///   nowhere else, so asking for them means recording a turn. Everything else
+///   this loop does is a read.
 func runProactiveWatch(
     source: any ProactiveSource,
+    arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
     say: @escaping @Sendable (String) async -> Void,
     log: @escaping @Sendable (String) -> Void
 ) async {
@@ -1206,6 +1222,24 @@ func runProactiveWatch(
         ledger = report.ledger
         ledger.lastCheckedAt = Date()
         try? ledger.save(to: ledgerURL)
+
+        // Said first and on its own, ahead of any "here is what changed"
+        // digest. A reply is the answer to an errand the owner sent, so it is
+        // the most wanted thing this loop can ever carry — and folding it into
+        // a summary would bury it under a task count.
+        //
+        // Not gated on `report.message`: a reply *is* the change. The gate it
+        // does sit behind is `isDue`, which carries the owner's own switch and
+        // their quiet hours — an appliance that pings at 3am because a stranger
+        // answered an email is a worse appliance.
+        //
+        // `SageRitual.AlreadySaid` is what stops this repeating, and it is on
+        // disk per surface, so a daemon restart between ticks does not replay
+        // the morning. That bug shipped once and the owner read it twice.
+        for reply in await arrivedReplies() {
+            log("[watch] a reply came back; telling the owner")
+            await say(reply)
+        }
 
         guard let message = report.message else { continue }
         log("[watch] something changed; telling the owner")

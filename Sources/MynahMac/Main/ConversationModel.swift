@@ -459,7 +459,28 @@ actor ToolLoopTurnEngine: TurnEngine {
     func run(transcript: String, history: [BrainMessage]) async throws -> TurnResult {
         try await prepare()
         let started = Date()
-        let result = try await loop.run(transcript: transcript, tools: catalogue, history: history)
+
+        // **Drained before the answer is composed, not after, and the owner
+        // caught why.** These arrived on the *previous* turn's `sage_turn`, so
+        // they have been sitting here since before this question was asked —
+        // but they used to be collected below, after the model had already
+        // spoken. It produced this, on both surfaces, seconds apart:
+        //
+        //     "Nothing new has arrived in this conversation…"
+        //     "one of your agents replied: Received your test note…"
+        //
+        // Two contradictory messages in a row, and worse in the record than on
+        // the screen: the arrival is written as a turn, so the model's own
+        // history then held a reply directly above its own sentence saying
+        // nothing had come back. It was answering truthfully from a context
+        // that had been assembled without the answer in it.
+        //
+        // Folded into `history` rather than merely returned, so the reply is a
+        // thing Mynah has already said by the time it is asked "anything new?".
+        let arrived = await ritual.drainReplies().map(\.spokenDescription)
+        let grounded = history + arrived.map { BrainMessage(role: .assistant, content: $0) }
+
+        let result = try await loop.run(transcript: transcript, tools: catalogue, history: grounded)
         conversationLog.info("turn: \(result.trace.summary)")
 
         // After the reply and never before. The node starts refusing outside
@@ -473,16 +494,6 @@ actor ToolLoopTurnEngine: TurnEngine {
         Task { [ritual] in
             await ritual.recordTurn(transcript: transcript, reply: reply, usedTools: usedTools)
         }
-
-        // Replies from the *previous* turn, because `sage_turn` is the only
-        // channel they arrive on and it runs unstructured above — the owner
-        // must not wait on housekeeping, which means this turn's results are
-        // not back yet when this returns.
-        //
-        // One turn late is the honest shape of that and reads correctly: the
-        // reply appears under the next thing the owner says, in the window,
-        // instead of never appearing at all.
-        let arrived = await ritual.drainReplies().map(\.spokenDescription)
 
         return TurnResult(
             reply: result.reply,
