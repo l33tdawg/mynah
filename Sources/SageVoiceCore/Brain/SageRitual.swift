@@ -356,10 +356,17 @@ public actor SageRitual {
     /// value is that the cached prefix matches the real requests byte for byte,
     /// and this changes the prefix — warming first would throw away the 5×
     /// prefill saving on the owner's first sentence.
+    /// - Parameter onSignedIn: called once the identity is claimed and its
+    ///   standing checked, before the slow part. This is two owner-visible
+    ///   steps in one method — signing in, then reading back what happened
+    ///   before — and on the owner's Mac they took 31 and 14 seconds. A caller
+    ///   drawing a start-up line has no other way to tell them apart, and one
+    ///   label held for three quarters of a minute is what he read as a hang.
     @discardableResult
-    public func boot() async -> String? {
+    public func boot(onSignedIn: @Sendable () -> Void = {}) async -> String? {
         await register()
         await checkWhetherItCanSaveAnything()
+        onSignedIn()
         do {
             let reply = try await tools.call(name: Tool.inception, arguments: [:])
             let trimmed = Self.condense(reply, to: Self.maximumBootContextCharacters)

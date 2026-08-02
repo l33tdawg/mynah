@@ -410,6 +410,51 @@ final class WindowConversationTests: XCTestCase {
         XCTAssertEqual(subject.messages.map(\.text), ["fixture"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: record.path))
     }
+
+    // MARK: A reply that arrives on its own
+
+    /// **The window relayed three replies and then said its inbox was empty.**
+    ///
+    /// Arrivals were held in a list beside the record and drawn as cards, and
+    /// the engine's history is built from the record — so what the owner could
+    /// read on screen was invisible to the thing he was asking. He sent
+    /// *"nothing yet ?"* and got *"Still nothing — inbox just checked and it's
+    /// empty. No reply from Claude yet."*
+    func testMynahCanReadBackAReplyItRelayed() async {
+        let subject = makeConversation()
+        await subject.restore()
+        subject.record(question: "any news?", answer: "Nothing yet.", askedAt: nil, answeredAt: nil)
+        subject.recordArrival("Claude replied: the pipeline works.", at: nil)
+
+        let seen = subject.priorMessages
+        XCTAssertEqual(seen.count, 3)
+        XCTAssertEqual(seen.last?.role, .assistant)
+        XCTAssertEqual(seen.last?.content, "Claude replied: the pipeline works.")
+    }
+
+    /// And it survives a relaunch, like every other thing said here.
+    func testAnArrivalIsStillThereNextLaunch() async {
+        let first = makeConversation()
+        await first.restore()
+        first.recordArrival("Claude replied: the pipeline works.", at: nil)
+
+        let reopened = makeConversation()
+        await reopened.restore()
+
+        XCTAssertEqual(reopened.messages.map(\.text), ["Claude replied: the pipeline works."])
+        XCTAssertEqual(reopened.messages.first?.speaker, .mynah)
+    }
+
+    /// Drawn once, not twice. `recordArrival` deliberately does not publish,
+    /// for the same reason `record` does not: the live card is already on
+    /// screen, and publishing puts a second copy underneath it.
+    func testAnArrivalDoesNotAppearTwiceInTheSameSession() async {
+        let subject = makeConversation()
+        await subject.restore()
+        subject.recordArrival("Claude replied: the pipeline works.", at: nil)
+
+        XCTAssertTrue(subject.messages.isEmpty, "the card is drawing this one already")
+    }
 }
 
 final class TranscriptExchangeGroupingTests: XCTestCase {
@@ -582,6 +627,28 @@ final class WindowDocumentRecordTests: XCTestCase {
         XCTAssertNil(record.turns.first?.files, "the owner did not write a document")
         XCTAssertEqual(record.turns.last?.files, [file.path])
     }
+
+    // MARK: A reply that arrives on its own
+
+    /// **The window relayed three replies and then said its inbox was empty.**
+    ///
+    /// Arrivals were held in a list beside the record and drawn as cards, and
+    /// the engine's history is built from the record — so what the owner could
+    /// read on screen was invisible to the thing he was asking. He sent
+    /// *"nothing yet ?"* and got *"Still nothing — inbox just checked and it's
+    /// empty. No reply from Claude yet."*
+    ///
+    /// It has to be one message with no question in front of it, which is why
+    /// this is not `append(question:answer:)` with an invented question.
+    func testAnArrivalIsOneAssistantTurnWithNoQuestion() {
+        var record = WindowRecord()
+        record.appendArrival("Claude replied: the pipeline works.", at: nil)
+
+        XCTAssertEqual(record.turns.count, 1)
+        XCTAssertEqual(record.turns.first?.role, "assistant")
+        XCTAssertEqual(record.turns.first?.content, "Claude replied: the pipeline works.")
+    }
+
 }
 
 // MARK: - Restarting is not quitting

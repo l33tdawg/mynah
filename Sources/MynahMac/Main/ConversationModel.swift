@@ -163,6 +163,29 @@ struct TurnResult: Sendable {
     var files: [URL] = []
 }
 
+/// What start-up is doing right now.
+///
+/// **Forty-five seconds of "Waking up" is indistinguishable from a hang, and
+/// the owner reported it as one:** *"stuck waking up"*, then, a minute later,
+/// *"ah it came online but after a while"*. Nothing was wrong. The screen just
+/// had no way to say which of the five things it was on.
+///
+/// Measured on his Mac from `mynah.log`, cold: launch at 13:31:55, signed in at
+/// 13:32:26, prior context read at 13:32:40. Thirty-one seconds then fourteen,
+/// and until this existed both of them looked identical from outside.
+///
+/// The wording is the owner's side of it, not ours — "signing in" rather than
+/// "registering the agent key". Each case also names itself in the log with the
+/// seconds it took, which is how the next round of this gets shortened rather
+/// than guessed at.
+enum WakingStep: String, Sendable {
+    case installingRuntime = "Getting the local model ready"
+    case startingMemory = "Starting your memory"
+    case readingTools = "Working out what it can do"
+    case signingIn = "Signing in"
+    case readingBefore = "Reading what you did before"
+}
+
 /// Where a turn is actually run.
 ///
 /// A protocol so the previews below drive the same code path the owner does
@@ -182,6 +205,13 @@ protocol TurnEngine: Sendable {
 extension TurnEngine {
     func warmUp() async {}
     func shutDown() async {}
+
+    /// Start-up, saying what it is on. Defaulted so a preview or a test engine —
+    /// neither of which takes long enough to need narrating — conforms with the
+    /// one method it already has.
+    func prepare(reporting: @Sendable (WakingStep) -> Void) async throws {
+        try await prepare()
+    }
 }
 
 // MARK: - Voice input seam
@@ -355,16 +385,36 @@ actor ToolLoopTurnEngine: TurnEngine {
     }
 
     func prepare() async throws {
+        try await prepare(reporting: { _ in })
+    }
+
+    /// Each step announced before it runs and timed after it, because both
+    /// halves were missing and the second is how the first gets shorter.
+    ///
+    /// The owner sees the step; the log gets the seconds. Until this existed,
+    /// the only evidence of where forty-five seconds went was the gap between
+    /// two unrelated lines that happened to be timestamped.
+    func prepare(reporting: @Sendable (WakingStep) -> Void) async throws {
         guard !isPrepared else { return }
+
+        func timing<T>(_ step: WakingStep, _ work: () async throws -> T) async rethrows -> T {
+            reporting(step)
+            let started = Date()
+            let result = try await work()
+            let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+            conversationLog.info("waking: \(step.rawValue) took \(seconds)s")
+            return result
+        }
+
         if let localProvisioner {
-            guard await localProvisioner.install() else {
+            guard await timing(.installingRuntime, { await localProvisioner.install() }) else {
                 throw BrainBackendError.unreachable(
                     "the managed local runtime or one of its required models is not ready"
                 )
             }
         }
-        _ = try await mcp.start()
-        let tools = try await loop.availableTools()
+        _ = try await timing(.startingMemory) { try await mcp.start() }
+        let tools = try await timing(.readingTools) { try await loop.availableTools() }
         catalogue = tools
         // The dictation vocabulary reads the owner's own memories through the
         // same MCP connection. Registered here rather than built here: the
@@ -374,7 +424,19 @@ actor ToolLoopTurnEngine: TurnEngine {
         await DictationProfileStore.shared.use(source: SageMemoryVocabularySource(tools: mcp).callAsFunction)
         // Before any warm-up, never after: the boot reply becomes part of the
         // system prompt, and warming a prompt no turn ever sends buys nothing.
-        if await ritual.boot() != nil {
+        //
+        // Two steps in one call, and the split is where the seconds are: on the
+        // owner's Mac signing in took 31s and reading back what he did before
+        // took a further 14. Timed separately here so the next person to ask
+        // "why is start-up slow" reads an answer instead of subtracting two
+        // timestamps from unrelated log lines.
+        // No stopwatch on these two, unlike the steps above: the ritual already
+        // logs `[sage] registered as …` and `[sage] inception ok` to the same
+        // file, so their durations are the gap between two lines that are
+        // already there. The steps above had nothing.
+        reporting(.signingIn)
+        let bootContext = await ritual.boot { reporting(.readingBefore) }
+        if bootContext != nil {
             let prompt = await ritual.systemPrompt(base: loop.systemPrompt)
             loop.setSystemPrompt(prompt)
         }
@@ -505,10 +567,23 @@ final class ConversationModel {
         let at: Date
     }
 
+    /// The owner has read the card. Only the card goes.
+    ///
+    /// The reply itself stays in the window's record, so Mynah can still answer
+    /// "did Claude get back to you?" afterwards. Dismissing means *I have seen
+    /// this*, which is not the same as *this did not happen*, and treating the
+    /// two as one is how the app came to contradict itself.
     func dismissArrival(_ id: UUID) {
         arrivals.removeAll { $0.id == id }
     }
     private(set) var readiness: Readiness = .connecting
+
+    /// Which part of start-up is running, drawn beside "Waking up".
+    ///
+    /// Cleared the moment start-up ends, so a stale step cannot outlive the
+    /// thing it describes. See `WakingStep` for why a bare "Waking up" was not
+    /// enough on a Mac where this takes three quarters of a minute.
+    private(set) var wakingStep: WakingStep?
     /// Set once the owner has seen one answer, so the "about twenty seconds"
     /// expectation is stated before the wait and never again.
     private(set) var hasEverAnswered = false
@@ -559,6 +634,15 @@ final class ConversationModel {
         _ answeredAt: Date,
         _ files: [URL]
     ) -> Void = { _, _, _, _, _ in }
+
+    /// Where a reply from another agent goes to be remembered.
+    ///
+    /// Paired with `recordTurn` and separate from it because an arrival has no
+    /// question in front of it. Both write the same record, which is the point:
+    /// `priorContext` reads that record back, so anything not written here is
+    /// something Mynah shows the owner and then cannot see. See
+    /// `WindowRecord.appendArrival`.
+    var recordArrival: @MainActor (_ text: String, _ at: Date) -> Void = { _, _ in }
     private var activeTurn: (id: UUID, task: Task<Void, Never>)?
     private var levelSampler: Task<Void, Never>?
     /// The connect that is already running, held so a second caller can *wait*
@@ -633,7 +717,7 @@ final class ConversationModel {
     var health: Health {
         switch readiness {
         case .connecting:
-            return Health(tone: .neutral, title: "Waking up", detail: nil)
+            return Health(tone: .neutral, title: "Waking up", detail: wakingStep?.rawValue)
         case .blocked:
             return Health(tone: .neutral, title: "Not ready yet", detail: "Finish the step below.")
         case .ready(let destination, let model, let staysOnDevice):
@@ -793,13 +877,20 @@ final class ConversationModel {
 
         let candidate = ToolLoopTurnEngine(backend: backend, memoryExecutable: memory)
         do {
-            try await candidate.prepare()
+            // Reported onto the main actor rather than assigned directly: the
+            // steps are announced from wherever the work runs, and the pill is
+            // read from here.
+            try await candidate.prepare { step in
+                Task { @MainActor [weak self] in self?.wakingStep = step }
+            }
         } catch {
             conversationLog.error("could not prepare engine: \(String(describing: error))")
+            wakingStep = nil
             readiness = .blocked(Self.explain(error, staysOnDevice: option.keepsWordsOnDevice))
             await candidate.shutDown()
             return
         }
+        wakingStep = nil
 
         engine = candidate
         connectedStaysOnDevice = option.keepsWordsOnDevice
@@ -967,11 +1058,19 @@ final class ConversationModel {
                 return
             }
             hasEverAnswered = true
-            // Anything another agent sent back, as its own arrival. Recorded
-            // before the answer is finished so the two land together rather
-            // than a beat apart.
+            // Anything another agent sent back, as its own arrival: drawn as a
+            // card, and written into the same record the answer above goes
+            // into.
+            //
+            // **Both, not either.** The card is what the owner sees; the record
+            // is what Mynah reads back on the next turn. When this only did the
+            // first, the window relayed three replies and then told the owner
+            // its inbox was empty — because `groundingHistory` is built from
+            // the record and the card was never in it.
+            let arrivedAt = Date()
             for reply in result.agentReplies {
-                arrivals.append(AgentArrival(text: reply, at: Date()))
+                arrivals.append(AgentArrival(text: reply, at: arrivedAt))
+                recordArrival(reply, arrivedAt)
             }
             finish(
                 id,

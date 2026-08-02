@@ -148,6 +148,32 @@ struct WindowRecord: Codable, Equatable, Sendable {
         }
     }
 
+    /// Adds something that arrived on its own, with no question in front of it.
+    ///
+    /// **A reply from another agent has to live here or Mynah cannot see it.**
+    /// It used to be drawn as a card and held in a separate list, which meant
+    /// the window showed the owner a reply and then answered *"inbox just
+    /// checked and it's empty. No reply from Claude yet"* when he asked about
+    /// it thirty seconds later. Both statements came from the same app.
+    ///
+    /// The daemon never had this bug and the reason is instructive: on Signal
+    /// an arrival *is* a message, so it lands in the thread and comes back as
+    /// history on the next turn. Asked the same question, the phone answered
+    /// correctly — "no new agent replies beyond the three I already relayed".
+    /// The window's card was a picture of a message rather than a message, and
+    /// `groundingHistory` is built from this record, so a picture is not
+    /// something Mynah can read back.
+    ///
+    /// One assistant turn with no user turn before it. That is the honest
+    /// shape: nobody asked, and inventing a question to pair it with would put
+    /// words in the owner's mouth.
+    mutating func appendArrival(_ text: String, at: Date?) {
+        turns.append(RecordedTurn(role: "assistant", content: text, at: at))
+        if turns.count > Self.maximumTurns {
+            turns = Array(turns.suffix(Self.maximumTurns))
+        }
+    }
+
     /// The owner emptying the window.
     ///
     /// The words go, and nothing survives them. The old mirrored record had to
@@ -274,6 +300,18 @@ final class WindowConversation {
             answeredAt: answeredAt,
             files: files
         )
+        persist()
+    }
+
+    /// Writes down a reply that arrived from another agent.
+    ///
+    /// Persisted like a turn and, like a turn, deliberately not published: the
+    /// live `ConversationModel.arrivals` list is already drawing this one on
+    /// screen, and publishing here would draw it a second time underneath. See
+    /// `record(question:answer:…)` for the echo this avoids.
+    func recordArrival(_ text: String, at: Date?) {
+        guard !isFixture else { return }
+        record.appendArrival(text, at: at)
         persist()
     }
 

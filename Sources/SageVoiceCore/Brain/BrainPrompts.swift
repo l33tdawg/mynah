@@ -137,9 +137,9 @@ public enum BrainPrompts {
     - If sage_find_agent finds nobody, say so plainly and do not guess an address.
 
     WHEN ASKED IF ANYONE REPLIED
-    - sage_inbox does not hold replies to work you sent; Mynah reports those itself. An \
-    empty inbox is not evidence nobody answered: say so and stop. NEVER say a named agent \
-    has not replied.
+    - Replies are delivered to you as messages here, above. Read them there; no tool fetches \
+    them. sage_inbox does not hold replies to work you sent, so an empty inbox is not \
+    evidence nobody answered. NEVER say a named agent has not replied.
     - If nothing changed since your last answer, say that in one short sentence.
 
     WHEN ASKED WHICH AGENTS EXIST
@@ -310,7 +310,6 @@ public enum BrainPrompts {
         "sage_inbox",
         "sage_find_agent",
         "sage_pipe",
-        "sage_pipe_result",
         "sage_federation",
         // Added for 11.16.x, and only these two of the thirteen it exposes that
         // this list does not.
@@ -342,6 +341,30 @@ public enum BrainPrompts {
         //     — measured, not assumed — and the scope pair returns
         //     "requires node-operator or admin access", so those two would be
         //     prompt tokens spent on a guaranteed refusal.
+        //   - sage_pipe_result: **it sends, and the model reached for it to
+        //     read.** Its schema is "return results for a claimed pipeline work
+        //     item… sends your result back to the requesting agent", and both
+        //     arguments are required — a `pipe_id` and the text to send. The
+        //     owner asked *"Any updates from other agents?"* and the trace is
+        //     `sage_inbox, sage_inbox, sage_pipe_result`: two failed attempts to
+        //     find an answer, then a write into somebody else's inbox carrying
+        //     whatever the model put in `result`. It fired again eighteen
+        //     minutes later on *"see if there's an update"*.
+        //
+        //     The name is the trap. Every read tool here is a noun for the
+        //     thing it returns, so `pipe_result` reads as "the result of a
+        //     pipe" — which is exactly what the owner is asking for and exactly
+        //     what it does not do. No amount of prompt wording beats a tool
+        //     name that answers the question.
+        //
+        //     What this gives up, said plainly: an agent can pipe work *to*
+        //     Mynah and Mynah can now never complete it. That is the right way
+        //     round for an appliance nobody assigns work to — it answers one
+        //     person's phone — and the wrong direction costs a stranger a
+        //     fabricated result they will act on. Replies to work Mynah sends
+        //     arrive on `sage_turn.pipe_results` and are announced by the
+        //     surface; no tool fetches them, which is why the model kept
+        //     casting about for one.
         "sage_corroborate",
         "sage_link",
         // Not a SAGE tool. The allowlist filters the *composed* catalogue, so a

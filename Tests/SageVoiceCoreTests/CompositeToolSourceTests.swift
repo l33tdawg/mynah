@@ -236,4 +236,23 @@ final class CompositeToolSourceTests: XCTestCase {
     func testTheVoiceAllowlistIncludesWebSearch() {
         XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains(WebSearchToolSource.toolName))
     }
+
+    /// **A send tool the model reached for as a read tool.**
+    ///
+    /// `sage_pipe_result` returns *your* result to an agent that asked you for
+    /// work. Its name reads as "the result of a pipe", which is the answer the
+    /// owner is after when he asks whether anyone got back to him — so the
+    /// trace for *"Any updates from other agents?"* was `sage_inbox,
+    /// sage_inbox, sage_pipe_result`: two attempts to find a reply, then a
+    /// write into a stranger's inbox carrying whatever the model invented.
+    ///
+    /// Nothing fetches replies. They arrive on `sage_turn.pipe_results` and the
+    /// surface announces them, which is why the model kept casting about.
+    func testTheModelIsNotOfferedTheToolThatSendsResultsToOtherAgents() {
+        XCTAssertFalse(BrainPrompts.voiceToolAllowlist.contains("sage_pipe_result"))
+        XCTAssertTrue(
+            BrainPrompts.voiceToolAllowlist.contains("sage_pipe"),
+            "sending work out is still Mynah's job — it is only answering somebody else's that is not"
+        )
+    }
 }

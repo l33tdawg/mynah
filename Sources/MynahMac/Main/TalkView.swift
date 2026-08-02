@@ -169,6 +169,12 @@ struct TalkView: View {
                     files: files
                 )
             }
+            // And the same for a reply that arrives with no question in front
+            // of it, or the window shows the owner something it cannot itself
+            // remember a minute later.
+            model.recordArrival = { [record] text, at in
+                record.recordArrival(text, at: at)
+            }
             await model.connect()
             app.presence = presence
         }
