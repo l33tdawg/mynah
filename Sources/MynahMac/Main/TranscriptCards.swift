@@ -342,3 +342,65 @@ struct DocumentChips: View {
         }
     }
 }
+
+// MARK: - Something that arrived on its own
+
+/// A reply from one of the owner's other agents.
+///
+/// **Not an answer card, because it is not an answer.** Nobody on this screen
+/// asked for it: the owner sent work to another agent some time ago and it has
+/// come back now, possibly in the middle of a different conversation. Drawing it
+/// as Mynah's reply would attach it to whatever question happens to sit above
+/// it, which is how somebody reads an answer to the wrong question.
+///
+/// So it takes the notice shape instead — an eyebrow that names where it came
+/// from, and a dismiss control, because a message with no question above it
+/// stays on screen until somebody says they have read it.
+struct AgentArrivalCard: View {
+    let arrival: ConversationModel.AgentArrival
+    let inset: CGFloat
+    var onDismiss: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: s3) {
+                HStack(spacing: s3) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .mynahIcon(.inline)
+                        .foregroundStyle(Palette.ink.secondary)
+                    Text("While you were working")
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .textCase(.uppercase)
+                    Spacer(minLength: s4)
+                    if isHovering {
+                        Button(action: onDismiss) {
+                            Image(systemName: "xmark")
+                                .mynahIcon(.inline)
+                                .foregroundStyle(Palette.ink.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Dismiss")
+                    }
+                }
+                Text(arrival.text)
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                MessageStamp(at: arrival.at)
+            }
+            .padding(.horizontal, s5)
+            .padding(.vertical, s5)
+            .background(Palette.surface.sunken, in: RoundedRectangle.mynah(r.card))
+            .mynahBorder(r.card)
+            Spacer(minLength: inset)
+        }
+        .onHover { isHovering = $0 }
+        .mynahAnimation(Motion.fade, value: isHovering)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("A reply arrived: \(arrival.text)")
+    }
+}

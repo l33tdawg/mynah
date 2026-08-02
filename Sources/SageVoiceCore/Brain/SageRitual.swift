@@ -229,6 +229,7 @@ public actor SageRitual {
         displayName: String? = nil,
         displayNameMarker: URL? = SageRitual.defaultDisplayNameMarker(),
         readinessCheck: (@Sendable () async -> ApplianceWriteReadiness)? = nil,
+        alreadySaidFile: URL = SageRitual.defaultAlreadySaidFile(),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.tools = tools
@@ -236,8 +237,77 @@ public actor SageRitual {
         self.displayName = displayName
         self.displayNameMarker = displayNameMarker
         self.readinessCheck = readinessCheck ?? { await ApplianceWriteReadinessCheck().check() }
+        self.alreadySaidFile = alreadySaidFile
+        self.alreadySaid = AlreadySaid.load(from: alreadySaidFile)
         self.log = log
     }
+
+    /// Replies already said out loud, so none is said twice.
+    ///
+    /// **The bug this exists to stop was shipped and seen.** `sage_turn` keeps
+    /// returning the same `pipe_results` on later turns — draining them from
+    /// this object clears *this* object, not the node — so every subsequent
+    /// turn announced the same reply again. The owner's thread filled with
+    /// "one of your agents replied:" repeating an acknowledgement and a long
+    /// status update, over and over.
+    ///
+    /// On disk rather than in memory, because the daemon restarts often — a
+    /// changed setting, an update, a launchd reconcile — and an in-memory set
+    /// would replay everything SAGE still holds on every one of those.
+    struct AlreadySaid: Codable, Equatable {
+        /// In arrival order, so the oldest can be dropped. An appliance that
+        /// runs for a year should not carry every pipe id it ever saw.
+        var ids: [String] = []
+
+        static let mostKept = 200
+
+        mutating func remember(_ id: String) {
+            ids.append(id)
+            if ids.count > Self.mostKept {
+                ids.removeFirst(ids.count - Self.mostKept)
+            }
+        }
+
+        func has(_ id: String) -> Bool { ids.contains(id) }
+
+        static func load(from url: URL) -> AlreadySaid {
+            guard let data = try? Data(contentsOf: url),
+                  let stored = try? JSONDecoder().decode(AlreadySaid.self, from: data) else {
+                return AlreadySaid()
+            }
+            return stored
+        }
+
+        func save(to url: URL) {
+            guard let data = try? JSONEncoder().encode(self) else { return }
+            try? OwnerOnlyFileSecurity.write(data, to: url)
+        }
+    }
+
+    /// One ledger per surface, and that is not an implementation detail.
+    ///
+    /// **A single shared file would have hidden replies from the window.** The
+    /// app and the daemon are separate processes with separate `SageRitual`s,
+    /// both calling `sage_turn`, and the node offers the same `pipe_results` to
+    /// each. With one ledger, whichever asked first would mark the reply said
+    /// and the other would never show it — which is precisely what the owner
+    /// reported: *"via signal you get the inbox, via the app it says i have
+    /// nothing."* The daemon runs constantly and would win that race every
+    /// time.
+    ///
+    /// Two surfaces telling the owner once each is not a repeat. It is a phone
+    /// and a Mac, and somebody looking at one of them has not seen the other.
+    public static func defaultAlreadySaidFile(
+        surface: String = "app",
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("said-replies-\(surface).json", isDirectory: false)
+    }
+
+    private let alreadySaidFile: URL
+    private var alreadySaid: AlreadySaid
 
     private let readinessCheck: @Sendable () async -> ApplianceWriteReadiness
 
@@ -517,14 +587,25 @@ public actor SageRitual {
         }
         log("[sage] \(results.count) pipe result(s) came back: \(String(describing: results).prefix(300))")
 
+        var changed = false
         for result in results {
             let from = Self.text(result, ["from", "from_name", "agent", "responder"])
                 ?? "one of your agents"
             guard let said = Self.text(result, ["result", "payload", "content", "text", "message"]) else {
                 continue
             }
+            // Once, ever. The node goes on offering a result after it has been
+            // handed over, so what stops a repeat is this ledger and nothing
+            // else. The pipe id when there is one; otherwise what was said, by
+            // whom — two replies identical in both are indistinguishable to a
+            // reader anyway, so treating them as one costs nothing.
+            let identity = Self.text(result, ["pipe_id", "id"]) ?? "\(from)|\(said)"
+            guard !alreadySaid.has(identity) else { continue }
+            alreadySaid.remember(identity)
+            changed = true
             arrivedReplies.append(PipeReply(from: Self.shortened(from), text: said))
         }
+        if changed { alreadySaid.save(to: alreadySaidFile) }
     }
 
     private static func text(_ object: [String: Any], _ keys: [String]) -> String? {

@@ -160,8 +160,25 @@ final class SageReplyCallersTests: XCTestCase {
 /// discarded the answer. So every reply any agent ever sent back was dropped.
 final class PipeReplyTests: XCTestCase {
 
+    private var said: URL!
+    private var saidDirectory: URL!
+
+    override func setUpWithError() throws {
+        // A directory of its own, never the shared temp root: writes here go
+        // through `OwnerOnlyFileSecurity`, which chmods the *containing*
+        // directory to 0700 — and doing that to /var/folders/.../T would be a
+        // test changing the machine it runs on.
+        saidDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("said-\(UUID().uuidString)", isDirectory: true)
+        said = saidDirectory.appendingPathComponent("said-replies.json")
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: saidDirectory)
+    }
+
     private func ritual() -> SageRitual {
-        SageRitual(tools: SilentTools(), displayName: "Mynah")
+        SageRitual(tools: SilentTools(), displayName: "Mynah", alreadySaidFile: said)
     }
 
     private func turnAnswer(_ results: String) -> String {
@@ -239,4 +256,113 @@ final class PipeReplyTests: XCTestCase {
 private struct SilentTools: ToolProviding {
     func listTools() async throws -> [MCPTool] { [] }
     func call(name: String, arguments: [String: JSONValue]) async throws -> String { "{}" }
+}
+
+// MARK: - Saying it once
+
+/// The bug that reached the owner's phone.
+///
+/// `sage_turn` keeps returning the same `pipe_results` on later turns, and
+/// draining them from the ritual clears the ritual rather than the node. So
+/// every following turn announced the same reply again, and his Note to Self
+/// filled with "one of your agents replied:" repeating an acknowledgement and a
+/// long status update over and over.
+final class RepeatedReplyTests: XCTestCase {
+
+    private var said: URL!
+    private var saidDirectory: URL!
+
+    override func setUpWithError() throws {
+        // A directory of its own, never the shared temp root: writes here go
+        // through `OwnerOnlyFileSecurity`, which chmods the *containing*
+        // directory to 0700 — and doing that to /var/folders/.../T would be a
+        // test changing the machine it runs on.
+        saidDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("said-\(UUID().uuidString)", isDirectory: true)
+        said = saidDirectory.appendingPathComponent("said-replies.json")
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: saidDirectory)
+    }
+
+    private func ritual() -> SageRitual {
+        SageRitual(tools: SilentTools(), displayName: "Mynah", alreadySaidFile: said)
+    }
+
+    private let turnAnswer = """
+    {"stored": true, "pipe_results": [
+      {"pipe_id":"p-1","from":"Claude","result":"Acknowledged — the pipeline works."}]}
+    """
+
+    func testTheSameResultIsNotSaidTwice() async {
+        let ritual = ritual()
+
+        await ritual.noteResults(in: turnAnswer)
+        let first = await ritual.drainReplies()
+        XCTAssertEqual(first.count, 1)
+
+        // The node offers it again on the next turn, as it does.
+        await ritual.noteResults(in: turnAnswer)
+        let second = await ritual.drainReplies()
+        XCTAssertTrue(
+            second.isEmpty,
+            "the node goes on offering a result after it has been handed over; this ledger "
+                + "is the only thing that stops a repeat"
+        )
+    }
+
+    func testARestartDoesNotReplayEverything() async {
+        let first = ritual()
+        await first.noteResults(in: turnAnswer)
+        _ = await first.drainReplies()
+
+        // A daemon restart — a changed setting, an update, a launchd reconcile.
+        // In memory alone this would say everything again.
+        let afterRestart = ritual()
+        await afterRestart.noteResults(in: turnAnswer)
+
+        let replayed = await afterRestart.drainReplies()
+        XCTAssertTrue(replayed.isEmpty)
+    }
+
+    func testADifferentReplyStillArrives() async {
+        let ritual = ritual()
+        await ritual.noteResults(in: turnAnswer)
+        _ = await ritual.drainReplies()
+
+        await ritual.noteResults(in: """
+        {"pipe_results": [{"pipe_id":"p-2","from":"Codex","result":"Wave 3 is done."}]}
+        """)
+
+        let arrived = await ritual.drainReplies()
+        XCTAssertEqual(arrived.first?.from, "Codex")
+    }
+
+    func testWithNoPipeIdItFallsBackToWhatWasSaid() async {
+        // Some results may carry no id. Two replies identical in sender and
+        // text are indistinguishable to a reader anyway, so treating them as
+        // one costs nothing and saying them twice costs the owner's patience.
+        let ritual = ritual()
+        let anonymous = #"{"pipe_results": [{"from":"Codex","result":"Wave 3 is done."}]}"#
+
+        await ritual.noteResults(in: anonymous)
+        let first = await ritual.drainReplies()
+        XCTAssertEqual(first.count, 1)
+
+        await ritual.noteResults(in: anonymous)
+        let again = await ritual.drainReplies()
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testTheLedgerDoesNotGrowForever() {
+        var ledger = SageRitual.AlreadySaid()
+        for index in 0..<(SageRitual.AlreadySaid.mostKept + 50) {
+            ledger.remember("p-\(index)")
+        }
+
+        XCTAssertEqual(ledger.ids.count, SageRitual.AlreadySaid.mostKept)
+        XCTAssertFalse(ledger.has("p-0"), "the oldest go first")
+        XCTAssertTrue(ledger.has("p-\(SageRitual.AlreadySaid.mostKept + 49)"))
+    }
 }

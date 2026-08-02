@@ -146,6 +146,13 @@ struct TurnResult: Sendable {
     /// `ConversationModel.conversationOnly(_:)`.
     var messages: [BrainMessage]
 
+    /// What another agent sent back, for the screen to show.
+    ///
+    /// The daemon says these into the Signal thread; the window had nowhere to
+    /// put them, so on the Mac they did not exist. *"via signal you get the
+    /// inbox, via the app it says i have nothing."*
+    var agentReplies: [String] = []
+
     /// Documents this turn wrote, for the screen to offer.
     ///
     /// The window has no attachment channel — that is the whole reason
@@ -337,6 +344,12 @@ actor ToolLoopTurnEngine: TurnEngine {
             tools: mcp,
             agentName: SageRitual.applianceAgentName,
             displayName: SageRitual.applianceDisplayName,
+            // The window's own ledger of what it has already shown. The daemon
+            // keeps a separate one — see `defaultAlreadySaidFile`. A single
+            // shared file would mean whichever process called `sage_turn` first
+            // claimed the reply and the other never showed it, which is exactly
+            // what the owner saw: on Signal it arrived, in the app it did not.
+            alreadySaidFile: SageRitual.defaultAlreadySaidFile(surface: "window"),
             log: { conversationLog.error("\($0)") }
         )
     }
@@ -394,6 +407,16 @@ actor ToolLoopTurnEngine: TurnEngine {
             await ritual.recordTurn(transcript: transcript, reply: reply, usedTools: usedTools)
         }
 
+        // Replies from the *previous* turn, because `sage_turn` is the only
+        // channel they arrive on and it runs unstructured above — the owner
+        // must not wait on housekeeping, which means this turn's results are
+        // not back yet when this returns.
+        //
+        // One turn late is the honest shape of that and reads correctly: the
+        // reply appears under the next thing the owner says, in the window,
+        // instead of never appearing at all.
+        let arrived = await ritual.drainReplies().map(\.spokenDescription)
+
         return TurnResult(
             reply: result.reply,
             toolNames: result.trace.toolNames,
@@ -401,6 +424,7 @@ actor ToolLoopTurnEngine: TurnEngine {
             messages: result.messages,
             // Drained, not read: a document that rode along with a second answer
             // because nobody cleared the list is a confusing thing to chase.
+            agentReplies: arrived,
             files: notes.drainWrittenNotes()
         )
     }
@@ -465,6 +489,25 @@ final class ConversationModel {
     }
 
     private(set) var exchanges: [Exchange] = []
+
+    /// What another agent sent back, waiting to be shown.
+    ///
+    /// Its own list rather than part of an `Exchange`, because it belongs to
+    /// nobody's question: the owner asked one thing and this is a different
+    /// thing arriving. On Signal the daemon sends it as its own message, and
+    /// this is the window's equivalent.
+    private(set) var arrivals: [AgentArrival] = []
+
+    /// One reply from another agent, drawn on its own.
+    struct AgentArrival: Identifiable, Equatable, Sendable {
+        let id = UUID()
+        let text: String
+        let at: Date
+    }
+
+    func dismissArrival(_ id: UUID) {
+        arrivals.removeAll { $0.id == id }
+    }
     private(set) var readiness: Readiness = .connecting
     /// Set once the owner has seen one answer, so the "about twenty seconds"
     /// expectation is stated before the wait and never again.
@@ -924,6 +967,12 @@ final class ConversationModel {
                 return
             }
             hasEverAnswered = true
+            // Anything another agent sent back, as its own arrival. Recorded
+            // before the answer is finished so the two land together rather
+            // than a beat apart.
+            for reply in result.agentReplies {
+                arrivals.append(AgentArrival(text: reply, at: Date()))
+            }
             finish(
                 id,
                 with: .answered(

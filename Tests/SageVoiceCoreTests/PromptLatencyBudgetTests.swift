@@ -356,3 +356,36 @@ private final class ReplayToolSource: ToolProviding, @unchecked Sendable {
         results[name] ?? "ok"
     }
 }
+
+// MARK: - What the model is told it cannot see
+
+/// The prompt has to correct a belief the model will otherwise hold.
+///
+/// The owner asked *"anything in the inbox?"* and Mynah answered *"Still
+/// nothing — Codex hasn't replied to the 11.16.4 question yet."* The first half
+/// was true and the second was invented: `sage_inbox` holds messages addressed
+/// *to* this agent and by SAGE's own definition does not contain replies to
+/// work it sent, so an empty inbox says nothing whatever about whether anyone
+/// answered. The model read one and reported the other, confidently, twice.
+final class InboxScopePromptTests: XCTestCase {
+
+    private var prompt: String { BrainPrompts.voiceAgentManager }
+
+    func testItIsToldTheInboxDoesNotHoldReplies() {
+        XCTAssertTrue(
+            prompt.contains("sage_inbox does not hold replies to work you sent"),
+            "without this the model treats an empty inbox as proof nobody answered"
+        )
+    }
+
+    func testItIsForbiddenFromSayingAnAgentHasNotReplied() {
+        // The specific false sentence, named. A general "do not speculate"
+        // would not have stopped it, because from the model's side this did not
+        // feel like speculation — it had just read a tool result.
+        XCTAssertTrue(prompt.contains("NEVER say a named agent has not replied"))
+    }
+
+    func testItIsToldToStopRepeatingAnUnchangedAnswer() {
+        XCTAssertTrue(prompt.contains("If nothing changed since your last answer"))
+    }
+}

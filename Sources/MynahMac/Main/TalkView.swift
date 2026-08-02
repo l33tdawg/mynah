@@ -453,6 +453,12 @@ struct TalkView: View {
                                 onRetry: { model.retry(exchange.id) }
                             )
                             .id(exchange.id)
+                        case .arrived(let arrival):
+                            AgentArrivalCard(
+                                arrival: arrival,
+                                inset: Self.cardInset,
+                                onDismiss: { model.dismissArrival(arrival.id) }
+                            )
                         }
                     }
                     // Typed while it was thinking, not yet asked.
@@ -546,11 +552,14 @@ struct TalkView: View {
     enum TranscriptItem: Identifiable {
         case earlier(TranscriptExchange)
         case here(Exchange)
+        /// A reply from another agent, which belongs to nobody's question.
+        case arrived(ConversationModel.AgentArrival)
 
         var id: String {
             switch self {
             case .earlier(let exchange): return "earlier-\(exchange.id)"
             case .here(let exchange): return "here-\(exchange.id)"
+            case .arrived(let arrival): return "arrived-\(arrival.id)"
             }
         }
 
@@ -565,6 +574,8 @@ struct TalkView: View {
                 return exchange.askedAt
             case .earlier(let exchange):
                 return (exchange.asked + exchange.answered).compactMap(\.at).min()
+            case .arrived(let arrival):
+                return arrival.at
             }
         }
     }
@@ -595,6 +606,10 @@ struct TalkView: View {
     var timeline: [TranscriptEntry] {
         var items: [TranscriptItem] = TranscriptExchange.group(record.messages).map { .earlier($0) }
         items.append(contentsOf: model.exchanges.map { .here($0) })
+        // Placed by when they arrived, like everything else, so a reply that
+        // came back during a long answer sits where it happened rather than at
+        // the end.
+        items.append(contentsOf: model.arrivals.map { .arrived($0) })
 
         let ordered = items.enumerated()
             .sorted { first, second in

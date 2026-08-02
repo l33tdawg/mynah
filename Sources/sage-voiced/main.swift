@@ -976,6 +976,11 @@ func runDaemon(_ arguments: [String]) -> Never {
                 : SageRitual(
                     tools: mcp,
                     displayName: SageRitual.applianceDisplayName,
+                    // The daemon's own ledger. The window keeps a separate one,
+                    // so a reply is said once on the phone and once on the Mac
+                    // rather than once in total, to whichever process happened
+                    // to call `sage_turn` first.
+                    alreadySaidFile: SageRitual.defaultAlreadySaidFile(surface: "daemon"),
                     log: { note($0) }
                 ),
             notes: notes,
