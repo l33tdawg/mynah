@@ -59,16 +59,52 @@ public struct ProactiveLedger: Sendable, Equatable, Codable {
     /// changes *from now on*.
     public var hasSeeded: Bool
 
+    /// Reminder rungs already delivered. See `ReminderLadder.Nudge.key`.
+    public var saidReminders: Set<String>
+
+    /// The open tasks as of the last check that actually reached the node.
+    ///
+    /// **Cached so reminders can be punctual without being expensive.** The
+    /// owner set the check interval to fifteen minutes, and a rung that fires on
+    /// a fifteen-minute grid cannot honestly say "in about half an hour". But
+    /// the *dates* do not change between checks — only the clock moves. So the
+    /// ladder is evaluated against this every tick, a minute apart, while the
+    /// node is still only asked as often as he chose.
+    ///
+    /// Kept out of `knownTasks`, which stores statuses for a different question.
+    public var lastSeenTasks: [WatchedTask]
+
     public init(
         toldAboutMessages: Set<String> = [],
         knownTasks: [String: String] = [:],
         lastCheckedAt: Date? = nil,
-        hasSeeded: Bool = false
+        hasSeeded: Bool = false,
+        saidReminders: Set<String> = [],
+        lastSeenTasks: [WatchedTask] = []
     ) {
         self.toldAboutMessages = toldAboutMessages
         self.knownTasks = knownTasks
         self.lastCheckedAt = lastCheckedAt
         self.hasSeeded = hasSeeded
+        self.saidReminders = saidReminders
+        self.lastSeenTasks = lastSeenTasks
+    }
+
+    // Both new fields decode as empty from a ledger written by an older build,
+    // which is the correct upgrade: no reminder is "already said" on a Mac that
+    // has never had reminders, and the first check refills the task cache.
+    enum CodingKeys: String, CodingKey {
+        case toldAboutMessages, knownTasks, lastCheckedAt, hasSeeded, saidReminders, lastSeenTasks
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        toldAboutMessages = try container.decodeIfPresent(Set<String>.self, forKey: .toldAboutMessages) ?? []
+        knownTasks = try container.decodeIfPresent([String: String].self, forKey: .knownTasks) ?? [:]
+        lastCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        hasSeeded = try container.decodeIfPresent(Bool.self, forKey: .hasSeeded) ?? false
+        saidReminders = try container.decodeIfPresent(Set<String>.self, forKey: .saidReminders) ?? []
+        lastSeenTasks = try container.decodeIfPresent([WatchedTask].self, forKey: .lastSeenTasks) ?? []
     }
 
     /// Bounded, because this file is written forever and an appliance that runs
@@ -190,6 +226,11 @@ public struct ProactiveWatch: Sendable {
         }
         if let tasks {
             updated.knownTasks = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.status) })
+            // Refilled only on a check that actually read the node, for the same
+            // reason as everything else in this block: a refusal must not empty
+            // the cache, or the ladder would go quiet until the node came back.
+            updated.lastSeenTasks = tasks
+            updated.saidReminders = ReminderLadder.keysWorthKeeping(updated.saidReminders, tasks: tasks)
         }
 
         let newMessages = (messages ?? []).filter { !ledger.toldAboutMessages.contains($0.id) }

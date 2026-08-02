@@ -116,6 +116,26 @@ public enum SpokenDate {
     /// the undated, which is a task the owner can fix rather than a reminder
     /// three months early.
     public static func writtenDate(in text: String, calendar: Calendar = .current) -> Date? {
+        writtenDateMatch(in: text, calendar: calendar)?.at
+    }
+
+    /// A date found in a title, with the two extra facts a reminder needs.
+    ///
+    /// Ordering only ever wanted the instant. A reminder wants two more things:
+    /// whether a *time* was written — because "in about two hours" is a promise
+    /// nothing can keep about a task whose title says only "Tuesday" — and where
+    /// the date sat in the sentence, so the reminder can say when it is without
+    /// reading the date out twice.
+    public struct WrittenDate: Equatable, Sendable {
+        public let at: Date
+        /// A clock time was written, not just a day. `.day` means the owner
+        /// named a date and no hour, and no rung may invent one.
+        public let granularity: OwnerDate.Granularity
+        /// The matched text, exactly as it appears in the original.
+        public let text: String
+    }
+
+    static func writtenDateMatch(in text: String, calendar: Calendar = .current) -> WrittenDate? {
         let months = [
             "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
             "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
@@ -123,7 +143,19 @@ public enum SpokenDate {
             "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12
         ]
         let lower = text.lowercased()
-        let names = months.keys.joined(separator: "|")
+        // **Longest first, and this was a live bug rather than tidiness.**
+        //
+        // `months.keys` has no order — Dictionary hashing decides it, and it can
+        // differ between runs. When "aug" happened to precede "august" the
+        // alternation matched the short form, because regex alternation takes
+        // the first branch that fits rather than the longest. "5 August 2026"
+        // then matched only "5 aug", the year group never saw 2026, and the year
+        // silently fell back to *the current one*.
+        //
+        // Invisible all year: the fallback is right whenever the task is in this
+        // year, which every task on the board is. It would have started dating
+        // things twelve months early on New Year's Day.
+        let names = months.keys.sorted { ($0.count, $0) > ($1.count, $1) }.joined(separator: "|")
         // "5 August 2026" and "August 5 2026", each with an optional ordinal
         // suffix and an optional year.
         let patterns = [
@@ -162,13 +194,75 @@ public enum SpokenDate {
             components.day = day
             components.month = month
             components.year = year ?? calendar.component(.year, from: Date())
-            if let clock = time(in: lower) {
+            let clock = time(in: lower)
+            if let clock {
                 components.hour = clock.hour
                 components.minute = clock.minute
             }
-            if let date = calendar.date(from: components) { return date }
+            guard let date = calendar.date(from: components) else { continue }
+
+            // Recovered from the *original* by searching for what matched,
+            // rather than by reusing an index into the lowercased copy. Case
+            // folding is not always length-preserving, and an offset that is
+            // right for ASCII and wrong for anything else is the kind of bug
+            // that only ever appears in somebody else's language.
+            let matched = Range(match.range, in: lower).map { String(lower[$0]) } ?? ""
+            let asWritten = text.range(of: matched, options: .caseInsensitive)
+                .map { String(text[$0]) } ?? matched
+
+            return WrittenDate(
+                at: date,
+                granularity: clock == nil ? .day : .minute,
+                text: asWritten
+            )
         }
         return nil
+    }
+
+    /// The title with its date taken out, for a reminder that is about to say
+    /// when it is in its own words.
+    ///
+    /// *"Chiropractor appointment at One Spine TTDI Wednesday 5 August 2026,
+    /// 11am"* becomes *"Chiropractor appointment at One Spine TTDI"*, so the
+    /// nudge reads "in about two hours" instead of naming a date the owner is
+    /// being reminded of anyway.
+    ///
+    /// The weekday goes too when it sits directly against the date, because
+    /// "Chiropractor appointment at One Spine TTDI Wednesday" is a sentence that
+    /// still claims to know when. Falls back to the whole title whenever the
+    /// surgery would leave something odd — a reminder that reads a little long
+    /// is fine, one that reads mangled is not.
+    public static func withoutWrittenDate(in text: String, calendar: Calendar = .current) -> String {
+        guard let found = writtenDateMatch(in: text, calendar: calendar),
+              let span = text.range(of: found.text) else { return text }
+
+        var kept = text
+        kept.removeSubrange(span)
+
+        // The time, when it was written separately — "…, 11am" trailing the
+        // date rather than inside the matched span.
+        for pattern in [#"\b\d{1,2}:\d{2}\s*(am|pm)?"#, #"\b\d{1,2}\s*(am|pm)"#, #"\b(noon|midday|midnight)\b"#] {
+            if let range = kept.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                kept.removeSubrange(range)
+            }
+        }
+
+        let weekdays = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        for pattern in [#"\b(on|at)?\s*(\#(weekdays))\b,?"#, #"\s*[,–—-]\s*$"#, #"^\s*[,–—-]\s*"#] {
+            while let range = kept.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                kept.removeSubrange(range)
+            }
+        }
+
+        let tidied = kept
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+([,.])"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ",–—- "))
+
+        // Nothing meaningful survived, so the owner's own sentence is better
+        // than the stub this produced.
+        return tidied.count >= 3 ? tidied : text
     }
 
     // MARK: Days

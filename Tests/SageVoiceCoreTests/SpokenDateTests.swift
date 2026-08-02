@@ -228,6 +228,36 @@ final class WrittenDateTests: XCTestCase {
         XCTAssertEqual(stamp("Dentist August 5 2026"), "2026-08-05 00:00")
     }
 
+    /// **A year that was written down must survive being read back.**
+    ///
+    /// The month names came out of a Dictionary, whose key order is decided by
+    /// hashing and can differ run to run. With "aug" ahead of "august" the
+    /// alternation matched the short form — regex alternation takes the first
+    /// branch that fits, not the longest — so "5 August 2027" matched only
+    /// "5 aug", the year capture never saw 2027, and the year fell back to the
+    /// current one.
+    ///
+    /// Invisible for as long as every task is in the current year, and wrong by
+    /// twelve months the moment one is not. Asserted with a year that is not
+    /// today's, because the fallback hides the bug whenever they agree.
+    func testAYearOtherThanThisOneIsRead() {
+        XCTAssertEqual(stamp("Passport renewal 5 August 2029"), "2029-08-05 00:00")
+        XCTAssertEqual(stamp("Passport renewal August 5 2029"), "2029-08-05 00:00")
+        XCTAssertEqual(stamp("Renewal on 5th Sept 2029"), "2029-09-05 00:00")
+    }
+
+    /// Every month, long and short, so no single spelling can regress alone.
+    func testEveryMonthReadsWithItsYear() {
+        let expected = [
+            "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
+            "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12
+        ]
+        for (name, month) in expected {
+            let padded = String(format: "%02d", month)
+            XCTAssertEqual(stamp("Thing on 12 \(name) 2029"), "2029-\(padded)-12 00:00", name)
+        }
+    }
+
     func testOrdinalsAndShortMonths() {
         XCTAssertEqual(stamp("Renewal on 5th Aug 2026"), "2026-08-05 00:00")
         XCTAssertEqual(stamp("Renewal on 5 Sept 2026"), "2026-09-05 00:00")

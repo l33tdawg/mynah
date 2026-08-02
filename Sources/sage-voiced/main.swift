@@ -1219,6 +1219,42 @@ func runProactiveWatch(
 
         let preferences = ProactivePreferences.load()
         var ledger = ProactiveLedger.load(from: ledgerURL)
+
+        // **Reminders run on every tick; the node is still only asked on his
+        // interval.** The owner chose fifteen minutes for how often Mynah goes
+        // *looking*, and asked separately for a rung tight enough to be worth
+        // having — "in about half an hour" is a lie on a fifteen-minute grid.
+        //
+        // Both are satisfied because they are different questions. Dates do not
+        // change between checks; only the clock moves. So the ladder is
+        // evaluated a minute apart against `lastSeenTasks`, which costs a date
+        // parse and no network at all, and the digest below still waits for
+        // `isDue`.
+        //
+        // Behind the owner's switch and his quiet hours, like everything else
+        // here. A reminder suppressed at 3am is not lost: its rung is unsaid, so
+        // it fires on the first tick after quiet hours end — provided the thing
+        // has not already happened by then.
+        let now = Date()
+        if preferences.isOn, !preferences.isQuiet(at: now) {
+            let nudges = ReminderLadder.due(
+                tasks: ledger.lastSeenTasks,
+                alreadySaid: ledger.saidReminders,
+                now: now
+            )
+            if !nudges.isEmpty {
+                // Written before speaking, not after. A crash between the two
+                // costs one missed reminder; the other order costs a reminder
+                // repeated on every tick forever.
+                ledger.saidReminders.formUnion(nudges.map(\.key))
+                try? ledger.save(to: ledgerURL)
+                for nudge in nudges {
+                    log("[watch] reminder due: \(nudge.key)")
+                    await say(nudge.text)
+                }
+            }
+        }
+
         guard ProactiveSchedule.isDue(
             now: Date(),
             lastChecked: ledger.lastCheckedAt,
