@@ -552,17 +552,33 @@ public actor CallTurnServer {
                 }
             }
 
-            // A second acknowledgement, for the answers that take a while.
+            // Filling the gap, rather than one line into the middle of it.
             //
-            // The opener buys about eight seconds of patience. A tool call can
-            // run well past that, and the silence after an opener is worse than
-            // the silence before one — the caller has been told it is working
-            // and then hears nothing, which reads as the thing having crashed
+            // The opener buys a few seconds. A tool call runs well past them,
+            // and the silence *after* an opener is worse than the silence
+            // before one — the caller has been told it is working and then
+            // hears nothing, which reads as the thing having crashed
             // mid-sentence rather than merely being slow.
+            //
+            // A cadence of short sounds instead: see `CallFiller` for why they
+            // are sounds rather than sentences, why they escalate, and why
+            // there are only four.
             let waiting = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(8))
-                guard !Task.isCancelled, let self else { return }
-                await self.sayStillWorking(over: writer)
+                var position = 0
+                var previous: String?
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(CallFiller.delay(before: position)))
+                    guard !Task.isCancelled, let self else { return }
+                    guard let line = CallFiller.line(at: position, previous: previous) else {
+                        // Past the cap. Going quiet is the right end: a caller
+                        // who has heard five "nearly there"s knows exactly as
+                        // much as one who heard two.
+                        return
+                    }
+                    previous = line
+                    position += 1
+                    await self.sayFiller(line, over: writer)
+                }
             }
             let fullReply = try await answer(heard)
             waiting.cancel()
@@ -768,12 +784,24 @@ public actor CallTurnServer {
     }
 
     /// Fills a long think with something human.
-    private func sayStillWorking(over writer: CallFrameWriter) async {
-        let line = WorkingReply.progressLine(completed: [], pending: nil)
-            ?? "Still on it."
+    /// One short thing, said into the gap.
+    ///
+    /// Not `say(_:over:)`, and the difference is the transcript: that one
+    /// records what it speaks, and filler is not something the appliance said.
+    /// A call record reading "Mm. Bear with me. Still going." is a record of
+    /// nothing, and it is what the owner would find posted into Signal after
+    /// the call.
+    ///
+    /// Checked for cancellation on both sides of the synthesiser, because
+    /// synthesis takes a few hundred milliseconds and the answer may land
+    /// inside them — filler arriving *after* the reply has started is worse
+    /// than the silence it was meant to cover.
+    private func sayFiller(_ line: String, over writer: CallFrameWriter) async {
+        guard !Task.isCancelled else { return }
         guard let audio = try? await synthesizer.synthesize(
             SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
         ) else { return }
+        guard !Task.isCancelled else { return }
         try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
         log("[call] said \"\(line)\" while working")
     }

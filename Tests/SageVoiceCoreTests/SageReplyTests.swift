@@ -177,8 +177,20 @@ final class PipeReplyTests: XCTestCase {
         try? FileManager.default.removeItem(at: saidDirectory)
     }
 
+    /// Already seeded, which is every ritual after its first turn — the state
+    /// these tests are about. The seeding turn has its own tests below.
     private func ritual() -> SageRitual {
-        SageRitual(tools: SilentTools(), displayName: "Mynah", alreadySaidFile: said)
+        let ritual = SageRitual(tools: SilentTools(), displayName: "Mynah", alreadySaidFile: said)
+        return ritual
+    }
+
+    /// Seeding needs a turn that actually carries results — an empty array is
+    /// not a first look, it is a quiet turn.
+    private func seeded() async -> SageRitual {
+        let ritual = ritual()
+        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
+        _ = await ritual.drainReplies()
+        return ritual
     }
 
     private func turnAnswer(_ results: String) -> String {
@@ -191,7 +203,7 @@ final class PipeReplyTests: XCTestCase {
     }
 
     func testAReplyBecomesSomethingToSay() async {
-        let ritual = ritual()
+        let ritual = await seeded()
 
         await ritual.noteResults(in: turnAnswer(
             #"{"pipe_id":"p1","from":"Claude","result":"Acknowledged — the pipeline works."}"#
@@ -206,7 +218,7 @@ final class PipeReplyTests: XCTestCase {
     }
 
     func testDrainingClearsThem() async {
-        let ritual = ritual()
+        let ritual = await seeded()
         await ritual.noteResults(in: turnAnswer(#"{"from":"Claude","result":"Done."}"#))
 
         _ = await ritual.drainReplies()
@@ -216,7 +228,7 @@ final class PipeReplyTests: XCTestCase {
     }
 
     func testA64CharacterAgentIdIsNotReadOutInFull() async {
-        let ritual = ritual()
+        let ritual = await seeded()
         let id = String(repeating: "a1b2c3d4", count: 8)
 
         await ritual.noteResults(in: turnAnswer(#"{"from":"\#(id)","result":"Done."}"#))
@@ -229,7 +241,7 @@ final class PipeReplyTests: XCTestCase {
         // The exact shape is not documented. A reply whose text is under
         // `payload` rather than `result` must not vanish — that would silently
         // reproduce the bug this fixes.
-        let ritual = ritual()
+        let ritual = await seeded()
 
         await ritual.noteResults(in: turnAnswer(
             #"{"agent":"Kestrel","payload":"Looked it up: 4,200."}"#
@@ -241,7 +253,7 @@ final class PipeReplyTests: XCTestCase {
     }
 
     func testATurnWithNoRepliesSaysNothing() async {
-        let ritual = ritual()
+        let ritual = await seeded()
 
         await ritual.noteResults(in: #"{"stored": true, "pipe_results": []}"#)
         await ritual.noteResults(in: #"{"stored": true}"#)
@@ -297,6 +309,7 @@ final class RepeatedReplyTests: XCTestCase {
 
     func testTheSameResultIsNotSaidTwice() async {
         let ritual = ritual()
+        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
 
         await ritual.noteResults(in: turnAnswer)
         let first = await ritual.drainReplies()
@@ -314,6 +327,7 @@ final class RepeatedReplyTests: XCTestCase {
 
     func testARestartDoesNotReplayEverything() async {
         let first = ritual()
+        await first.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
         await first.noteResults(in: turnAnswer)
         _ = await first.drainReplies()
 
@@ -328,6 +342,7 @@ final class RepeatedReplyTests: XCTestCase {
 
     func testADifferentReplyStillArrives() async {
         let ritual = ritual()
+        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
         await ritual.noteResults(in: turnAnswer)
         _ = await ritual.drainReplies()
 
@@ -344,6 +359,7 @@ final class RepeatedReplyTests: XCTestCase {
         // text are indistinguishable to a reader anyway, so treating them as
         // one costs nothing and saying them twice costs the owner's patience.
         let ritual = ritual()
+        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
         let anonymous = #"{"pipe_results": [{"from":"Codex","result":"Wave 3 is done."}]}"#
 
         await ritual.noteResults(in: anonymous)
@@ -364,5 +380,87 @@ final class RepeatedReplyTests: XCTestCase {
         XCTAssertEqual(ledger.ids.count, SageRitual.AlreadySaid.mostKept)
         XCTAssertFalse(ledger.has("p-0"), "the oldest go first")
         XCTAssertTrue(ledger.has("p-\(SageRitual.AlreadySaid.mostKept + 49)"))
+    }
+}
+
+// MARK: - The first look
+
+/// What happens the moment this ledger exists.
+///
+/// The node goes on returning results for hours, so the first turn after an
+/// upgrade hands over everything it still holds — and every one of them looks
+/// new to an empty ledger. That is exactly what the owner saw: he updated, and
+/// his thread immediately filled with three replies he had already read twice.
+/// *"you repeated yourself two three tiems."*
+final class FirstLookTests: XCTestCase {
+
+    private var said: URL!
+    private var saidDirectory: URL!
+
+    override func setUpWithError() throws {
+        saidDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("first-look-\(UUID().uuidString)", isDirectory: true)
+        said = saidDirectory.appendingPathComponent("said-replies.json")
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: saidDirectory)
+    }
+
+    private func ritual() -> SageRitual {
+        SageRitual(tools: SilentTools(), displayName: "Mynah", alreadySaidFile: said)
+    }
+
+    private let backlog = """
+    {"pipe_results": [
+      {"from":"Claude","result":"Acknowledged."},
+      {"from":"Codex","result":"Wave 3 is done."}]}
+    """
+
+    func testNothingAlreadyWaitingIsSaid() async {
+        let ritual = ritual()
+
+        await ritual.noteResults(in: backlog)
+
+        let replies = await ritual.drainReplies()
+        XCTAssertTrue(replies.isEmpty, "an upgrade must not replay a morning of replies")
+    }
+
+    func testButItIsWrittenDown() async {
+        let first = ritual()
+        await first.noteResults(in: backlog)
+
+        // A later turn, and a later process, must still treat these as old.
+        let next = ritual()
+        await next.noteResults(in: backlog)
+
+        let replies = await next.drainReplies()
+        XCTAssertTrue(replies.isEmpty)
+    }
+
+    func testWhatArrivesAfterwardsIsSaid() async {
+        let ritual = ritual()
+        await ritual.noteResults(in: backlog)
+
+        await ritual.noteResults(in: """
+        {"pipe_results": [{"from":"Kestrel","result":"Found it: 4,200."}]}
+        """)
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.count, 1)
+        XCTAssertEqual(replies.first?.from, "Kestrel")
+    }
+
+    func testALedgerFromTheVersionBeforeThisRuleIsNotReplayed() throws {
+        // 1.2.13 wrote ids and no seeded flag. Its contents are proof it has
+        // seen a turn, so it is treated as seeded rather than as brand new —
+        // otherwise upgrading *again* would replay everything one more time.
+        try FileManager.default.createDirectory(at: saidDirectory, withIntermediateDirectories: true)
+        try Data(#"{"ids":["Claude|Acknowledged."]}"#.utf8).write(to: said)
+
+        let ledger = SageRitual.AlreadySaid.load(from: said)
+
+        XCTAssertNil(ledger.hasSeeded)
+        XCTAssertTrue(ledger.has("Claude|Acknowledged."))
     }
 }

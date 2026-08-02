@@ -709,7 +709,45 @@ final class SettingsModel {
         // ordinary Quit would leave their phone still being answered: exactly
         // the bug that method was written to fix.
         RestartIntent.shared.begin()
-        NSApplication.shared.terminate(nil)
+
+        // **The card has to come down before the app can go.**
+        //
+        // *"it still doesn't restart when you click the button - have to press
+        // later, then quit and it will auto reopen."* That sentence is the
+        // diagnosis: pressing Later dismisses the sheet, and the quit that
+        // follows works. `NSApplication.terminate` does not close a window with
+        // an attached sheet — the sheet is what the press leaves on screen, so
+        // the app sat there with the relaunch already waiting on its process id.
+        //
+        // Which also means the first version of this fix was never proved. The
+        // evidence read at the time — a new process five seconds after the
+        // press, and no LaunchAgent teardown in the log — is equally explained
+        // by the owner pressing Later and quitting by hand, with the teardown
+        // skipped because the flag above was already set. Two readings, one
+        // observation, and the wrong one was reported as fact.
+        installState = nil
+        for window in NSApplication.shared.windows {
+            guard let sheet = window.attachedSheet else { continue }
+            window.endSheet(sheet)
+        }
+
+        // A hop, so AppKit has actually taken the sheet down before the
+        // termination is asked for.
+        DispatchQueue.main.async {
+            NSApplication.shared.terminate(nil)
+            // And a floor under the whole thing.
+            //
+            // A restart that silently does nothing is the failure this button
+            // has now had twice, and every cause of it is something AppKit
+            // declined to do. Nothing here needs `applicationWillTerminate`:
+            // the restart path deliberately leaves the LaunchAgents alone, the
+            // conversation is written after each turn rather than at exit, and
+            // the copy on disk is already the new one. So if the app is still
+            // alive a second later, it leaves anyway.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                exit(0)
+            }
+        }
     }
 
     // MARK: Re-checking the key

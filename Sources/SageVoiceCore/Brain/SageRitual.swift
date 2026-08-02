@@ -259,6 +259,31 @@ public actor SageRitual {
         /// runs for a year should not carry every pipe id it ever saw.
         var ids: [String] = []
 
+        /// Whether this ledger has ever seen a turn.
+        ///
+        /// **The first one says nothing, and that is not caution — it is the
+        /// only correct answer.** The node goes on returning results for hours,
+        /// so on the first turn after this ledger exists, everything it still
+        /// holds arrives at once and every one of it looks new. The owner
+        /// upgraded and his thread immediately filled with three replies he had
+        /// already read twice: *"you repeated yourself two three tiems."*
+        ///
+        /// Nothing already sitting there when the ledger is born is news. It is
+        /// written down and not spoken, and what follows is genuinely new.
+        ///
+        /// Optional so a ledger written by 1.2.13 — which had no such field and
+        /// no such rule — decodes rather than being thrown away, and is treated
+        /// as already seeded. Its contents are proof it has seen a turn.
+        ///
+        /// **The cost, stated rather than hidden:** on a brand-new install the
+        /// very first reply that ever comes back is written down and not
+        /// spoken, because there is no way to tell it apart from a backlog the
+        /// node has been holding. The results carry no timestamp this can read,
+        /// so the choice is between swallowing one reply once and replaying
+        /// hours of them on every upgrade. The second is what the owner already
+        /// experienced twice.
+        var hasSeeded: Bool? = nil
+
         static let mostKept = 200
 
         mutating func remember(_ id: String) {
@@ -587,6 +612,13 @@ public actor SageRitual {
         }
         log("[sage] \(results.count) pipe result(s) came back: \(String(describing: results).prefix(300))")
 
+        // Born on this turn. Everything the node is holding gets written down
+        // and none of it is said — see `AlreadySaid.hasSeeded`.
+        let seeding = !(alreadySaid.hasSeeded ?? !alreadySaid.ids.isEmpty)
+        if seeding {
+            log("[sage] first look at pipe results: noting \(results.count) without saying them")
+        }
+
         var changed = false
         for result in results {
             let from = Self.text(result, ["from", "from_name", "agent", "responder"])
@@ -603,7 +635,12 @@ public actor SageRitual {
             guard !alreadySaid.has(identity) else { continue }
             alreadySaid.remember(identity)
             changed = true
+            guard !seeding else { continue }
             arrivedReplies.append(PipeReply(from: Self.shortened(from), text: said))
+        }
+        if seeding {
+            alreadySaid.hasSeeded = true
+            changed = true
         }
         if changed { alreadySaid.save(to: alreadySaidFile) }
     }
