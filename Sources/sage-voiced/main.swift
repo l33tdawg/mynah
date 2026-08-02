@@ -330,7 +330,9 @@ func makeToolSource(
     var sources: [CompositeToolSource.Source] = [
         .init(
             label: "SAGE MCP",
-            provider: mcp,
+            // See `ScopedRecall`: 11.16.4 refuses recall with no domain, and
+            // the model leaves it out. The ritual keeps the raw client.
+            provider: ScopedRecall(wrapping: mcp),
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])

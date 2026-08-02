@@ -78,6 +78,7 @@ public actor SageRitual {
         public static let reflect = "sage_reflect"
         public static let register = "sage_register"
         public static let rename = "sage_rename"
+        public static let status = "sage_status"
     }
 
     /// What the phone appliance registers as.
@@ -230,6 +231,7 @@ public actor SageRitual {
         displayNameMarker: URL? = SageRitual.defaultDisplayNameMarker(),
         readinessCheck: (@Sendable () async -> ApplianceWriteReadiness)? = nil,
         alreadySaidFile: URL = SageRitual.defaultAlreadySaidFile(),
+        readableDomainsFile: URL = ReadableDomains.defaultFileURL(),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.tools = tools
@@ -239,6 +241,7 @@ public actor SageRitual {
         self.readinessCheck = readinessCheck ?? { await ApplianceWriteReadinessCheck().check() }
         self.alreadySaidFile = alreadySaidFile
         self.alreadySaid = AlreadySaid.load(from: alreadySaidFile)
+        self.readableDomainsFile = readableDomainsFile
         self.log = log
     }
 
@@ -334,6 +337,14 @@ public actor SageRitual {
     private let alreadySaidFile: URL
     private var alreadySaid: AlreadySaid
 
+    /// Where the searchable domains are written for `ScopedRecall` to read.
+    ///
+    /// One file for both surfaces, unlike `alreadySaidFile`: this records what
+    /// the *node* permits this agent, which is a property of the identity and
+    /// identical whichever process asks. Two copies could only ever disagree by
+    /// being differently stale.
+    private let readableDomainsFile: URL
+
     private let readinessCheck: @Sendable () async -> ApplianceWriteReadiness
 
     public static func defaultDisplayNameMarker(
@@ -366,6 +377,7 @@ public actor SageRitual {
     public func boot(onSignedIn: @Sendable () -> Void = {}) async -> String? {
         await register()
         await checkWhetherItCanSaveAnything()
+        await noteWhichDomainsItMaySearch()
         onSignedIn()
         do {
             let reply = try await tools.call(name: Tool.inception, arguments: [:])
@@ -402,6 +414,37 @@ public actor SageRitual {
         // that was perfectly silent for the life of an identity, and a line
         // that scrolls past once would have been just as silent.
         log(line)
+    }
+
+    /// Asks the node which domains this agent may search, and writes them down.
+    ///
+    /// **11.16.4 stopped answering recall with no `domain`**, and the model
+    /// omits it most of the time — so without this, "what do you remember about
+    /// X" is refused rather than answered. See `ScopedRecall`, which reads the
+    /// file this writes.
+    ///
+    /// Skipped entirely while the record is fresh. The answer only changes when
+    /// a person grants this agent something in CEREBRUM, which is rare and
+    /// deliberate, and a daily round trip is the right price for noticing it.
+    ///
+    /// Never fatal, and never blocking. A node that will not answer leaves the
+    /// previous set in place; an appliance that refused to start because it
+    /// could not enumerate its own permissions would be trading a degraded
+    /// recall for no appliance at all.
+    private func noteWhichDomainsItMaySearch(now: Date = Date()) async {
+        let existing = ReadableDomains.load(from: readableDomainsFile)
+        guard !existing.isFresh(now: now) else { return }
+        do {
+            let reply = try await tools.call(name: Tool.status, arguments: [:])
+            guard let discovered = ReadableDomains.fromStatus(reply, writesTo: Self.memoryDomain) else {
+                log("[sage] could not read searchable domains from sage_status")
+                return
+            }
+            discovered.save(to: readableDomainsFile)
+            log("[sage] recall is scoped to \(discovered.domains.joined(separator: ", "))")
+        } catch {
+            log("[sage] could not ask which domains are searchable: \(error)")
+        }
     }
 
     /// Claims an on-chain identity for the appliance.

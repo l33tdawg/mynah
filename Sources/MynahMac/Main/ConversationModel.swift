@@ -315,7 +315,12 @@ actor ToolLoopTurnEngine: TurnEngine {
         var sources: [CompositeToolSource.Source] = [
             CompositeToolSource.Source(
                 label: "memory",
-                provider: mcp,
+                // Wrapped, so a recall the model wrote without a domain is
+                // scoped to what this agent may actually search. 11.16.4
+                // refuses the unscoped form outright. The ritual below keeps
+                // the raw client — it calls tools the model never sees, and one
+                // of them is what discovers the scope.
+                provider: ScopedRecall(wrapping: mcp),
                 isRequired: true,
                 // Fails closed if the node ever renames its tools. Web search
                 // always matches the allowlist, so without this expectation a

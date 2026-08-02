@@ -45,12 +45,19 @@ enum MynahCopy {
     /// determinate progress to report. Four sentences on a timer tell the truth;
     /// a percentage would be a lie and a spinner would imply a network call that
     /// is about to time out.
+    ///
+    /// **The last one said "up to a minute" and the counter beside it read 103
+    /// seconds.** A reassurance the screen is actively disproving is worse than
+    /// no reassurance: the owner now knows one of the two numbers in front of
+    /// him is wrong, and the honest one is the counter. Any ceiling this line
+    /// names will eventually be beaten by a slow tool call, so it names none —
+    /// "or more" is open-ended and cannot be contradicted by waiting longer.
     static func thinkingLine(elapsed: TimeInterval) -> String {
         switch elapsed {
         case ..<8: return "Thinking…"
         case ..<22: return "Still thinking…"
         case ..<45: return "Looking through what it remembers."
-        default: return "This one's a big recall — it can take up to a minute."
+        default: return "This one's a big recall — it can take a minute or more."
         }
     }
 

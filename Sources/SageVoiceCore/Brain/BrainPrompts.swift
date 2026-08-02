@@ -132,9 +132,11 @@ public enum BrainPrompts {
 
     SENDING WORK TO ANOTHER AGENT
     - If the owner names an agent in human terms — "send this to MacBook Pro Agent A", \
-    "ask Perplexity to research it" — call sage_find_agent first with that name.
-    - Then call sage_pipe using the exact address sage_find_agent returned, never the spoken name.
-    - If sage_find_agent finds nobody, say so plainly and do not guess an address.
+    "ask Perplexity to research it" — call sage_directory first. It lists every agent on \
+    this Mac with its display name, registered name, provider and exact agent_id.
+    - Then call sage_pipe using the exact agent_id from that list, never the spoken name.
+    - If nobody in the list matches, say who is there and ask which they meant. Never guess \
+    an agent_id, and never send to one whose name merely looks similar.
 
     WHEN ASKED IF ANYONE REPLIED
     - Replies are delivered to you as messages here, above. Read them there; no tool fetches \
@@ -143,14 +145,11 @@ public enum BrainPrompts {
     - If nothing changed since your last answer, say that in one short sentence.
 
     WHEN ASKED WHICH AGENTS EXIST
-    - You cannot list the agents on this Mac. sage_find_agent needs a name to look up, and \
-    there is no tool that enumerates them. Say that, and say the Agents page in the Mynah \
-    window shows the full list. That is the whole answer.
+    - sage_directory answers this. It takes no arguments and returns the active agents on \
+    this Mac. Name them; do not read out agent_ids unless asked.
     - NEVER answer this with sage_federation. It reports connected *other SAGEs*, which is a \
     different question — answering "no federated connections" to "what agents can you see" \
     tells the owner there is nobody here while twenty agents sit on his screen.
-    - If they name one, look it up. "Which do you have" and "do you have X" are different \
-    questions and only the second one you can answer.
 
     GROUND RULES
     - Never invent a tool result, a memory, an agent name, or a status. If a tool failed or \
@@ -308,7 +307,26 @@ public enum BrainPrompts {
         "sage_status",
         "sage_reflect",
         "sage_inbox",
-        "sage_find_agent",
+        // **Swapped for `sage_find_agent` in 11.16.4, not added alongside it.**
+        //
+        // The bug that earned this: asked to send a note to "you", a 4B matched
+        // the substring against two unrelated Claude registrations and piped
+        // the owner's messages to strangers. `sage_find_agent` takes a name and
+        // guesses; `sage_directory` takes nothing and *lists* — display name,
+        // immutable registered name, provider and exact `agent_id` for every
+        // active agent on this Mac. A model choosing from a list cannot invent
+        // a recipient, which is the entire difference.
+        //
+        // What the swap gives up, from SAGE's own description: `find_agent`
+        // also searches "caller-authorized federated contacts", and this does
+        // not — it is explicitly "a signed local roster, not … a global
+        // federated directory". No federated peers are in play on this Mac
+        // today, and `sage_pipe` still accepts a known exact `agent_id`
+        // directly, so nothing reachable becomes unreachable. If federation
+        // starts being used, `find_agent` comes back — and then it is worth
+        // re-measuring routing, because 19 tools is already past the 14 where
+        // the catalogue scored 12/12.
+        "sage_directory",
         "sage_pipe",
         "sage_federation",
         // Added for 11.16.x, and only these two of the thirteen it exposes that

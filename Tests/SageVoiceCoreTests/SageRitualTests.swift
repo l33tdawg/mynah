@@ -38,15 +38,47 @@ private final class RecordingToolSource: ToolProviding, @unchecked Sendable {
 
 final class SageRitualTests: XCTestCase {
 
+    private var directory = URL(fileURLWithPath: NSTemporaryDirectory())
+
+    override func setUpWithError() throws {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sage-ritual-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// **Every ritual in this file goes through here, and that is not tidiness.**
+    ///
+    /// `SageRitual` defaults its two records to the owner's real Application
+    /// Support directory. A test that took the defaults would read — and, once
+    /// `noteWhichDomainsItMaySearch` shipped, *write* — the live appliance's
+    /// files while the suite ran.
+    private func makeRitual(_ tools: ToolProviding) -> SageRitual {
+        SageRitual(
+            tools: tools,
+            alreadySaidFile: directory.appendingPathComponent("said.json"),
+            readableDomainsFile: directory.appendingPathComponent("domains.json")
+        )
+    }
+
     // MARK: Boot
 
     func testBootCallsInceptionAndKeepsItsReply() async {
         let tools = RecordingToolSource(replies: [SageRitual.Tool.inception: "You were migrating the voice bridge."])
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         let context = await ritual.boot()
 
-        XCTAssertEqual(tools.names, [SageRitual.Tool.register, SageRitual.Tool.inception])
+        // `sage_status` sits between the two: it is how the appliance learns
+        // which domains it may search, which 11.16.4 made a precondition of
+        // recall answering at all. See `ScopedRecall`.
+        XCTAssertEqual(
+            tools.names,
+            [SageRitual.Tool.register, SageRitual.Tool.status, SageRitual.Tool.inception]
+        )
         XCTAssertEqual(context, "You were migrating the voice bridge.")
     }
 
@@ -57,7 +89,7 @@ final class SageRitualTests: XCTestCase {
     /// identity.
     func testBootClaimsAnOnChainIdentity() async {
         let tools = RecordingToolSource()
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         await ritual.boot()
 
@@ -72,7 +104,7 @@ final class SageRitualTests: XCTestCase {
             replies: [SageRitual.Tool.inception: "prior context"],
             failing: [SageRitual.Tool.register]
         )
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         let context = await ritual.boot()
 
@@ -83,7 +115,7 @@ final class SageRitualTests: XCTestCase {
     /// appliance starts every restart with amnesia.
     func testBootContextIsFoldedIntoTheSystemPrompt() async {
         let tools = RecordingToolSource(replies: [SageRitual.Tool.inception: "Last task: fix the truncation bug."])
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
         await ritual.boot()
 
         let prompt = await ritual.systemPrompt(base: "BASE PROMPT")
@@ -96,7 +128,7 @@ final class SageRitualTests: XCTestCase {
     /// history is worse than one that starts cold — the owner is on a phone.
     func testAFailedInceptionIsNotFatal() async {
         let tools = RecordingToolSource(failing: [SageRitual.Tool.inception])
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         let context = await ritual.boot()
 
@@ -111,7 +143,7 @@ final class SageRitualTests: XCTestCase {
     func testBootContextIsCapped() async {
         let huge = String(repeating: "memory ", count: 2000)
         let tools = RecordingToolSource(replies: [SageRitual.Tool.inception: huge])
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         let context = await ritual.boot()
 
@@ -126,7 +158,7 @@ final class SageRitualTests: XCTestCase {
     /// call. Without this the appliance degrades the more it is used.
     func testEveryTurnIsRecordedWithSage() async {
         let tools = RecordingToolSource()
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         await ritual.recordTurn(
             transcript: "what is the population of Kuala Lumpur",
@@ -183,7 +215,7 @@ final class SageRitualTests: XCTestCase {
     /// already been sent by the time this runs.
     func testAFailedTurnIsSwallowed() async {
         let tools = RecordingToolSource(failing: [SageRitual.Tool.turn])
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         await ritual.recordTurn(transcript: "hello there", reply: "Hi.", usedTools: [])
 
@@ -194,7 +226,7 @@ final class SageRitualTests: XCTestCase {
 
     func testReflectionHappensOnCadenceNotEveryTurn() async {
         let tools = RecordingToolSource()
-        let ritual = SageRitual(tools: tools)
+        let ritual = makeRitual(tools)
 
         for index in 1...SageRitual.reflectEveryTurns {
             await ritual.recordTurn(

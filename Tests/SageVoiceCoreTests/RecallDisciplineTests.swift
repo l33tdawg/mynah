@@ -173,22 +173,36 @@ final class RecallDisciplineTests: XCTestCase {
 /// is the only agent-shaped tool the model can call without already knowing the
 /// answer. It reached for the one instrument it had.
 ///
-/// Which makes this the same failure as everything else this week: a limitation
-/// rendered as a finding. The prompt cannot conjure the missing tool; it can
-/// stop the model from dressing its absence up as a result.
+/// Which made this a limitation rendered as a finding. The prompt could not
+/// conjure the missing tool; it could only stop the model dressing the absence
+/// up as a result.
+///
+/// **SAGE 11.16.4 shipped the tool, so these tests now assert the opposite of
+/// what they used to.** `sage_directory` takes no arguments and returns the
+/// active agents on this Mac — display name, registered name, provider and
+/// exact `agent_id`. The rule that survived the change is the federation ban,
+/// because that wrong answer was never about a missing capability: it was about
+/// reaching for an adjacent tool and reporting its output as though it answered
+/// the question.
 final class AgentEnumerationHonestyTests: XCTestCase {
 
     private var prompt: String { BrainPrompts.voiceAgentManager }
 
-    func testThePromptSaysItCannotListAgents() {
+    func testThePromptNamesTheToolThatEnumerates() {
         XCTAssertTrue(
+            prompt.contains("sage_directory answers this"),
+            "the model is not told which tool lists the agents on this Mac"
+        )
+        XCTAssertFalse(
             prompt.contains("cannot list the agents on this Mac"),
-            "nothing tells it that enumeration is not something it can do"
+            "it can now, and a prompt that says otherwise makes it refuse a question it can answer"
         )
     }
 
     /// The wrong answer was confident and adjacent. Naming the tool that
-    /// produced it is what stops it being reached for again.
+    /// produced it is what stops it being reached for again — and this survives
+    /// `sage_directory` existing, because a model that has the right tool can
+    /// still reach for the wrong one.
     func testThePromptForbidsAnsweringWithFederation() {
         XCTAssertTrue(prompt.contains("NEVER answer this with sage_federation"))
         XCTAssertTrue(
@@ -197,19 +211,21 @@ final class AgentEnumerationHonestyTests: XCTestCase {
         )
     }
 
-    /// A dead end is not an answer. The Agents page can enumerate — it reads the
-    /// roster over REST, which is exactly the capability MCP does not expose —
-    /// so the honest reply points there rather than stopping at "I can't".
-    func testThePromptPointsSomewhereThatCanAnswer() {
-        XCTAssertTrue(prompt.contains("Agents page"))
-    }
-
-    /// "Which do you have" and "do you have X" are different questions, and the
-    /// second one is answerable. Refusing both would trade a false positive for
-    /// a false negative.
-    func testLookingUpANamedAgentIsStillEncouraged() {
-        XCTAssertTrue(prompt.contains("If they name one, look it up"))
-        XCTAssertTrue(prompt.contains("sage_find_agent first with that name"))
+    /// **A list is what stops a guess.** Asked to send a note to "you", a 4B
+    /// matched the substring with `sage_find_agent` and piped the owner's
+    /// messages to two unrelated Claude registrations. Choosing from an
+    /// enumerated roster is not the same act as searching by name, and only one
+    /// of the two can invent a recipient.
+    func testSendingWorkStartsFromTheListRatherThanASearch() {
+        XCTAssertTrue(prompt.contains("call sage_directory first"))
+        XCTAssertTrue(
+            prompt.contains("exact agent_id from that list"),
+            "without this the model pipes to the name the owner spoke"
+        )
+        XCTAssertTrue(
+            prompt.contains("Never guess an agent_id"),
+            "the failure was a guess that looked like a match"
+        )
     }
 }
 
