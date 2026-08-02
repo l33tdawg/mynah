@@ -1,0 +1,181 @@
+import XCTest
+@testable import SageVoiceCore
+
+/// **The owner's ruling, made mechanical.**
+///
+/// *"next wednesday means the coming wednesday - its basic logic; in 2 weeks
+/// from now; next month; next week - tomorrow, day after - those are normal
+/// human turn of phrases bro; its deterministic"*
+///
+/// Every case below is a fixed instant in a fixed zone, so these assert
+/// arithmetic rather than a mood. The zone is his — Asia/Kuala_Lumpur — because
+/// a parser tested only in UTC is one that has never met a day boundary that
+/// matters.
+final class SpokenDateTests: XCTestCase {
+
+    /// Sunday 2 August 2026, 14:00 in Kuala Lumpur.
+    private let now = Date(timeIntervalSince1970: 1_785_657_600)
+
+    private var calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }()
+
+    private func resolved(_ text: String) -> OwnerDate? {
+        guard case .one(let date) = SpokenDate.resolve(in: text, now: now, calendar: calendar) else {
+            return nil
+        }
+        return date
+    }
+
+    /// The day it lands on, as "yyyy-MM-dd HH:mm" in his zone.
+    private func stamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = calendar.locale
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func assertDay(_ text: String, is expected: String, file: StaticString = #filePath, line: UInt = #line) {
+        guard let date = resolved(text) else {
+            return XCTFail("\"\(text)\" resolved to nothing", file: file, line: line)
+        }
+        XCTAssertEqual(stamp(date.at), expected, "\"\(text)\"", file: file, line: line)
+    }
+
+    // MARK: The phrases he named
+
+    func testTodayIsToday() { assertDay("do it today", is: "2026-08-02 00:00") }
+    func testTomorrow() { assertDay("chiro tomorrow", is: "2026-08-03 00:00") }
+    func testTheDayAfter() { assertDay("call them the day after", is: "2026-08-04 00:00") }
+    func testDayAfterTomorrow() { assertDay("day after tomorrow", is: "2026-08-04 00:00") }
+    func testNextWeek() { assertDay("haircut next week", is: "2026-08-09 00:00") }
+    func testNextMonth() { assertDay("renew it next month", is: "2026-09-02 00:00") }
+    func testInTwoWeeks() { assertDay("in 2 weeks", is: "2026-08-16 00:00") }
+    func testInTwoWeeksFromNow() { assertDay("in 2 weeks from now", is: "2026-08-16 00:00") }
+    func testWordNumbers() { assertDay("in three days", is: "2026-08-05 00:00") }
+    func testInAMonth() { assertDay("in a month", is: "2026-09-02 00:00") }
+
+    /// **The one call that actually needed making.** Half the world reads "next
+    /// Wednesday" as the Wednesday after the coming one. He ruled: the coming
+    /// one. A week's error on an appointment is the alternative.
+    func testNextWednesdayIsTheComingWednesday() {
+        assertDay("chiro next wednesday", is: "2026-08-05 00:00")
+    }
+
+    func testThisWednesdayIsTheSameDay() {
+        assertDay("chiro this wednesday", is: "2026-08-05 00:00")
+    }
+
+    func testABareWeekdayIsTheSameDay() {
+        assertDay("meeting with TII IT on tuesday", is: "2026-08-04 00:00")
+    }
+
+    /// Said on a Sunday, "Sunday" is the next one and never today. An
+    /// appointment named by its weekday is being planned; resolving it to a day
+    /// already half gone is the one reading guaranteed to be useless.
+    func testAWeekdayNamedOnThatVeryDayMeansTheNextOne() {
+        assertDay("brunch on sunday", is: "2026-08-09 00:00")
+    }
+
+    // MARK: Times refine a day, they do not make one
+
+    func testAWeekdayWithATime() {
+        assertDay("chiro wednesday 11am", is: "2026-08-05 11:00")
+        XCTAssertEqual(resolved("chiro wednesday 11am")?.granularity, .minute)
+    }
+
+    func testAfternoonTimes() { assertDay("call them tomorrow at 3pm", is: "2026-08-03 15:00") }
+    func testMinutesPastTheHour() { assertDay("tomorrow at 11:30am", is: "2026-08-03 11:30") }
+    func testTwentyFourHourClock() { assertDay("tomorrow at 14:30", is: "2026-08-03 14:30") }
+    func testNoon() { assertDay("lunch tomorrow at noon", is: "2026-08-03 12:00") }
+    func testMidnightIsTheStartOfTheDay() { assertDay("tomorrow at midnight", is: "2026-08-03 00:00") }
+    func testTwelvePM() { assertDay("tomorrow 12pm", is: "2026-08-03 12:00") }
+    func testTwelveAM() { assertDay("tomorrow 12am", is: "2026-08-03 00:00") }
+
+    /// A day named with no time stays a day. Nothing here invents nine in the
+    /// morning because a `Date` has an hour field.
+    func testADayWithNoTimeStaysADay() {
+        XCTAssertEqual(resolved("chiro next wednesday")?.granularity, .day)
+    }
+
+    /// A time with no day is not a date. Reading it as today's 11am would
+    /// schedule something for a day the owner never mentioned.
+    func testATimeAloneIsNotADate() {
+        XCTAssertNil(resolved("at 11am"))
+    }
+
+    // MARK: What it refuses, and why refusing is the feature
+
+    /// "5/8" is the fifth of August to him and the eighth of May to half the
+    /// internet. There is no correct guess, so there is no guess.
+    func testNumericDatesAreRefused() {
+        XCTAssertNil(resolved("chiro on 5/8"))
+        XCTAssertNil(resolved("chiro on 05-08-2026"))
+    }
+
+    /// "at 11" has two answers eleven hours apart.
+    func testABareHourIsRefused() {
+        guard let date = resolved("chiro tomorrow at 11") else {
+            return XCTFail("the day should still resolve")
+        }
+        XCTAssertEqual(date.granularity, .day, "an hour with no am/pm must not become a time")
+    }
+
+    /// Parts of a day are not times. Turning one into a clock reading would be
+    /// inventing precision the owner did not offer.
+    func testPartsOfADayAreNotTimes() {
+        XCTAssertEqual(resolved("chiro tomorrow morning")?.granularity, .day)
+        XCTAssertEqual(resolved("call them tomorrow evening")?.granularity, .day)
+    }
+
+    func testOrdinaryTextHasNoDate() {
+        XCTAssertNil(resolved("remind me to buy eggs"))
+        XCTAssertNil(resolved("what did the roofer say"))
+    }
+
+    // MARK: Two days in one sentence
+
+    /// "move the chiro from Wednesday to Friday" has two anchors, and silently
+    /// taking the first is how the wrong appointment gets the reminder.
+    func testTwoDaysAreAmbiguousRatherThanTheFirstOne() {
+        guard case .ambiguous(let phrases) = SpokenDate.resolve(
+            in: "move the chiro from wednesday to friday",
+            now: now,
+            calendar: calendar
+        ) else {
+            return XCTFail("two weekdays in one sentence must not resolve silently")
+        }
+        XCTAssertEqual(phrases.count, 2)
+    }
+
+    /// The same day said twice is not two days. "tomorrow, so Monday" is one
+    /// appointment described twice over, and asking which he meant would be
+    /// pedantry.
+    func testTheSameDaySaidTwiceIsOneDay() {
+        assertDay("chiro tomorrow, so monday", is: "2026-08-03 00:00")
+    }
+
+    // MARK: It is a function, not a mood
+
+    func testTheSameWordsAtTheSameInstantAlwaysGiveTheSameAnswer() {
+        let once = SpokenDate.resolve(in: "chiro next wednesday 11am", now: now, calendar: calendar)
+        let twice = SpokenDate.resolve(in: "chiro next wednesday 11am", now: now, calendar: calendar)
+
+        XCTAssertEqual(once, twice)
+    }
+
+    /// Across a day boundary the answer moves with the day, which is the point
+    /// of taking `now` rather than reading the clock.
+    func testTomorrowMovesWithTheDay() {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+        guard case .one(let date) = SpokenDate.resolve(in: "tomorrow", now: tomorrow, calendar: calendar) else {
+            return XCTFail("no date")
+        }
+        XCTAssertEqual(stamp(date.at), "2026-08-04 00:00")
+    }
+}
