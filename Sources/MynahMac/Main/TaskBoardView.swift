@@ -74,22 +74,25 @@ struct TaskBoardView: View {
     private func columns(_ board: TaskBoard) -> some View {
         VStack(spacing: 0) {
             BoardColumnView(
-                title: "In progress",
-                tone: .accent,
-                count: board.inProgress.count,
-                tasks: board.inProgress,
-                emptyLine: "Nothing under way.",
-                accepts: .inProgress,
-                onDrop: move,
-                onRemove: remove
-            )
-            MynahDivider()
-            BoardColumnView(
-                title: "Planned",
+                // **One list, because there was only ever one.**
+                //
+                // "In progress" held nothing for the life of this board and
+                // could not hold anything: nothing moves a task out of
+                // `planned`. The owner ruled on it — *"thus task list can be
+                // only 'planned'"* — and gave the reason: these are errands a
+                // person does, *"buy eggs, call so and so, chiro appointment
+                // next week"*, not work with a lifecycle to track. Work handed
+                // to another agent is chased by asking Mynah to message them,
+                // which needs no column at all.
+                //
+                // Still labelled rather than left as a bare stack of cards —
+                // his note, and he is right: an unheaded list beneath a
+                // conversation reads as part of the conversation.
+                title: "Tasks",
                 tone: .neutral,
                 count: board.planned.count,
                 tasks: board.planned,
-                emptyLine: "Nothing planned.",
+                emptyLine: "Nothing on your list.",
                 accepts: .planned,
                 onDrop: move,
                 onRemove: remove

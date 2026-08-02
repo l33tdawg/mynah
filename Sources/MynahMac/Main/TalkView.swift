@@ -294,12 +294,21 @@ struct TalkView: View {
             // conclude is true.
             return board.trouble == nil ? "Tasks" : "Tasks — this list won't open"
         }
-        let parts = [
-            "\(plate.planned.count) planned",
-            "\(plate.inProgress.count) in progress",
-            "\(plate.done.count) done"
-        ]
-        return parts.joined(separator: " · ")
+        // **One number, because there was only ever one.**
+        //
+        // This read "6 planned · 0 in progress · 0 done" for the life of the
+        // board, and the two zeroes were not a quiet period — nothing ever sets
+        // a task to anything else. The owner's ruling: *"thus task list can be
+        // only 'planned'"*, and his reasoning is that these are errands a person
+        // does — *"buy eggs, call so and so, chiro appointment next week"* —
+        // not work with a lifecycle. Delegated work is chased by asking Mynah
+        // to message the agent holding it, which needs no column at all.
+        //
+        // A counter that has only ever shown zero is worse than absent: it
+        // implies a state the owner is failing to reach.
+        let count = plate.planned.count
+        guard count > 0 else { return "Tasks — nothing on your list" }
+        return count == 1 ? "Tasks — 1" : "Tasks — \(count)"
     }
 
 

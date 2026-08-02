@@ -226,6 +226,15 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// know whether it worked is to watch this number fall.
     public var unfulfilledPromises: Int = 0
 
+    /// Assistant turns that carried neither a sentence nor a tool call.
+    ///
+    /// Counted for the same reason as `unfulfilledPromises`: the loop now drops
+    /// them rather than sending them back — a provider refuses the request
+    /// outright, which reached the owner as *"Mynah couldn't finish that"* on
+    /// every attempt — and a fault that is handled silently is one nobody
+    /// notices getting worse.
+    public var blankResponses: Int = 0
+
     public init(
         model: String,
         iterations: Int = 0,
@@ -905,7 +914,36 @@ public final class ToolLoop: @unchecked Sendable {
                     truncated: response.wasTruncated
                 )
             )
-            messages.append(response.message)
+            // **A blank turn is not a turn, and putting it in `messages` is a
+            // request the provider refuses.**
+            //
+            // The owner asked *"can you add dates to the appointments please"*
+            // and got "Mynah couldn't finish that" twice in a row. The cause,
+            // from the log:
+            //
+            //     turn failed: Model rejected the request:
+            //     Invalid assistant message: content or tool_calls must be set
+            //
+            // That is DeepSeek's 400, not a fault on this Mac and not something
+            // "asking again" can fix — the retry rebuilds the same history and
+            // is refused in the same way, which is exactly what he saw.
+            //
+            // The model returned an assistant turn with no sentence and no tool
+            // call. Empty responses happen; the bug is that this appended one
+            // and then sent it back. Every path below re-sends `messages` — the
+            // unfulfilled-promise retry, the next tool round, the wrap-up — so
+            // one blank response poisons the rest of the turn.
+            //
+            // Dropped rather than replaced with a placeholder: a fabricated
+            // "..." would be a sentence the model never said, sitting in the
+            // history the *next* turn is grounded in. The blank carries no
+            // information to preserve, so losing it costs nothing.
+            if !response.message.toolCalls.isEmpty
+                || !response.message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                messages.append(response.message)
+            } else {
+                trace.blankResponses += 1
+            }
 
             guard !response.toolCalls.isEmpty else {
                 let spoken = Self.speakable(response.message.content)

@@ -762,3 +762,86 @@ final class ToolTraceReceiptTests: XCTestCase {
         XCTAssertLessThan(summary.count, 400, "one turn is one readable line")
     }
 }
+
+// MARK: - A blank turn is not a turn
+
+/// **"Mynah couldn't finish that", twice in a row, and asking again could not
+/// help.**
+///
+/// The owner asked *"can you add dates to the appointments please"* and got the
+/// failure card both times. From the log:
+///
+///     turn failed: Model rejected the request:
+///     Invalid assistant message: content or tool_calls must be set
+///
+/// That is the provider's 400, not a fault on this Mac — and not something the
+/// "Ask again" button can fix, because the retry rebuilds the same history and
+/// is refused identically. Which is exactly what he saw.
+///
+/// The model returned an assistant turn with no sentence and no tool call.
+/// Empty responses happen. The bug was that the loop appended one and then sent
+/// it back, and every path re-sends `messages` — so a single blank response
+/// poisoned the rest of the turn.
+final class BlankAssistantTurnTests: XCTestCase {
+
+    private static func blank() -> BrainReply {
+        BrainReply(
+            model: "stub-model",
+            message: BrainMessage(role: .assistant, content: "", toolCalls: []),
+            stopReason: .endTurn,
+            usage: BrainUsage(inputTokens: 10, outputTokens: 0)
+        )
+    }
+
+    /// The heart of it: nothing empty may reach the next request.
+    func testABlankResponseNeverGoesBackToTheModel() async throws {
+        let backend = ScriptedBackend([Self.blank(), ScriptedBackend.answering("Wednesday the 6th.")])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+        let loop = ToolLoop(backend: backend, mcp: tools, configuration: .init(allowedToolNames: ["remember"]))
+
+        _ = try await loop.run(transcript: "add dates to the appointments")
+
+        let sentBack = backend.requests.dropFirst().flatMap(\.messages).filter { $0.role == .assistant }
+        XCTAssertFalse(
+            sentBack.contains { $0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && $0.toolCalls.isEmpty },
+            "an assistant message with neither content nor tool calls is a request the provider refuses"
+        )
+    }
+
+    /// And the turn still finishes. Dropping the blank has to leave a working
+    /// loop, not merely a differently broken one.
+    func testTheTurnStillAnswers() async throws {
+        let backend = ScriptedBackend([Self.blank(), ScriptedBackend.answering("Wednesday the 6th.")])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+        let loop = ToolLoop(backend: backend, mcp: tools, configuration: .init(allowedToolNames: ["remember"]))
+
+        let result = try await loop.run(transcript: "add dates")
+
+        XCTAssertEqual(result.reply, "Wednesday the 6th.")
+    }
+
+    /// Counted, not swallowed. A fault handled silently is one nobody notices
+    /// getting worse — the same reasoning as `unfulfilledPromises`.
+    func testTheBlankIsCounted() async throws {
+        let backend = ScriptedBackend([Self.blank(), ScriptedBackend.answering("done")])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+        let loop = ToolLoop(backend: backend, mcp: tools, configuration: .init(allowedToolNames: ["remember"]))
+
+        let result = try await loop.run(transcript: "x")
+
+        XCTAssertEqual(result.trace.blankResponses, 1)
+    }
+
+    /// A real answer is still kept, so the guard cannot be "drop everything".
+    func testAnOrdinaryAnswerIsUntouched() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Chiro is Wednesday at 11.")])
+        let tools = StubToolSource(toolNames: ["remember"], results: ["remember": "ok"])
+        let loop = ToolLoop(backend: backend, mcp: tools, configuration: .init(allowedToolNames: ["remember"]))
+
+        let result = try await loop.run(transcript: "when is chiro")
+
+        XCTAssertEqual(result.reply, "Chiro is Wednesday at 11.")
+        XCTAssertEqual(result.trace.blankResponses, 0)
+    }
+}

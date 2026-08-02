@@ -218,6 +218,89 @@ final class ProactiveWatchTests: XCTestCase {
             "a check nobody asked for must not put an error on the owner's phone"
         )
     }
+
+    // MARK: A refusal is not an empty node
+
+    /// **`?? []` read "I could not look" as "nothing is there", and the two are
+    /// opposite.**
+    ///
+    /// The test above passed while this shipped, because it seeded an *empty*
+    /// ledger — with nothing recorded, an empty reading looks identical to a
+    /// correct one. Against a real backlog it is the difference between silence
+    /// and announcing that everything the owner has was just completed.
+    ///
+    /// Not hypothetical: `sage_backlog failed: … connect: connection refused`
+    /// appears six times in one day in the owner's log, and he has set the
+    /// interval to fifteen minutes.
+    private func knowing(_ tasks: [WatchedTask], messages: [AgentInboxItem] = []) -> ProactiveLedger {
+        ProactiveLedger(
+            toldAboutMessages: Set(messages.map(\.id)),
+            knownTasks: Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.status) }),
+            hasSeeded: true
+        )
+    }
+
+    func testARefusedBacklogIsNotAnEmptyOne() async {
+        let known = [task("t1", "Book the hotel"), task("t2", "Send the car in")]
+
+        let report = await ProactiveWatch(source: ScriptedNode(refuses: true))
+            .check(against: knowing(known))
+
+        XCTAssertNil(report.message, "it said every task the owner has had just come off the list")
+    }
+
+    /// And the half that mattered most: a failed check must not *forget*.
+    /// Wiping the ledger meant the next healthy tick re-announced the entire
+    /// backlog as newly arrived.
+    func testARefusedCheckRemembersWhatItAlreadyKnew() async {
+        let known = [task("t1", "Book the hotel"), task("t2", "Send the car in")]
+        let before = knowing(known, messages: [message("p1")])
+
+        let after = await ProactiveWatch(source: ScriptedNode(refuses: true))
+            .check(against: before).ledger
+
+        XCTAssertEqual(after.knownTasks, before.knownTasks)
+        XCTAssertEqual(after.toldAboutMessages, before.toldAboutMessages)
+    }
+
+    /// Proof of the whole failure in one test: refuse, then answer normally.
+    /// Before the fix the second tick announced both tasks as new.
+    func testTheTickAfterARefusalSaysNothingNew() async {
+        let known = [task("t1", "Book the hotel"), task("t2", "Send the car in")]
+
+        let afterOutage = await ProactiveWatch(source: ScriptedNode(refuses: true))
+            .check(against: knowing(known)).ledger
+        let report = await ProactiveWatch(source: ScriptedNode(tasks: known))
+            .check(against: afterOutage)
+
+        XCTAssertNil(report.message, "the outage made it forget, so everything looked new again")
+    }
+
+    /// The halves fail independently. A reachable inbox is still worth
+    /// reporting when the backlog is down.
+    func testOneHalfBeingDownDoesNotSilenceTheOther() async {
+        struct HalfDown: ProactiveSource {
+            let inbox: [AgentInboxItem]
+            func waitingMessages(limit: Int) async throws -> [AgentInboxItem] { inbox }
+            func openTasks() async throws -> [WatchedTask] { throw AgentMessagingTrouble.nodeUnavailable }
+        }
+        let known = [task("t1", "Book the hotel")]
+
+        let report = await ProactiveWatch(source: HalfDown(inbox: [message("p9")]))
+            .check(against: knowing(known))
+
+        XCTAssertNotNil(report.message, "the inbox answered and had something new in it")
+        XCTAssertEqual(report.ledger.knownTasks, knowing(known).knownTasks, "the backlog half was never read")
+    }
+
+    /// Seeding needs something to seed *from*. Marking a ledger primed against
+    /// a reading that never happened moves the same fault one tick later.
+    func testAFirstCheckThatReachedNothingIsNotSeeded() async {
+        let report = await ProactiveWatch(source: ScriptedNode(refuses: true))
+            .check(against: ProactiveLedger())
+
+        XCTAssertFalse(report.ledger.hasSeeded)
+    }
 }
 
 // MARK: - When it looks

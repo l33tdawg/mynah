@@ -159,22 +159,54 @@ public struct ProactiveWatch: Sendable {
     /// is simply a check that found nothing to say — it must not take the
     /// appliance down or produce an error message on the owner's phone.
     public func check(against ledger: ProactiveLedger) async -> ProactiveReport {
-        let messages = (try? await source.waitingMessages(limit: 20)) ?? []
-        let tasks = (try? await source.openTasks()) ?? []
+        // **`?? []` was the bug, and it was worse than silence.**
+        //
+        // A node that refuses used to be coalesced to an empty list, which is
+        // not "nothing is there" — it is "I could not look", and the two are
+        // opposite. Read as an empty backlog it meant every task the owner has
+        // had just been completed, so the check announced *"A task came off the
+        // list."* once per task and then overwrote the ledger with the empty
+        // result. The next healthy tick, having forgotten everything, announced
+        // the entire backlog and inbox again as new.
+        //
+        // Not hypothetical on this Mac. `sage_backlog failed: … connect:
+        // connection refused` appears six times in one day in the owner's log,
+        // and he has just set the interval to fifteen minutes.
+        //
+        // Nil, not empty, and the two halves fail independently: a reachable
+        // inbox is still worth reporting when the backlog is down.
+        let messages = try? await source.waitingMessages(limit: 20)
+        let tasks = try? await source.openTasks()
 
         var updated = ledger
-        updated.forgetMessagesNotIn(Set(messages.map(\.id)))
 
-        let newMessages = messages.filter { !ledger.toldAboutMessages.contains($0.id) }
-        let taskNews = Self.taskNews(tasks, against: ledger.knownTasks, seeded: ledger.hasSeeded)
+        // Every mutation below is guarded by "did we actually see it". The rule
+        // this preserves is the one in the doc comment above — a failed check
+        // says nothing — plus the one it was missing: a failed check must not
+        // *forget* anything either.
+        if let messages {
+            updated.forgetMessagesNotIn(Set(messages.map(\.id)))
+            updated.toldAboutMessages.formUnion(messages.map(\.id))
+        }
+        if let tasks {
+            updated.knownTasks = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.status) })
+        }
 
-        updated.toldAboutMessages.formUnion(messages.map(\.id))
-        updated.knownTasks = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.status) })
+        let newMessages = (messages ?? []).filter { !ledger.toldAboutMessages.contains($0.id) }
+        let taskNews = tasks.map {
+            Self.taskNews($0, against: ledger.knownTasks, seeded: ledger.hasSeeded)
+        } ?? []
 
         // The silent first pass. Everything above is written down; nothing is
         // said.
+        //
+        // Only counts as seeded once something was actually read. Seeding on a
+        // check that reached nothing would mark a ledger "primed" against an
+        // empty picture, and the *next* check would then report the owner's
+        // whole backlog as newly arrived — which is the same fault as the one
+        // above, arriving one tick later.
         guard ledger.hasSeeded else {
-            updated.hasSeeded = true
+            updated.hasSeeded = messages != nil || tasks != nil
             return ProactiveReport(message: nil, ledger: updated)
         }
 
