@@ -90,21 +90,41 @@ struct PhoneStatus: Sendable, Equatable {
 
     /// What "Can Mynah reach it" says, and the reason it is a function.
     ///
-    /// It had two branches for three states. Not reachable *and no account
-    /// linked* is the state a new owner is in, and it was told to turn answering
-    /// off and on — advice that cannot work, because nothing is broken and
-    /// nothing is starting. The switch has no account to connect.
+    /// It had two branches for four states. Out of the view so each one can be
+    /// asserted rather than trusted.
     ///
-    /// Out of the view so the third branch can be asserted rather than trusted.
-    var reachabilityDetail: String {
+    /// - No account linked is the state a new owner is in, and it used to be
+    ///   told to turn answering off and on — advice that cannot work, because
+    ///   the switch has no account to connect.
+    /// - **Still starting** is the ordinary state for the first ten seconds
+    ///   after launch. Measured on the owner's Mac: signal-cli's daemon began at
+    ///   07:28:55 and its socket appeared at 07:29:04. Nine seconds is how long
+    ///   a JVM takes, and none of it is a fault.
+    /// - Only the last branch is a problem worth acting on.
+    func reachabilityDetail(helper: BackgroundHelperState?) -> String {
         if isReachable {
             return "The link between this Mac and your phone is up."
         }
         if linkedNumber == nil {
             return "It can't yet — link your phone above first."
         }
+        if helper == .running {
+            return "Starting up — it takes about ten seconds after Mynah opens."
+        }
         return "Mynah is starting the private Signal link. If this does not change, "
             + "turn answering off and on once."
+    }
+
+    /// The word in the pill.
+    ///
+    /// "Not connected" is alarming and, for the first ten seconds, wrong: it
+    /// describes a fault where there is a JVM starting. launchd already tells us
+    /// which of the two it is, and that answer was on screen two rows down
+    /// without being used here.
+    func reachabilityLabel(helper: BackgroundHelperState?) -> String {
+        if isReachable { return "Connected" }
+        if linkedNumber != nil, helper == .running { return "Starting" }
+        return "Not connected"
     }
 }
 
@@ -2106,10 +2126,10 @@ struct SettingsView: View {
             // named two rows up — and toggling a switch cannot supply one.
             SettingsRow(
                 "Can Mynah reach it",
-                detail: model.phone.reachabilityDetail
+                detail: model.phone.reachabilityDetail(helper: model.helperState)
             ) {
                 StatusPill(
-                    model.phone.isReachable ? "Connected" : "Not connected",
+                    model.phone.reachabilityLabel(helper: model.helperState),
                     tone: model.phone.isReachable ? .good : .neutral
                 )
             }

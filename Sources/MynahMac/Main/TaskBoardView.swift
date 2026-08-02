@@ -395,6 +395,10 @@ private struct TaskCard: View {
     /// The pointer is over this card, so the remove control is visible.
     @State private var isHovering = false
 
+    /// Recomputed on each render rather than stored, so a board left open
+    /// overnight does not still call yesterday "today".
+    private var nearness: TaskNearness? { TaskNearness.of(task) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: s3) {
             Text(task.title)
@@ -417,6 +421,23 @@ private struct TaskCard: View {
             if hasFootnote { footnote }
         }
         .mynahCard(density: .compact)
+        // Drawn over the card's own hairline rather than replacing it, so a
+        // near task keeps the same shape as every other card and differs only
+        // in colour and weight. History is never marked: a haircut that already
+        // happened is not happening soon.
+        .overlay {
+            if !isHistory, let nearness {
+                RoundedRectangle.mynah(r.card)
+                    .strokeBorder(
+                        nearness == .today ? Palette.state.dueToday : Palette.state.dueTomorrow,
+                        lineWidth: 2
+                    )
+            }
+        }
+        // Said in words as well as colour. Somebody who cannot separate blue
+        // from orange gets the same fact, and VoiceOver reads it aloud — a
+        // border is invisible to both.
+        .accessibilityHint(nearness == .today ? "Due today" : nearness == .tomorrow ? "Due tomorrow" : "")
         // On hover, not always.
         //
         // A cross on every card, permanently, turns a list of work into a list

@@ -332,7 +332,11 @@ func makeToolSource(
             label: "SAGE MCP",
             // See `ScopedRecall`: 11.16.4 refuses recall with no domain, and
             // the model leaves it out. The ritual keeps the raw client.
-            provider: ScopedRecall(wrapping: mcp),
+            // Two decorators, and the order matters only in that neither cares:
+            // one rewrites `sage_task` arguments, the other fills in
+            // `sage_recall`'s domain. Both exist because a rule in the prompt is
+            // followed most of the time, and "most of the time" fails silently.
+            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: mcp)),
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])

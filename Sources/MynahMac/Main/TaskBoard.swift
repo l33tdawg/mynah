@@ -226,6 +226,46 @@ struct TaskBoard: Equatable, Sendable {
     }
 }
 
+// MARK: - How near a task is
+
+/// Near enough to mark on the card.
+///
+/// The owner, looking at a 10am task sitting four cards down: *"things that are
+/// due today should be at the top probably with a 'blue' border for the card
+/// perhaps to show its something happening soon"*, then *"use orange then for
+/// due tomorrow"*.
+///
+/// The ordering half of that was already built and was not working, for a reason
+/// worth keeping written down: the task had no readable date, so it sorted with
+/// the undated. `DatedTaskWrites` is what fixed that. This is only the mark.
+///
+/// Out of the view so "is this today" is a function with tests rather than a
+/// date comparison inlined in a `body`.
+enum TaskNearness: Equatable, Sendable {
+    case today
+    case tomorrow
+
+    /// Nothing for a task that is undated, further off, or already past.
+    ///
+    /// **Overdue is deliberately unmarked.** A red-ish border on a lapsed task
+    /// would be the fourth job for a colour on this board, and the appliance
+    /// already has a better channel for it: the ladder asks about overdue work
+    /// in a message, in words, with a way to act. A border cannot be answered.
+    static func of(_ task: BoardTask, now: Date = Date(), calendar: Calendar = .current) -> TaskNearness? {
+        guard let due = SpokenDate.writtenDate(in: task.title, calendar: calendar) else { return nil }
+        let days = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: now),
+            to: calendar.startOfDay(for: due)
+        ).day
+        switch days {
+        case 0: return .today
+        case 1: return .tomorrow
+        default: return nil
+        }
+    }
+}
+
 // MARK: - Where the board gets its tasks
 
 /// Anything that can answer "what is on the owner's plate?".

@@ -263,6 +263,100 @@ final class ReminderLadderTests: XCTestCase {
         XCTAssertEqual(kept, ["t-chiro#day", "t-chiro#hours", "t-meeting#today"])
     }
 
+    // MARK: His actual board
+
+    /// **The seven tasks in the live ledger on 3 August 2026**, because a parser
+    /// that passes on tidy fixtures and fails on what is really stored is a
+    /// parser that has not been tested. Two of these are awkward shapes that no
+    /// invented example would have produced.
+    ///
+    /// The whole point of a reminder is that nobody is watching it work, so the
+    /// failure mode is silence — and silence is indistinguishable from "nothing
+    /// was due".
+    func testTheRealBoardParsesTheWayItLooks() {
+        let board = [
+            ("Apply for UOB Visa Infinite — contact a UOB agent to start the application", nil),
+            ("Check in at Butterfly Hotel Betong — booking number 1755889226, Deluxe King Room", nil),
+            ("Haircut at Trufitt & Hill Bangsar, Thursday 6 August 2026, 11am", "2026-08-06 11:00"),
+            ("Chiropractor appointment at One Spine TTDI Wednesday 5 August 2026, 11am", "2026-08-05 11:00"),
+            // The time comes *before* the date here. Nothing was designed for
+            // that; it works because the two are found independently.
+            ("Donsak to Koh Phangan ferry at 14:30, Monday 10 August 2026", "2026-08-10 14:30"),
+            ("Apply for Thailand Digital Arrival Card before travelling", nil),
+            // A ten-digit booking number sitting next to a real date. The date
+            // must win and the number must not become one.
+            ("Check in at Brillianest Hotel, Hatyai on Wednesday 19 August 2026. Booking no. 1755889226",
+             "2026-08-19 00:00")
+        ]
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = calendar.locale
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+
+        for (title, expected) in board {
+            let parsed = SpokenDate.writtenDate(in: title, calendar: calendar).map(formatter.string(from:))
+            XCTAssertEqual(parsed, expected, title)
+        }
+    }
+
+    /// And that nothing on it fires at 07:27 on 3 August, when the nearest thing
+    /// is two days away. A ladder that announced all seven the moment it woke up
+    /// would be the worst possible first impression.
+    func testNothingOnTheRealBoardFiresTwoDaysOut() {
+        let board = [
+            "Apply for UOB Visa Infinite — contact a UOB agent to start the application",
+            "Check in at Butterfly Hotel Betong — booking number 1755889226, Deluxe King Room",
+            "Haircut at Trufitt & Hill Bangsar, Thursday 6 August 2026, 11am",
+            "Chiropractor appointment at One Spine TTDI Wednesday 5 August 2026, 11am",
+            "Donsak to Koh Phangan ferry at 14:30, Monday 10 August 2026",
+            "Apply for Thailand Digital Arrival Card before travelling",
+            "Check in at Brillianest Hotel, Hatyai on Wednesday 19 August 2026. Booking no. 1755889226"
+        ].enumerated().map { WatchedTask(id: "real-\($0.offset)", title: $0.element, status: "planned") }
+
+        let due = ReminderLadder.due(
+            tasks: board,
+            alreadySaid: [],
+            now: at(3, 7, 27),
+            calendar: calendar
+        )
+
+        XCTAssertTrue(due.isEmpty, "would have said: \(due.map(\.text))")
+    }
+
+    /// The live test the owner asked for, run as arithmetic first: a task added
+    /// this morning for 9:30 the same morning.
+    func testATaskAddedTwoHoursBeforeItHappens() {
+        let test = WatchedTask(
+            id: "t-live",
+            title: "Test reminder Monday 3 August 2026, 9:30am",
+            status: "planned"
+        )
+
+        // 07:35, just after it is added and picked up by the next check. One
+        // hour fifty-five is inside two hours, so this is the *hours* rung and
+        // not the day rung — a task added this close never gets a day rung at
+        // all, because there was never a moment when it was a day away.
+        guard let first = nudge(test, at: at(3, 7, 35)) else {
+            return XCTFail("nothing at 07:35, two hours out")
+        }
+        XCTAssertEqual(first.key, "t-live#hours")
+        XCTAssertTrue(first.text.contains("in about 2 hours"), first.text)
+        XCTAssertTrue(first.text.contains("9:30 am"), first.text)
+
+        // 09:00, half an hour out — a different rung, so it lands even though
+        // the first one already did.
+        guard let second = nudge(test, at: at(3, 9, 0)) else {
+            return XCTFail("nothing at 09:00, half an hour out")
+        }
+        XCTAssertEqual(second.key, "t-live#soon")
+        XCTAssertTrue(second.text.contains("half an hour"), second.text)
+
+        // And the morning after, if it is never marked done.
+        XCTAssertEqual(nudge(test, at: at(4, 9))?.key, "t-live#overdue-0")
+    }
+
     // MARK: It is a function
 
     func testTheSameTasksAtTheSameInstantGiveTheSameAnswer() {

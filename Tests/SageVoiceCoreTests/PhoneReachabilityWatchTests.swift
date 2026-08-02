@@ -115,13 +115,12 @@ final class PhoneReachabilityWatchTests: XCTestCase {
     /// The detail line promises the row will change on its own — *"Mynah is
     /// starting the private Signal link. If this does not change…"*. That was a
     /// promise the code did not keep, which is what made it a bug report rather
-    /// than a cosmetic issue.
+    /// than a cosmetic issue. It keeps it now, and says how long to expect.
     func testTheWordingPromisesSomethingTheCodeNowDoes() {
         let starting = PhoneStatus(isReachable: false, linkedNumber: "+6012·····89", socketPath: "/tmp/s")
+        let detail = starting.reachabilityDetail(helper: .running)
 
-        XCTAssertTrue(
-            starting.reachabilityDetail.contains("starting"),
-            "the copy claims it is still coming up: \(starting.reachabilityDetail)"
-        )
+        XCTAssertTrue(detail.lowercased().contains("starting"), detail)
+        XCTAssertTrue(detail.contains("ten seconds"), "it should say how long: \(detail)")
     }
 }

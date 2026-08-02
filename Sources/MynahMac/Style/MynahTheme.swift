@@ -222,6 +222,27 @@ enum Palette {
             light: .mynahHex(0x9A6212, alpha: 0.10),
             dark: .mynahHex(0xE0A54A, alpha: 0.13)
         )
+
+        /// **When something happens — not whether anything is wrong.**
+        ///
+        /// The owner asked for these directly: *"things that are due today
+        /// should be at the top probably with a 'blue' border for the card
+        /// perhaps to show its something happening soon"*, and then *"and yellow
+        /// for the ones due tomorrow?"*.
+        ///
+        /// Tomorrow is **orange**, not the yellow first suggested — the owner's
+        /// own correction, and it settles a collision as well as a preference.
+        /// `caution` carries exactly one meaning, words leave this Mac, and the
+        /// history above is what a colour with more than one job costs: he read
+        /// a yellow mark on a stale task list as "Signal has crashed". A second
+        /// yellow, however separate its constant, would have had somebody making
+        /// that comparison by eye. Orange does not invite it.
+        ///
+        /// These live on a **border**, never on text or a pill. A border says
+        /// "this one" without claiming anything about state, which is precisely
+        /// the distinction that was lost last time.
+        static let dueToday = Color.mynah(light: .mynahHex(0x1F6FEB), dark: .mynahHex(0x58A6FF))
+        static let dueTomorrow = Color.mynah(light: .mynahHex(0xC2410C), dark: .mynahHex(0xFB923C))
     }
 
     /// Stated explicitly in both schemes rather than inverting `Color.primary`,
