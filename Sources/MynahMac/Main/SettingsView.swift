@@ -500,6 +500,33 @@ final class SettingsModel {
         phone = phoneLink.status
     }
 
+    /// How often "Can Mynah reach it" is asked again while the screen is open.
+    ///
+    /// It is a `stat()` on one path, so this is nearly free. Two seconds because
+    /// the thing it watches for appears without warning and the owner is
+    /// *already looking at the row* when it does.
+    static let phoneWatchInterval: Duration = .seconds(2)
+
+    /// Keeps the reachability row honest while somebody is watching it.
+    ///
+    /// **It was read once, on appear, and never again.** The socket is created
+    /// by signal-cli a few seconds after launch — longer on a cold Mac — so
+    /// opening Settings early left "Not connected" on the screen permanently,
+    /// under a sentence promising it would change on its own. Everything else in
+    /// this pane that can change is already re-asked; this was the one that was
+    /// not, and it is the one the owner reads to decide whether their phone
+    /// works.
+    ///
+    /// SwiftUI cancels the enclosing `.task` when the pane goes away, so this
+    /// costs nothing when nobody is looking.
+    func watchPhoneReachability() async {
+        while !Task.isCancelled {
+            let latest = phoneLink.status
+            if latest != phone { phone = latest }
+            try? await Task.sleep(for: Self.phoneWatchInterval)
+        }
+    }
+
     func probeIfNeeded() async {
         guard probe == nil, !isProbing else { return }
         isProbing = true
@@ -1115,6 +1142,7 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Palette.surface.canvas)
         .onAppear { model.refresh() }
+        .task { await model.watchPhoneReachability() }
         .task { await model.probeIfNeeded() }
         .task { await model.loadCallVoices() }
         // Beside the screen, never in front of it. The row below carries its own
