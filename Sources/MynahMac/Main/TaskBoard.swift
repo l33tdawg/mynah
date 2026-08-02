@@ -188,13 +188,41 @@ struct TaskBoard: Equatable, Sendable {
             (first.shownAt ?? .distantPast) > (second.shownAt ?? .distantPast)
         }
         return TaskBoard(
-            planned: ordered.filter { $0.progress == .planned },
+            planned: byWhenTheyHappen(ordered.filter { $0.progress == .planned }),
             inProgress: ordered.filter { $0.progress == .inProgress },
             done: ordered.filter { $0.progress == .done },
             dropped: ordered.filter { $0.progress == .dropped },
             unclassified: ordered.filter { $0.progress == nil },
             coversFinishedWork: coversFinishedWork
         )
+    }
+
+    /// Soonest first, and undated work after all of it.
+    ///
+    /// **The order a list is read in is the order it gets done in.** Sorted by
+    /// when it was written down, the board put Thursday's haircut above
+    /// Tuesday's meeting because the haircut was typed two seconds later. The
+    /// owner: *"i'm talking about the order in which they should be 'executed'
+    /// / reminder sent to you based on the timing - like don't remind me about
+    /// thursday on monday instead of telling me about things on tuesday /
+    /// wednesday"*.
+    ///
+    /// The date comes out of the task's own words — Mynah writes "Wednesday 5
+    /// August 2026, 11am" into the title — so this needs no store of its own
+    /// and works on every task already on his node. See `SpokenDate.writtenDate`
+    /// for why a numeric "5/8" deliberately yields nothing.
+    ///
+    /// Undated last rather than first: "apply for the UOB card" has no deadline
+    /// and putting it above a dated appointment would bury the thing that
+    /// actually expires. Within the undated the existing newest-first order is
+    /// kept, which is what `sorted(by:)` being stable gives us for free.
+    static func byWhenTheyHappen(_ tasks: [BoardTask]) -> [BoardTask] {
+        let dated = tasks.compactMap { task in
+            SpokenDate.writtenDate(in: task.title).map { (task, $0) }
+        }
+        let undatedIDs = Set(dated.map(\.0.id))
+        return dated.sorted { $0.1 < $1.1 }.map(\.0)
+            + tasks.filter { !undatedIDs.contains($0.id) }
     }
 }
 

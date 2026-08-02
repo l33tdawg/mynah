@@ -1011,6 +1011,13 @@ func runDaemon(_ arguments: [String]) -> Never {
             await daemon?.postCallTranscript(transcript)
         }
 
+        // And the other direction, so a call opens on the conversation the
+        // owner was already having rather than on his task list: *"most likely
+        // i'm calling you to continue the conversation"*.
+        await callServer.onRecentMessages { [weak daemon] in
+            await daemon?.recentMessagesForCall()
+        }
+
         // Checking on things without being asked.
         //
         // Off unless the owner switched it on, and the loop is started

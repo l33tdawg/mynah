@@ -98,6 +98,79 @@ public enum SpokenDate {
         return .one(OwnerDate(at: first.day, granularity: .day, phrase: first.phrase))
     }
 
+    /// The date already written into a task's own words, if there is one.
+    ///
+    /// **Different job from `resolve`, and the difference is who wrote it.**
+    /// `resolve` reads what the *owner* said, and refuses numeric forms because
+    /// "5/8" has two readings. This reads a task title that has already been
+    /// written down with the month spelled out — "Chiropractor appointment at
+    /// One Spine TTDI Wednesday 5 August 2026, 11am" — which has exactly one
+    /// reading and is the shape Mynah itself records.
+    ///
+    /// It exists so the list can be ordered by when things happen. The owner:
+    /// *"i'm talking about the order in which they should be 'executed' …
+    /// don't remind me about thursday on monday instead of telling me about
+    /// things on tuesday / wednesday"*.
+    ///
+    /// Still no numeric dates. A task saying "5/8" gets no date and sorts with
+    /// the undated, which is a task the owner can fix rather than a reminder
+    /// three months early.
+    public static func writtenDate(in text: String, calendar: Calendar = .current) -> Date? {
+        let months = [
+            "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+            "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7,
+            "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12
+        ]
+        let lower = text.lowercased()
+        let names = months.keys.joined(separator: "|")
+        // "5 August 2026" and "August 5 2026", each with an optional ordinal
+        // suffix and an optional year.
+        let patterns = [
+            #"(\d{1,2})(?:st|nd|rd|th)?\s+(\#(names))\.?(?:\s+(\d{4}))?"#,
+            #"(?:\#(names))\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?"#
+        ]
+
+        for (index, pattern) in patterns.enumerated() {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower))
+            else { continue }
+
+            func group(_ at: Int) -> String? {
+                guard let range = Range(match.range(at: at), in: lower) else { return nil }
+                return String(lower[range])
+            }
+
+            let day: Int?
+            let month: Int?
+            let year: Int?
+            if index == 0 {
+                day = group(1).flatMap(Int.init)
+                month = group(2).flatMap { months[$0.replacingOccurrences(of: ".", with: "")] }
+                year = group(3).flatMap(Int.init)
+            } else {
+                // The month name is the literal alternation, so recover it from
+                // the matched text rather than a capture group.
+                let whole = Range(match.range, in: lower).map { String(lower[$0]) } ?? ""
+                month = months.first { whole.hasPrefix($0.key) }?.value
+                day = group(1).flatMap(Int.init)
+                year = group(2).flatMap(Int.init)
+            }
+
+            guard let day, let month, (1...31).contains(day) else { continue }
+            var components = DateComponents()
+            components.day = day
+            components.month = month
+            components.year = year ?? calendar.component(.year, from: Date())
+            if let clock = time(in: lower) {
+                components.hour = clock.hour
+                components.minute = clock.minute
+            }
+            if let date = calendar.date(from: components) { return date }
+        }
+        return nil
+    }
+
     // MARK: Days
 
     private struct Anchor {

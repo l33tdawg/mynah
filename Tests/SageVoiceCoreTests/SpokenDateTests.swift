@@ -179,3 +179,73 @@ final class SpokenDateTests: XCTestCase {
         XCTAssertEqual(stamp(date.at), "2026-08-04 00:00")
     }
 }
+
+/// **The order a list is read in is the order it gets done in.**
+///
+/// Sorted by when it was written down, the board put Thursday's haircut above
+/// Tuesday's meeting because the haircut was typed two seconds later. The
+/// owner: *"i'm talking about the order in which they should be 'executed' /
+/// reminder sent to you based on the timing - like don't remind me about
+/// thursday on monday instead of telling me about things on tuesday /
+/// wednesday"*.
+///
+/// The date is read back out of the task's own words, because that is where
+/// Mynah writes it. No store of its own, and it works on tasks already on the
+/// node.
+final class WrittenDateTests: XCTestCase {
+
+    private var calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }()
+
+    private func stamp(_ text: String) -> String? {
+        guard let date = SpokenDate.writtenDate(in: text, calendar: calendar) else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = calendar.locale
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// The three the owner is actually looking at.
+    func testTheTasksOnHisBoard() {
+        XCTAssertEqual(stamp("Meeting with TII IT on Tuesday 4 August 2026"), "2026-08-04 00:00")
+        XCTAssertEqual(
+            stamp("Chiropractor appointment at One Spine TTDI Wednesday 5 August 2026, 11am"),
+            "2026-08-05 11:00"
+        )
+        XCTAssertEqual(
+            stamp("Haircut at Trufitt & Hill Bangsar, Thursday 6 August 2026, 11am"),
+            "2026-08-06 11:00"
+        )
+    }
+
+    func testMonthFirstAlsoReads() {
+        XCTAssertEqual(stamp("Dentist August 5 2026"), "2026-08-05 00:00")
+    }
+
+    func testOrdinalsAndShortMonths() {
+        XCTAssertEqual(stamp("Renewal on 5th Aug 2026"), "2026-08-05 00:00")
+        XCTAssertEqual(stamp("Renewal on 5 Sept 2026"), "2026-09-05 00:00")
+    }
+
+    /// Undated work is genuinely undated — it must not acquire a date by
+    /// accident, because that is a reminder for something with no deadline.
+    func testTasksWithNoDateHaveNoDate() {
+        XCTAssertNil(stamp("Apply for Thailand Digital Arrival Card before travelling"))
+        XCTAssertNil(stamp("Apply for UOB Visa Infinite — contact a UOB agent to start the application"))
+        XCTAssertNil(stamp("buy eggs"))
+    }
+
+    /// Still no numeric dates, for the same reason as everywhere else: "5/8" is
+    /// two different days depending on who wrote it. It sorts with the undated,
+    /// which is a task the owner can fix rather than a reminder months early.
+    func testNumericDatesStillYieldNothing() {
+        XCTAssertNil(stamp("Chiro on 5/8"))
+        XCTAssertNil(stamp("Chiro on 05-08-2026"))
+    }
+}

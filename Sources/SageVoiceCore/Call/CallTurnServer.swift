@@ -48,6 +48,20 @@ public actor CallTurnServer {
     private let transcriber: any AudioFileTranscribing
     private let synthesizer: any SpeechSynthesizing
     private let answer: @Sendable (String) async throws -> String
+
+    /// The last few things said in messages, for the opening to pick up on.
+    ///
+    /// **A call is usually a continuation, not a status request.** The owner:
+    /// *"most likely i'm calling you to continue the conversation"*, and before
+    /// that, *"skip the open items on task list - look at what we were last
+    /// talking about via text"*.
+    ///
+    /// Handed in rather than recalled, for the reason stated at
+    /// `briefingRequest`: memory returns what is most *relevant*, and the
+    /// thread he was in five minutes ago is rarely that. The same mistake once
+    /// opened a call with "last we talked, you were heading to bed" on an
+    /// evening whose actual last exchange had been about tonkatsu shops.
+    private var recentMessages: @Sendable () async -> String?
     private let log: @Sendable (String) -> Void
 
     private var listening: Int32 = -1
@@ -84,13 +98,24 @@ public actor CallTurnServer {
         transcriber: any AudioFileTranscribing,
         synthesizer: any SpeechSynthesizing,
         answer: @escaping @Sendable (String) async throws -> String,
+        recentMessages: @escaping @Sendable () async -> String? = { nil },
         log: @escaping @Sendable (String) -> Void = { print($0) }
     ) {
         self.configuration = configuration
         self.transcriber = transcriber
         self.synthesizer = synthesizer
         self.answer = answer
+        self.recentMessages = recentMessages
         self.log = log
+    }
+
+    /// Where the opening reads the message thread from.
+    ///
+    /// Set after construction, like `onTranscript` and for the same reason: the
+    /// call server is built before the daemon that owns the conversation,
+    /// because `//call` needs its socket whether or not Signal ever comes up.
+    public func onRecentMessages(_ provide: @escaping @Sendable () async -> String?) {
+        recentMessages = provide
     }
 
     /// Where finished transcripts are posted.
@@ -156,7 +181,8 @@ public actor CallTurnServer {
             // call — a restart is routine, and "what did we just talk about"
             // surviving only until the next one is the same bug again.
             sinceLastCall: (lastCallEnded ?? previous?.ended).map { Date().timeIntervalSince($0) },
-            lastCall: previous
+            lastCall: previous,
+            recentMessages: await recentMessages()
         )
         if let briefing = try? await answer(request),
            !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -192,10 +218,27 @@ public actor CallTurnServer {
     /// ever said it, and if it is not, asking once and remembering is what a
     /// person would do — far better than an appliance that either guesses or
     /// never uses it.
+    /// **It no longer asks who it is talking to.**
+    ///
+    /// This used to open with "greet me by name — if you don't know my name,
+    /// ask me for it". The owner: *"we also have the first call agent asks
+    /// users for their name - we should probably just disable that; it isn't
+    /// helpful"*.
+    ///
+    /// It is worse than unhelpful, and the reason is what this appliance is.
+    /// Mynah answers exactly one person's phone — the allowlist refuses every
+    /// other caller by construction — so there is no one it could be talking to
+    /// whose name is in question. Asking spends the first thing said on a call
+    /// establishing something already settled, and does it on a surface where
+    /// the answer has to be spoken and recognised.
+    ///
+    /// Nothing replaced it. An appliance that greets its only owner with "hey"
+    /// and then says what is open is doing the whole job of an opening.
     static func briefingRequest(
         now: Date,
         sinceLastCall: TimeInterval?,
-        lastCall: LastCall? = nil
+        lastCall: LastCall? = nil,
+        recentMessages: String? = nil
     ) -> String {
         let clock = DateFormatter()
         clock.dateFormat = "EEEE h:mm a"
@@ -227,17 +270,29 @@ public actor CallTurnServer {
                 """
         }
 
+        if let recentMessages, !recentMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            context += """
+
+
+                These are the last things we said to each other in messages, \
+                oldest first. This is almost certainly what I am calling about:
+
+                \(recentMessages)
+                """
+        }
+
         return """
             \(context)
 
-            I'm about to join a voice call with you. Greet me by name in a few
-            words — if you don't know my name, ask me for it and remember it when
-            I tell you. Then say where things stand: anything open on my task
-            list, and what we were last working on.
+            I'm about to join a voice call with you. Greet me in a few words,
+            then pick up where our messages left off — say the one thing that is
+            still open between us, or ask what I want to do about it.
 
             Two or three short sentences, spoken aloud — no lists, no markdown.
-            If there's genuinely nothing open, say so briefly. Let the time of
-            day and how long it's been sound natural rather than announced.
+            Do not read my task list out and do not summarise everything we
+            said; take the last thread and carry it on. If there is genuinely
+            nothing to pick up, just say hello and ask what I need. Let the time
+            of day and how long it's been sound natural rather than announced.
             """
     }
 

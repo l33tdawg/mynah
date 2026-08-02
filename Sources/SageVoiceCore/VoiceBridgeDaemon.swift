@@ -543,6 +543,28 @@ public actor VoiceBridgeDaemon {
     /// Comfortably inside Ollama's 30-minute `keep_alive`.
     static let keepWarmIntervalSeconds: TimeInterval = 20 * 60
 
+    /// The last few things said in messages, as prose, for a call to open on.
+    ///
+    /// **A call is usually a continuation.** The owner: *"most likely i'm
+    /// calling you to continue the conversation"* — so the opening is built
+    /// from the thread he was just in, not from his task list and not from a
+    /// memory search. `CallTurnServer.briefingRequest` explains why handing it
+    /// over beats recalling it: memory returns what is most *relevant*, which
+    /// is rarely what is most recent.
+    ///
+    /// The thread that was spoken to last, because this appliance serves one
+    /// person and the alternative is picking a conversation by luck. Nil when
+    /// nothing has been said yet, which reads on the call as a plain hello.
+    public func recentMessagesForCall(turns: Int = 6) -> String? {
+        guard let key = lastAnchoredKey ?? histories.keys.first,
+              let history = histories[key], !history.isEmpty else { return nil }
+        let recent = Self.trimmed(history, keepingLastTurns: turns)
+            .filter { $0.role == .user || $0.role == .assistant }
+            .map { "\($0.role == .user ? "Me" : "You"): \(ToolLoop.speakable($0.content))" }
+            .filter { !$0.hasSuffix(": ") }
+        return recent.isEmpty ? nil : recent.joined(separator: "\n")
+    }
+
     // MARK: One message
 
     /// Exposed so a test can drive a synthetic message without a live daemon.
