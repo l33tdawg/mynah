@@ -184,8 +184,8 @@ struct PrivacyView: View {
 
     /// One row per thing that can leave, each with the badge that says where it
     /// goes. Ordered by how often it happens rather than by severity: the first
-    /// two are every single time the owner speaks, and the last is once a day
-    /// whether they speak or not.
+    /// two are every single time the owner speaks, and the last is every fifteen
+    /// minutes whether they speak or not.
     private var claims: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup("Every time you ask something") {
@@ -264,7 +264,7 @@ struct PrivacyView: View {
                 PrivacyRow("Checking for a newer Mynah", detail: PrivacyClaim.aboutCaption) {
                     HStack(spacing: s4) {
                         StatusPill(
-                            checksForUpdates ? "Once a day" : "Turned off",
+                            checksForUpdates ? "Every 15 minutes" : "Turned off",
                             tone: checksForUpdates ? .neutral : .good
                         )
                         // The one row on this page that describes something

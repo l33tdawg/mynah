@@ -257,8 +257,8 @@ enum PrivacyClaim {
         + "wake word. Speech is turned into words on this Mac either way."
 
     /// What the update check tells a third party.
-    static let updateCheckReach = "The update check asks GitHub once a day whether a newer "
-        + "version has been released. That request tells GitHub a Mac asked, which is a third "
+    static let updateCheckReach = "The update check asks GitHub every fifteen minutes whether a "
+        + "newer version has been released. That request tells GitHub a Mac asked, which is a third "
         + "party learning this machine exists — the one thing Mynah does that you did not ask "
         + "for by speaking. Turn it off and Mynah never contacts GitHub at all."
 
@@ -419,37 +419,26 @@ final class SettingsModel {
     // settings are: `@Observable` cannot see a file being written, so a row
     // bound straight through the store would not redraw when the owner set it.
 
-    /// What the last check found. `nil` while the first one is still running,
-    /// which is the only state that means "asking".
-    private(set) var update: UpdateAvailability?
-
-    /// How a swap is going, when one is happening.
+    /// **Every one of these forwards to `UpdateWatch`, which owns them.**
     ///
-    /// Three states rather than a handful of flags, because the card draws one
-    /// of exactly three things: it is working, it finished, or it stopped and
-    /// said why. `nil` is no card at all.
-    enum InstallState: Equatable {
-        case working(UpdateInstallProgress)
-        case installed(String)
-        case failed(UpdateInstallProblem)
-
-        var isWorking: Bool {
-            if case .working = self { return true }
-            return false
-        }
-    }
-
-    private(set) var installState: InstallState?
-
-    /// The version sitting on disk waiting for a restart, once one is.
+    /// They used to live here, and that was fine while Settings was the only
+    /// place an update could be seen. It is not any more: the banner under the
+    /// header offers the same swap, and two objects each holding an install task
+    /// can each start one. Two copies of Mynah replacing the same bundle at once
+    /// is the single failure in this feature that leaves an owner with no working
+    /// app, so there is one owner and this screen is a view onto it.
     ///
-    /// Kept apart from `installState` deliberately: closing the card puts the
-    /// card away, and it must not also throw away the fact that this Mac is now
-    /// carrying a newer Mynah than the one running. The row says so until the
-    /// owner restarts.
-    private(set) var installedAndWaiting: String?
+    /// Forwarded rather than having the views reach for `UpdateWatch.shared`
+    /// themselves, because `SettingsView` takes an injected model in previews and
+    /// tests, and a view that reaches past its model for state is one that cannot
+    /// be shown without the real thing behind it.
+    private var updates: UpdateWatch { UpdateWatch.shared }
 
-    private var installWork: Task<Result<String, UpdateInstallProblem>, Never>?
+    var update: UpdateAvailability? { updates.availability }
+    typealias InstallState = UpdateWatch.InstallState
+    var installState: InstallState? { updates.installState }
+    var installedAndWaiting: String? { updates.installedAndWaiting }
+
     private(set) var checksForUpdates: Bool
 
     /// What launchd says about the background helper, or `nil` before the first
@@ -628,10 +617,10 @@ final class SettingsModel {
     /// already been made is `UpdateCheck`'s decision, not this screen's — the
     /// same limit has to hold however many places end up calling it.
     func checkForUpdate() async {
-        update = await UpdateCheck(preferencesFile: updatePreferences).run()
+        await updates.check()
     }
 
-    private(set) var isCheckingForUpdate = false
+    var isCheckingForUpdate: Bool { updates.isChecking }
 
     /// Asks GitHub now, whatever the daily limit and the switch say.
     ///
@@ -641,10 +630,7 @@ final class SettingsModel {
     /// first press of the day answers and every press after it reports "hasn't
     /// managed to check yet", which reads as a broken control.
     func checkForUpdateNow() async {
-        guard !isCheckingForUpdate else { return }
-        isCheckingForUpdate = true
-        defer { isCheckingForUpdate = false }
-        update = await UpdateCheck(preferencesFile: updatePreferences).run(force: true)
+        await updates.checkNow()
     }
 
     /// When GitHub was last asked, in words.
@@ -654,18 +640,7 @@ final class SettingsModel {
     /// "Up to date" that was already on screen looks identical to "Up to date"
     /// that has just been confirmed, and a button with no visible effect reads
     /// as a broken one.
-    var lastCheckedDescription: String {
-        guard let when = UpdatePreferences.load(from: updatePreferences).lastCheckedAt else {
-            return "Once a day. It hasn't asked yet."
-        }
-        let ago = Date().timeIntervalSince(when)
-        // Under a minute is "just now" rather than "0 seconds ago", which is
-        // what the relative formatter says and is not how anybody speaks.
-        guard ago >= 60 else { return "Once a day. Last asked just now." }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return "Once a day. Last asked \(formatter.localizedString(for: when, relativeTo: Date()))."
-    }
+    var lastCheckedDescription: String { updates.lastCheckedDescription }
 
     /// Turning the check off stops the requests, not merely the reporting.
     ///
@@ -679,7 +654,7 @@ final class SettingsModel {
             preferences.checksForUpdates = isOn
             if isOn { preferences.lastCheckedAt = nil }
         }
-        update = nil
+        updates.forgetAnswer()
         Task { await checkForUpdate() }
     }
 
@@ -719,135 +694,17 @@ final class SettingsModel {
     }
 
     // MARK: Fetching a newer Mynah
+    //
+    // All four moved to `UpdateWatch`, which owns the install task. The bodies
+    // did not change — in particular `restartIntoNewVersion` kept every comment
+    // it had earned, because each one records a way that button has already
+    // failed in the owner's hands.
 
-    /// Downloads the newest release, checks it, and puts it in place.
-    ///
-    /// The stages arrive on a stream rather than through a closure that writes
-    /// this object: the installer runs off this actor, and handing it something
-    /// that mutates the model from wherever it happens to be is how a screen
-    /// ends up redrawing from a background thread. The stream's continuation is
-    /// the only thing that crosses.
-    func installUpdate() async {
-        guard installWork == nil else { return }
-        installState = .working(UpdateInstallProgress(stage: .finding))
-
-        let (steps, feed) = AsyncStream<UpdateInstallProgress>.makeStream()
-        let installer = UpdateInstaller()
-        let work = Task { () -> Result<String, UpdateInstallProblem> in
-            let outcome = await installer.run { feed.yield($0) }
-            feed.finish()
-            return outcome
-        }
-        installWork = work
-
-        for await step in steps {
-            installState = .working(step)
-        }
-
-        let outcome = await work.value
-        installWork = nil
-        switch outcome {
-        case .success(let version):
-            log.info("update: \(version) is on disk, waiting for a restart")
-            installedAndWaiting = version
-            installState = .installed(version)
-        case .failure(let problem):
-            log.error("update: \(problem.spokenDescription)")
-            installState = .failed(problem)
-        }
-    }
-
-    /// Stops a download in progress. Only offered before anything is moved, so
-    /// there is never a half-installed app behind this button.
-    func stopInstalling() {
-        installWork?.cancel()
-    }
-
-    func dismissInstall() {
-        installState = nil
-    }
-
-    /// Starts the copy now on disk, then stands down.
-    ///
-    /// The shell waits for this process to be gone before opening the app,
-    /// because `open` on an app that is still running activates the old copy
-    /// instead of launching the new one — which looks exactly like the update
-    /// not having worked.
-    ///
-    /// The daemon answering the phone comes back by itself: its LaunchAgent
-    /// carries a stamp of the executable it was written for, so the new app
-    /// notices at launch that the bytes changed and re-installs the job. See
-    /// `SignalBackgroundServiceManager.executableStamp`.
+    func installUpdate() async { await updates.install() }
+    func stopInstalling() { updates.stopInstalling() }
+    func dismissInstall() { updates.dismissInstall() }
     func restartIntoNewVersion(bundleURL: URL = Bundle.main.bundleURL) {
-        // Before the shell is even arranged, because what this changes is what
-        // `applicationShouldTerminate` does — and without it that method spends
-        // up to thirty seconds removing LaunchAgents the next launch will put
-        // straight back. See `RestartIntent`.
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let script = "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done; "
-            + "/usr/bin/open \"$1\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // The path as an argument rather than inside the script: a folder name
-        // with a quote in it would otherwise end the string and run whatever
-        // came after it.
-        process.arguments = ["-c", script, "mynah-restart", bundleURL.path]
-        do {
-            try process.run()
-        } catch {
-            // Quitting anyway would leave the owner with no Mynah and no
-            // explanation. Better to stay up and let them open it themselves.
-            log.error("update: could not arrange the restart: \(String(describing: error))")
-            installState = .failed(.couldNotRestart)
-            return
-        }
-        // **After the relaunch is arranged and never before.** This changes
-        // what quitting does — `applicationShouldTerminate` skips removing the
-        // LaunchAgents while it is set, because the next launch would put them
-        // straight back. Setting it first and then failing to start the shell
-        // would leave the flag on with no restart coming, so the owner's next
-        // ordinary Quit would leave their phone still being answered: exactly
-        // the bug that method was written to fix.
-        RestartIntent.shared.begin()
-
-        // **The card has to come down before the app can go.**
-        //
-        // *"it still doesn't restart when you click the button - have to press
-        // later, then quit and it will auto reopen."* That sentence is the
-        // diagnosis: pressing Later dismisses the sheet, and the quit that
-        // follows works. `NSApplication.terminate` does not close a window with
-        // an attached sheet — the sheet is what the press leaves on screen, so
-        // the app sat there with the relaunch already waiting on its process id.
-        //
-        // Which also means the first version of this fix was never proved. The
-        // evidence read at the time — a new process five seconds after the
-        // press, and no LaunchAgent teardown in the log — is equally explained
-        // by the owner pressing Later and quitting by hand, with the teardown
-        // skipped because the flag above was already set. Two readings, one
-        // observation, and the wrong one was reported as fact.
-        installState = nil
-        for window in NSApplication.shared.windows {
-            guard let sheet = window.attachedSheet else { continue }
-            window.endSheet(sheet)
-        }
-
-        // A hop, so AppKit has actually taken the sheet down before the
-        // termination is asked for.
-        DispatchQueue.main.async {
-            NSApplication.shared.terminate(nil)
-            // And a floor under the whole thing.
-            //
-            // A restart that silently does nothing is the failure this button
-            // has now had twice, and every cause of it is something AppKit
-            // declined to do. Nothing here needs `applicationWillTerminate`:
-            // the restart path deliberately leaves the LaunchAgents alone, the
-            // conversation is written after each turn rather than at exit, and
-            // the copy on disk is already the new one. So if the app is still
-            // alive a second later, it leaves anyway.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                exit(0)
-            }
-        }
+        updates.restartIntoNewVersion(bundleURL: bundleURL)
     }
 
     // MARK: Re-checking the key
@@ -2227,11 +2084,11 @@ struct SettingsView: View {
             // list of things that leave, which it now does in a line.
             SettingsRow(
                 "Checking for a newer Mynah",
-                detail: "Mynah asks GitHub once a day whether there is a newer version. "
+                detail: "Mynah asks GitHub every fifteen minutes whether there is a newer version. "
                     + "The switch is on the About tab."
             ) {
                 StatusPill(
-                    model.checksForUpdates ? "Once a day" : "Turned off",
+                    model.checksForUpdates ? "Every 15 minutes" : "Turned off",
                     tone: model.checksForUpdates ? .neutral : .good
                 )
             }

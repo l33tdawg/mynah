@@ -280,10 +280,24 @@ public struct UpdateCheck: Sendable {
         string: "https://api.github.com/repos/l33tdawg/mynah/releases/latest"
     )!
 
-    /// Once a day. Not once a launch: this Mac restarts often, every check is a
-    /// third party being told it is here, and a version that came out this
-    /// morning can wait until this evening.
-    public static let interval: TimeInterval = 24 * 60 * 60
+    /// Every fifteen minutes.
+    ///
+    /// **It was once a day, and the owner never once saw an update offered.**
+    /// The reasoning for a day was that every check is a third party being told
+    /// this Mac is here, and a version released this morning can wait until the
+    /// evening. Both true, and both beside the point: the appliance runs for
+    /// days at a time, so a daily check meant a release could sit unnoticed for
+    /// most of a day on a Mac that was awake and idle the whole time.
+    ///
+    /// Four requests an hour is well inside GitHub's unauthenticated limit of
+    /// sixty, and the privacy switch above still turns the whole thing off. The
+    /// *cost* of checking is one request that says nothing but "which release is
+    /// latest"; the cost of not checking is the owner running an old build
+    /// without knowing there is a newer one.
+    ///
+    /// Still not once a launch — a Mac that restarts five times in ten minutes
+    /// would make five requests, and the elapsed-time check makes that one.
+    public static let interval: TimeInterval = 15 * 60
 
     /// Short. Nothing waits on this call, but a request left open for a minute
     /// on a network that is dropping packets is a socket held for a minute for

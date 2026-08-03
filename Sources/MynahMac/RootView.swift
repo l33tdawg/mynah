@@ -780,6 +780,10 @@ struct MainShell: View {
     /// it away for anyone who wants the width back.
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    /// Shared rather than owned, because the Settings screen offers the same
+    /// swap and two install tasks must never run at once. See `UpdateWatch`.
+    @State private var updates = UpdateWatch.shared
+
     var body: some View {
         // **A horizontal bar rather than a sidebar column.**
         //
@@ -800,6 +804,10 @@ struct MainShell: View {
         VStack(spacing: 0) {
             MainTopBar(selection: $selection)
             MynahDivider()
+            // Under the header and above every pane, so it is seen on whichever
+            // of the four the owner happens to be looking at. It draws nothing
+            // at all when there is no newer version, which is almost always.
+            UpdateBanner(watch: updates)
             // The `GeometryReader` is a clamp, not a measurement.
             //
             // A pane sized by its own content used to feed that height back into
@@ -855,6 +863,28 @@ struct MainShell: View {
                 }
         }
         .navigationTitle("")
+        // Starts the fifteen-minute loop, once. `start()` is idempotent because
+        // SwiftUI is entitled to re-run this, and a second loop would double the
+        // requests for no extra freshness.
+        .task { updates.start() }
+        .animation(.easeOut(duration: 0.22), value: updates.banner)
+        // The same sheet Settings shows, driven by the same state — there is one
+        // install, so there is one thing watching it.
+        .sheet(isPresented: Binding(
+            get: { updates.installState != nil },
+            set: { isOpen in if !isOpen { updates.dismissInstall() } }
+        )) {
+            if let state = updates.installState {
+                UpdateInstallSheet(
+                    version: updates.offeredVersion,
+                    state: state,
+                    onStop: { updates.stopInstalling() },
+                    onClose: { updates.dismissInstall() },
+                    onRestart: { updates.restartIntoNewVersion() },
+                    onOpenReleases: { NSWorkspace.shared.open(updates.releasePage) }
+                )
+            }
+        }
     }
 
     /// The sentence the word is short for. "Pause" alone is a verb with no
