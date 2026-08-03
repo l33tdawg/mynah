@@ -998,37 +998,21 @@ public actor VoiceBridgeDaemon {
         }
     }
 
-    /// Tells the model what arrived and what it can do about it.
+    /// Tells the model what arrived. See `AttachmentArrivalNote` for what it
+    /// says and why it stopped apologising.
     ///
-    /// **This is the fix for a fabrication, not a nicety.** Handed a caption
-    /// with no picture — which is what every hosted backend receives, because
-    /// only Ollama reads `BrainMessage.images` — a model answers the only way it
-    /// can: *"I can't see an image attached to this message, nothing came
-    /// through."* The owner watched Signal upload a photo and was told it never
-    /// arrived.
-    ///
-    /// The model was not lying; it was never told. So the transcript now carries
-    /// the two facts it was missing: the picture exists, and whether this brain
-    /// can look at it. What it says next is then its own honest answer instead
-    /// of a guess about the owner's phone.
+    /// The title rather than the filename, because that is what `send_file`
+    /// takes and therefore what the owner will need to ask for it back.
     private func attachmentNote(for kept: [SignalAttachmentStore.Kept]) -> String? {
-        guard !kept.isEmpty else { return nil }
-
-        let names = kept.map(\.file.lastPathComponent).joined(separator: ", ")
-        let count = kept.count == 1 ? "an attachment" : "\(kept.count) attachments"
-        let saved = "[The owner sent \(count) with this message. It is already saved on this Mac"
-            + " under Notes/\(SignalAttachmentStore.subdirectory)/ as \(names), and a note"
-            + " describing it has been written, so it can be found later by asking for it."
-
-        guard !loop.backendSeesImages else {
-            return saved + " You can see it.]"
-        }
-        // Said flatly, because the model must not soften it into "I couldn't
-        // find an image" — the image is there, and the limitation is ours.
-        return saved + " The brain currently answering cannot view images, so you have NOT seen it."
-            + " Do not say it failed to arrive or that nothing came through: it arrived and it is"
-            + " saved. Say it is stored, and offer either to be told what it contains, or to"
-            + " switch to a local model in Settings, which can look at pictures.]"
+        AttachmentArrivalNote.text(
+            kept.map {
+                AttachmentArrivalNote.Arrival(
+                    title: NoteSlug.readableTitle(fromFilename: $0.note.lastPathComponent),
+                    isImage: $0.isImage
+                )
+            },
+            seesImages: loop.backendSeesImages
+        )
     }
 
     private func resolveImages(_ message: SignalIncomingMessage) -> [Data] {

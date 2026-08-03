@@ -61,6 +61,16 @@ public struct SignalAttachmentStore: Sendable {
         public let note: URL
         /// What the owner said when they sent it, if anything.
         public let caption: String?
+        /// Whether this is a picture rather than a document, which decides
+        /// whether the model is asked to look at it. The owner's rule:
+        ///
+        /// > if i drop a png jpg other image type; then try and interpret it /
+        /// > read it - if its pdf, docx, xls - keep it for later retrieval
+        ///
+        /// Carried from `SignalAttachment.isImage` rather than re-derived from
+        /// the saved filename, so the answer cannot drift from the one
+        /// `imageURLs` used when it decided what to show the model.
+        public let isImage: Bool
     }
 
     /// Copies each attachment in and writes one note describing it.
@@ -119,7 +129,7 @@ public struct SignalAttachmentStore: Sendable {
                 receivedAt: receivedAt
             )
             log("[attachments] kept \(destination.lastPathComponent) (\(bytes.count) bytes) and noted it")
-            return Kept(file: destination, note: note, caption: caption)
+            return Kept(file: destination, note: note, caption: caption, isImage: attachment.isImage)
         } catch {
             log("[attachments] could not keep \(source.lastPathComponent): \(error)")
             return nil
