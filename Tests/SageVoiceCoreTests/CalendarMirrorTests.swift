@@ -457,7 +457,10 @@ final class CalendarMirrorTests: XCTestCase {
     func testATimedEventGetsTheLaddersOwnRungs() {
         let entry = CalendarEntry(taskID: "a", title: "Dentist", starts: date(2026, 8, 4, 13), isAllDay: false)
 
-        XCTAssertEqual(EventKitCalendar.alarms(for: entry), [-86_400, -7_200, -900])
+        XCTAssertEqual(
+            EventKitCalendar.alarms(for: entry, now: date(2026, 8, 1)),
+            [-86_400, -7_200, -900]
+        )
     }
 
     /// All-day offsets are measured from midnight, so nine in the morning is
@@ -467,7 +470,33 @@ final class CalendarMirrorTests: XCTestCase {
         let entry = CalendarEntry(taskID: "a", title: "Meeting", starts: date(2026, 8, 4), isAllDay: true)
         let morning = Double(ReminderLadder.morningHour * 3600)
 
-        XCTAssertEqual(EventKitCalendar.alarms(for: entry), [morning - 86_400, morning])
+        XCTAssertEqual(
+            EventKitCalendar.alarms(for: entry, now: date(2026, 8, 1)),
+            [morning - 86_400, morning]
+        )
+
+        // And half of them once the day before has passed.
+        XCTAssertEqual(
+            EventKitCalendar.alarms(for: entry, now: date(2026, 8, 3, 20)),
+            [morning]
+        )
+    }
+
+    /// **The first sync on a Mac that has been running for weeks writes every
+    /// dated task at once, and several have been and gone.** Three alarms each
+    /// would be a burst of notifications about things that already happened —
+    /// a spectacular first impression for a feature meant to reduce noise.
+    func testNothingAlreadyPastGetsAnAlarm() {
+        let entry = CalendarEntry(
+            taskID: "a", title: "Dentist", starts: date(2026, 8, 4, 13), isAllDay: false
+        )
+
+        XCTAssertTrue(EventKitCalendar.alarms(for: entry, now: date(2026, 8, 5)).isEmpty)
+        XCTAssertEqual(
+            EventKitCalendar.alarms(for: entry, now: date(2026, 8, 4, 12)),
+            [-900],
+            "the rung that has not passed yet still stands"
+        )
     }
 
     // MARK: - Who says what

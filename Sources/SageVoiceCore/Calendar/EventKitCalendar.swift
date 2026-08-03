@@ -231,7 +231,7 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         // Replaced rather than added to. Without this an event edited on four
         // ticks carries four copies of every alarm, and the owner's phone goes
         // off four times.
-        event.alarms = Self.alarms(for: entry).map { EKAlarm(relativeOffset: $0) }
+        event.alarms = Self.alarms(for: entry, now: Date()).map { EKAlarm(relativeOffset: $0) }
         event.url = entry.link
         // The rest of the task's own words first, then one line about where this
         // came from — so somebody looking at their calendar in six months knows
@@ -251,11 +251,20 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
     ///
     /// All-day offsets are measured from midnight, so nine in the morning is
     /// `+9h` on the day and `-15h` the day before.
-    static func alarms(for entry: CalendarEntry) -> [TimeInterval] {
-        guard entry.isAllDay else {
-            return [-24 * 60 * 60, -2 * 60 * 60, -15 * 60]
-        }
-        let morning = TimeInterval(ReminderLadder.morningHour * 60 * 60)
-        return [morning - 24 * 60 * 60, morning]
+    ///
+    /// **Nothing already past gets an alarm.** The first sync on a Mac that has
+    /// been running for weeks writes every dated task at once, and several of
+    /// them have been and gone — putting three alarms on each would mean a
+    /// burst of notifications for things that already happened, which is a
+    /// spectacular first impression of a feature meant to reduce noise. The task
+    /// stays in the calendar as a record; it simply does not shout.
+    static func alarms(for entry: CalendarEntry, now: Date = Date()) -> [TimeInterval] {
+        let offsets: [TimeInterval] = entry.isAllDay
+            ? {
+                let morning = TimeInterval(ReminderLadder.morningHour * 60 * 60)
+                return [morning - 24 * 60 * 60, morning]
+            }()
+            : [-24 * 60 * 60, -2 * 60 * 60, -15 * 60]
+        return offsets.filter { entry.starts.addingTimeInterval($0) > now }
     }
 }
