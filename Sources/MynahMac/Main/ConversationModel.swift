@@ -153,13 +153,18 @@ struct TurnResult: Sendable {
     /// inbox, via the app it says i have nothing."*
     var agentReplies: [String] = []
 
-    /// Documents this turn wrote, for the screen to offer.
+    /// Files this turn is handing over, for the screen to offer: documents
+    /// `write_note` just wrote, and anything `send_file` was asked to give back.
     ///
     /// The window has no attachment channel — that is the whole reason
     /// `NotesToolSource` takes a `Delivery` — so a PDF written here would
     /// otherwise be a file the owner is told about and cannot reach. *"if you
     /// send the same message in the app it would send back a clickable pdf that
     /// it has saved to its 'directory'."*
+    ///
+    /// The chip is what makes "send me that ferry ticket" mean something at a
+    /// desk. On the phone it arrives as a Signal attachment; here it arrives as
+    /// something to click, and both are a real answer to the same sentence.
     var files: [URL] = []
 }
 
@@ -503,7 +508,7 @@ actor ToolLoopTurnEngine: TurnEngine {
             // Drained, not read: a document that rode along with a second answer
             // because nobody cleared the list is a confusing thing to chase.
             agentReplies: arrived,
-            files: notes.drainWrittenNotes()
+            files: notes.drainOutgoingFiles()
         )
     }
 

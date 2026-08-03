@@ -352,6 +352,17 @@ public enum WorkingReply {
                 "Give me a moment to write that up."
             ]
 
+        // Its own line, because "writing that up" is the wrong news entirely for
+        // a file that already exists — the owner asked for a thing they have,
+        // and being told it is being composed reads as Mynah not understanding
+        // the request.
+        case "send_file":
+            return [
+                "Finding that and sending it over.",
+                "Let me dig that file out for you.",
+                "One sec — pulling that up to send."
+            ]
+
         default:
             // Writes (sage_remember, sage_task, sage_rename, sage_link…) return
             // fast enough that the answer beats the acknowledgement.

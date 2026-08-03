@@ -723,12 +723,16 @@ public actor VoiceBridgeDaemon {
             )
         }
 
-        // Anything left over from a turn that failed after writing a note. The
+        // Anything left over from a turn that failed after queueing a file. The
         // file stays on disk — it is the owner's, and the turn that made it may
         // simply have run out of iterations — but it must not ride out on the
         // next unrelated reply, which is what happens without this line.
-        if let stale = notes?.drainWrittenNotes(), !stale.isEmpty {
-            log("[daemon] discarding \(stale.count) undelivered note(s) from an earlier turn")
+        //
+        // Stricter than it looks now that `send_file` exists. A stale *note* on
+        // the wrong reply is confusing; a stale attachment the owner asked for
+        // is one of their own files arriving in whatever thread spoke next.
+        if let stale = notes?.drainOutgoingFiles(), !stale.isEmpty {
+            log("[daemon] discarding \(stale.count) undelivered file(s) from an earlier turn")
         }
 
         // **Kept before the brain is asked anything.**
@@ -803,12 +807,14 @@ public actor VoiceBridgeDaemon {
                 keepingLastTurns: configuration.historyTurnLimit
             )
             persistConversations()
-            // Documents this turn produced go out with the sentence that
-            // announces them, not as a second message. On Note-to-Self every
+            // Files this turn is handing over — documents it wrote, and
+            // anything `send_file` was asked to give back — go out with the
+            // sentence that announces them, not as a second message. On
+            // Note-to-Self every
             // message is the owner's own outgoing bubble, so a follow-up bubble
             // carrying the file would read as a third indistinguishable blue
             // block — the same reason the thinking acknowledgement is off.
-            await reply(result.reply, to: recipient, attaching: notes?.drainWrittenNotes() ?? [])
+            await reply(result.reply, to: recipient, attaching: notes?.drainOutgoingFiles() ?? [])
             // **The owner's wait ends here, and nothing below is part of it.**
             let delivered = Date()
             log("[daemon] \(result.trace.summary)")

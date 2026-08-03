@@ -16,6 +16,23 @@ public enum BrainPrompts {
     ///    spurious `sage_inception` call.
     /// 3. The find-then-pipe chain. `sage_pipe` needs an exact address, and a
     ///    human name is not one.
+    ///
+    /// ## What comes out when something goes in
+    ///
+    /// This string is the prompt cache's prefix and is re-read on every cold
+    /// turn, so `PromptLatencyBudgetTests` holds it under 8,000 characters —
+    /// roughly 16 seconds of prefill on the appliance's local model before it
+    /// has read a word of the question. Adding a section therefore means
+    /// removing one, and the cheapest removals are lines a *tool result* already
+    /// carries, because those arrive at the moment they apply and cost nothing
+    /// until then.
+    ///
+    /// `send_file` was added this way. What paid for it was the line telling the
+    /// model its document "goes out attached to your reply" — which
+    /// `NotesToolSource.Delivery.sentence` appends to every `write_note` result
+    /// anyway, and says *correctly for the host it is running on*. In the window
+    /// nothing is attached to anything, so the prompt had been stating that as a
+    /// fact on a surface where it was false.
     /// The prompt for the default reply style. See `voiceAgentManager(style:)`.
     public static let voiceAgentManager = voiceAgentManager(style: .default)
 
@@ -117,13 +134,14 @@ public enum BrainPrompts {
     - write_note saves a markdown document and delivers it to the owner as a file. Use it when \
     they ask you to write something down, make notes, or produce a summary, a list or a \
     document they want to keep. Do not use it for an ordinary answer — those you just speak.
-    - The file goes out attached to your reply, so never read the document aloud and never \
-    offer to send it separately. Say what it covers in one sentence and stop.
     - Asked for a fact you may have written down — an address, a booking, a number — call \
     list_notes and read_note BEFORE web_search. You wrote those notes; the answer is usually \
     already there and the web does not have it.
     - To send a document to another agent, read_note it first, then pass what it says to \
     sage_pipe. sage_pipe carries text, not files.
+    - Everything the owner sends you is kept, so "send me that ticket again" is answerable: \
+    list_notes for the title, then send_file with it. Never guess a title, and never say a file \
+    is on its way unless send_file said it is sending it.
 
     LINKING TO A PLACE
     - A map link is https://www.google.com/maps/search/?api=1&query= then the place and city, \

@@ -63,8 +63,25 @@ final class NotesToolSourceTests: XCTestCase {
             )
         }
 
-        let written = source.drainWrittenNotes()
-        XCTAssertEqual(written.count, hostileTitles.count, "every call should have written exactly one file")
+        let written = source.drainOutgoingFiles()
+        // **Not `hostileTitles.count`.** Several of these slug to the same
+        // filename — ".." and "-" both become `note` — so they are one file
+        // written twice, and the queue deliberately holds it once. Attaching it
+        // twice is the duplicate `deliver` exists to stop.
+        //
+        // Asserted against what is on disk rather than against a slug count
+        // recomputed here, because that recomputation would have to reproduce
+        // `write`'s own fallbacks — a blank title takes its name from the
+        // document's first line — and a test that reimplements the code it is
+        // checking agrees with itself, not with the product.
+        XCTAssertFalse(written.isEmpty)
+        let onDisk = try FileManager.default
+            .contentsOfDirectory(atPath: source.notesDirectory.path)
+            .filter { $0.hasSuffix(".md") }
+        XCTAssertEqual(
+            written.count, onDisk.count,
+            "the reply should carry every file that was written, once each"
+        )
 
         for url in written {
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
@@ -115,7 +132,7 @@ final class NotesToolSourceTests: XCTestCase {
                 arguments: ["title": .string(title), "content": .string(title)]
             )
         }
-        let written = Set(source.drainWrittenNotes().map(\.lastPathComponent))
+        let written = Set(source.drainOutgoingFiles().map(\.lastPathComponent))
         XCTAssertEqual(written.count, 3, "titles collided: \(written)")
     }
 
@@ -170,7 +187,7 @@ final class NotesToolSourceTests: XCTestCase {
             arguments: ["title": .string("Empty"), "content": .string("   \n  ")]
         )
         XCTAssertTrue(answer.lowercased().contains("no content"), "got: \(answer)")
-        XCTAssertTrue(source.drainWrittenNotes().isEmpty)
+        XCTAssertTrue(source.drainOutgoingFiles().isEmpty)
     }
 
     /// A reasoning runaway was measured at 4,069 tokens on this model. The cap
@@ -184,7 +201,7 @@ final class NotesToolSourceTests: XCTestCase {
         )
         XCTAssertTrue(answer.contains("too long"), "got: \(answer)")
 
-        let url = try XCTUnwrap(source.drainWrittenNotes().first)
+        let url = try XCTUnwrap(source.drainOutgoingFiles().first)
         let written = try String(contentsOf: url, encoding: .utf8)
         XCTAssertLessThanOrEqual(
             written.count,
@@ -201,8 +218,8 @@ final class NotesToolSourceTests: XCTestCase {
             name: NotesToolSource.writeToolName,
             arguments: ["title": .string("One"), "content": .string("x")]
         )
-        XCTAssertEqual(source.drainWrittenNotes().count, 1)
-        XCTAssertTrue(source.drainWrittenNotes().isEmpty)
+        XCTAssertEqual(source.drainOutgoingFiles().count, 1)
+        XCTAssertTrue(source.drainOutgoingFiles().isEmpty)
     }
 
     /// Reading a title that was never written must not read as an empty note —
@@ -272,7 +289,7 @@ final class NotesToolSourceTests: XCTestCase {
             name: NotesToolSource.writeToolName,
             arguments: ["title": .string("Private"), "content": .string("x")]
         )
-        let url = try XCTUnwrap(source.drainWrittenNotes().first)
+        let url = try XCTUnwrap(source.drainOutgoingFiles().first)
 
         let file = try FileManager.default.attributesOfItem(atPath: url.path)
         XCTAssertEqual(file[.posixPermissions] as? NSNumber, OwnerOnlyFileSecurity.filePermissions)
@@ -329,7 +346,7 @@ final class NoteDocumentTests: XCTestCase {
         _ = try await write(source)
 
         XCTAssertEqual(
-            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"]
+            source.drainOutgoingFiles().map(\.lastPathComponent), ["quarterly-brief.md"]
         )
     }
 
@@ -343,7 +360,7 @@ final class NoteDocumentTests: XCTestCase {
             "the model has to be told, or it will say it sent a PDF: \(answer)"
         )
         XCTAssertEqual(
-            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"],
+            source.drainOutgoingFiles().map(\.lastPathComponent), ["quarterly-brief.md"],
             "the note is what gets attached when the document could not be made"
         )
     }
@@ -354,7 +371,7 @@ final class NoteDocumentTests: XCTestCase {
         let answer = try await write(source, format: "epub")
 
         XCTAssertTrue(answer.contains("isn't a format"), answer)
-        XCTAssertEqual(source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"])
+        XCTAssertEqual(source.drainOutgoingFiles().map(\.lastPathComponent), ["quarterly-brief.md"])
     }
 
     func testAFailedConversionKeepsTheNoteAndSaysWhy() async throws {
@@ -369,7 +386,7 @@ final class NoteDocumentTests: XCTestCase {
 
         XCTAssertTrue(answer.contains("failed"), answer)
         XCTAssertEqual(
-            source.drainWrittenNotes().map(\.lastPathComponent), ["quarterly-brief.md"],
+            source.drainOutgoingFiles().map(\.lastPathComponent), ["quarterly-brief.md"],
             "a failed conversion must not cost the owner the note as well"
         )
     }
@@ -398,7 +415,7 @@ final class NoteDocumentTests: XCTestCase {
         let answer = try await write(source, format: "docx")
 
         XCTAssertTrue(answer.contains("Word document"), answer)
-        let attached = source.drainWrittenNotes()
+        let attached = source.drainOutgoingFiles()
         XCTAssertEqual(attached.map(\.lastPathComponent), ["quarterly-brief.docx"])
         XCTAssertEqual(
             attached.first?.deletingLastPathComponent().lastPathComponent, "documents",

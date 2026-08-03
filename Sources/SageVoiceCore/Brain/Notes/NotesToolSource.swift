@@ -29,9 +29,19 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     public static let writeToolName = "write_note"
     public static let readToolName = "read_note"
     public static let listToolName = "list_notes"
+    public static let sendToolName = "send_file"
 
     /// For `CompositeToolSource.Source.expectedToolNames` and the prompt allowlist.
-    public static let toolNames: Set<String> = [writeToolName, readToolName, listToolName]
+    public static let toolNames: Set<String> = [writeToolName, readToolName, listToolName, sendToolName]
+
+    /// The largest file that goes out over Signal.
+    ///
+    /// Signal's own ceiling is 100 MiB, and the last few of those are envelope
+    /// and encryption overhead. Refusing at 95 MB with a sentence beats letting
+    /// signal-cli reject the send: that failure path drops **the whole reply**
+    /// and retries as text, so the owner would lose the answer as well as the
+    /// file and be told why by nothing at all.
+    public static let maximumAttachmentBytes = 95 * 1024 * 1024
 
     /// Roughly fifteen pages. Large enough for any document a 4B model will
     /// actually produce in one turn, small enough that a reasoning runaway
@@ -85,6 +95,22 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                 return "The file is saved in the owner's notes, not sent anywhere. Tell them its title in one sentence; do not read it out loud."
             }
         }
+
+        /// The same distinction for a file the owner already had, which is a
+        /// different sentence because the owner already knows what is in it.
+        ///
+        /// After `write_note` the model has to say what it wrote. After
+        /// `send_file` it does not — they asked for their own ferry ticket back,
+        /// and a paragraph describing the ticket to the person who bought it is
+        /// the appliance filling silence.
+        var handbackSentence: String {
+            switch self {
+            case .attachedToReply:
+                return "It is attached to your reply. Say in one line that it is on its way and stop; do not describe what is in it."
+            case .savedOnDisk:
+                return "It is on this answer for the owner to click and open. Say in one line that it is there and stop; do not describe what is in it."
+            }
+        }
     }
 
     private let directory: URL
@@ -94,9 +120,10 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     private let log: @Sendable (String) -> Void
 
     private let lock = NSLock()
-    /// Notes written since the last drain, so the daemon can attach them to the
-    /// reply that mentions them.
-    private var written: [URL] = []
+    /// Files this turn is handing the owner, so the host can put them on the
+    /// reply that mentions them. Notes `write_note` just made, and files
+    /// `send_file` was asked to give back.
+    private var outgoing: [URL] = []
 
     /// - Parameter delivery: defaults to the honest-anywhere answer. A host that
     ///   actually ships the file has to say so explicitly.
@@ -144,29 +171,45 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     /// a test can assert on it.
     public var notesDirectory: URL { directory }
 
-    // MARK: - Written-note handoff
+    // MARK: - File handoff
 
-    /// The notes written since this was last called, and clears the list.
+    /// Records a file for the reply to carry, once.
     ///
-    /// Draining rather than reading is deliberate: the daemon attaches these to
-    /// one reply, and a note that rode along with a second reply because nobody
-    /// cleared the list would be a confusing bug to chase from the phone.
-    /// Records a file for the reply to carry.
+    /// The duplicate is reachable in one ordinary turn: the model writes a
+    /// document and then, being helpful, calls `send_file` on the thing it just
+    /// wrote. Both queue the same URL and Signal shows the owner two identical
+    /// attachments — which reads as the appliance having lost track of itself.
     ///
     /// Its own synchronous method because taking a lock inside an async
     /// function is a suspension point away from a deadlock, and the compiler
     /// says so.
-    private func noteWritten(_ file: URL) {
+    /// Compared on the resolved path, not the URL. `write_note` builds its URL
+    /// by appending to the notes directory and `send_file` reads one back from
+    /// `contentsOfDirectory`, and on macOS those are `/var/…` and `/private/var/…`
+    /// for the same file — so `==` sees two different files and the owner gets
+    /// their document twice.
+    private func deliver(_ file: URL) {
+        let resolved = file.resolvingSymlinksInPath().standardizedFileURL.path
         lock.lock()
-        written.append(file)
+        let known = outgoing.contains {
+            $0.resolvingSymlinksInPath().standardizedFileURL.path == resolved
+        }
+        if !known { outgoing.append(file) }
         lock.unlock()
     }
 
-    public func drainWrittenNotes() -> [URL] {
+    /// The files this turn is handing over, and clears the list.
+    ///
+    /// Draining rather than reading is deliberate: the host attaches these to
+    /// one reply, and a file that rode along with a second reply because nobody
+    /// cleared the list would be a confusing bug to chase from the phone — and
+    /// a worse one now that `send_file` can put the owner's own documents in
+    /// here, because the second reply might be in a different thread.
+    public func drainOutgoingFiles() -> [URL] {
         lock.lock()
         defer { lock.unlock() }
-        let drained = written
-        written = []
+        let drained = outgoing
+        outgoing = []
         return drained
     }
 
@@ -240,6 +283,40 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                     "type": .string("object"),
                     "properties": .object([:])
                 ])
+            ),
+            // **The second half of a two-step, and the description says so.**
+            //
+            // A one-shot "send the thing about X" tool would have to search and
+            // send in one call, which means the model never sees what it is
+            // about to hand over — and the owner asked for the opposite: *"maybe
+            // do it in 2 steps - look it up; then send - this way we don't burn
+            // the context window in 1 go."*
+            //
+            // So the first step is `list_notes`, which already exists and
+            // already sees files the owner sent, because `SignalAttachmentStore`
+            // writes a note for each one. Naming it here is what stops the model
+            // guessing a title and getting the "did you mean" line instead of
+            // sending anything.
+            MCPTool(
+                name: Self.sendToolName,
+                description: """
+                Give the owner back a file that is already saved — something they sent you \
+                earlier, or a document you wrote before. Use it when they ask you to send, \
+                share or resend a file, photo, ticket, receipt or PDF. Call list_notes first \
+                and use a title from that list.
+                """,
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "title": .object([
+                            "type": .string("string"),
+                            "description": .string(
+                                "The title it is saved under, as list_notes shows it."
+                            )
+                        ])
+                    ]),
+                    "required": .array([.string("title")])
+                ])
             )
         ]
     }
@@ -263,6 +340,8 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             return try read(arguments: arguments)
         case Self.listToolName:
             return try list()
+        case Self.sendToolName:
+            return handBack(arguments: arguments)
         default:
             throw CompositeToolSource.Failure.unknownTool(name)
         }
@@ -327,7 +406,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
         )
         if let note { sentences.append(note) }
 
-        noteWritten(delivered)
+        deliver(delivered)
 
         // Says what already happened to the file, so the model does not go on to
         // offer a delivery it cannot perform. Which host is speaking matters:
@@ -406,6 +485,94 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             """
         }
         return text
+    }
+
+    // MARK: - send_file
+
+    /// Hands back something the owner already has.
+    ///
+    /// Everything that can go wrong here has the same failure mode if it is
+    /// worded loosely: the model reads a sentence that does not clearly say
+    /// *nothing left this machine* and tells the owner their file is on its way.
+    /// That is the class the owner called *"quite dangerous"* — confident,
+    /// complete and wrong — so every branch below says what did not happen
+    /// first, and then what to do instead. A dead end with no door is how an
+    /// appliance strands somebody.
+    private func handBack(arguments: [String: JSONValue]) -> String {
+        let asked = (arguments["title"]?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !asked.isEmpty else {
+            return "No title was given, so nothing was sent. Call \(Self.listToolName) and ask the owner which one they mean."
+        }
+
+        let stored = StoredFiles(directory: directory, fileManager: fileManager)
+        switch stored.match(title: asked) {
+        case .nothing(let available):
+            guard !available.isEmpty else {
+                return "NOTHING WAS SENT. There is no file saved under \"\(asked)\", and nothing has been "
+                    + "saved on this Mac yet. Tell the owner there is nothing to send, and that anything "
+                    + "they send you on Signal is kept and can be asked for later."
+            }
+            return "NOTHING WAS SENT. There is no file saved under \"\(asked)\". What is saved: "
+                + "\(available.joined(separator: ", ")). Ask the owner which of those they meant, or say "
+                + "you cannot find it — do not tell them a file is on its way."
+
+        case .several(let titles):
+            // Deliberately not a best guess. See `StoredFiles.Resolution`.
+            return "NOTHING WAS SENT. More than one saved file matches \"\(asked)\": "
+                + "\(titles.joined(separator: ", ")). Ask the owner which one they want, then call "
+                + "\(Self.sendToolName) again with that exact title."
+
+        case .one(let match):
+            return send(match, stored: stored)
+        }
+    }
+
+    private func send(_ match: StoredFiles.Match, stored: StoredFiles) -> String {
+        var sending: [URL] = []
+        var refused: [String] = []
+
+        for file in match.files {
+            // Only where a size limit is real. In the window the file is a chip
+            // the owner clicks, and a 200 MB video opens as happily as a 2 KB
+            // note — refusing it there would be borrowing Signal's constraint
+            // for a surface that does not have it.
+            if delivery == .attachedToReply,
+               let bytes = stored.sizeInBytes(of: file),
+               bytes > Self.maximumAttachmentBytes {
+                refused.append("\(file.lastPathComponent) is \(Self.megabytes(bytes)) and too big for Signal")
+                continue
+            }
+            sending.append(file)
+        }
+
+        guard !sending.isEmpty else {
+            log("[notes] refused to send \(match.slug): \(refused.joined(separator: "; "))")
+            return "NOTHING WAS SENT — \(refused.joined(separator: "; ")). Tell the owner plainly that the "
+                + "file is too large to send over Signal and is still saved on the Mac, so they can open it there."
+        }
+
+        for file in sending { deliver(file) }
+
+        let names = sending.map(\.lastPathComponent).joined(separator: ", ")
+        log("[notes] sending \(sending.count) file(s) for \"\(match.slug)\": \(names)")
+
+        var sentences = [
+            sending.count == 1
+                ? "Sending \(names), saved as \"\(match.title)\"."
+                : "Sending \(sending.count) files saved as \"\(match.title)\": \(names)."
+        ]
+        if !refused.isEmpty {
+            sentences.append("Not sending \(refused.joined(separator: "; ")) — say so.")
+        }
+        sentences.append(delivery.handbackSentence)
+        return sentences.joined(separator: " ")
+    }
+
+    /// Rounded, because "99.7 MB" and "100 MB" call for the same reaction and
+    /// only one of them sounds like a machine reading a number aloud.
+    static func megabytes(_ bytes: Int) -> String {
+        "\(max(1, Int((Double(bytes) / (1024 * 1024)).rounded()))) MB"
     }
 
     // MARK: - list_notes
