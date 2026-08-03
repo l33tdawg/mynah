@@ -226,6 +226,44 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// know whether it worked is to watch this number fall.
     public var unfulfilledPromises: Int = 0
 
+    /// Replies that claimed a change nothing had made.
+    ///
+    /// The dangerous direction. `unfulfilledPromises` ends a turn on "Let me
+    /// check:" and the owner notices within a minute; this one says "Added" over
+    /// a turn that only read, and the owner notices by missing the appointment.
+    /// Counted separately so the log can tell them apart.
+    public var unbackedClaims: Int = 0
+
+    /// Tools that only ever read. Everything else is assumed to change
+    /// something.
+    ///
+    /// **Inverted on purpose, and the direction matters.** Listing the *writers*
+    /// and treating everything unlisted as a read is the obvious way round, and
+    /// it fails dangerously: a tool nobody remembered to add makes a genuine
+    /// write invisible, so an honest "Saved that" gets contradicted and the
+    /// owner is told nothing was written when it was. Crying wolf about the
+    /// owner's own data is its own kind of untrustworthy.
+    ///
+    /// This way, an unknown tool counts as having acted. The cost is that a new
+    /// read-only tool could let a false claim through until it is listed here —
+    /// which is exactly the status quo, so the guard can only ever be an
+    /// improvement on it.
+    static let readOnlyTools: Set<String> = [
+        "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
+        "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
+        "sage_scope_get", "sage_scope_list", "sage_federation", "sage_gov_status",
+        "web_search", "list_notes", "read_note"
+    ]
+
+    /// Whether anything this turn actually changed something.
+    ///
+    /// A *successful* call to something that is not a known read. A failure must
+    /// not count: that is precisely the case the comment on `sendingTools`
+    /// describes — a model reading "Error: …" and reporting a send.
+    public var didSomething: Bool {
+        toolCalls.contains { !Self.readOnlyTools.contains($0.name) && !$0.failed }
+    }
+
     /// Assistant turns that carried neither a sentence nor a tool call.
     ///
     /// Counted for the same reason as `unfulfilledPromises`: the loop now drops
@@ -330,6 +368,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         if wasTruncated { notes.append("[TRUNCATED]") }
         if droppedToolCalls > 0 { notes.append("[DROPPED \(droppedToolCalls)]") }
         if unfulfilledPromises > 0 { notes.append("[PROMISED \(unfulfilledPromises)]") }
+        if unbackedClaims > 0 { notes.append("[UNBACKED \(unbackedClaims)]") }
         return notes.isEmpty ? "" : " " + notes.joined(separator: " ")
     }
 }
@@ -974,6 +1013,31 @@ public final class ToolLoop: @unchecked Sendable {
                     break
                 }
 
+                // **A claim of having done something, with nothing that did it.**
+                //
+                // The loop knows precisely which tools ran, so this is a fact
+                // rather than a guess: the reply says "Added" and no tool that
+                // writes was called. Shipping that is how an owner is told an
+                // appointment exists and finds out otherwise by missing it.
+                //
+                // Corrected in the model's own conversation rather than
+                // rewritten afterwards, for the same reason the promise case is
+                // retried: another iteration with the tools still attached is
+                // usually all it takes. It is what the owner's own "did you add
+                // it? i don't see it" achieved by hand.
+                if Self.readsAsCompletedAction(spoken), !trace.didSomething {
+                    trace.unbackedClaims += 1
+                    if trace.unbackedClaims <= Self.maximumPromiseRetries {
+                        messages.append(.user(Self.unbackedClaimCorrection))
+                        continue
+                    }
+                    // Out of retries and still asserting. The claim must not
+                    // ship as written — an answer that is merely unhelpful beats
+                    // one that is confidently wrong about the owner's calendar.
+                    reply = Self.flaggedAsUnconfirmed(spoken)
+                    break
+                }
+
                 reply = spoken
                 Self.warnIfSpeakableAteTheAnswer(raw: response.message.content, spoken: reply)
                 break
@@ -1378,6 +1442,74 @@ public final class ToolLoop: @unchecked Sendable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return trimmed.hasSuffix(":")
+    }
+
+    /// Whether a reply claims something was *done*, in the past tense.
+    ///
+    /// **The mirror of `readsAsUnfulfilledPromise`, and much worse.** That one
+    /// ends a turn on "Let me check:" and the owner waits for a message that
+    /// never comes — annoying, and obvious within a minute. This one says
+    /// "Added" when nothing was added, and the owner finds out by missing the
+    /// appointment.
+    ///
+    /// Observed on 3 August: *"Added — call with Daniel & Tenzai tomorrow
+    /// (Tuesday 4 August) at 1pm"*, receipt `Looked through what it remembers`.
+    /// One recall, no write. The owner: *"said it did it, but actually didn't …
+    /// quite dangerous"*. He is right, and note what fixed it — he asked "did
+    /// you add it? i don't see it", and it went and did it. The question worked.
+    /// This makes the loop ask it.
+    ///
+    /// Deliberately narrow. It matches claims of a *completed change*, not
+    /// findings: "I found three dealers" is a report about a read and must not
+    /// trip this, or every successful search turn would be retried.
+    static func readsAsCompletedAction(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        // Anchored to the front of the reply or of a sentence, because "let me
+        // know once it's saved" is not a claim that anything was saved.
+        let claims = [
+            #"^\s*(done|added|saved|updated|removed|deleted|sent|noted|created|booked)\b"#,
+            #"[.!?]\s+(done|added|saved|updated|removed|deleted|sent|noted)\b"#,
+            #"\bi(?:'ve| have)\s+(added|saved|updated|removed|deleted|sent|noted|created|put|booked|scheduled|written)\b"#,
+            // Anchored to a sentence start like the rest. Unanchored it matched
+            // "Let me know once it's saved", which is the model asking the owner
+            // to check — the opposite of a claim, and the sort of false positive
+            // that would retry an honest turn.
+            #"(^|[.!?]\s+)it(?:'s| is)\s+(now\s+)?(on the list|saved|added|scheduled|booked|noted)\b"#,
+            #"\b(is|are)\s+now\s+on\s+your\s+(list|task list)\b"#,
+            #"\bi(?:'ve| have)\s+(put|added)\s+(it|that|this)\b"#
+        ]
+        return claims.contains { lowered.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// What to say to a model that claimed a change it never made.
+    ///
+    /// Phrased as the owner's own follow-up because that is what demonstrably
+    /// works — asked "did you add it? i don't see it", the model stopped
+    /// asserting and called the tool. It is also the honest thing to say: the
+    /// loop knows exactly which tools ran, and it did not run one that writes.
+    static let unbackedClaimCorrection = """
+        Stop. You said that was done, but you did not call any tool that changes \
+        anything, so nothing was saved. Either call the right tool now to actually \
+        do it, or tell the owner plainly that you have not done it yet. Do not \
+        claim it is done again unless a tool call confirms it.
+        """
+
+    /// The last resort, when a model has claimed a change twice and still not
+    /// made one.
+    ///
+    /// Kept rather than replaced, because the rest of the reply is usually true
+    /// and useful — the turn that caused this also correctly worked out there
+    /// was no clash at 1pm. What must not survive is the impression that
+    /// something was saved. Leading with the correction, because a warning
+    /// appended after four sentences of confident prose is one the owner reads
+    /// last, if at all.
+    static func flaggedAsUnconfirmed(_ reply: String) -> String {
+        """
+        I need to correct myself before anything else: I have NOT saved that. \
+        Nothing was written down, so please ask me again and watch that it sticks.
+
+        \(reply)
+        """
     }
 
     public static func speakable(_ content: String) -> String {
