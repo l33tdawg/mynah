@@ -152,10 +152,25 @@ public enum WorkingReply {
     /// five, and a line that promised one would be wrong more often than it was
     /// right. These are only ever said after the hold, so a turn that finishes
     /// quickly never claims it needed minutes.
+    ///
+    /// **Six of them, at the owner's asking:** *"lets have at least 5-6 versions
+    /// of the newer i'm workng on it, gimme some time message so it doesn't feel
+    /// so 'robotic' for the user"*. This pool now carries the whole wait on the
+    /// text surface, so it is also the line he will see most often — three would
+    /// have become recognisable inside a week, and a sentence you can predict is
+    /// one you stop reading.
+    ///
+    /// They vary in opening word and in shape, not just in wording: a pool where
+    /// every line starts "I'm" and ends "when it's ready" is one sentence with
+    /// six spellings. `opening` also refuses the previous line, so the same one
+    /// never lands twice in a row.
     static let catchAllOptions = [
         "On it — give me a couple of minutes and I'll come back when it's all done.",
         "Working on it now. I'll come back to you once everything's ready.",
-        "Give me a couple of minutes — I'll send it over when it's ready to look at."
+        "Give me a couple of minutes — I'll send it over when it's ready to look at.",
+        "Let me get this sorted, and I'll come back to you with the whole thing.",
+        "I'm on it. It'll take a few minutes — I'll let you know the moment it's done.",
+        "Doing that now. Give me a little while and I'll come back when it's ready."
     ]
 
     /// Classifies the request from its wording alone. Deliberately conservative:

@@ -441,4 +441,70 @@ final class InterruptedOpeningTests: XCTestCase {
             )
         }
     }
+
+    // MARK: The line that now carries the whole wait
+
+    /// **This pool used to have company.** Two or three progress messages
+    /// followed it, so no single line had to hold a five-minute turn on its own.
+    /// The owner ended that — *"then stfu until agent comes back"* — and these
+    /// assertions are what stops the wording drifting back to "One moment.",
+    /// which expires in about fifteen seconds and promises nothing.
+    func testEveryCatchAllPromisesToComeBack() {
+        for line in WorkingReply.catchAllOptions {
+            let lowered = line.lowercased()
+            XCTAssertTrue(
+                lowered.contains("come back") || lowered.contains("send it over")
+                    || lowered.contains("let you know"),
+                "nothing follows this line, so it has to promise a return: \(line)"
+            )
+        }
+    }
+
+    /// It is the line he will see most often, so it cannot be predictable. The
+    /// owner: *"lets have at least 5-6 versions ... so it doesn't feel so
+    /// 'robotic' for the user"*.
+    func testThereAreEnoughOfThemToNotSoundLikeAScript() {
+        XCTAssertGreaterThanOrEqual(WorkingReply.catchAllOptions.count, 5)
+        XCTAssertEqual(
+            Set(WorkingReply.catchAllOptions).count,
+            WorkingReply.catchAllOptions.count,
+            "a duplicate is one fewer variation than the count claims"
+        )
+    }
+
+    /// Variety has to be real. A pool where every line opens the same way is one
+    /// sentence with six spellings, which is the thing being fixed rather than a
+    /// fix for it.
+    func testTheyDoNotAllStartTheSameWay() {
+        let openings = WorkingReply.catchAllOptions.map { $0.split(separator: " ").first.map(String.init) ?? "" }
+
+        XCTAssertGreaterThanOrEqual(
+            Set(openings).count,
+            4,
+            "these read as one line rewritten: \(openings)"
+        )
+    }
+
+    /// None of them may claim a duration the turn cannot keep. "A couple of
+    /// minutes" against a five-minute budget is vague and generous on purpose;
+    /// "a second" would be a promise broken on nearly every long turn.
+    func testNonePromiseSeconds() {
+        for line in WorkingReply.catchAllOptions {
+            XCTAssertFalse(line.lowercased().contains("a second"), line)
+            XCTAssertFalse(line.lowercased().contains("one moment"), line)
+        }
+    }
+
+    /// The same one must not land twice running, which is what makes six of them
+    /// worth having at all.
+    func testItDoesNotRepeatTheLastLine() {
+        for previous in WorkingReply.catchAllOptions {
+            let next = WorkingReply.opening(
+                forRequest: "sort all of that out for me",
+                previous: previous,
+                chooser: first
+            )?.line
+            XCTAssertNotEqual(next, previous)
+        }
+    }
 }
