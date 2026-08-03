@@ -307,6 +307,23 @@ private struct BoardColumnView: View {
                     .padding(.bottom, s5)
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                // **The scroller gets the column's right margin to itself.**
+                //
+                // This list is inset by `s6` on both sides by the padding at
+                // the bottom of this view, so the scroll view ended exactly
+                // where the cards did and macOS drew the scroller on top of
+                // them — over the right border of a card, and over the edge of
+                // the "at the same time" box, which has a visible outline it
+                // was cutting through.
+                //
+                // Widening the scroll view into that margin and then insetting
+                // its *content* by the same amount leaves every card where it
+                // already was and moves only the scroller, out into the gap
+                // that was always there. Content margins rather than padding
+                // on the stack: padding would move the indicator with the
+                // content, which is the thing being fixed.
+                .padding(.trailing, -s6)
+                .contentMargins(.trailing, s6, for: .scrollContent)
             }
         }
         // The whole column is the target, not the list — dropping into the gap
