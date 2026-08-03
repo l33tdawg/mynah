@@ -959,13 +959,24 @@ final class MemoriesModel {
     /// `isOwnHome` compares the domain against this appliance's own agent id,
     /// which is the node's own definition of ownership rather than a guess from
     /// the text.
-    var mynahOwned: [Memory] {
-        let id = SageAgentIdentity.applianceAgentID()
-        return memories.filter { memory in
-            guard let domain = memory.domain else { return false }
-            if MemorySubjectName.isOwnHome(domain, applianceAgentID: id) { return true }
-            return Self.ownDomains.contains(domain.lowercased())
+    var mynahOwned: [Memory] { memories.filter(isMynahs) }
+
+    /// Whether this one is Mynah's to act on.
+    ///
+    /// **Per memory, because a control has to know.** The bulk clear could work
+    /// from a filtered list; a cross on a card cannot. Adding that cross without
+    /// this put one on every row, including memories filed by other agents on
+    /// the node — which the owner found immediately, because pressing it can
+    /// only ever produce "Mynah couldn't forget that."
+    ///
+    /// A button that is certain to fail is worse than no button: it teaches that
+    /// the controls are unreliable, when in fact this one was never permitted.
+    func isMynahs(_ memory: Memory) -> Bool {
+        guard let domain = memory.domain else { return false }
+        if MemorySubjectName.isOwnHome(domain, applianceAgentID: SageAgentIdentity.applianceAgentID()) {
+            return true
         }
+        return Self.ownDomains.contains(domain.lowercased())
     }
 
     /// The named domains this appliance writes to, beyond its `local-<id>` home.
@@ -1426,7 +1437,10 @@ struct MemoriesView: View {
                         isReleasing: model.stillLettingGo.contains(memory.id),
                         isForgetting: model.forgetInFlight.contains(memory.id),
                         onSelect: { model.selection = model.selection == memory.id ? nil : memory.id },
-                        onForget: { model.confirmForget(memory) }
+                        // Nil on anything filed by another agent, so no cross
+                        // appears where forgetting is not permitted.
+                        onForget: model.isMynahs(memory) ? { model.confirmForget(memory) } : nil,
+                        isSomebodyElses: !model.isMynahs(memory)
                     )
                 }
 
@@ -1484,7 +1498,10 @@ private struct MemoryEntry: View {
     let isReleasing: Bool
     let isForgetting: Bool
     let onSelect: () -> Void
-    let onForget: () -> Void
+    /// Absent when this memory is not Mynah's to forget.
+    let onForget: (() -> Void)?
+    /// Filed by another agent on the same node. Readable, never removable.
+    var isSomebodyElses = false
 
     @State private var isHovering = false
 
@@ -1548,7 +1565,7 @@ private struct MemoryEntry: View {
         // things to delete, which is the wrong invitation for a page somebody
         // is reading.
         .overlay(alignment: .topTrailing) {
-            if isHovering, !isForgetting, !isReleasing {
+            if let onForget, isHovering, !isForgetting, !isReleasing {
                 Button(action: onForget) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
@@ -1611,6 +1628,28 @@ private struct MemoryEntry: View {
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: s4) {
+            // **The page is titled "What Mynah remembers" and this row is not
+            // that.** A SAGE node holds every agent's memories, and this screen
+            // lists what Mynah is *allowed to read* — so a Claude Code session's
+            // notes sit under a heading claiming Mynah filed them.
+            //
+            // The owner, reading his own dev-session memories on it: *"these are
+            // not its memories thus it can't forget them - but why do they show
+            // up to begin with ? they look like they belogn to you"*. They did,
+            // and nothing on the card said so until it refused to delete one.
+            //
+            // Said here rather than by hiding the row: the memories are real,
+            // Mynah can genuinely use them to answer, and a list that silently
+            // dropped them would explain even less than one that mislabels them.
+            // The subject filter above still narrows to whichever agent's the
+            // owner wants.
+            if isSomebodyElses {
+                Text("Another agent on this node filed this. Mynah can read it, and can't forget it.")
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if isReleasing {
                 Text("Mynah has been asked to forget this, and hasn't finished yet. "
                     + "It should be gone shortly.")
@@ -1654,12 +1693,16 @@ private struct MemoryEntry: View {
                     Text("Forgetting…")
                         .mynahFont(.callout)
                         .foregroundStyle(Palette.ink.secondary)
-                } else {
+                } else if let onForget {
                     // A destructive action is a secondary button with critical
                     // *text*, never a filled red button — the fill turns a
                     // reversible-feeling browse screen into an alarm. The colour
                     // goes on the `Text` rather than the `Button`, because the
                     // shared style sets the label's foreground itself.
+                    //
+                    // Absent entirely on another agent's memory. It was offered
+                    // there and could only ever answer "Mynah couldn't forget
+                    // that", which is how the owner found this.
                     Button(action: onForget) {
                         Text("Forget this").foregroundStyle(Palette.state.critical)
                     }

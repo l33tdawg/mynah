@@ -230,19 +230,26 @@ enum Palette {
         /// perhaps to show its something happening soon"*, and then *"and yellow
         /// for the ones due tomorrow?"*.
         ///
-        /// Tomorrow is **orange**, not the yellow first suggested — the owner's
-        /// own correction, and it settles a collision as well as a preference.
-        /// `caution` carries exactly one meaning, words leave this Mac, and the
-        /// history above is what a colour with more than one job costs: he read
-        /// a yellow mark on a stale task list as "Signal has crashed". A second
-        /// yellow, however separate its constant, would have had somebody making
-        /// that comparison by eye. Orange does not invite it.
+        /// **Today is the warm one.** First built the other way round, and the
+        /// owner corrected it on sight: *"change teh colors around - red /
+        /// orange should be today, blue should be tomorrow"*. He is right and
+        /// the reason is worth keeping — warmth reads as urgency everywhere
+        /// else, so a cool border on the thing happening in two hours was
+        /// fighting an instinct rather than using it. Tomorrow is genuinely
+        /// cooler news.
+        ///
+        /// Orange rather than the yellow first suggested, also his call, and it
+        /// settles a collision as well as a preference: `caution` carries
+        /// exactly one meaning, words leave this Mac, and the history above is
+        /// what a colour with more than one job costs — he read a yellow mark on
+        /// a stale task list as "Signal has crashed". A second yellow, however
+        /// separate its constant, would have had somebody comparing them by eye.
         ///
         /// These live on a **border**, never on text or a pill. A border says
         /// "this one" without claiming anything about state, which is precisely
         /// the distinction that was lost last time.
-        static let dueToday = Color.mynah(light: .mynahHex(0x1F6FEB), dark: .mynahHex(0x58A6FF))
-        static let dueTomorrow = Color.mynah(light: .mynahHex(0xC2410C), dark: .mynahHex(0xFB923C))
+        static let dueToday = Color.mynah(light: .mynahHex(0xC2410C), dark: .mynahHex(0xFB923C))
+        static let dueTomorrow = Color.mynah(light: .mynahHex(0x1F6FEB), dark: .mynahHex(0x58A6FF))
     }
 
     /// Stated explicitly in both schemes rather than inverting `Color.primary`,
