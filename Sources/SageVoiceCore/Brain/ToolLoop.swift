@@ -694,6 +694,20 @@ public final class ToolLoop: @unchecked Sendable {
     static let rateLimitRetries = 2
     static let rateLimitFallbackDelaySeconds: TimeInterval = 6
 
+    /// The longest this will sit waiting on a provider's `Retry-After`.
+    ///
+    /// **A number from someone else's server was being obeyed without a
+    /// ceiling.** `Retry-After: 3600` is a legal answer, and honouring it would
+    /// have the appliance sit mute for an hour, twice, while the owner watched a
+    /// thread it had already promised to come back to. Nothing logged it either,
+    /// because sleeping is not an error.
+    ///
+    /// Waiting longer than this cannot help anyone: the owner would rather be
+    /// told the brain is busy than be left holding a promise. Past the cap the
+    /// retry is abandoned and `rateLimited` is thrown, which already has a
+    /// sentence written for the owner.
+    static let rateLimitMaximumDelaySeconds: TimeInterval = 30
+
     private func completeWithRateLimitRetry(_ request: BrainRequest) async throws -> BrainReply {
         var attempt = 0
         while true {
@@ -703,7 +717,10 @@ public final class ToolLoop: @unchecked Sendable {
                 guard case .rateLimited(_, let retryAfter) = error, attempt < Self.rateLimitRetries else {
                     throw error
                 }
-                let delay = retryAfter ?? Self.rateLimitFallbackDelaySeconds * pow(2, Double(attempt))
+                let asked = retryAfter ?? Self.rateLimitFallbackDelaySeconds * pow(2, Double(attempt))
+                // Their number, our ceiling. See `rateLimitMaximumDelaySeconds`.
+                guard asked <= Self.rateLimitMaximumDelaySeconds else { throw error }
+                let delay = asked
                 attempt += 1
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }

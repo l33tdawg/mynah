@@ -367,13 +367,13 @@ final class UpdateWatch {
 /// is the one running. Anything else is a control whose only function is to hide
 /// the fact that Mynah is out of date.
 ///
-/// **It does not take the colour a banner usually takes.** `Palette.state.good`
-/// exists and QuietType tints its equivalent green, but this palette spent a
-/// long argument stripping colour of accumulated meanings — *"amber accent kill
-/// it bro - its meaningless"* — and an update being available is neither good
-/// news nor bad news. So it separates itself the way every other band in this
-/// app does: a raised surface against the canvas, a rule under it, and the words
-/// doing the work.
+/// **Translucent green, at the owner's instruction:** *"please make it
+/// translucent green like quiettype-ish"*. It shipped white first, on the
+/// reasoning that this palette had spent a long argument stripping colour of
+/// accumulated meanings and an update is neither good news nor bad. He saw it
+/// working and asked for green, which settles it — and `Palette.state.goodWash`
+/// is the app's own token for exactly this, a low-alpha tint made for inline
+/// notes, so the band is green without any new colour entering the palette.
 struct UpdateBanner: View {
 
     var watch: UpdateWatch
@@ -388,7 +388,7 @@ struct UpdateBanner: View {
                     ? "arrow.clockwise.circle.fill"
                     : "arrow.down.circle.fill")
                     .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(Palette.ink.primary)
+                    .foregroundStyle(Palette.state.good)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: s1) {
@@ -425,8 +425,16 @@ struct UpdateBanner: View {
             .padding(.horizontal, s6)
             .padding(.vertical, s4)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The wash over the raised surface rather than instead of it, so the
+            // band still reads as sitting above the canvas in either appearance
+            // — a translucent tint alone would take whatever is behind it.
             .background(Palette.surface.raised)
-            .overlay(alignment: .bottom) { MynahDivider() }
+            .background(Palette.state.goodWash)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Palette.state.good.opacity(0.28))
+                    .frame(height: 1)
+            }
             // Enters from the top so it reads as something arriving rather than
             // something that was always there and went unnoticed.
             .transition(.move(edge: .top).combined(with: .opacity))

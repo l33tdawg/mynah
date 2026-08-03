@@ -53,11 +53,34 @@ struct WorkingLineGate {
     /// would leave a slow turn completely silent.
     private(set) var saidArrivalOpener = false
 
+    /// Whether *anything* has been said this turn.
+    ///
+    /// **One working line per turn, and this is the whole rule.** Everything
+    /// else here deduplicates by wording — `saysTheSameThing` was built to catch
+    /// a stutter, two phrasings of one piece of news, and it does that well. It
+    /// was never a limit on how many working lines a turn may send, and nothing
+    /// else was either.
+    ///
+    /// So one question produced this, on the owner's phone, from one turn:
+    ///
+    ///     MYNAH >> On it — give me a couple of minutes and I'll come back
+    ///              when it's all done.
+    ///     MYNAH >> Searching for that now.
+    ///
+    /// Both true, neither a stutter — they share no significant words, so the
+    /// wording check passed them both. And two notifications where one would do
+    /// is the exact complaint this gate exists to answer: *"the time to reply is
+    /// quite fast, so don't send back the 'on it' / internal messages esp on
+    /// text"*. The second line also contradicts the first, which promised to
+    /// come back when it was done and then came back to say it was still going.
+    private(set) var hasSaidSomething = false
+
     mutating func beginTurn() {
         held = nil
         isQuiet = true
         isAnswered = false
         saidArrivalOpener = false
+        hasSaidSomething = false
     }
 
     /// Offers a line.
@@ -70,6 +93,11 @@ struct WorkingLineGate {
         previous: String?
     ) -> Decision {
         guard !isAnswered else { return .drop }
+        // Said one thing already, so this turn has had its line. See
+        // `hasSaidSomething` — the wording check below cannot do this job,
+        // because two lines that share no words are exactly the case it lets
+        // through and exactly the case the owner saw twice on his phone.
+        guard !hasSaidSomething else { return .drop }
         // Against whatever would otherwise be said next: a line still waiting
         // its turn counts as much as one already sent, or the opener and the
         // tool line both go out saying the same thing two seconds apart.
@@ -84,6 +112,7 @@ struct WorkingLineGate {
             return .hold
         }
         if isArrivalOpener { saidArrivalOpener = true }
+        hasSaidSomething = true
         return .say
     }
 
@@ -96,6 +125,10 @@ struct WorkingLineGate {
         guard !isAnswered, let held else { return nil }
         self.held = nil
         if held.isArrivalOpener { saidArrivalOpener = true }
+        // The other route to speaking, and the one the reported bug took: the
+        // opener was held rather than said, so the flag the tool line checks was
+        // never set and the second notification went out behind it.
+        hasSaidSomething = true
         return held.text
     }
 

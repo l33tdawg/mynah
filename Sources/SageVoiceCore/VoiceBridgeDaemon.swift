@@ -240,6 +240,25 @@ public actor VoiceBridgeDaemon {
     /// the number, and it is the one thing here a clock is needed for.
     static let quietBeforeWorkingLine: TimeInterval = 2.5
 
+    /// The hard ceiling on one turn, after which the appliance stops waiting.
+    ///
+    /// **Above `ToolLoop.defaultDeadlineSeconds`, and that is the whole point.**
+    /// The loop has its own 300-second brake and it is the right one — it stops
+    /// between iterations, keeps the work done so far, and produces an answer.
+    /// This never competes with it. This fires only when that brake did not,
+    /// which means something inside a single call is not coming back.
+    ///
+    /// Sixty seconds of slack over it, rather than a round number: enough that a
+    /// turn legitimately finishing its last model call at 299 seconds is not cut
+    /// off, and short enough that the owner is never left in silence for more
+    /// than about six minutes.
+    ///
+    /// The failure this exists for: a question at 22:00, "I'll come back when
+    /// it's all done", and then nothing for fourteen minutes — with two further
+    /// messages accepted and never answered, because turns are serialised and
+    /// the first one never released the queue.
+    static let turnCeiling: TimeInterval = ToolLoop.defaultDeadlineSeconds + 60
+
     private var workingLines = WorkingLineGate()
 
     /// Cancelled when the answer beats it.
@@ -776,12 +795,19 @@ public actor VoiceBridgeDaemon {
         do {
             let tools = try await toolCatalogue()
             let key = recipient.description
-            let result = try await loop.run(
-                transcript: attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript,
-                tools: tools,
-                history: histories[key] ?? [],
-                images: batch.flatMap { resolveImages($0) },
-                onToolDecision: { [weak self] chosen in
+            // Bounded from the outside. Everything inside has its own timeout
+            // except the node's pipe, which has none, and the loop's own
+            // deadline cannot help because it is checked between iterations
+            // rather than during one. See `turnCeiling`.
+            // Everything the loop needs, resolved here on the actor before the
+            // deadline wrapper takes the work off it. The closure handed to
+            // `withDeadline` runs outside this actor's isolation and so cannot
+            // read `histories`, call `resolveImages`, or touch `loop` directly.
+            let prompt = attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript
+            let priorTurns = histories[key] ?? []
+            let attachedImages = batch.flatMap { resolveImages($0) }
+            let brain = loop
+            let announceChosenTool: @Sendable ([String]) async -> Void = { [weak self] chosen in
                     guard let self else { return }
                     // Already spoke on arrival. Saying "having a look" a second
                     // time, seconds after "let me check your backlog", is the
@@ -798,27 +824,41 @@ public actor VoiceBridgeDaemon {
                     // opener — "Looking that up online" is better news than
                     // "On it", and there is no reason to say both.
                     await self.working(line, thread: key, to: recipient)
-                },
-                // **One message, then quiet.** Deliberately not wired.
-                //
-                // A thread is not a progress bar. Every update here is a
-                // notification on the owner's phone, and three of them across
-                // one turn is the appliance talking about itself while he waits
-                // for the thing he actually asked for.
-                //
-                // The owner, after watching a long turn narrate itself: *"make
-                // the messages sound more useful and not just 'noise' - esp when
-                // replying on text - its better we send 1 message that says, i'm
-                // working on it - gimme a couple of minutes and i'll get back to
-                // you when everything's ready for you to review' - then stfu
-                // until agent comes back"*.
-                //
-                // `onToolDecision` above is that one message, and it is already
-                // held so a turn that finishes quickly says nothing at all. What
-                // it needed was not company but a promise to return, which is
-                // now in the wording rather than in a second notification.
-                onProgress: nil
-            )
+            }
+
+            // **One message, then quiet.** `onProgress` below is deliberately
+            // not wired.
+            //
+            // A thread is not a progress bar. Every update there is a
+            // notification on the owner's phone, and three of them across one
+            // turn is the appliance talking about itself while he waits for the
+            // thing he actually asked for.
+            //
+            // The owner, after watching a long turn narrate itself: *"make the
+            // messages sound more useful and not just 'noise' - esp when
+            // replying on text - its better we send 1 message that says, i'm
+            // working on it - gimme a couple of minutes and i'll get back to
+            // you when everything's ready for you to review' - then stfu until
+            // agent comes back"*.
+            //
+            // `announceChosenTool` above is that one message, and it is held so
+            // a turn that finishes quickly says nothing at all. What it needed
+            // was not company but a promise to return, which is now in the
+            // wording rather than in a second notification — and, since that
+            // promise can now be broken by a turn that never comes back,
+            // `turnCeiling` is what withdraws it out loud.
+            let result = try await withDeadline(Self.turnCeiling, label: "turn") {
+                try await brain.run(
+                    transcript: prompt,
+                    tools: tools,
+                    history: priorTurns,
+                    images: attachedImages,
+                    onToolDecision: announceChosenTool,
+                    // **One message, then quiet.** Deliberately not wired — the
+                    // reasoning is on `announceChosenTool` above.
+                    onProgress: nil
+                )
+            }
             histories[key] = Self.trimmed(
                 Self.conversationOnly(result.messages),
                 keepingLastTurns: configuration.historyTurnLimit
@@ -948,6 +988,23 @@ public actor VoiceBridgeDaemon {
         } catch let error as BrainBackendError {
             // These have sentences written for exactly this moment.
             await reply(error.spokenDescription, to: recipient)
+            return .failed("\(error)")
+        } catch let error as DeadlineExceeded {
+            // **Its own sentence, because "something went wrong" is not what
+            // happened.** Nothing went wrong that this process can see: the turn
+            // simply never came back, and the appliance gave up waiting so it
+            // could answer the next message. Saying so is also the only word the
+            // owner gets — he was promised a return, and a promise that is now
+            // never going to be kept has to be withdrawn out loud.
+            //
+            // Logged at error rather than info: this means an await somewhere
+            // has no bound of its own, and the log is where that gets found.
+            log("[daemon] ERROR \(error) — gave up so the next message can be answered")
+            await reply(
+                "Sorry — that one didn't come back. I've stopped waiting on it so I can "
+                    + "answer you again. Ask me once more and I'll have another go.",
+                to: recipient
+            )
             return .failed("\(error)")
         } catch {
             await reply(configuration.genericFailureReply, to: recipient)

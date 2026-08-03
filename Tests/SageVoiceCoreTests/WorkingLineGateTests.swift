@@ -119,3 +119,80 @@ final class WorkingLineGateTests: XCTestCase {
         )
     }
 }
+
+// MARK: - One line per turn
+
+/// **The bug the owner photographed.** One question produced two notifications:
+///
+///     MYNAH >> On it — give me a couple of minutes and I'll come back
+///              when it's all done.
+///     MYNAH >> Searching for that now.
+///
+/// Everything here deduplicates by *wording*, and correctly — `saysTheSameThing`
+/// catches a stutter, two phrasings of one piece of news. These two share no
+/// significant words at all, so it passed them both, and nothing else counted.
+extension WorkingLineGateTests {
+
+    /// The exact pair, in the exact order, with the quiet period ending in
+    /// between — which is what let both out.
+    func testTheOpenerAndTheToolLineDoNotBothGoOut() {
+        XCTAssertEqual(
+            gate.offer("On it — give me a couple of minutes and I'll come back when it's all done.",
+                       previous: nil),
+            .hold
+        )
+        XCTAssertEqual(
+            gate.quietPeriodEnded(),
+            "On it — give me a couple of minutes and I'll come back when it's all done."
+        )
+        XCTAssertEqual(
+            gate.offer("Searching for that now.", previous: nil), .drop,
+            "second notification for one question — this is the reported bug"
+        )
+    }
+
+    /// Stated as the rule rather than as that one pair, so it holds for any two
+    /// lines however differently they are worded.
+    func testNothingIsSaidTwiceInOneTurnHoweverDifferentlyItIsPhrased() {
+        XCTAssertEqual(gate.offer("On it.", previous: nil), .hold)
+        XCTAssertNotNil(gate.quietPeriodEnded())
+        XCTAssertTrue(gate.hasSaidSomething)
+
+        for line in ["Searching for that now.", "Checking your calendar.", "Nearly there."] {
+            XCTAssertEqual(gate.offer(line, previous: nil), .drop, "\(line) was a second line")
+        }
+    }
+
+    /// A line said *directly* — no quiet period involved — closes the turn just
+    /// the same. The quiet period is one route to speaking, not the only one.
+    func testALineSaidOutrightAlsoClosesTheTurn() {
+        _ = gate.quietPeriodEnded()
+        XCTAssertEqual(gate.offer("Looking that up online.", previous: nil), .say)
+        XCTAssertTrue(gate.hasSaidSomething)
+        XCTAssertEqual(gate.offer("Still going.", previous: nil), .drop)
+    }
+
+    /// The next turn gets its own line. This bounds one turn, it does not mute
+    /// the appliance for the rest of the conversation.
+    func testTheNextTurnMaySpeakAgain() {
+        _ = gate.quietPeriodEnded()
+        XCTAssertEqual(gate.offer("Looking that up online.", previous: nil), .say)
+        XCTAssertEqual(gate.offer("Still going.", previous: nil), .drop)
+
+        gate.beginTurn()
+        XCTAssertFalse(gate.hasSaidSomething)
+        XCTAssertEqual(gate.offer("On it.", previous: nil), .hold)
+    }
+
+    /// A turn that only ever *held* a line has said nothing, so a replacement is
+    /// still allowed — the newest news wins while the appliance is still quiet.
+    func testHoldingALineIsNotSayingIt() {
+        XCTAssertEqual(gate.offer("On it.", previous: nil), .hold)
+        XCTAssertFalse(gate.hasSaidSomething)
+        XCTAssertEqual(
+            gate.offer("Searching for that now.", previous: nil), .hold,
+            "nothing has left the Mac yet, so the better line may still replace it"
+        )
+        XCTAssertEqual(gate.quietPeriodEnded(), "Searching for that now.")
+    }
+}
