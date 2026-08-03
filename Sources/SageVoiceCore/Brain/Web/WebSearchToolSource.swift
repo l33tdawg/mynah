@@ -66,13 +66,33 @@ public final class WebSearchToolSource: ToolProviding {
     }
 
     /// The provider chain this machine can actually use, best first.
+    /// - Note: reads the stored key as well as the environment. Environment-only
+    ///   was the bug: nothing sets `BRAVE_SEARCH_API_KEY` on a shipped Mac — the
+    ///   daemon is launched by launchd from a plist that never carried it — so
+    ///   the keyed provider was unreachable in every install and the scraper
+    ///   behind it took every query. `ProviderKeyStore` is the same 0600 file
+    ///   both processes already read for brain keys, so a key set once in
+    ///   Settings reaches the daemon without a restart dance or a Keychain
+    ///   prompt on an unattended reboot.
     public static func defaultBackends(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        keys: ProviderKeyStore = ProviderKeyStore()
     ) -> [WebSearchBackend] {
         var backends: [WebSearchBackend] = []
-        if let brave = BraveSearchBackend.fromEnvironment(environment) {
-            backends.append(brave)
+        if let key = keys.key(forProvider: ProviderKeyStore.searchProvider, environment: environment),
+           !key.isEmpty {
+            backends.append(BraveSearchBackend(apiKey: key))
         }
+        #if canImport(WebKit)
+        // Ahead of the raw HTTP scrape, behind a real key. The owner: *"why are
+        // we using a scraper bro ? its running on the users machine right"* —
+        // and on a Mac the browser engine is already there, so asking like a
+        // browser costs a page load rather than a dependency.
+        backends.append(BrowserSearchBackend())
+        #endif
+        // Kept last rather than replaced. WebKit outside an app bundle is the
+        // part of this that is genuinely uncertain, and a Mac where it will not
+        // start must be no worse off than it was before.
         backends.append(DuckDuckGoSearchBackend())
         return backends
     }

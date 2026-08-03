@@ -44,9 +44,25 @@ public struct ProviderKeyStore: Sendable {
         case "groq":              return "GROQ_API_KEY"
         case "moonshot", "kimi":  return "MOONSHOT_API_KEY"
         case "glm", "zhipu":      return "GLM_API_KEY"
+        case Self.searchProvider: return "BRAVE_SEARCH_API_KEY"
         default:                  return nil
         }
     }
+
+    /// The search provider, which is not a brain and lives here anyway.
+    ///
+    /// **Because the alternative was the reason searches kept failing.** Brave
+    /// support has been in the code the whole time and read one environment
+    /// variable — which nothing sets. The daemon is started by launchd from a
+    /// plist this app writes, and that plist has never carried it, so on every
+    /// shipped Mac the only reachable provider was the keyless scraper behind
+    /// it. A scraper asked several questions in a row gets a challenge page,
+    /// which is precisely what the owner kept hitting: *"still hitting rate
+    /// limits"*, twice, after pacing had already been added.
+    ///
+    /// Pacing cannot fix that. A provider with a quota and a key can, and the
+    /// code for it was already written and unreachable.
+    public static let searchProvider = "brave-search"
 
     // MARK: Reading
 

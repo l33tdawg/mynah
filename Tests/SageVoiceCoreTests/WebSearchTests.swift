@@ -200,12 +200,47 @@ final class BraveSearchBackendTests: XCTestCase {
         XCTAssertNotNil(BraveSearchBackend.fromEnvironment(["BRAVE_SEARCH_API_KEY": "abc"]))
     }
 
+    /// **The order is the whole design, so it is asserted rather than assumed.**
+    ///
+    /// A key first, because a provider with a quota answers in ~200 ms and never
+    /// sees a challenge page. Then the browser, because a Mac already has an
+    /// engine and asking like a browser beats asking like a program. The raw
+    /// HTTP scrape stays last rather than being deleted: WebKit outside an app
+    /// bundle is the genuinely uncertain part of this, and a Mac where it will
+    /// not start must be no worse off than it was before.
     func testBraveIsPreferredWhenAKeyIsPresent() {
-        let withKey = WebSearchToolSource.defaultBackends(environment: ["BRAVE_SEARCH_API_KEY": "abc"])
-        XCTAssertEqual(withKey.map(\.providerName), ["Brave Search", "DuckDuckGo"])
+        let empty = ProviderKeyStore(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("keys-\(UUID().uuidString).json"))
 
-        let without = WebSearchToolSource.defaultBackends(environment: [:])
-        XCTAssertEqual(without.map(\.providerName), ["DuckDuckGo"])
+        let withKey = WebSearchToolSource.defaultBackends(
+            environment: ["BRAVE_SEARCH_API_KEY": "abc"],
+            keys: empty
+        )
+        XCTAssertEqual(withKey.map(\.providerName).first, "Brave Search")
+
+        let without = WebSearchToolSource.defaultBackends(environment: [:], keys: empty)
+        XCTAssertFalse(without.map(\.providerName).contains("Brave Search"))
+        XCTAssertEqual(without.map(\.providerName).last, "DuckDuckGo", "the plain scrape must stay as the floor")
+    }
+
+    /// **The bug that made every other search fix beside the point.** Brave was
+    /// read from the environment alone, and nothing sets that variable on a
+    /// shipped Mac — the daemon is launched by launchd from a plist that never
+    /// carried it. So the keyed provider was unreachable in every install and
+    /// the scraper took every query, which is why the owner kept hitting rate
+    /// limits after pacing had already been added.
+    func testAStoredKeyIsEnoughWithNothingInTheEnvironment() throws {
+        // Its own directory, because the store hardens the parent to 0700 and
+        // the shared temp root is not ours to change.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-keys-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("provider-keys.json")
+        let store = ProviderKeyStore(url: url)
+        try store.save("abc", forProvider: ProviderKeyStore.searchProvider)
+
+        let backends = WebSearchToolSource.defaultBackends(environment: [:], keys: store)
+
+        XCTAssertEqual(backends.map(\.providerName).first, "Brave Search")
     }
 }
 
