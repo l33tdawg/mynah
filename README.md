@@ -55,11 +55,18 @@ once-a-day update check against GitHub.
   request.
 - Searches the web when the answer was never yours to begin with — Brave when
   `BRAVE_SEARCH_API_KEY` is set, DuckDuckGo otherwise, so it works with no key.
-- Writes, reads and lists notes as real files on the Mac.
-- Looks at a photo you send with a message (on the Ollama backend — see
-  [What the model can do](#what-the-model-can-do)).
-- Finds another agent on your SAGE node by name, hands it a job, and tells you
-  what came back.
+- Writes, reads and lists notes as real files on the Mac, and exports them as
+  PDF, Word or a deck where the converters are staged.
+- Keeps whatever you send it — photos, tickets, PDFs — and sends any of it back
+  when you ask, as a Signal attachment or as a file to click in the window. What
+  it does with one depends on the kind: a picture is described where the brain
+  can see (see [What the model can do](#what-the-model-can-do)); a document is
+  filed and not read, because that is what a booking confirmation is sent for.
+- Reminds you about dated work as the day approaches rather than on a fixed
+  alarm, so a Mac that was asleep says "in about two hours" rather than
+  yesterday's line. Things happening at the same time are grouped on the board.
+- Finds another agent on your SAGE node from its own roster, hands it a job, and
+  tells you what came back.
 - Shows the work assigned to it on Home, read from `sage_backlog`.
 
 ## The two ways in
@@ -240,39 +247,52 @@ Photos are attached only on the Ollama backend today: it is the one wire encoder
 that emits image content. The Anthropic and OpenAI-compatible encoders build
 their messages from text, tool calls and tool results.
 
+**Keeping a file never depends on that.** Whatever arrives is stored and noted
+before the brain is asked anything, so an attachment survives a turn that fails,
+a model with no eyes, and a loop that runs out of iterations. Backends declare
+`seesImages` and the default is `false`, so a backend that forgets is treated as
+blind — the owner is told the picture was kept and not looked at, which is true
+of one that ignores it. The opposite default ships something that claims to have
+seen a picture it discarded.
+
 ## What the model can do
 
 The loop filters the composed tool catalogue against a named allowlist of 20 —
-16 `sage_` tools, `web_search`, and three note tools — and throws rather than
+15 `sage_` tools, `web_search`, and four note tools — and throws rather than
 falling back to everything when the allowlist matches nothing. A test fails the
 build if a twenty-first is added without re-measuring routing.
 
 - **Memory** — `sage_recall`, `sage_remember`, `sage_forget`, `sage_list`,
   `sage_timeline`, `sage_status`, `sage_corroborate`, `sage_link`.
 - **Work** — `sage_task`, `sage_backlog`, `sage_inbox`, `sage_reflect`.
-- **Other agents** — `sage_find_agent`, `sage_pipe`, `sage_pipe_result`,
-  `sage_federation`. An address cannot be built from a name outside the resolver,
-  and more than one match is refused rather than guessed at. Anything another
-  agent says arrives as `UntrustedAgentContent` rather than a String, so
-  rendering it as if Mynah had said it is a visible act at the call site.
-- **Notes** — `write_note`, `read_note`, `list_notes`. Stored under
-  `~/Library/Application Support/SAGE Voice Bridge/Notes`, owner-only. The model
-  supplies a title and never a path, and the filename is derived from a
-  restricted alphabet, so traversal is unrepresentable rather than blocked.
+- **Other agents** — `sage_directory`, `sage_pipe`, `sage_federation`. The model
+  picks a recipient from a signed roster rather than matching a spoken name, so
+  an address cannot be invented. Anything another agent says arrives as
+  `UntrustedAgentContent` rather than a String, so rendering it as if Mynah had
+  said it is a visible act at the call site.
+- **Notes and files** — `write_note`, `read_note`, `list_notes`, `send_file`.
+  Stored under `~/Library/Application Support/SAGE Voice Bridge/Notes`,
+  owner-only. The model supplies a title and never a path, the filename is
+  derived from a restricted alphabet, and `send_file` resolves that title
+  against a real directory listing — so traversal is unrepresentable rather than
+  blocked, on the way out as well as in. A title matching more than one file is
+  refused rather than guessed at.
 - **The web** — `web_search`. Results are labelled to the model as third-party
   text to summarise and never as instructions. That raises the bar; it does not
   close the hole. What actually contains it is that the reply goes back to a
   person who can read it. Search runs on a session with cookies disabled, and
   can be switched off entirely with `--no-web`.
 
-Eleven SAGE tools are deliberately withheld, each with a stated reason in
-`BrainPrompts.swift` — `sage_turn`, `sage_inception` and `sage_red_pill` because
-the daemon calls them itself and the last is a deprecated alias, `sage_rename`,
-`sage_register` and `sage_reinstate` because identity administration is hard to
-undo by voice, `sage_gov_propose` and `sage_gov_vote` because a 4B should not
-cast a vote on your chain, and `sage_gov_status` plus the two scope tools because
-nobody asks for governance out loud and the scope pair answers only a node
-operator.
+The rest of SAGE's catalogue is deliberately withheld, each with a stated reason
+in `BrainPrompts.swift` — `sage_turn`, `sage_inception` and `sage_red_pill`
+because the daemon calls them itself and the last is a deprecated alias,
+`sage_rename`, `sage_register` and `sage_reinstate` because identity
+administration is hard to undo by voice, `sage_gov_propose` and `sage_gov_vote`
+because a 4B should not cast a vote on your chain, `sage_gov_status` plus the two
+scope tools because nobody asks for governance out loud and the scope pair
+answers only a node operator, and `sage_pipe_result` because it *sends* and the
+model reached for it to *read* — its name is a noun for the thing it does not
+return.
 
 The routing measurement behind the curated catalogue is a file rather than a
 memory: 12 utterances, 3 of which must call nothing, in

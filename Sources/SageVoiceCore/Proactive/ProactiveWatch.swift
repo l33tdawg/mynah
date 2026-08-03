@@ -43,6 +43,16 @@ public struct ProactiveLedger: Sendable, Equatable, Codable {
     /// Task id to the status it was in when last reported.
     public var knownTasks: [String: String]
 
+    /// Task id to its title, so a task that *leaves* the list can be named.
+    ///
+    /// **Kept separately from `knownTasks` on purpose.** Folding them into one
+    /// dictionary of a richer type would make an older build's ledger fail to
+    /// decode under a key it already uses, and a ledger that fails to decode is
+    /// a ledger that re-seeds — silent for one tick, then fine, but for no
+    /// reason. A second key simply arrives empty on the first upgrade, which
+    /// costs at most one unnamed removal.
+    public var knownTaskTitles: [String: String]
+
     /// When the last check ran, whatever it found.
     ///
     /// Set on every attempt rather than every report, for the reason
@@ -77,6 +87,7 @@ public struct ProactiveLedger: Sendable, Equatable, Codable {
     public init(
         toldAboutMessages: Set<String> = [],
         knownTasks: [String: String] = [:],
+        knownTaskTitles: [String: String] = [:],
         lastCheckedAt: Date? = nil,
         hasSeeded: Bool = false,
         saidReminders: Set<String> = [],
@@ -84,23 +95,26 @@ public struct ProactiveLedger: Sendable, Equatable, Codable {
     ) {
         self.toldAboutMessages = toldAboutMessages
         self.knownTasks = knownTasks
+        self.knownTaskTitles = knownTaskTitles
         self.lastCheckedAt = lastCheckedAt
         self.hasSeeded = hasSeeded
         self.saidReminders = saidReminders
         self.lastSeenTasks = lastSeenTasks
     }
 
-    // Both new fields decode as empty from a ledger written by an older build,
+    // Every field decodes as empty from a ledger written by an older build,
     // which is the correct upgrade: no reminder is "already said" on a Mac that
     // has never had reminders, and the first check refills the task cache.
     enum CodingKeys: String, CodingKey {
-        case toldAboutMessages, knownTasks, lastCheckedAt, hasSeeded, saidReminders, lastSeenTasks
+        case toldAboutMessages, knownTasks, knownTaskTitles
+        case lastCheckedAt, hasSeeded, saidReminders, lastSeenTasks
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         toldAboutMessages = try container.decodeIfPresent(Set<String>.self, forKey: .toldAboutMessages) ?? []
         knownTasks = try container.decodeIfPresent([String: String].self, forKey: .knownTasks) ?? [:]
+        knownTaskTitles = try container.decodeIfPresent([String: String].self, forKey: .knownTaskTitles) ?? [:]
         lastCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
         hasSeeded = try container.decodeIfPresent(Bool.self, forKey: .hasSeeded) ?? false
         saidReminders = try container.decodeIfPresent(Set<String>.self, forKey: .saidReminders) ?? []
@@ -194,7 +208,23 @@ public struct ProactiveWatch: Sendable {
     /// ordinary state for a machine that runs all year, and a check that failed
     /// is simply a check that found nothing to say — it must not take the
     /// appliance down or produce an error message on the owner's phone.
-    public func check(against ledger: ProactiveLedger) async -> ProactiveReport {
+    /// - Parameter announcingTaskChanges: `false` absorbs whatever the task
+    ///   list has done since the last check without saying a word about it.
+    ///
+    ///   Set when the owner has just changed the list himself, which is the bug
+    ///   he caught: he asked Mynah to move a deadline, Mynah confirmed it in
+    ///   prose — *"I've replaced the old open-ended TDAC task with this one"* —
+    ///   and then a second message reported the same edit back to him as news,
+    ///   twice over, because a replacement is one arrival and one departure.
+    ///
+    ///   His own words for what these messages are for: *"the tasks coming on
+    ///   and off the lists"*. A change he made thirty seconds ago is not one of
+    ///   them. Inbox news is unaffected — a message from another agent is still
+    ///   news whatever he was just doing.
+    public func check(
+        against ledger: ProactiveLedger,
+        announcingTaskChanges: Bool = true
+    ) async -> ProactiveReport {
         // **`?? []` was the bug, and it was worse than silence.**
         //
         // A node that refuses used to be coalesced to an empty list, which is
@@ -226,6 +256,7 @@ public struct ProactiveWatch: Sendable {
         }
         if let tasks {
             updated.knownTasks = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.status) })
+            updated.knownTaskTitles = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.title) })
             // Refilled only on a check that actually read the node, for the same
             // reason as everything else in this block: a refusal must not empty
             // the cache, or the ladder would go quiet until the node came back.
@@ -234,9 +265,16 @@ public struct ProactiveWatch: Sendable {
         }
 
         let newMessages = (messages ?? []).filter { !ledger.toldAboutMessages.contains($0.id) }
-        let taskNews = tasks.map {
-            Self.taskNews($0, against: ledger.knownTasks, seeded: ledger.hasSeeded)
-        } ?? []
+        // Absorbed above and unsaid here: the ledger is now current, so the next
+        // check compares against the truth and this one carries nothing.
+        let taskNews = announcingTaskChanges ? tasks.map {
+            Self.taskNews(
+                $0,
+                against: ledger.knownTasks,
+                titles: ledger.knownTaskTitles,
+                seeded: ledger.hasSeeded
+            )
+        } ?? [] : []
 
         // The silent first pass. Everything above is written down; nothing is
         // said.
@@ -268,6 +306,7 @@ public struct ProactiveWatch: Sendable {
     static func taskNews(
         _ tasks: [WatchedTask],
         against known: [String: String],
+        titles: [String: String] = [:],
         seeded: Bool
     ) -> [String] {
         guard seeded else { return [] }
@@ -283,10 +322,19 @@ public struct ProactiveWatch: Sendable {
         // Gone from the open list, which on this node means finished or
         // dropped. Which of the two is not knowable from an absence, so it does
         // not claim to know.
+        //
+        // **Named, because the unnamed version told him nothing.** Two lines
+        // reading "A task came off the list." are indistinguishable from each
+        // other and from any other pair, so the only thing they communicate is
+        // that something happened somewhere. `knownTaskTitles` exists for this
+        // one sentence.
+        //
+        // The fallback survives the first tick after an upgrade, when the
+        // titles dictionary is empty because the previous build never wrote it.
         let present = Set(tasks.map(\.id))
-        for (id, _) in known where !present.contains(id) {
-            _ = id
-            lines.append("A task came off the list.")
+        for (id, _) in known.sorted(by: { $0.key < $1.key }) where !present.contains(id) {
+            lines.append(titles[id].map { "“\(ending($0))” came off the list." }
+                ?? "A task came off the list.")
         }
         return lines
     }

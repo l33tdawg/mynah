@@ -979,6 +979,12 @@ func runDaemon(_ arguments: [String]) -> Never {
                 log: { note($0) }
             )
 
+        // Shared with the proactive watch below, in memory rather than through
+        // the ledger file: both live in this process, and a flag written to disk
+        // while the watch holds a copy across a node round trip is a flag that
+        // gets overwritten.
+        let ownTaskEdits = OwnTaskEdits()
+
         let daemon = VoiceBridgeDaemon(
             signal: signal,
             transcriber: transcriber,
@@ -1007,7 +1013,9 @@ func runDaemon(_ arguments: [String]) -> Never {
             // //call is several seconds of warning. Spent warming the model,
             // SAGE, the voice and recognition — and building the opening — so
             // the caller arrives to something ready rather than to a pause.
-            onCallRequested: { await callServer.prepare() }
+            onCallRequested: { await callServer.prepare() },
+            // What he changes himself is not news. See `OwnTaskEdits`.
+            onTaskWrites: { await ownTaskEdits.record() }
         )
         // After construction, because the transcript goes out through the same
         // Signal path as everything else and the daemon owns it.
@@ -1046,6 +1054,7 @@ func runDaemon(_ arguments: [String]) -> Never {
 
             await runProactiveWatch(
                 source: SageProactiveSource(tools: mcp),
+                ownEdits: ownTaskEdits,
                 arrivedReplies: {
                     guard let ritual else { return [] }
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
@@ -1210,6 +1219,9 @@ func runCheck(_ arguments: [String]) -> Never {
 ///   this loop does is a read.
 func runProactiveWatch(
     source: any ProactiveSource,
+    /// Set by a turn that wrote to the task list, so this loop absorbs the
+    /// owner's own edit instead of reporting it back to him. See `OwnTaskEdits`.
+    ownEdits: OwnTaskEdits? = nil,
     arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
     say: @escaping @Sendable (String) async -> Void,
     log: @escaping @Sendable (String) -> Void
@@ -1265,7 +1277,14 @@ func runProactiveWatch(
             preferences: preferences
         ) else { continue }
 
-        let report = await watch.check(against: ledger)
+        // Taken once per check, and taken *before* the check so a turn landing
+        // mid-round-trip sets it for the next one rather than being swallowed
+        // by this one.
+        let ownEdit = await ownEdits?.takeSuppression() ?? false
+        if ownEdit {
+            log("[watch] absorbing the owner's own task edits without announcing them")
+        }
+        let report = await watch.check(against: ledger, announcingTaskChanges: !ownEdit)
         ledger = report.ledger
         ledger.lastCheckedAt = Date()
         try? ledger.save(to: ledgerURL)

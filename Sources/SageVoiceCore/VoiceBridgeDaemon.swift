@@ -186,6 +186,21 @@ public actor VoiceBridgeDaemon {
     /// Called the moment //call arrives, before the link is even built.
     private var onCallRequested: (@Sendable () async -> Void)?
 
+    /// Told after a turn that changed the owner's task list, so the proactive
+    /// watch does not report his own edit back to him as news. See
+    /// `OwnTaskEdits`.
+    private var onTaskWrites: (@Sendable () async -> Void)?
+
+    /// Tools that change what is on the list.
+    ///
+    /// Deliberately the opposite policy to `ToolLoop.readOnlyTools`, which
+    /// treats an unlisted tool as having acted because the dangerous direction
+    /// there is missing a real write. Here the dangerous direction is the
+    /// reverse: a tool wrongly listed suppresses genuine news, so this names
+    /// only what actually writes tasks and a new one costs an extra
+    /// announcement rather than a silence.
+    static let taskWritingTools: Set<String> = ["sage_task"]
+
     /// Who asked for the last call, so its transcript goes back to them.
     private var lastCallRecipient: SignalRecipient?
     private let loop: ToolLoop
@@ -362,6 +377,7 @@ public actor VoiceBridgeDaemon {
         calls: CallHost? = nil,
         callRefusal: CallInvitation.Refusal? = nil,
         onCallRequested: (@Sendable () async -> Void)? = nil,
+        onTaskWrites: (@Sendable () async -> Void)? = nil,
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
@@ -380,6 +396,7 @@ public actor VoiceBridgeDaemon {
         self.calls = calls
         self.callRefusal = callRefusal
         self.onCallRequested = onCallRequested
+        self.onTaskWrites = onTaskWrites
         // Every line this daemon writes goes through here, and `log`'s default
         // destination is stderr — which launchd redirects into `bridge.log`.
         // The scrub is applied once, at the seam, rather than trusted to each
@@ -818,6 +835,15 @@ public actor VoiceBridgeDaemon {
             // **The owner's wait ends here, and nothing below is part of it.**
             let delivered = Date()
             log("[daemon] \(result.trace.summary)")
+
+            // He has just been told, in words, what changed on his list. The
+            // watch must not tell him again fifteen minutes later as though a
+            // stranger had done it. See `OwnTaskEdits`.
+            if result.trace.toolCalls.contains(where: {
+                Self.taskWritingTools.contains($0.name) && !$0.failed
+            }) {
+                await onTaskWrites?()
+            }
             // Cleanup should tidy a reply, not amputate it. A large gap between
             // what the model produced and what the owner receives means
             // `speakable` ate something — most likely an unclosed <think> tag,
