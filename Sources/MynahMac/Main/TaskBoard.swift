@@ -226,6 +226,95 @@ struct TaskBoard: Equatable, Sendable {
     }
 }
 
+// MARK: - Things happening at the same moment
+
+/// One box on the board: usually a single task, sometimes several that happen at
+/// the same time.
+///
+/// The owner, looking at a dentist appointment and a Google Meet both written
+/// for Tuesday at 1pm and drawn as two unrelated cards: *"if there's a clash,
+/// can we put them like into 1 bounding box - so its clear it happens at the
+/// same time"*, and then the shape of it: *"we still need them to show as
+/// separate items but within the blue or red box, make it 1 bounding box"*.
+///
+/// **Not a warning.** His own example is two things that share a slot perfectly
+/// well — *"some things can be done simultaneously; like send car to car wash
+/// and get groceries"* — so this states a fact and leaves the judgement to him.
+/// Nothing here calls it a conflict, refuses it, or asks him to fix it.
+struct TaskCluster: Identifiable, Equatable {
+    var tasks: [BoardTask]
+    /// The clock time they share, already written the way the owner wrote it —
+    /// `nil` for an ordinary single card.
+    var sharedTime: String?
+
+    /// Stable across renders because it is built from the members, and unique
+    /// because task ids are.
+    var id: String { tasks.map(\.id).joined(separator: "+") }
+
+    var isShared: Bool { tasks.count > 1 }
+}
+
+extension TaskBoard {
+
+    /// Groups an **already ordered** list into boxes.
+    ///
+    /// Consecutive-only, which is not a shortcut: `byWhenTheyHappen` has sorted
+    /// by date, so everything at the same moment is already adjacent. Scanning
+    /// the whole list instead would let two tasks be boxed together across a
+    /// third that happens between them, and a box whose contents are not
+    /// contiguous in time is a lie about the day.
+    ///
+    /// **A shared *day* is not a shared moment.** Two things due Friday with no
+    /// hour written are not happening at once — a day holds plenty — so
+    /// `.day` granularity never clusters. That is the same distinction
+    /// `ReminderLadder` draws, and for the same reason: no hour was named, so
+    /// none may be invented.
+    static func clustered(_ ordered: [BoardTask], calendar: Calendar = .current) -> [TaskCluster] {
+        var boxes: [TaskCluster] = []
+        var current: [(task: BoardTask, when: SpokenDate.WrittenDate)] = []
+
+        func flush() {
+            guard !current.isEmpty else { return }
+            boxes.append(TaskCluster(
+                tasks: current.map(\.task),
+                sharedTime: current.count > 1 ? clock(current[0].when.at, calendar: calendar) : nil
+            ))
+            current = []
+        }
+
+        for task in ordered {
+            guard let when = SpokenDate.writtenDateMatch(in: task.title, calendar: calendar),
+                  when.granularity != .day else {
+                flush()
+                boxes.append(TaskCluster(tasks: [task], sharedTime: nil))
+                continue
+            }
+            if let open = current.first, open.when.at != when.at {
+                flush()
+            }
+            current.append((task, when))
+        }
+        flush()
+        return boxes
+    }
+
+    /// The shared hour, written the short way somebody says it: `1pm`, `10:30am`.
+    ///
+    /// Deliberately not `Date.formatted`, which is locale-driven and would put
+    /// `13:00` on a board whose every task title says `1pm`. The label exists to
+    /// name the moment two cards have in common, and naming it differently from
+    /// how both of them spell it is worse than not labelling it at all.
+    static func clock(_ date: Date, calendar: Calendar = .current) -> String {
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        let twelve = hour % 12 == 0 ? 12 : hour % 12
+        let suffix = hour < 12 ? "am" : "pm"
+        return minute == 0
+            ? "\(twelve)\(suffix)"
+            : String(format: "%d:%02d%@", twelve, minute, suffix)
+    }
+}
+
 // MARK: - How near a task is
 
 /// Near enough to mark on the card.

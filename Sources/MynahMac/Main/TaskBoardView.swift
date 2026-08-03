@@ -288,23 +288,20 @@ private struct BoardColumnView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: s4) {
-                        ForEach(tasks) { task in
-                            TaskCard(
-                                task: task,
-                                isHistory: isHistory,
-                                onRemove: onRemove.map { remove in { remove(task.id) } }
-                            )
-                                // The card itself is the payload: its id is the
-                                // memory id, which is all `sage_task` needs.
-                                .draggable(task.id) {
-                                    // What follows the cursor. Narrower than the
-                                    // card and slightly transparent, so the
-                                    // column underneath stays readable while
-                                    // deciding where to put it.
-                                    TaskCard(task: task, isHistory: isHistory)
-                                        .frame(width: 240)
-                                        .opacity(0.9)
+                        ForEach(TaskBoard.clustered(tasks)) { cluster in
+                            if cluster.isShared, !isHistory {
+                                SharedTimeBox(
+                                    cluster: cluster,
+                                    onRemove: onRemove
+                                )
+                            } else {
+                                // History never boxes: two haircuts that happened
+                                // at the same time is not a thing anyone needs
+                                // pointed out afterwards.
+                                ForEach(cluster.tasks) { task in
+                                    draggableCard(task)
                                 }
+                            }
                         }
                     }
                     .padding(.bottom, s5)
@@ -339,6 +336,29 @@ private struct BoardColumnView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, s6)
         .padding(.vertical, s6)
+    }
+
+    /// One card, wired for drag.
+    ///
+    /// Extracted because it is now built in two places — loose in the column,
+    /// and inside a shared-time box — and a card that could be dragged in one
+    /// place and not the other would be a difference nobody could explain.
+    private func draggableCard(_ task: BoardTask) -> some View {
+        TaskCard(
+            task: task,
+            isHistory: isHistory,
+            onRemove: onRemove.map { remove in { remove(task.id) } }
+        )
+        // The card itself is the payload: its id is the memory id, which is
+        // all `sage_task` needs.
+        .draggable(task.id) {
+            // What follows the cursor. Narrower than the card and slightly
+            // transparent, so the column underneath stays readable while
+            // deciding where to put it.
+            TaskCard(task: task, isHistory: isHistory)
+                .frame(width: 240)
+                .opacity(0.9)
+        }
     }
 
     /// A label, not a control.
@@ -386,9 +406,88 @@ private struct BoardColumnView: View {
 /// the task model; the third would promise a status change this board
 /// deliberately cannot make — moving a card writes into consensus on the owner's
 /// own node, and that is not something to discover by mis-clicking.
+/// Several tasks that happen at the same moment, in one bounding box.
+///
+/// The owner, looking at a dentist appointment and a Google Meet both written
+/// for Tuesday at 1pm and drawn as two unrelated cards four rows apart: *"if
+/// there's a clash, can we put them like into 1 bounding box - so its clear it
+/// happens at the same time"*, then the shape: *"we still need them to show as
+/// separate items but within the blue or red box, make it 1 bounding box"*.
+///
+/// So the cards keep their own surface and hairline — they are still separate
+/// things, still individually draggable and removable — and only the *coloured*
+/// border moves outward, from each card to the box around them. One nearness
+/// mark for one moment, which is what it was always describing.
+///
+/// **It states a fact and asks for nothing.** His own example of a clash is two
+/// errands that share a slot perfectly well: *"some things can be done
+/// simultaneously; like send car to car wash and get groceries"*. Nothing here
+/// says conflict, nothing warns, nothing offers to move anything.
+private struct SharedTimeBox: View {
+    let cluster: TaskCluster
+    var onRemove: ((String) -> Void)?
+
+    /// The box's own nearness, taken from its members — who by construction all
+    /// happen at the same instant, so they cannot disagree about it.
+    private var nearness: TaskNearness? {
+        cluster.tasks.lazy.compactMap { TaskNearness.of($0) }.first
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: s4) {
+            if let sharedTime = cluster.sharedTime {
+                // Said in words, because two cards whose titles both end "1pm"
+                // are only obviously simultaneous to somebody already reading
+                // for it — and because a border is invisible to VoiceOver and to
+                // anyone who cannot separate blue from orange.
+                Text("At the same time · \(sharedTime)")
+                    .mynahFont(.eyebrow)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .padding(.horizontal, s2)
+            }
+            ForEach(cluster.tasks) { task in
+                TaskCard(
+                    task: task,
+                    isHistory: false,
+                    // The box draws it once for all of them.
+                    showsNearness: false,
+                    onRemove: onRemove.map { remove in { remove(task.id) } }
+                )
+                .draggable(task.id) {
+                    TaskCard(task: task, isHistory: false)
+                        .frame(width: 240)
+                        .opacity(0.9)
+                }
+            }
+        }
+        .padding(s4)
+        .overlay {
+            RoundedRectangle.mynah(r.card)
+                .strokeBorder(
+                    nearness == .today ? Palette.state.dueToday : Palette.state.dueTomorrow,
+                    lineWidth: 2
+                )
+                // A box holding a task neither today nor tomorrow still groups
+                // it — the grouping is a fact about the clock, not about how
+                // soon it is — but there is no colour to say so with.
+                .opacity(nearness == nil ? 0 : 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "\(cluster.tasks.count) at the same time\(cluster.sharedTime.map { ", \($0)" } ?? "")"
+        )
+    }
+}
+
 private struct TaskCard: View {
     let task: BoardTask
     let isHistory: Bool
+    /// Whether this card draws its own due-soon border.
+    ///
+    /// `false` inside a `SharedTimeBox`, which draws one for the whole group —
+    /// otherwise a box of two would carry three concentric coloured rectangles
+    /// saying the same thing.
+    var showsNearness = true
     /// Takes this card off the board. Absent on a card that cannot be removed.
     var onRemove: (() -> Void)?
 
@@ -426,7 +525,7 @@ private struct TaskCard: View {
         // in colour and weight. History is never marked: a haircut that already
         // happened is not happening soon.
         .overlay {
-            if !isHistory, let nearness {
+            if showsNearness, !isHistory, let nearness {
                 RoundedRectangle.mynah(r.card)
                     .strokeBorder(
                         nearness == .today ? Palette.state.dueToday : Palette.state.dueTomorrow,

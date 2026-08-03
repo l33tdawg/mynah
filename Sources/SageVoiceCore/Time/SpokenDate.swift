@@ -135,7 +135,12 @@ public enum SpokenDate {
         public let text: String
     }
 
-    static func writtenDateMatch(in text: String, calendar: Calendar = .current) -> WrittenDate? {
+    /// Public because the board needs the granularity, not just the instant:
+    /// two tasks written for the same *day* with no hour are not happening at
+    /// the same time, and `TaskBoard.clustered` must not box them as if they
+    /// were. Same distinction `ReminderLadder` draws, same reason — no hour was
+    /// named, so none may be invented.
+    public static func writtenDateMatch(in text: String, calendar: Calendar = .current) -> WrittenDate? {
         let months = [
             "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
             "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
