@@ -56,6 +56,17 @@ private final class ScriptedBackend: BrainBackend, @unchecked Sendable {
         )
     }
 
+    /// Cut off at the token ceiling with nothing usable in it — what a document
+    /// too long for the budget actually looks like coming back.
+    static func cutOff(_ text: String = "") -> BrainReply {
+        BrainReply(
+            model: "stub-model",
+            message: .assistant(text),
+            stopReason: .maxTokens,
+            usage: BrainUsage(inputTokens: 10, outputTokens: 1024)
+        )
+    }
+
     static func calling(_ name: String, id: String = "call_1", arguments: [String: JSONValue] = [:]) -> BrainReply {
         BrainReply(
             model: "stub-model",
@@ -473,6 +484,32 @@ final class ToolLoopTests: XCTestCase {
             XCTFail("expected .emptyReply")
         } catch let error as ToolLoopError {
             XCTAssertEqual(error, .emptyReply)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    /// **Empty because it ran out of room is not empty because it had nothing
+    /// to say**, and only one of those is the owner's to fix.
+    ///
+    /// Both used to throw `emptyReply`, whose owner-facing sentence is "try
+    /// asking it a different way — it does better with a whole sentence than a
+    /// couple of words". Told that after asking, in a full sentence, for a
+    /// researched PDF, the owner goes and rewrites the one thing that was never
+    /// at fault.
+    func testATurnCutOffAtTheTokenCeilingSaysSoRatherThanBlamingTheQuestion() async {
+        let backend = ScriptedBackend([
+            ScriptedBackend.cutOff("<think>right, the report needs six sections"),
+            ScriptedBackend.cutOff()
+        ])
+        let tools = StubToolSource(toolNames: ["sage_inbox"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        do {
+            _ = try await loop.run(transcript: "research EDR tools and make me a PDF")
+            XCTFail("expected .replyRanLong")
+        } catch let error as ToolLoopError {
+            XCTAssertEqual(error, .replyRanLong)
         } catch {
             XCTFail("unexpected error: \(error)")
         }

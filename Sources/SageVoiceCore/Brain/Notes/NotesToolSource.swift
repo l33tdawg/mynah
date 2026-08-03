@@ -383,7 +383,21 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     private func write(arguments: [String: JSONValue]) async throws -> String {
         let content = arguments["content"]?.stringValue ?? ""
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "No content was given, so no note was written."
+            // **Names the cause, because the model cannot see it.** A document
+            // travels inside this call, so a call that ran past the turn's token
+            // ceiling arrives here looking exactly like one where the model
+            // forgot the argument — and the old sentence described only the
+            // second. Told nothing else, the model tried again identically:
+            // eight `write_note` calls in one 130-second turn, all empty, all
+            // reported the same way, before the iteration cap ended it.
+            //
+            // Cheaper than plumbing truncation down into the tool, and it works
+            // for whichever of the two actually happened.
+            return """
+            No content was given, so no note was written. If your reply was cut off partway \
+            through this call, the document was too long to send in one piece — write a \
+            shorter one, or split it across two notes.
+            """
         }
 
         let requestedTitle = (arguments["title"]?.stringValue ?? "")

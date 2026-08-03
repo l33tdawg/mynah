@@ -293,7 +293,16 @@ actor ToolLoopTurnEngine: TurnEngine {
     private var catalogue: [MCPTool]?
     private var isPrepared = false
 
-    init(backend: BrainBackend, memoryExecutable: URL, allowsWebSearch: Bool = true) {
+    /// - Parameter style: how the owner asked to be answered. Read from the same
+    ///   file the daemon reads, because the window and Signal are one appliance
+    ///   and a setting that applies to half of it is a bug waiting to be
+    ///   reported. Injectable for tests; nothing else passes it.
+    init(
+        backend: BrainBackend,
+        memoryExecutable: URL,
+        allowsWebSearch: Bool = true,
+        style: ReplyStyle = ReplyPreferences().style()
+    ) {
         // The appliance's identity, not one of its own.
         //
         // This used childEnvironment(), which resolves a different key —
@@ -361,7 +370,19 @@ actor ToolLoopTurnEngine: TurnEngine {
             )
         }
         self.mcp = mcp
-        self.loop = ToolLoop(backend: backend, mcp: CompositeToolSource(sources: sources))
+        // **Configured, not bare.** This was `ToolLoop(backend:mcp:)`, which took
+        // the written system prompt from `Configuration`'s default and the spoken
+        // 1,024-token ceiling from the number sitting beside it. Fine for a
+        // sentence; fatal for a document, which rides out as a `write_note`
+        // argument and so is bounded by that ceiling rather than by anything the
+        // owner can see. Asked to research EDR and SIEM tools and make a PDF, the
+        // window cut the tool call off mid-argument, dropped it, and reported
+        // "Mynah didn't have an answer for that."
+        self.loop = ToolLoop(
+            backend: backend,
+            mcp: CompositeToolSource(sources: sources),
+            configuration: .forStyle(style)
+        )
         self.localProvisioner = backend.identifier == "ollama"
             ? LocalBrainInstaller(runtime: OllamaRuntimeInstaller.shared)
             : nil
@@ -1365,6 +1386,17 @@ final class ConversationModel {
                     headline: "Mynah didn't have an answer for that.",
                     explanation: "Try asking it a different way — it does better with a whole "
                         + "sentence than a couple of words.",
+                    canRetry: true
+                )
+            case .replyRanLong:
+                // Names the length, because that is the thing the owner can
+                // change. The old copy sent him to rewrite a question that was
+                // never at fault.
+                return Exchange.Failure(
+                    headline: "That one ran longer than Mynah could finish.",
+                    explanation: "It was still writing when it ran out of room. Ask for it "
+                        + "again in two halves, or ask for a shorter version, and it will "
+                        + "get there.",
                     canRetry: true
                 )
             case .noTools, .toolAllowlistMatchedNothing:

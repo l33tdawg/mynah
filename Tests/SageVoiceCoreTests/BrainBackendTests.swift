@@ -396,4 +396,77 @@ final class BrainBackendTests: XCTestCase {
             "ToolLoop's default must be raised by the floor, not passed through"
         )
     }
+
+    // MARK: The same floor, on the backend that did not have it
+
+    /// **The 1.5.1 bug, at the layer it actually bit.** `AnthropicBackend` has
+    /// floored `max_tokens` since it was written; nobody carried that across to
+    /// `OpenAICompatBackend`, so DeepSeek — a reasoning model that spends the
+    /// allowance thinking before it writes — got the window's 1,024 verbatim.
+    /// Asked for a researched PDF it called `write_note` eight times in one
+    /// turn and every call arrived with an empty `content`, because the document
+    /// travels inside the call and the JSON was cut off mid-argument.
+    func testTheOpenAICompatBackendFloorsTheTokenCeilingToo() throws {
+        let request = BrainRequest(
+            messages: [.user("research EDR and SIEM tools and make me a PDF")],
+            maxOutputTokens: 1024
+        )
+        let body = OpenAICompatBackend.requestBody(
+            for: request,
+            model: "deepseek-v4-flash",
+            provider: .deepSeek
+        )
+        XCTAssertEqual(
+            body["max_tokens"] as? Int,
+            BrainRequest.hostedMinimumOutputTokens,
+            "a local model's budget reached a hosted one unraised — this is the bug"
+        )
+    }
+
+    /// A ceiling already above the floor is the caller's to choose.
+    func testAGenerousCeilingIsNotLoweredToTheFloor() {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hello")], maxOutputTokens: 32_000),
+            model: "deepseek-v4-flash",
+            provider: .deepSeek
+        )
+        XCTAssertEqual(body["max_tokens"] as? Int, 32_000)
+    }
+
+    /// A deliberate one-token probe stays one token. Inflating a reachability
+    /// check to 4,096 would bill the owner for asking whether their key works.
+    func testAProbeIsNotInflatedByTheFloor() {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hi")], maxOutputTokens: 1),
+            model: "deepseek-v4-flash",
+            provider: .deepSeek
+        )
+        XCTAssertEqual(body["max_tokens"] as? Int, 1)
+    }
+
+    /// Naming no ceiling still means the provider's own default. Capping an
+    /// uncapped caller here would be a second bug wearing the first one's fix.
+    func testNoCeilingAskedForMeansNoCeilingSent() {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hi")]),
+            model: "deepseek-v4-flash",
+            provider: .deepSeek
+        )
+        XCTAssertNil(body["max_tokens"])
+        XCTAssertNil(body["max_completion_tokens"])
+    }
+
+    /// Providers that renamed the field get the floor under the new name.
+    func testTheFloorFollowsTheProvidersFieldName() {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hi")], maxOutputTokens: 1024),
+            model: "gpt-5",
+            provider: .openAI
+        )
+        XCTAssertNil(body["max_tokens"])
+        XCTAssertEqual(
+            body["max_completion_tokens"] as? Int,
+            BrainRequest.hostedMinimumOutputTokens
+        )
+    }
 }

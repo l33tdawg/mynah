@@ -195,6 +195,38 @@ public struct BrainRequest: Sendable {
         self.maxOutputTokens = maxOutputTokens
         self.reasoning = reasoning
     }
+
+    /// The floor every hosted backend applies to whatever the caller asked for.
+    ///
+    /// **A local model's budget is not a sane cap for a cloud one.** A hosted
+    /// reasoning model spends this allowance thinking before it writes anything,
+    /// so a small cap does not produce a short answer — it produces
+    /// `stop_reason: max_tokens` with nothing in it.
+    ///
+    /// `AnthropicBackend` had this from the start and it was right. Nobody
+    /// copied it into `OpenAICompatBackend`, so the same starvation reached
+    /// DeepSeek unopposed: asked to research EDR and SIEM tools and write a PDF,
+    /// `deepseek-v4-flash` called `write_note` eight times in one turn and every
+    /// call arrived with no `content`, because the document rides *inside* the
+    /// tool call and 1,024 tokens cut the JSON off mid-argument. Eight
+    /// "no content was given" results, the iteration cap, and a wrap-up asking
+    /// the owner whether he would like the PDF he had already asked for twice.
+    ///
+    /// Lives on the request rather than in either backend so there is one number
+    /// and one reason, reachable by whoever writes the third backend.
+    public static let hostedMinimumOutputTokens = 4096
+
+    /// `maxOutputTokens` raised to `hostedMinimumOutputTokens`, for hosted
+    /// backends.
+    ///
+    /// A deliberate tiny request stays tiny: `probe()` asks for a single token
+    /// to check a key works, and inflating that to 4,096 would bill the owner
+    /// for a reachability test. The floor exists to stop a local model's budget
+    /// starving a reasoning model, not to override an explicit small ask.
+    public func hostedMaxOutputTokens(default fallback: Int) -> Int {
+        let requested = maxOutputTokens ?? fallback
+        return requested <= 4 ? requested : max(requested, Self.hostedMinimumOutputTokens)
+    }
 }
 
 // MARK: - Reply

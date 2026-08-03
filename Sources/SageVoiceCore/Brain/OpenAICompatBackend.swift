@@ -190,10 +190,21 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
 
     // MARK: Completion
 
-    public func complete(_ request: BrainRequest) async throws -> BrainReply {
+    /// The JSON this backend puts on the wire.
+    ///
+    /// Static and separate from `complete` so a test can read it without a
+    /// network. It was inline, and what it sent was therefore checked by nobody
+    /// — which is how it shipped for three releases handing a hosted reasoning
+    /// model a 1,024-token budget meant for a local 4B. `parseReply` was pulled
+    /// out for the same reason and is well covered; this half was not.
+    static func requestBody(
+        for request: BrainRequest,
+        model: String,
+        provider: OpenAICompatProvider
+    ) -> [String: Any] {
         var body: [String: Any] = [
-            "model": modelName,
-            "messages": Self.encodeMessages(request.messages),
+            "model": model,
+            "messages": encodeMessages(request.messages),
             "stream": false
         ]
         if !request.tools.isEmpty {
@@ -202,8 +213,14 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
         if let temperature = request.temperature {
             body["temperature"] = temperature
         }
-        if let maxOutputTokens = request.maxOutputTokens {
-            body[provider.usesMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] = maxOutputTokens
+        // Floored, exactly as `AnthropicBackend` floors it — and for the reason
+        // written there, which nobody carried across when this backend was
+        // added. A caller that names no ceiling still gets the provider's own
+        // default: silence is not a budget this loop chose, and overriding it
+        // here would quietly cap models that were previously uncapped.
+        if request.maxOutputTokens != nil {
+            body[provider.usesMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] =
+                request.hostedMaxOutputTokens(default: BrainRequest.hostedMinimumOutputTokens)
         }
         if provider.supportsReasoningEffort {
             switch request.reasoning {
@@ -212,6 +229,11 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
             case .automatic: break
             }
         }
+        return body
+    }
+
+    public func complete(_ request: BrainRequest) async throws -> BrainReply {
+        let body = Self.requestBody(for: request, model: modelName, provider: provider)
 
         var urlRequest = URLRequest(url: provider.baseURL.appendingPathComponent("chat/completions"))
         urlRequest.httpMethod = "POST"

@@ -679,11 +679,14 @@ func resolveReplyStyle(_ arguments: [String]) -> ReplyStyle {
 }
 
 /// The loop configuration that follows from a style.
+///
+/// A pass-through now. It used to build the configuration here, which meant the
+/// window — a different target, unable to see this function — built its own and
+/// got it wrong. The knowledge moved to `ToolLoop.Configuration.forStyle(_:)`,
+/// where both surfaces can reach it; this stays for the call sites below and for
+/// the guard test that counts them.
 func loopConfiguration(for style: ReplyStyle) -> ToolLoop.Configuration {
-    ToolLoop.Configuration(
-        systemPrompt: BrainPrompts.voiceAgentManager(style: style),
-        maxGeneratedTokens: style.maximumGeneratedTokens
-    )
+    .forStyle(style)
 }
 
 /// Keeps text messaging alive when a release is missing its speech assets.

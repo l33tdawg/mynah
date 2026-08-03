@@ -414,6 +414,16 @@ public struct ToolLoopResult: Sendable, Equatable {
 public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
     case noTools
     case emptyReply
+    /// Ended with nothing to say *because it ran out of budget*, not because it
+    /// had nothing to say.
+    ///
+    /// Its own case because the owner can only act on one of those two, and the
+    /// advice for the other one is actively misleading here. Told "try asking it
+    /// a different way — it does better with a whole sentence than a couple of
+    /// words", the owner goes and rewrites a question that was already fine: he
+    /// asked for a researched PDF in a full sentence, and the sentence was never
+    /// the problem. The length of the answer was.
+    case replyRanLong
     /// The curated tool allowlist matched none of the tools the server publishes.
     /// Deliberately fatal rather than silently falling back to the full
     /// catalogue — see `ToolLoop.availableTools()`.
@@ -425,6 +435,8 @@ public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
             return "The MCP server advertised no tools, so the brain has nothing to drive."
         case .emptyReply:
             return "The model produced no speakable reply."
+        case .replyRanLong:
+            return "The model hit its token ceiling before it finished, so nothing usable came back."
         case .toolAllowlistMatchedNothing(let expected, let published):
             return """
             None of the \(expected.count) allowlisted tools are published by this MCP server. \
@@ -580,6 +592,12 @@ public final class ToolLoop: @unchecked Sendable {
         /// Hard token cap per model turn. Guards against a reasoning runaway:
         /// with no tools attached and a thin context, qwen3.5:4b was measured
         /// generating 4069 tokens over 190 s and returning empty content.
+        ///
+        /// **Comes from a `ReplyStyle`, never from a number typed here.** This
+        /// defaulted to a bare `1024` while `systemPrompt` above defaulted to
+        /// `ReplyStyle.default` — one initialiser holding two halves of two
+        /// different styles, so every bare `Configuration()` got a written
+        /// prompt on a spoken budget. See `forStyle(_:)`.
         public var maxGeneratedTokens: Int?
         /// Tool results longer than this are truncated before going back to the
         /// model; a 4B model's context is not the place for a 40 KB memory dump.
@@ -590,6 +608,30 @@ public final class ToolLoop: @unchecked Sendable {
         /// `BrainPrompts.voiceToolAllowlist`.
         public var allowedToolNames: Set<String>
 
+        /// Everything a reply style decides, decided once.
+        ///
+        /// **The prompt and the token ceiling are two halves of one choice**, and
+        /// they must be set together or not at all. Kept apart, they drifted: the
+        /// window built a bare `ToolLoop(backend:mcp:)`, inherited the written
+        /// prompt and the spoken 1,024-token ceiling, and asked for a PDF. The
+        /// document travels as a `write_note` argument, so the ceiling cut the
+        /// tool call off mid-JSON — which is not a short answer but *no* answer,
+        /// and the owner was told "Mynah didn't have an answer for that."
+        ///
+        /// Worse, it was intermittent. A ceiling only bites when the model runs
+        /// past it, so the same question worked on the retry and looked fixed.
+        ///
+        /// This is the second time these two drifted apart — the first was
+        /// `runDaemon` in `sage-voiced`. So this now lives beside the fields it
+        /// sets rather than in one of the two callers, and a test walks every
+        /// `ToolLoop` construction in the repo looking for a third.
+        public static func forStyle(_ style: ReplyStyle) -> Configuration {
+            Configuration(
+                systemPrompt: BrainPrompts.voiceAgentManager(style: style),
+                maxGeneratedTokens: style.maximumGeneratedTokens
+            )
+        }
+
         public init(
             systemPrompt: String = BrainPrompts.voiceAgentManager,
             maxIterations: Int = ToolLoop.defaultMaxIterations,
@@ -598,7 +640,7 @@ public final class ToolLoop: @unchecked Sendable {
             temperature: Double? = 0,
             reasoning: ReasoningPreference = .automatic,
             reasoningOnSummary: ReasoningPreference = .disabled,
-            maxGeneratedTokens: Int? = 1024,
+            maxGeneratedTokens: Int? = ReplyStyle.default.maximumGeneratedTokens,
             maxToolResultCharacters: Int = 6000,
             allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist
         ) {
@@ -1278,7 +1320,11 @@ public final class ToolLoop: @unchecked Sendable {
         }
 
         guard !reply.isEmpty else {
-            throw ToolLoopError.emptyReply
+            // Which kind of empty this is, said out loud. `wasTruncated` is
+            // already recorded on every model call for the trace; it is the only
+            // thing here that can tell "it ran out of room" from "it had nothing
+            // to say", and the owner-facing sentence differs completely.
+            throw trace.wasTruncated ? ToolLoopError.replyRanLong : ToolLoopError.emptyReply
         }
         return ToolLoopResult(reply: reply, trace: trace, messages: messages)
     }

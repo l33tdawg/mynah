@@ -57,7 +57,7 @@ enum MynahCopy {
         case ..<8: return "Thinking…"
         case ..<22: return "Still thinking…"
         case ..<45: return "Looking through what it remembers."
-        default: return "This one's a big recall — it can take a minute or more."
+        default: return "This one's a big one — could take a bit of time. Let me work on it."
         }
     }
 

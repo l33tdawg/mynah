@@ -395,29 +395,95 @@ final class MynahIdentityTests: XCTestCase {
     /// `runBrain` and not in `runDaemon`, so the owner's "Answer with voice
     /// notes" switch did nothing on the appliance and the token ceiling stayed at
     /// the spoken value. Both entry points now go through one resolver.
-    func testEveryEntryPointResolvesTheReplyStyle() throws {
-        let main = URL(fileURLWithPath: #filePath)
+    ///
+    /// **Widened in 1.5.1, because the guard was narrower than the bug.** It read
+    /// one file — `Sources/sage-voiced/main.swift` — and passed for three
+    /// releases while the window, in a different target, built a bare
+    /// `ToolLoop(backend:mcp:)` and inherited a written prompt on a spoken
+    /// budget. Asked for a PDF it truncated the `write_note` call mid-argument
+    /// and told the owner it had no answer. A guard that names the file it
+    /// checks only ever catches the bug it was written for, so this one now
+    /// walks every source file in the repository.
+    func testEveryToolLoopIsConfiguredFromAReplyStyle() throws {
+        let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/sage-voiced/main.swift")
-        let source = try String(contentsOf: main, encoding: .utf8)
+            .appendingPathComponent("Sources")
 
-        // Whitespace removed before counting, because the guard was checking
-        // formatting as much as intent: a construction wrapped across lines did
-        // not match `= ToolLoop(backend:` and silently stopped being counted.
-        // A guard that a line break can switch off is worse than none, because
-        // it still reports success.
-        let dense = source.filter { !$0.isWhitespace }
+        var checked = 0
+        var loops = 0
+        var offenders: [String] = []
 
-        // `=ToolLoop(backend:` rather than a bare mention, so a doc comment that
-        // names the type is not counted as a construction site.
-        let loops = dense.components(separatedBy: "=ToolLoop(backend:").count - 1
-        let configured = dense.components(separatedBy: "loopConfiguration(for:").count - 1
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            guard file.pathExtension == "swift" else { continue }
+            let source = try String(contentsOf: file, encoding: .utf8)
+
+            // Whitespace removed before counting, because the guard was checking
+            // formatting as much as intent: a construction wrapped across lines
+            // did not match `= ToolLoop(backend:` and silently stopped being
+            // counted. A guard that a line break can switch off is worse than
+            // none, because it still reports success.
+            let dense = source.filter { !$0.isWhitespace }
+
+            // `=ToolLoop(backend:` rather than a bare mention, so a doc comment
+            // that names the type is not counted as a construction site.
+            let here = dense.components(separatedBy: "=ToolLoop(backend:").count - 1
+            guard here > 0 else { continue }
+            checked += 1
+            loops += here
+
+            // Either resolver will do. `forStyle` is the one that knows; the
+            // daemon's `loopConfiguration(for:)` is a pass-through to it.
+            let styled = dense.components(separatedBy: "forStyle(").count - 1
+                + dense.components(separatedBy: "loopConfiguration(for:").count - 1
+            if styled < here {
+                offenders.append("\(file.lastPathComponent): \(here) built, \(styled) styled")
+            }
+        }
+
         XCTAssertGreaterThan(loops, 0, "could not find any ToolLoop construction to check")
-        XCTAssertEqual(
-            configured,
-            loops,
-            "\(loops) ToolLoop(s) but only \(configured) configured — an unconfigured one ignores the owner's reply-style setting"
+        XCTAssertGreaterThan(checked, 1, "only one file builds a ToolLoop — has a target moved?")
+        XCTAssertTrue(
+            offenders.isEmpty,
+            """
+            a ToolLoop built without a reply style takes the written prompt and the \
+            spoken token ceiling, which truncates a document mid-tool-call: \
+            \(offenders.joined(separator: "; "))
+            """
         )
+    }
+
+    /// The defect underneath that one, stated directly.
+    ///
+    /// `Configuration()`'s two defaults came from two different styles — the
+    /// prompt from `ReplyStyle.default`, the ceiling from a `1024` typed in
+    /// beside it. Every bare construction inherited the mismatch. Asserting they
+    /// agree means the next person to add a style cannot leave half of it behind.
+    func testTheBareConfigurationDefaultsAgreeWithEachOther() {
+        let bare = ToolLoop.Configuration()
+        XCTAssertEqual(
+            bare.maxGeneratedTokens,
+            ReplyStyle.default.maximumGeneratedTokens,
+            "the default token ceiling is not the default style's — a bare Configuration is half spoken, half written"
+        )
+        XCTAssertEqual(bare.systemPrompt, BrainPrompts.voiceAgentManager(style: .default))
+    }
+
+    /// And that `forStyle` sets both halves, for every style there is.
+    func testForStyleSetsThePromptAndTheCeilingTogether() {
+        for style in ReplyStyle.allCases {
+            let configuration = ToolLoop.Configuration.forStyle(style)
+            XCTAssertEqual(
+                configuration.maxGeneratedTokens,
+                style.maximumGeneratedTokens,
+                "\(style) got the wrong token ceiling"
+            )
+            XCTAssertEqual(
+                configuration.systemPrompt,
+                BrainPrompts.voiceAgentManager(style: style),
+                "\(style) got the wrong prompt"
+            )
+        }
     }
 
     func testLocalBrainTurnsOnSAGESemanticMemory() {
