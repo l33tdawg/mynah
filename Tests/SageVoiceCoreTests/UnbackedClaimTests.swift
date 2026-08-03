@@ -211,4 +211,74 @@ final class UnbackedClaimTests: XCTestCase {
         XCTAssertTrue(trace.summary.contains("[UNBACKED 2]"), trace.summary)
         XCTAssertFalse(trace.summary.contains("[PROMISED"), trace.summary)
     }
+
+    // MARK: - The opposite mistake: refusing something it can do
+
+    /// **Verbatim, from the 4B on the owner's Mac, asked for a PDF report.**
+    /// Both of these came back on the same question minutes apart, with
+    /// `write_note` sitting unused in the catalogue.
+    func testTheRefusalTheLocalModelActuallyWrites() {
+        let refusals = [
+            "I cannot generate a PDF file directly as I am an AI text model without the "
+                + "capability to create or deliver downloadable documents like that.",
+            "I cannot generate a PDF file directly. However, I can provide you with all the "
+                + "necessary information in this chat so you can easily copy it into your own "
+                + "document editor and save it as a PDF yourself.",
+            "I'm unable to create a Word document for you.",
+            "I can't produce a downloadable file, but here is the text.",
+            "I do not have the ability to attach documents."
+        ]
+
+        for refusal in refusals {
+            XCTAssertTrue(ToolLoop.readsAsRefusalToMakeAFile(refusal), refusal)
+        }
+    }
+
+    /// **The narrow part.** A model that cannot find a file, or that correctly
+    /// says a file cannot travel down a pipe, is telling the truth — and a guard
+    /// that contradicts a true sentence is worse than no guard.
+    func testATrueSentenceAboutAFileIsNotARefusal() {
+        let honest = [
+            "I can't find a note called “ferry tickets” — nothing by that name is saved.",
+            "That file cannot be sent to another agent; sage_pipe carries text, not files.",
+            "I've made the PDF and it's attached.",
+            "The PDF failed to convert, so you're getting the note itself.",
+            "I can make you a PDF — say the word.",
+            "You cannot open that file on a phone without a reader."
+        ]
+
+        for sentence in honest {
+            XCTAssertFalse(ToolLoop.readsAsRefusalToMakeAFile(sentence), sentence)
+        }
+    }
+
+    /// The correction names the tool. "You can do this" on its own gets a 4B to
+    /// agree warmly and still not call anything.
+    func testTheCorrectionNamesTheToolAndTheFormats() {
+        let correction = ToolLoop.fileRefusalCorrection
+
+        XCTAssertTrue(correction.contains("write_note"))
+        XCTAssertTrue(correction.contains("pdf"))
+        XCTAssertTrue(
+            correction.lowercased().contains("copy text"),
+            "the helpful-sounding version — “copy this into your own editor” — is the one "
+                + "that has to be named, because it is the one that sounds fine"
+        )
+    }
+
+    /// Only where a file can actually be made. On the call surface there is no
+    /// `write_note`, and there the refusal is the honest answer.
+    func testTheGuardKnowsWhichToolWouldMakeTheFile() {
+        XCTAssertEqual(ToolLoopTrace.fileWritingTools, ["write_note"])
+        XCTAssertTrue(ToolLoopTrace.fileWritingTools.isDisjoint(with: ["sage_recall", "web_search"]))
+    }
+
+    func testTheLogCountsRefusalsSeparatelyToo() {
+        var trace = ToolLoopTrace(model: "m", toolsOffered: 5)
+        trace.refusedToMakeAFile = 1
+
+        XCTAssertTrue(trace.summary.contains("[REFUSED 1]"), trace.summary)
+        XCTAssertFalse(trace.summary.contains("[UNBACKED"), trace.summary)
+    }
 }
+

@@ -66,12 +66,23 @@ public enum ReplyStyle: String, Sendable, Codable, CaseIterable {
     /// `https://www.google.com/maps/search/?api=1&query=...` is around 30
     /// tokens before the place name.
     ///
-    /// So the ceiling follows the style. Doubling it for written costs nothing
+    /// So the ceiling follows the style. Raising it for written costs nothing
     /// when the reply is short, because it is a ceiling and not a target.
+    ///
+    /// **Raised again in 1.5.0, because a document travels as a tool argument.**
+    /// `write_note` carries the whole report in `content`, so the ceiling is not
+    /// bounding a reply here — it is bounding the document. Measured on this
+    /// Mac: asked to compare local and hosted models and make a PDF, qwen3.5:4b
+    /// spent 704 characters thinking and then wrote a two-page report, and at
+    /// 2,048 the tool call was cut off mid-argument. A truncated call is not a
+    /// short answer, it is *no* answer — the call is dropped, the loop falls
+    /// through to the tools-withheld wrap-up, and the owner is told the thing
+    /// cannot be done at all. That is the failure this number caused, and it is
+    /// worse than a slow turn.
     public var maximumGeneratedTokens: Int {
         switch self {
         case .spoken: return 1024
-        case .written: return 2048
+        case .written: return 4096
         }
     }
 

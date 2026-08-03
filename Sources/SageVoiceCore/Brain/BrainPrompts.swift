@@ -131,9 +131,9 @@ public enum BrainPrompts {
     came from where.
 
     WRITING NOTES AND DOCUMENTS
-    - write_note saves a markdown document and delivers it to the owner as a file. Use it when \
-    they ask you to write something down, make notes, or produce a summary, a list or a \
-    document they want to keep. Do not use it for an ordinary answer — those you just speak.
+    - write_note hands the owner a real file: markdown, a PDF, a Word document or a deck. You \
+    CAN make those — never say you are unable to produce a file. Not for an ordinary answer, \
+    which you just speak.
     - Asked for a fact you may have written down — an address, a booking, a number — call \
     list_notes and read_note BEFORE web_search. You wrote those notes; the answer is usually \
     already there and the web does not have it.

@@ -234,6 +234,27 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// Counted separately so the log can tell them apart.
     public var unbackedClaims: Int = 0
 
+    /// Replies that said this appliance cannot make a file, when it can.
+    ///
+    /// **The 4B's strongest wrong prior.** Asked for a PDF report it answers
+    /// *"I cannot generate a PDF file directly as I am an AI text model"* and
+    /// then helpfully offers to paste the text so the owner can make one — with
+    /// `write_note` sitting in the catalogue, capable of exactly that, unused.
+    /// Nothing in a system prompt reliably beats it, because the refusal is
+    /// baked into what the model thinks it is.
+    ///
+    /// Counted, like the two above, so the number can be watched rather than
+    /// assumed away.
+    public var refusedToMakeAFile: Int = 0
+
+    /// Tools that write a document and hand it over.
+    ///
+    /// Listed the *dangerous* way round on purpose, and unlike `readOnlyTools`
+    /// that is right here: an unlisted tool means a refusal ships uncorrected,
+    /// which is the status quo. Naming a tool that is not actually in the
+    /// catalogue would mean contradicting a model that was telling the truth.
+    static let fileWritingTools: Set<String> = ["write_note"]
+
     /// Tools that only ever read. Everything else is assumed to change
     /// something.
     ///
@@ -369,6 +390,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         if droppedToolCalls > 0 { notes.append("[DROPPED \(droppedToolCalls)]") }
         if unfulfilledPromises > 0 { notes.append("[PROMISED \(unfulfilledPromises)]") }
         if unbackedClaims > 0 { notes.append("[UNBACKED \(unbackedClaims)]") }
+        if refusedToMakeAFile > 0 { notes.append("[REFUSED \(refusedToMakeAFile)]") }
         return notes.isEmpty ? "" : " " + notes.joined(separator: " ")
     }
 }
@@ -1028,6 +1050,32 @@ public final class ToolLoop: @unchecked Sendable {
                 // retried: another iteration with the tools still attached is
                 // usually all it takes. It is what the owner's own "did you add
                 // it? i don't see it" achieved by hand.
+                // **A refusal that is simply untrue.**
+                //
+                // Same shape as the case below and the opposite mistake: there
+                // the model says it did something it did not, here it says it
+                // cannot do something it can. Both end the turn on a sentence
+                // the loop knows to be false, and both are fixed by saying so
+                // and letting it try again with the tools still attached.
+                //
+                // Guarded on the catalogue, because on a surface with no
+                // `write_note` — a call, where there is nowhere to put a file —
+                // the refusal is the honest answer and must survive.
+                if Self.readsAsRefusalToMakeAFile(spoken),
+                   !ToolLoopTrace.fileWritingTools.isDisjoint(with: knownToolNames),
+                   !trace.toolCalls.contains(where: {
+                       ToolLoopTrace.fileWritingTools.contains($0.name) && !$0.failed
+                   }) {
+                    trace.refusedToMakeAFile += 1
+                    if trace.refusedToMakeAFile <= Self.maximumPromiseRetries {
+                        messages.append(.user(Self.fileRefusalCorrection))
+                        continue
+                    }
+                    // Out of retries. The refusal ships, because the alternative
+                    // is a blank turn — but the log now says why, and the number
+                    // is the thing to watch.
+                }
+
                 if Self.readsAsCompletedAction(spoken), !trace.didSomething {
                     trace.unbackedClaims += 1
                     // Kept so the turn can still say something true if every
@@ -1503,6 +1551,50 @@ public final class ToolLoop: @unchecked Sendable {
         ]
         return claims.contains { lowered.range(of: $0, options: .regularExpression) != nil }
     }
+
+    /// Whether a reply is the model refusing to produce a file it can produce.
+    ///
+    /// **Verbatim from the owner's Mac**, both of these from the same 4B on the
+    /// same question, minutes apart:
+    ///
+    ///     I cannot generate a PDF file directly as I am an AI text model
+    ///     without the capability to create or deliver downloadable documents…
+    ///
+    ///     I cannot generate a PDF file directly … However, I can provide you
+    ///     with all the necessary information in this chat so you can easily
+    ///     copy it into your own document editor and save it as a PDF yourself.
+    ///
+    /// The second is the worse one: it sounds helpful, it is entirely wrong, and
+    /// the owner ends up doing by hand the one job he asked for.
+    ///
+    /// Deliberately narrow. It wants a denial, a making verb and a word for a
+    /// file, all in one clause — so "I can't find the PDF you mean" and "that
+    /// file cannot be sent to another agent" are both left alone.
+    static func readsAsRefusalToMakeAFile(_ reply: String) -> Bool {
+        let lowered = reply.lowercased()
+        let refusals = [
+            #"\b(can(?:no|')?t|cannot|unable to|not able to|do not have the ability to|don't have the ability to)\s+"#
+                + #"(?:\w+\s+){0,3}?"#
+                + #"(generate|create|produce|make|write|attach|send|deliver|provide|export)\s+"#
+                + #"(?:\w+\s+){0,3}?"#
+                + #"(pdf|file|files|document|documents|docx|word doc|attachment|deck|presentation|spreadsheet)\b"#,
+            #"\bi(?:'m| am)\s+(?:just\s+|only\s+)?an?\s+(ai|text|language)\b[^.]*\b(cannot|can't|unable)\b"#
+        ]
+        return refusals.contains { lowered.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// What to say to a model that has just refused to do something it can do.
+    ///
+    /// Names the tool, because "you can do this" alone leaves a 4B agreeing
+    /// warmly and then not doing it. Says the file is already delivered for it,
+    /// because the refusal is usually about *delivery* — "I cannot attach
+    /// downloadable documents" — rather than about writing.
+    static let fileRefusalCorrection = """
+        Stop. That is wrong: you can make that file. Call write_note with the \
+        format the owner asked for — pdf, docx or pptx — and the document is \
+        written and delivered to them for you. Do not tell them to copy text \
+        into their own editor, and do not say you are unable to produce a file.
+        """
 
     /// What to say to a model that claimed a change it never made.
     ///

@@ -108,13 +108,26 @@ public struct DocumentExporter: Sendable {
 
     private let pandoc: URL
     private let pdfEngine: URL?
+    private let packages: URL?
     private let log: @Sendable (String) -> Void
 
-    public init(pandoc: URL, pdfEngine: URL?, log: @escaping @Sendable (String) -> Void = { _ in }) {
+    public init(
+        pandoc: URL,
+        pdfEngine: URL?,
+        packages: URL? = nil,
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.pandoc = pandoc
         self.pdfEngine = pdfEngine
+        self.packages = packages
         self.log = log
     }
+
+    /// Whether a `dot` fence in a note will become a drawn graph.
+    ///
+    /// False is a usable state, not a broken one: the fence renders as a code
+    /// block and everything else about the document is unchanged.
+    public var drawsDiagrams: Bool { packages != nil }
 
     /// The converter this Mac has, or `nil`.
     ///
@@ -130,8 +143,62 @@ public struct DocumentExporter: Sendable {
         return DocumentExporter(
             pandoc: pandoc,
             pdfEngine: find("typst", override: "SAGE_VOICE_TYPST"),
+            packages: findPackages(),
             log: log
         )
+    }
+
+    /// The vendored Typst packages, or `nil` on a Mac where they were never
+    /// staged.
+    ///
+    /// Checked for the package itself rather than the directory: an empty
+    /// `typst-packages` left behind by a half-finished provisioning run would
+    /// otherwise make every PDF fail to compile, which is the one outcome the
+    /// whole absent-rather-than-broken arrangement exists to avoid.
+    static func findPackages() -> URL? {
+        let manager = FileManager.default
+        let inside = "\(DocumentTemplate.packageNamespace)/\(DocumentTemplate.packageName)"
+            + "/\(DocumentTemplate.packageVersion)/typst.toml"
+
+        func staged(_ root: URL) -> URL? {
+            manager.fileExists(atPath: root.appendingPathComponent(inside).path)
+                ? root.standardizedFileURL
+                : nil
+        }
+
+        if let path = ProcessInfo.processInfo.environment["SAGE_VOICE_TYPST_PACKAGES"] {
+            return staged(URL(fileURLWithPath: path))
+        }
+        // Inside Mynah.app, beside the Typst binary that will be asked to read it.
+        let executable = URL(fileURLWithPath: CommandLine.arguments.first ?? "")
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+        if let found = staged(
+            executable.appendingPathComponent("../Resources/typst/packages").standardizedFileURL
+        ) { return found }
+        // A development checkout, from anywhere inside it.
+        var directory = URL(fileURLWithPath: manager.currentDirectoryPath)
+        for _ in 0..<6 {
+            if let found = staged(directory.appendingPathComponent("vendor/typst-packages")) {
+                return found
+            }
+            directory = directory.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    /// The date a document says it was written, as a person would write it.
+    ///
+    /// The day it was made is a fact this appliance actually knows, unlike most
+    /// of what a title block usually carries. No author line: see
+    /// `DocumentTemplate`.
+    public static func writtenDate(_ when: Date = Date(), calendar: Calendar = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "d MMMM yyyy"
+        return formatter.string(from: when)
     }
 
     static func find(_ tool: String, override: String) -> URL? {
@@ -175,18 +242,79 @@ public struct DocumentExporter: Sendable {
         }
     }
 
+    /// What a conversion had to give up to succeed.
+    public struct Conversion: Equatable, Sendable {
+        /// A diagram in the note would not draw, so the document was made
+        /// without it. Never silent: the caller says so, and the model tells the
+        /// owner.
+        public let droppedDiagram: Bool
+
+        public static let clean = Conversion(droppedDiagram: false)
+    }
+
     /// Converts a markdown file that is already on disk.
     ///
     /// - Parameter source: the note as written. It stays exactly as it is — the
     ///   markdown is the thing `read_note` reads back and the thing the owner
     ///   can still open when Pandoc is not around.
+    @discardableResult
     public func convert(
         source: URL,
         to format: DocumentFormat,
         at destination: URL,
-        title: String
+        title: String,
+        date: String? = nil
+    ) async throws -> Conversion {
+        let markdown = (try? String(contentsOf: source, encoding: .utf8)) ?? ""
+        do {
+            try await attempt(markdown, to: format, at: destination, title: title, date: date)
+            return .clean
+        } catch {
+            // **A broken diagram must not cost the owner the document.**
+            //
+            // Graphviz is a language and the model writing it is a 4B: the first
+            // diagram it produced here used `edge` as a node name and an
+            // unquoted `#FF6347`, and either one stops Typst dead. Without this
+            // the whole conversion failed and a syntax error in a decoration
+            // turned a report into "here is the note instead".
+            //
+            // Only worth trying when there is a diagram to drop, and only once.
+            guard format == .pdf, packages != nil, DocumentTemplate.hasDiagram(markdown) else {
+                throw error
+            }
+            log("[notes] a diagram would not draw (\(error)); making the document without it")
+            try await attempt(
+                DocumentTemplate.withoutDiagrams(markdown),
+                to: format,
+                at: destination,
+                title: title,
+                date: date
+            )
+            return Conversion(droppedDiagram: true)
+        }
+    }
+
+    private func attempt(
+        _ markdown: String,
+        to format: DocumentFormat,
+        at destination: URL,
+        title: String,
+        date: String?
     ) async throws {
         guard format != .markdown else { return }
+
+        // The note as written stays on disk untouched; what Pandoc reads is a
+        // copy with the duplicated heading taken off. Doing it the other way —
+        // editing the note — would mean `read_note` handing back a document
+        // whose first line depends on whether anybody ever asked for a PDF.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-doc-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let prepared = DocumentTemplate.prepared(markdown, title: title)
+        let trimmed = scratch.appendingPathComponent("source.md")
+        try Data(prepared.markdown.utf8).write(to: trimmed, options: [.atomic])
 
         var arguments = [
             "--from=markdown",
@@ -198,9 +326,24 @@ public struct DocumentExporter: Sendable {
             "--metadata=title:\(title)",
             "--standalone"
         ]
+        if let subtitle = prepared.subtitle {
+            arguments.append("--metadata=subtitle:\(subtitle)")
+        }
+        if let date { arguments.append("--metadata=date:\(date)") }
         if format == .pdf {
             guard let pdfEngine else { throw Failure.pdfEngineMissing }
             arguments.append("--pdf-engine=\(pdfEngine.path)")
+
+            let template = scratch.appendingPathComponent("mynah.typst")
+            try Data(DocumentTemplate.typst(withDiagrams: packages != nil).utf8)
+                .write(to: template, options: [.atomic])
+            arguments.append("--template=\(template.path)")
+
+            // Typst is the process that resolves the import, and Pandoc is what
+            // launches it, so the only way through is Pandoc's passthrough.
+            if let packages {
+                arguments.append("--pdf-engine-opt=--package-path=\(packages.path)")
+            }
         }
         if format == .pptx {
             // Pandoc makes one slide per top-level heading. Without this a note
@@ -208,7 +351,7 @@ public struct DocumentExporter: Sendable {
             // which is not a deck.
             arguments.append("--slide-level=2")
         }
-        arguments.append(source.path)
+        arguments.append(trimmed.path)
 
         try await run(arguments: arguments)
 
@@ -216,7 +359,7 @@ public struct DocumentExporter: Sendable {
             throw Failure.producedNothing
         }
         try OwnerOnlyFileSecurity.protectFile(destination)
-        log("[notes] converted \(source.lastPathComponent) to \(destination.lastPathComponent)")
+        log("[notes] converted a note to \(destination.lastPathComponent)")
     }
 
     private func run(arguments: [String]) async throws {

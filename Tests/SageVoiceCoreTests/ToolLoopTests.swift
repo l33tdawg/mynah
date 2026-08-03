@@ -112,6 +112,47 @@ final class ToolLoopTests: XCTestCase {
         ToolLoop(backend: backend, mcp: tools, configuration: configuration)
     }
 
+    // MARK: A refusal that is not true
+
+    /// **The 4B's strongest wrong prior, caught and corrected.**
+    ///
+    /// Asked for a PDF report it answers "I cannot generate a PDF file directly
+    /// as I am an AI text model" with `write_note` sitting unused in the
+    /// catalogue. One correction and it does the thing.
+    func testARefusalToMakeAFileIsCorrectedAndRetried() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering(
+                "I cannot generate a PDF file directly as I am an AI text model without the "
+                    + "capability to create or deliver downloadable documents like that. "
+                    + "However, I can provide the information here so you can copy it into "
+                    + "your own document editor."
+            ),
+            ScriptedBackend.calling("write_note"),
+            ScriptedBackend.answering("Made it — the PDF is on its way.")
+        ])
+        let tools = StubToolSource(toolNames: ["write_note", "list_notes"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        let result = try await loop.run(transcript: "compare X and Y and make me a pdf report")
+
+        XCTAssertEqual(tools.calls.map(\.name), ["write_note"], "the correction did not land")
+        XCTAssertEqual(result.trace.refusedToMakeAFile, 1)
+        XCTAssertEqual(result.reply, "Made it — the PDF is on its way.")
+    }
+
+    /// Nowhere to put a file, so the refusal is the honest answer and ships.
+    func testARefusalStandsWhereThereIsNoToolToMakeAFile() async throws {
+        let refusal = "I cannot generate a PDF file directly as I am an AI text model."
+        let backend = ScriptedBackend([ScriptedBackend.answering(refusal)])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        let result = try await loop.run(transcript: "make me a pdf")
+
+        XCTAssertEqual(result.reply, refusal)
+        XCTAssertEqual(result.trace.refusedToMakeAFile, 0)
+    }
+
     // MARK: The per-iteration tool cap
 
     /// Every tool call the model makes gets an answer, including the ones the

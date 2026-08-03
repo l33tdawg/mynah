@@ -108,6 +108,8 @@ PANDOC_ROOT="${SAGE_VOICE_PANDOC_ROOT:-$ROOT/vendor/pandoc}"
 PANDOC_SOURCE="${SAGE_VOICE_PANDOC:-$PANDOC_ROOT/bin/pandoc}"
 TYPST_ROOT="${SAGE_VOICE_TYPST_ROOT:-$ROOT/vendor/typst}"
 TYPST_SOURCE="${SAGE_VOICE_TYPST:-$TYPST_ROOT/bin/typst}"
+TYPST_PACKAGES_ROOT="${SAGE_VOICE_TYPST_PACKAGES_ROOT:-$ROOT/vendor/typst-packages}"
+DIAGRAPH_VERSION="${SAGE_VOICE_DIAGRAPH_VERSION:-0.3.5}"
 REQUIRE_DOCUMENTS="${SAGE_VOICE_REQUIRE_DOCUMENTS:-1}"
 
 # An ad-hoc signature cannot ship the dylib, and the failure is total.
@@ -456,6 +458,25 @@ Run scripts/provision-typst.sh before packaging.
 It is what turns a document into a PDF; without it pandoc would need LaTeX."
 fi
 
+# Graphviz, as WebAssembly inside a Typst package, which is what turns a ```dot
+# fence in a note into a drawn diagram. Data rather than a binary: nothing here
+# is signed or notarized separately, and it never reaches the network.
+#
+# Absence is survivable by design — `DocumentTemplate` leaves the import out and
+# a fence renders as a code block — so this is only fatal for a real release,
+# where a PDF with a page of `digraph {` in it is not what was promised.
+if [[ -f "$TYPST_PACKAGES_ROOT/local/diagraph/$DIAGRAPH_VERSION/typst.toml" ]]; then
+  [[ -f "$TYPST_PACKAGES_ROOT/local/diagraph/$DIAGRAPH_VERSION/graphviz_interface/diagraph.wasm" ]] \
+    || die "The diagraph package is staged without its Graphviz plugin, which is the only reason to ship it.
+Delete $TYPST_PACKAGES_ROOT and rerun scripts/provision-typst-packages.sh."
+  mkdir -p "$APP/Contents/Resources/typst/packages"
+  cp -R "$TYPST_PACKAGES_ROOT/." "$APP/Contents/Resources/typst/packages/"
+elif [[ "$REQUIRE_DOCUMENTS" == "1" || "$REQUIRE_DOCUMENTS" == "true" ]]; then
+  die "Required Typst packages are missing: $TYPST_PACKAGES_ROOT
+Run scripts/provision-typst-packages.sh before packaging.
+They are what draws a diagram into a PDF."
+fi
+
 if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
   if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
     cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
@@ -526,6 +547,15 @@ if [[ -x "$APP/Contents/Resources/pandoc/bin/pandoc" ]]; then
   [[ -f "$APP/Contents/Resources/licences/GPL-2.0.txt" ]] \
     || die "pandoc is GPL 2.0-or-later and ships in this bundle, but its licence text was not staged.
 Put the licence at resources/licences/GPL-2.0.txt."
+fi
+# The Graphviz inside the diagram plugin. A WASM file is still a binary somebody
+# else wrote, and EPL 2.0 asks for the same conveyance as any other copyleft.
+if [[ -d "$APP/Contents/Resources/typst/packages/local/diagraph" ]]; then
+  [[ -f "$APP/Contents/Resources/licences/EPL-2.0.txt" ]] \
+    || die "Graphviz is EPL 2.0 and ships in this bundle as WebAssembly, but its licence text was not staged.
+Put the licence at resources/licences/EPL-2.0.txt."
+  [[ -f "$APP/Contents/Resources/typst/packages/local/diagraph/$DIAGRAPH_VERSION/LICENSE" ]] \
+    || die "The diagraph package is MIT and its own licence text did not survive staging."
 fi
 
 if [[ "$BUNDLE_SAGE" != "0" && "$BUNDLE_SAGE" != "false" ]]; then

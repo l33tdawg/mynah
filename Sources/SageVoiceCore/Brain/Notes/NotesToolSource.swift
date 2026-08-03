@@ -239,7 +239,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                         ]),
                         "content": .object([
                             "type": .string("string"),
-                            "description": .string("The document itself. Markdown is fine here.")
+                            "description": .string(contentGuidance)
                         ]),
                         // Offered only where it can be honoured. A model told
                         // `pdf` is available on a Mac with no converter will use
@@ -319,6 +319,37 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                 ])
             )
         ]
+    }
+
+    /// What to put in a document, said where it costs nothing.
+    ///
+    /// **Here rather than in the system prompt on purpose.** The prompt is held
+    /// under a hard character budget because every line of it is prefilled on
+    /// every turn, including the thousands of turns that never write a document.
+    /// A tool schema is read at the moment the model is choosing to write one,
+    /// which is both cheaper and better placed.
+    ///
+    /// The diagram sentence appears only where a diagram can actually be drawn.
+    /// A model told it can draw one on a Mac with no Graphviz staged would write
+    /// the fence, and the owner would get a page of `digraph {` in a monospace
+    /// box where a picture was promised.
+    var contentGuidance: String {
+        var lines = [
+            "The document itself. Markdown is fine here — headings, lists, "
+                + "tables and short paragraphs all come out properly typeset. "
+                + "Put every list item on its own line starting with \"- \"; "
+                + "items strung along one line read as a paragraph full of hyphens."
+        ]
+        if exporter?.drawsDiagrams == true, offeredFormats.contains(.pdf) {
+            lines.append(
+                "Where a picture says it better than a sentence — a flow, a "
+                    + "comparison, how things connect — include a ```dot fenced block "
+                    + "of Graphviz and it is drawn into the document. Plain nodes and "
+                    + "edges with labels; no subgraphs or clusters, and quote every "
+                    + "colour. One or two at most, and only where one genuinely helps."
+            )
+        }
+        return lines.joined(separator: " ")
     }
 
     /// The formats this Mac can actually produce, markdown always first.
@@ -443,14 +474,23 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             .appendingPathComponent(slug + "." + format.fileExtension, isDirectory: false)
         do {
             try OwnerOnlyFileSecurity.prepareDirectory(documentsDirectory)
-            try await exporter.convert(
+            let conversion = try await exporter.convert(
                 source: source,
                 to: format,
                 at: destination,
-                title: title
+                title: title,
+                date: DocumentExporter.writtenDate()
             )
-            return (destination, "It was made into \(format.spokenName): "
-                + destination.lastPathComponent + ".")
+            var note = "It was made into \(format.spokenName): "
+                + destination.lastPathComponent + "."
+            // Said rather than swallowed. The owner asked for a diagram and is
+            // getting a document without one; a model that does not know that
+            // will describe a picture that is not on the page.
+            if conversion.droppedDiagram {
+                note += " The diagram in it would not draw, so the document was made without it —"
+                    + " say so in passing, in one short clause."
+            }
+            return (destination, note)
         } catch {
             log("[notes] could not convert \(slug) to \(format.rawValue): \(error)")
             let reason = (error as? DocumentExporter.Failure)?.description
