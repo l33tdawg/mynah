@@ -71,6 +71,53 @@ final class SpokenDateTests: XCTestCase {
         assertDay("chiro this wednesday", is: "2026-08-05 00:00")
     }
 
+    /// **"friday next week" is one day, not two.**
+    ///
+    /// The owner asked to add something *"by friday next week"* and got nothing
+    /// at all. "friday" resolves to the coming Friday and "next week" to seven
+    /// days out, and two distinct days in one sentence is deliberately
+    /// `.ambiguous` — the rule that stops "move it from Wednesday to Friday"
+    /// being silently guessed at. Right rule, wrong input: this is one English
+    /// phrase naming one day, and refusing it left the task undated.
+    ///
+    /// Today is Sunday 2 August. Next week's Friday is the 14th — not the 7th,
+    /// which is the coming Friday and the error that would be hardest to
+    /// notice, because a task dated a week early still looks correctly dated.
+    func testAWeekdayNextWeekIsOneDay() {
+        assertDay("review the agreement by friday next week", is: "2026-08-14 00:00")
+        assertDay("call them thursday next week", is: "2026-08-13 00:00")
+    }
+
+    func testTheOtherWaysOfSayingIt() {
+        assertDay("friday of next week", is: "2026-08-14 00:00")
+        assertDay("next week on friday", is: "2026-08-14 00:00")
+        assertDay("next week, friday", is: "2026-08-14 00:00")
+    }
+
+    /// It must not swallow the plain forms. "next week" alone is still seven
+    /// days out, and a bare weekday is still the coming one.
+    func testThePlainFormsAreUntouched() {
+        assertDay("haircut next week", is: "2026-08-09 00:00")
+        assertDay("meeting with TII IT on tuesday", is: "2026-08-04 00:00")
+    }
+
+    /// And it must not resolve genuinely ambiguous sentences that happen to
+    /// contain both words far apart.
+    func testTwoSeparateDaysAreStillAmbiguous() {
+        guard case .ambiguous = SpokenDate.resolve(
+            in: "move the chiro from wednesday to friday",
+            now: now,
+            calendar: calendar
+        ) else {
+            return XCTFail("two weekdays in one sentence must not resolve silently")
+        }
+    }
+
+    /// A time still refines it, so "friday next week at 3pm" is a moment.
+    func testItStillTakesATime() {
+        assertDay("review it friday next week at 3pm", is: "2026-08-14 15:00")
+    }
+
     func testABareWeekdayIsTheSameDay() {
         assertDay("meeting with TII IT on tuesday", is: "2026-08-04 00:00")
     }

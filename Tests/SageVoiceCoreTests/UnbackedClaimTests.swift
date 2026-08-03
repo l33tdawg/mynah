@@ -184,6 +184,24 @@ final class UnbackedClaimTests: XCTestCase {
         )
     }
 
+    /// **A caught false claim must never become silence.**
+    ///
+    /// The first version of the guard sent the model back to try again, and a
+    /// retry that came back blank left the turn with nothing — so asking Mynah
+    /// to add a task produced "Mynah didn't have an answer for that."
+    ///
+    /// That is worse than the bug it replaced in one specific way: the owner now
+    /// has no idea whether anything was written. The truth is still known at
+    /// that point — a claim was made and nothing backed it — so it gets said.
+    func testARetryThatComesBackEmptyStillTellsTheOwnerTheTruth() {
+        let claimed = "Added — review modular malaya x music bliss agreement by Friday."
+        let flagged = ToolLoop.flaggedAsUnconfirmed(claimed)
+
+        XCTAssertFalse(flagged.isEmpty)
+        XCTAssertTrue(flagged.contains("have NOT saved"))
+        XCTAssertTrue(flagged.contains(claimed), "the owner should still see what it thought it did")
+    }
+
     /// The log can tell the two failure modes apart, because they call for
     /// opposite fixes.
     func testTheLogDistinguishesItFromAnUnfulfilledPromise() {

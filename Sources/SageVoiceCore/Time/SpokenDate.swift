@@ -297,6 +297,54 @@ public enum SpokenDate {
         "thursday": 5, "friday": 6, "saturday": 7
     ]
 
+    /// "friday next week", "next week on friday", "friday of next week".
+    ///
+    /// One anchor for one phrase. Resolved as the named weekday inside the week
+    /// that follows this one, which is what somebody saying it means: on a
+    /// Monday, "friday next week" is eleven days away, not four. Taking the
+    /// coming Friday would put a deadline a week early — the failure that is
+    /// hardest to notice, because the task looks correctly dated.
+    ///
+    /// Weeks are counted from the calendar's own `firstWeekday`, so this follows
+    /// the owner's locale rather than an assumption about when a week starts.
+    private static func weekdayOfNextWeek(
+        in text: String,
+        today: Date,
+        calendar: Calendar
+    ) -> Anchor? {
+        let lower = text.lowercased()
+        let names = weekdays.keys.sorted { $0.count > $1.count }.joined(separator: "|")
+        let patterns = [
+            #"\b(\#(names))\s+(of\s+)?next\s+week\b"#,
+            #"\bnext\s+week\s*,?\s+(on\s+)?(\#(names))\b"#
+        ]
+
+        for pattern in patterns {
+            guard let range = lower.range(of: pattern, options: .regularExpression) else { continue }
+            let phrase = String(lower[range])
+            guard let name = weekdays.keys.first(where: { phrase.contains($0) }),
+                  let target = weekdays[name] else { continue }
+
+            // Start of the week after this one, then the named day within it.
+            guard let thisWeek = calendar.dateInterval(of: .weekOfYear, for: today)?.start,
+                  let nextWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: thisWeek),
+                  let day = calendar.nextDate(
+                      after: calendar.date(byAdding: .second, value: -1, to: nextWeek) ?? nextWeek,
+                      matching: DateComponents(weekday: target),
+                      matchingPolicy: .nextTime,
+                      direction: .forward
+                  )
+            else { continue }
+
+            return Anchor(
+                day: calendar.startOfDay(for: day),
+                phrase: phrase,
+                position: lower.distance(from: lower.startIndex, to: range.lowerBound)
+            )
+        }
+        return nil
+    }
+
     private static let numberWords = [
         "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
         "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -310,6 +358,22 @@ public enum SpokenDate {
         func add(_ phrase: String, _ day: Date?, at position: Int) {
             guard let day else { return }
             found.append(Anchor(day: day, phrase: phrase, position: position))
+        }
+
+        // **"friday next week" is one day, not two.**
+        //
+        // The owner asked to add something "by friday next week" and got
+        // nothing: "friday" resolves to the coming Friday, "next week" to seven
+        // days out, and two distinct days in one sentence is `.ambiguous` by
+        // design — the rule that stops "move it from Wednesday to Friday" being
+        // silently guessed at. Correct rule, wrong input: this is a single
+        // English phrase naming a single day, and refusing it left a task with
+        // no date at all.
+        //
+        // Handled here and returned immediately, so neither half is also matched
+        // separately below.
+        if let combined = weekdayOfNextWeek(in: text, today: today, calendar: calendar) {
+            return [combined]
         }
 
         // Longest first, always. "day after tomorrow" contains "tomorrow", and

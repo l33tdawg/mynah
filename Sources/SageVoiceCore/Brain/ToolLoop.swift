@@ -881,6 +881,9 @@ public final class ToolLoop: @unchecked Sendable {
 
         var trace = ToolLoopTrace(model: backend.modelName, toolsOffered: catalogue.count)
         var reply = ""
+        /// The last thing the model claimed without backing it, so a correction
+        /// that runs out of road still has something honest to say.
+        var lastUnbackedClaim: String?
         let cap = max(1, configuration.maxIterations)
 
         // Progress on a wall clock, in its own task, because the loop's position
@@ -1027,6 +1030,11 @@ public final class ToolLoop: @unchecked Sendable {
                 // it? i don't see it" achieved by hand.
                 if Self.readsAsCompletedAction(spoken), !trace.didSomething {
                     trace.unbackedClaims += 1
+                    // Kept so the turn can still say something true if every
+                    // retry comes back blank. Without it the correction path can
+                    // end in silence, which tells the owner less than the false
+                    // claim did.
+                    lastUnbackedClaim = spoken
                     if trace.unbackedClaims <= Self.maximumPromiseRetries {
                         messages.append(.user(Self.unbackedClaimCorrection))
                         continue
@@ -1205,6 +1213,21 @@ public final class ToolLoop: @unchecked Sendable {
         }
 
         trace.totalDurationSeconds = Date().timeIntervalSince(started)
+
+        // **A caught false claim must never become silence.**
+        //
+        // The guard above sends the model back to try again, and a retry can end
+        // with nothing to say — a blank response, or the budget running out
+        // mid-correction. That threw `emptyReply`, so the owner asked Mynah to
+        // add a task and got "Mynah didn't have an answer for that."
+        //
+        // Which is a worse outcome than the bug it replaced in one specific way:
+        // he now has no idea whether anything was written. The whole point of
+        // catching the claim is to tell him the truth about it, and the truth is
+        // still known here — the claim was made, and nothing backed it.
+        if reply.isEmpty, trace.unbackedClaims > 0, let claimed = lastUnbackedClaim {
+            reply = Self.flaggedAsUnconfirmed(claimed)
+        }
 
         guard !reply.isEmpty else {
             throw ToolLoopError.emptyReply
