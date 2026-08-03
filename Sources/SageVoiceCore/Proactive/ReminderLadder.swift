@@ -84,14 +84,19 @@ public enum ReminderLadder {
     /// Never throws, never reads a clock, never touches a network. The same
     /// tasks at the same instant against the same ledger return the same answer
     /// forever, which is what makes any of this testable.
+    /// - Parameter mirrored: task ids the calendar is already holding an event
+    ///   for. Their run-up rungs are left to the OS; see `nudge(for:…)`.
     public static func due(
         tasks: [WatchedTask],
         alreadySaid: Set<String>,
         now: Date,
+        mirrored: Set<String> = [],
         calendar: Calendar = .current
     ) -> [Nudge] {
         tasks
-            .compactMap { nudge(for: $0, now: now, calendar: calendar) }
+            .compactMap {
+                nudge(for: $0, now: now, inCalendar: mirrored.contains($0.id), calendar: calendar)
+            }
             .filter { !alreadySaid.contains($0.key) }
     }
 
@@ -112,7 +117,25 @@ public enum ReminderLadder {
     /// days overdue, and a version that returned every rung a task had passed
     /// would deliver the entire ladder in one message the first time the ledger
     /// was empty.
-    static func nudge(for task: WatchedTask, now: Date, calendar: Calendar) -> Nudge? {
+    /// - Parameter inCalendar: whether an event for this task exists in Mynah's
+    ///   own calendar.
+    ///
+    ///   **The run-up rungs then belong to the OS.** A calendar alert fires
+    ///   whether or not this Mac is awake and reaches the owner's phone and
+    ///   watch, which is strictly better than a 60-second tick in a daemon —
+    ///   and sending both would mean being told about the dentist twice, which
+    ///   is how somebody turns the whole feature off.
+    ///
+    ///   The overdue check-in is deliberately unaffected. *"That was yesterday,
+    ///   move it or drop it?"* is a question, and a calendar alert has nowhere to
+    ///   put the answer. So the split is: iCal owns "it is happening soon",
+    ///   Mynah owns "it did not happen, what now".
+    static func nudge(
+        for task: WatchedTask,
+        now: Date,
+        inCalendar: Bool = false,
+        calendar: Calendar
+    ) -> Nudge? {
         guard let written = SpokenDate.writtenDateMatch(in: task.title, calendar: calendar) else {
             return nil
         }
@@ -129,6 +152,8 @@ public enum ReminderLadder {
         guard now < lapsesAt else {
             return overdue(task: task, what: what, due: written.at, now: now, calendar: calendar)
         }
+        // Everything below this line is a run-up rung, and the calendar has them.
+        guard !inCalendar else { return nil }
         guard written.granularity == .minute else {
             return dayShaped(task: task, what: what, due: written.at, now: now, calendar: calendar)
         }

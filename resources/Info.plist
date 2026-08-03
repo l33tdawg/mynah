@@ -83,6 +83,24 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>Mynah asks for the microphone only if you choose to hold the talk button and speak to it from this Mac. It never listens in the background, and what you say is turned into words on this Mac.</string>
 
+  <!-- Only asked for at the moment Mynah first has a dated task to mirror, not
+       at launch: an appliance that demands calendar access on first run, before
+       it has earned anything, is one people decline permanently. The key has to
+       be here regardless, because a bundle that gains a usage string later has
+       to be re-signed and re-notarized to pick it up — and because asking
+       without one crashes the process rather than showing a prompt.
+
+       Full access rather than write-only. Write-only cannot read back an event
+       it wrote, and without that there is no way to change or remove one when
+       the owner moves a deadline: the identifier resolves to nothing and the
+       calendar fills up with orphans. -->
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Mynah keeps its own calendar, named Mynah, and puts your dated tasks in it so your Mac, phone and watch can do the reminding. It only ever writes to that one calendar, and deleting it removes everything Mynah put there.</string>
+  <!-- The pre-macOS 14 spelling. Harmless on 14 and later, and the difference
+       between a prompt and a crash on anything older. -->
+  <key>NSCalendarsUsageDescription</key>
+  <string>Mynah keeps its own calendar, named Mynah, and puts your dated tasks in it so your Mac, phone and watch can do the reminding. It only ever writes to that one calendar, and deleting it removes everything Mynah put there.</string>
+
   <!-- Mynah is an appliance: it answers the phone whether or not a window is
        open. Letting macOS terminate it quietly at logout or under memory
        pressure would mean messages going unanswered with nothing to see. -->

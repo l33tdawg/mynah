@@ -161,6 +161,24 @@ public struct ProactiveReport: Sendable, Equatable {
     /// most checks, and is the point.
     public let message: String?
     public let ledger: ProactiveLedger
+
+    /// The open tasks this check actually read, or `nil` when the node could
+    /// not be asked.
+    ///
+    /// **Carried out separately from `ledger.lastSeenTasks`, which cannot answer
+    /// the question.** That field deliberately keeps its old contents when a
+    /// check fails, so "the node said nothing is dated any more" and "the node
+    /// did not answer" look identical in it. The calendar mirror has to tell
+    /// those apart: read as an empty list, an unreachable node would mean every
+    /// dated task had just been finished, and the mirror would delete the
+    /// owner's calendar entries.
+    public let sawTasks: [WatchedTask]?
+
+    public init(message: String?, ledger: ProactiveLedger, sawTasks: [WatchedTask]? = nil) {
+        self.message = message
+        self.ledger = ledger
+        self.sawTasks = sawTasks
+    }
 }
 
 // MARK: - Checking without being asked
@@ -286,14 +304,16 @@ public struct ProactiveWatch: Sendable {
         // above, arriving one tick later.
         guard ledger.hasSeeded else {
             updated.hasSeeded = messages != nil || tasks != nil
-            return ProactiveReport(message: nil, ledger: updated)
+            return ProactiveReport(message: nil, ledger: updated, sawTasks: tasks)
         }
 
         let lines = newMessages.map(Self.line(forMessage:)) + taskNews
         guard !lines.isEmpty else {
-            return ProactiveReport(message: nil, ledger: updated)
+            return ProactiveReport(message: nil, ledger: updated, sawTasks: tasks)
         }
-        return ProactiveReport(message: Self.message(from: lines), ledger: updated)
+        return ProactiveReport(
+            message: Self.message(from: lines), ledger: updated, sawTasks: tasks
+        )
     }
 
     // MARK: What changed

@@ -46,6 +46,7 @@ func usage() -> Never {
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
                          [--reply-prefix "MYNAH >> "] [--acknowledge]
       sage-voiced check [--sage PATH]                     one proactive check, printed
+      sage-voiced calendar [--plan|--undo] [--sage PATH]  mirror dated tasks into iCal
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
     Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
@@ -1055,6 +1056,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             await runProactiveWatch(
                 source: SageProactiveSource(tools: mcp),
                 ownEdits: ownTaskEdits,
+                calendar: CalendarSync(
+                    calendar: EventKitCalendar(log: { note($0) }),
+                    log: { note($0) }
+                ),
                 arrivedReplies: {
                     guard let ritual else { return [] }
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
@@ -1086,7 +1091,108 @@ case "google":      runGoogle(Array(arguments.dropFirst()))
 case "key":         runKey(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 case "check":       runCheck(Array(arguments.dropFirst()))
+case "calendar":    runCalendar(Array(arguments.dropFirst()))
 default:            usage()
+}
+
+// MARK: - calendar
+
+/// One calendar sync, by hand, with everything it did printed.
+///
+/// **The only end-to-end this feature can have.** `CalendarMirrorTests` proves
+/// the difference engine against a stub, which is every decision and none of the
+/// wiring: whether this Mac grants access at all, whether a calendar can be made
+/// in the iCloud account, whether an event written on one tick can still be found
+/// on the next. Those are exactly the failures that otherwise show up as an
+/// appliance that has been silent for a week with nobody able to say whether that
+/// is correct.
+///
+/// Three modes, and the first is the safe one:
+///
+///     sage-voiced calendar --plan     what it would do; asks for nothing
+///     sage-voiced calendar            does it, for real
+///     sage-voiced calendar --undo     removes the calendar and everything in it
+///
+/// `--plan` deliberately never touches EventKit, so it can be run on a Mac that
+/// has refused access and still answer "is it reading the right tasks".
+func runCalendar(_ arguments: [String]) -> Never {
+    let flags = parseFlags(arguments)
+    let planOnly = arguments.contains("--plan")
+    let undo = arguments.contains("--undo")
+    let sagePath = flags["sage"]
+        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
+        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let ledgerURL = CalendarLedger.defaultFileURL()
+
+    runAndExit {
+        if undo {
+            let ledger = CalendarLedger.load(from: ledgerURL)
+            let calendar = EventKitCalendar(log: { print($0) })
+            guard await calendar.prepare() else {
+                print("no calendar access, so there is nothing this can remove")
+                return 1
+            }
+            // The calendar goes, which takes every event with it. Removing them
+            // one at a time first would leave an empty calendar behind and call
+            // that finished.
+            do { try calendar.forget() } catch {
+                print("could not remove the calendar: \(error)")
+                return 1
+            }
+            try? FileManager.default.removeItem(at: ledgerURL)
+            print("removed \(ledger.events.count) event(s) and the calendar itself")
+            return 0
+        }
+
+        let mcp = MCPClient(
+            executableURL: URL(fileURLWithPath: sagePath),
+            arguments: ["mcp"],
+            environment: MynahIdentity.applianceEnvironment()
+        )
+        defer { mcp.stop() }
+
+        // Nil rather than `?? []`, and the reason is the whole safety property:
+        // a node that could not be asked must never look like a node with no
+        // dated tasks, or the sync would empty the owner's calendar.
+        let tasks = try? await SageProactiveSource(tools: mcp).openTasks()
+        guard let tasks else {
+            print("could not ask the node for its tasks, so nothing was changed")
+            return 1
+        }
+        let dated = tasks.compactMap { CalendarEntry.from($0) }
+        print("tasks: \(tasks.count) open, \(dated.count) with a date in them")
+        for entry in dated {
+            print("  - \(entry.title) — \(entry.starts)\(entry.isAllDay ? " (all day)" : "")")
+        }
+
+        let ledger = CalendarLedger.load(from: ledgerURL)
+        let plan = CalendarMirror.plan(tasks: tasks, against: ledger)
+        print("")
+        print("plan: \(plan.add.count) to add, \(plan.update.count) to update, "
+            + "\(plan.remove.count) to remove")
+        for entry in plan.add { print("  + \(entry.title)") }
+        for (entry, _) in plan.update { print("  ~ \(entry.title)") }
+        for (taskID, _) in plan.remove { print("  - the event for \(taskID)") }
+
+        guard !planOnly else {
+            print("")
+            print("--plan, so nothing was written. Run without it to do this for real.")
+            return 0
+        }
+
+        let sync = CalendarSync(calendar: EventKitCalendar(log: { print($0) }), log: { print($0) })
+        let outcome = await sync.run(tasks: tasks, ledger: ledger)
+        if outcome.ledger != ledger { try? outcome.ledger.save(to: ledgerURL) }
+
+        print("")
+        print("mirroring \(outcome.ledger.events.count) event(s)")
+        print("ladder run-up nudges suppressed for: \(outcome.mirrored.sorted().joined(separator: ", "))")
+        if let trouble = outcome.trouble {
+            print("trouble: \(trouble)")
+            return 1
+        }
+        return 0
+    }
 }
 
 
@@ -1222,12 +1328,16 @@ func runProactiveWatch(
     /// Set by a turn that wrote to the task list, so this loop absorbs the
     /// owner's own edit instead of reporting it back to him. See `OwnTaskEdits`.
     ownEdits: OwnTaskEdits? = nil,
+    /// Mirrors dated tasks into the owner's Calendar. `nil` switches the whole
+    /// thing off; everything else here behaves exactly as it did before.
+    calendar: CalendarSync? = nil,
     arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
     say: @escaping @Sendable (String) async -> Void,
     log: @escaping @Sendable (String) -> Void
 ) async {
     let watch = ProactiveWatch(source: source)
     let ledgerURL = ProactiveLedger.defaultFileURL()
+    let calendarLedgerURL = CalendarLedger.defaultFileURL()
 
     while !Task.isCancelled {
         try? await Task.sleep(for: .seconds(ProactiveSchedule.tick))
@@ -1253,10 +1363,18 @@ func runProactiveWatch(
         // has not already happened by then.
         let now = Date()
         if preferences.isOn, !preferences.isQuiet(at: now) {
+            // Read every tick rather than remembered, because the sync that
+            // writes it runs on the owner's interval while this runs every
+            // minute — and because a daemon restart between the two must not
+            // resurrect the run-up nudges for things the calendar already has.
+            let mirrored = calendar == nil
+                ? []
+                : Set(CalendarLedger.load(from: calendarLedgerURL).events.keys)
             let nudges = ReminderLadder.due(
                 tasks: ledger.lastSeenTasks,
                 alreadySaid: ledger.saidReminders,
-                now: now
+                now: now,
+                mirrored: mirrored
             )
             if !nudges.isEmpty {
                 // Written before speaking, not after. A crash between the two
@@ -1288,6 +1406,21 @@ func runProactiveWatch(
         ledger = report.ledger
         ledger.lastCheckedAt = Date()
         try? ledger.save(to: ledgerURL)
+
+        // On the same look that just read the node, so the calendar is never
+        // one interval behind the list and the node is not asked twice. Handed
+        // `report.sawTasks` rather than the ledger's cache: `nil` there means
+        // "could not ask", and the sync must not read that as "nothing is dated
+        // any more" and empty the owner's calendar.
+        if let calendar {
+            let before = CalendarLedger.load(from: calendarLedgerURL)
+            let outcome = await calendar.run(tasks: report.sawTasks, ledger: before)
+            if outcome.ledger != before {
+                try? outcome.ledger.save(to: calendarLedgerURL)
+                log("[calendar] mirroring \(outcome.ledger.events.count) dated task(s)")
+            }
+            if let trouble = outcome.trouble { log("[calendar] \(trouble)") }
+        }
 
         // Said first and on its own, ahead of any "here is what changed"
         // digest. A reply is the answer to an errand the owner sent, so it is

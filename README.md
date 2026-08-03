@@ -55,8 +55,17 @@ once-a-day update check against GitHub.
   request.
 - Searches the web when the answer was never yours to begin with — Brave when
   `BRAVE_SEARCH_API_KEY` is set, DuckDuckGo otherwise, so it works with no key.
-- Writes, reads and lists notes as real files on the Mac, and exports them as
-  PDF, Word or a deck where the converters are staged.
+- Writes, reads and lists notes as real files on the Mac, and exports them as a
+  PDF, a Word document or a deck where the converters are staged. A PDF is
+  typeset rather than printed: A4, a serif for prose and a sans for headings, a
+  title block, running headers, real tables. Where a picture says it better than
+  a sentence, a ```` ```dot ```` fence is drawn into the page by Graphviz —
+  compiled to WebAssembly inside the PDF engine, so there is no second binary
+  and nothing to fetch.
+- Puts dated tasks in a calendar of its own, named Mynah, so macOS does the
+  reminding on your phone and watch. It is a mirror: SAGE stays the source of
+  truth, only dated items go in, and deleting the calendar removes everything it
+  put there.
 - Keeps whatever you send it — photos, tickets, PDFs — and sends any of it back
   when you ask, as a Signal attachment or as a file to click in the window. What
   it does with one depends on the kind: a picture is described where the brain
@@ -65,6 +74,9 @@ once-a-day update check against GitHub.
 - Reminds you about dated work as the day approaches rather than on a fixed
   alarm, so a Mac that was asleep says "in about two hours" rather than
   yesterday's line. Things happening at the same time are grouped on the board.
+  Where the calendar has the same item, the run-up nudges are left to the OS and
+  Mynah keeps only the overdue check-in — because "did that happen, or should I
+  move it?" is a question, and a calendar alert has nowhere to put the answer.
 - Finds another agent on your SAGE node from its own roster, hands it a job, and
   tells you what came back.
 - Shows the work assigned to it on Home, read from `sage_backlog`.
@@ -415,8 +427,16 @@ relay refuses `/appliance/enrol` and appliances have to be provisioned by hand.
 The appliance reads its own secret from `~/.sage/call-relay.secret`.
 
 `sage-voiced` is the debugging surface for all of it — `transcribe`, `brain`,
-`search`, `setup`, `verify-sage`, `key`, `google`, `daemon`. Run it with no
-arguments for usage.
+`search`, `setup`, `verify-sage`, `key`, `google`, `daemon`, `check`,
+`calendar`. Run it with no arguments for usage.
+
+Two of those exist because the unit tests cover the decisions and prove nothing
+about the wiring. `check` runs one proactive look and prints what it *would*
+say, without consuming the news. `calendar --plan` prints the events it would
+write and touches nothing — the useful thing to run first, because it answers
+"is it reading the right tasks, and do the titles read properly" before anything
+is asked for calendar access. Without `--plan` it does one real sync; `--undo`
+removes the calendar and everything in it.
 
 ## Tests
 
