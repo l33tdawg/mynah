@@ -317,7 +317,20 @@ public struct DocumentExporter: Sendable {
         try Data(prepared.markdown.utf8).write(to: trimmed, options: [.atomic])
 
         var arguments = [
-            "--from=markdown",
+            // **`autolink_bare_uris`, or a Sources list is dead text.**
+            //
+            // Pandoc turns `[name](url)` into a link on its own, and the
+            // template has styled links blue since the day it was written — but
+            // a model writing a references section writes the address by itself,
+            // on its own line, because that is what a citation looks like. With
+            // the plain `markdown` reader those are characters, so the owner got
+            // a page of blue-less URLs he had to retype: *"can we make the URLs
+            // in the pdf clickable?"*
+            //
+            // The extension is on the reader rather than a fix-up on the text,
+            // because Pandoc already knows where a URI ends and a sentence
+            // resumes, and a regular expression written here would not.
+            "--from=markdown+autolink_bare_uris",
             "--output=\(destination.path)",
             // Without this the document has no title inside it — DOCX and PPTX
             // both carry one in their metadata, and a deck whose properties say

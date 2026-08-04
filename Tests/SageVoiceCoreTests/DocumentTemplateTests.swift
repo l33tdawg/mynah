@@ -463,6 +463,82 @@ final class DocumentTemplateTests: XCTestCase {
         return (conversion, try XCTUnwrap(PDFDocument(url: destination), "the PDF would not open"))
     }
 
+    // MARK: - Links somebody can actually press
+
+    /// Every URL the rendered PDF carries as a real link annotation.
+    ///
+    /// Annotations rather than text, because the two come apart in exactly the
+    /// way that matters here: a URL can be on the page, in the right colour, and
+    /// still be nothing but characters. Only the annotation is clickable.
+    private func linkedURLs(in pdf: PDFDocument) -> [String] {
+        var found: [String] = []
+        for index in 0..<pdf.pageCount {
+            guard let page = pdf.page(at: index) else { continue }
+            for annotation in page.annotations {
+                if let url = annotation.url ?? (annotation.action as? PDFActionURL)?.url {
+                    found.append(url.absoluteString)
+                }
+            }
+        }
+        return found
+    }
+
+    /// **A references section is written as bare addresses, and they were dead.**
+    ///
+    /// Pandoc links `[name](url)` on its own and the template has styled links
+    /// blue from the start — but a model writing sources puts the address on its
+    /// own line, which the plain `markdown` reader leaves as characters. The
+    /// owner got a page of URLs he had to retype.
+    func testABareURLBecomesSomethingYouCanPress() async throws {
+        let pdf = try await renderedPDF(
+            markdown: """
+            ## Sources
+
+            - https://www.nvidia.com/en-us/products/workstations/dgx-spark/
+            - https://developer.nvidia.com/blog/dgx-spark-benchmarks/
+            """,
+            title: "Sources"
+        )
+        let links = linkedURLs(in: pdf)
+        XCTAssertTrue(
+            links.contains { $0.contains("nvidia.com") },
+            "a bare URL is still just text: \(links)"
+        )
+        XCTAssertEqual(links.count, 2, "both sources should be pressable: \(links)")
+    }
+
+    /// The form that already worked must keep working — this changed the reader,
+    /// and a reader extension can alter how ordinary markdown parses.
+    func testAWrittenLinkIsStillALink() async throws {
+        let pdf = try await renderedPDF(
+            markdown: "See [the benchmarks](https://developer.nvidia.com/blog/dgx-spark-benchmarks/).",
+            title: "Links"
+        )
+        XCTAssertTrue(
+            linkedURLs(in: pdf).contains { $0.contains("developer.nvidia.com") },
+            "a written link stopped being a link"
+        )
+    }
+
+    /// And an address inside a sentence is linked without swallowing the words
+    /// after it — the reason this is a reader extension rather than a regular
+    /// expression written by us.
+    func testAURLInsideASentenceDoesNotEatTheSentence() async throws {
+        let pdf = try await renderedPDF(
+            markdown: "Read https://developer.nvidia.com/blog/ and then decide what to buy.",
+            title: "Inline"
+        )
+        XCTAssertEqual(linkedURLs(in: pdf), ["https://developer.nvidia.com/blog/"])
+        let text = try await renderedText(
+            markdown: "Read https://developer.nvidia.com/blog/ and then decide what to buy.",
+            title: "Inline"
+        )
+        XCTAssertTrue(
+            text.contains("and then decide what to buy"),
+            "the words after the address were absorbed into it"
+        )
+    }
+
     private func occurrences(of needle: String, in haystack: String) -> Int {
         guard !needle.isEmpty else { return 0 }
         var count = 0
