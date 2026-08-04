@@ -425,11 +425,28 @@ struct UpdateBanner: View {
             .padding(.horizontal, s6)
             .padding(.vertical, s4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The wash over the raised surface rather than instead of it, so the
-            // band still reads as sitting above the canvas in either appearance
-            // — a translucent tint alone would take whatever is behind it.
-            .background(Palette.surface.raised)
-            .background(Palette.state.goodWash)
+            // **The wash goes on top of the surface, not behind it.**
+            //
+            // This was `.background(raised).background(goodWash)`, which reads
+            // like "surface, then tint" and does the opposite: each `background`
+            // sits behind the one before it, so the *opaque* raised surface was
+            // painted straight over the tint. The icon turned green, the band
+            // stayed white, and the modifier that was supposed to colour it did
+            // nothing at all.
+            //
+            // Composed in one `background` now, where the order is the order it
+            // is drawn in and cannot be read two ways.
+            //
+            // Twice, because a single pass of `goodWash` is paler than the
+            // reference the owner pointed at. Doubling the palette's own token
+            // keeps the light and dark pair it encodes — 0x1D8A4E under a light
+            // appearance, 0x3FD07E under a dark one — rather than inventing a
+            // second green that would then have to be maintained.
+            .background {
+                Palette.surface.raised
+                    .overlay(Palette.state.goodWash)
+                    .overlay(Palette.state.goodWash)
+            }
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Palette.state.good.opacity(0.28))
