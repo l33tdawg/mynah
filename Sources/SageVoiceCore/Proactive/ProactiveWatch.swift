@@ -241,7 +241,9 @@ public struct ProactiveWatch: Sendable {
     ///   news whatever he was just doing.
     public func check(
         against ledger: ProactiveLedger,
-        announcingTaskChanges: Bool = true
+        announcingTaskChanges: Bool = true,
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) async -> ProactiveReport {
         // **`?? []` was the bug, and it was worse than silence.**
         //
@@ -290,7 +292,9 @@ public struct ProactiveWatch: Sendable {
                 $0,
                 against: ledger.knownTasks,
                 titles: ledger.knownTaskTitles,
-                seeded: ledger.hasSeeded
+                seeded: ledger.hasSeeded,
+                now: now,
+                calendar: calendar
             )
         } ?? [] : []
 
@@ -327,7 +331,9 @@ public struct ProactiveWatch: Sendable {
         _ tasks: [WatchedTask],
         against known: [String: String],
         titles: [String: String] = [:],
-        seeded: Bool
+        seeded: Bool,
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> [String] {
         guard seeded else { return [] }
         var lines: [String] = []
@@ -339,22 +345,41 @@ public struct ProactiveWatch: Sendable {
             guard let before = known[task.id], before != task.status else { continue }
             lines.append("“\(task.title)” is now \(readable(task.status)).")
         }
-        // Gone from the open list, which on this node means finished or
-        // dropped. Which of the two is not knowable from an absence, so it does
-        // not claim to know.
+        // Gone from the open list, which on this node means finished or dropped.
+        // Which of the two is not knowable from an absence, so it does not claim
+        // to know.
         //
-        // **Named, because the unnamed version told him nothing.** Two lines
-        // reading "A task came off the list." are indistinguishable from each
-        // other and from any other pair, so the only thing they communicate is
-        // that something happened somewhere. `knownTaskTitles` exists for this
-        // one sentence.
+        // ## Why almost all of these are now silent
         //
-        // The fallback survives the first tick after an upgrade, when the
-        // titles dictionary is empty because the previous build never wrote it.
+        // The owner, on being told *"“Call with TII IT at 18:00 on Monday 3
+        // August 2026.” came off the list."* on the Tuesday morning: *"obviously
+        // things from yesterday should come off the list — added, yes, removed I
+        // think not meaningful?"*
+        //
+        // He is right, and the reason is the sentence three paragraphs up: this
+        // line **cannot say why**. Finished, dropped, lapsed, and asked-for all
+        // render identically, so the only thing it can communicate is that
+        // something happened — and every cause he will actually meet is one he
+        // already knows about, because he caused it.
+        //
+        // One cause is not: a task that leaves while nobody is touching it.
+        // Decay on the node, another agent, a governance action. A task list that
+        // quietly loses things is the worst thing a task list can be, and that
+        // case was drowning in the noise of the others.
+        //
+        // So a departure has to be *unexplained* to be worth a sentence. Past its
+        // date is explained — the moment has gone, and the ladder has already
+        // asked him about it once a day since. Anything else is not.
         let present = Set(tasks.map(\.id))
         for (id, _) in known.sorted(by: { $0.key < $1.key }) where !present.contains(id) {
-            lines.append(titles[id].map { "“\(ending($0))” came off the list." }
-                ?? "A task came off the list.")
+            // An unknown title is silent rather than generic. It happens for one
+            // tick after upgrading from a build that never wrote the titles
+            // dictionary, and the generic version — "A task came off the list."
+            // — is the one he read twice in a row and correctly called useless.
+            guard let title = titles[id] else { continue }
+            guard ReminderLadder.lapseTime(of: title, calendar: calendar).map({ $0 > now }) ?? true
+            else { continue }
+            lines.append("“\(ending(title))” came off the list, and nothing here took it off.")
         }
         return lines
     }

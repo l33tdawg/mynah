@@ -191,15 +191,6 @@ public actor VoiceBridgeDaemon {
     /// `OwnTaskEdits`.
     private var onTaskWrites: (@Sendable () async -> Void)?
 
-    /// Tools that change what is on the list.
-    ///
-    /// Deliberately the opposite policy to `ToolLoop.readOnlyTools`, which
-    /// treats an unlisted tool as having acted because the dangerous direction
-    /// there is missing a real write. Here the dangerous direction is the
-    /// reverse: a tool wrongly listed suppresses genuine news, so this names
-    /// only what actually writes tasks and a new one costs an extra
-    /// announcement rather than a silence.
-    static let taskWritingTools: Set<String> = ["sage_task"]
 
     /// Who asked for the last call, so its transcript goes back to them.
     private var lastCallRecipient: SignalRecipient?
@@ -879,9 +870,7 @@ public actor VoiceBridgeDaemon {
             // He has just been told, in words, what changed on his list. The
             // watch must not tell him again fifteen minutes later as though a
             // stranger had done it. See `OwnTaskEdits`.
-            if result.trace.toolCalls.contains(where: {
-                Self.taskWritingTools.contains($0.name) && !$0.failed
-            }) {
+            if OwnTaskEdits.wroteToTheTaskList(result.trace) {
                 await onTaskWrites?()
             }
             // Cleanup should tidy a reply, not amputate it. A large gap between

@@ -165,16 +165,67 @@ final class ProactiveWatchTests: XCTestCase {
         XCTAssertEqual(report.message, "“Book the hotel” is now in progress.")
     }
 
-    func testATaskThatLeftTheListIsNotClaimedToBeDone() async {
+    /// An undated task that vanishes is the one departure still worth a
+    /// sentence: nothing explains it, so it may be the node losing something.
+    ///
+    /// `sage_backlog` returns open tasks only, so an absence means finished *or*
+    /// dropped and this cannot tell which — hence the line does not claim to.
+    func testAnUndatedTaskThatLeftTheListIsNews() async {
         var ledger = seeded()
         ledger.knownTasks = ["t1": "planned"]
+        ledger.knownTaskTitles = ["t1": "Apply for UOB Visa Infinite"]
         let node = ScriptedNode(tasks: [])
 
         let report = await ProactiveWatch(source: node).check(against: ledger)
 
-        // `sage_backlog` returns open tasks only, so an absence means finished
-        // *or* dropped and this cannot tell which.
-        XCTAssertEqual(report.message, "A task came off the list.")
+        XCTAssertEqual(
+            report.message,
+            "“Apply for UOB Visa Infinite.” came off the list, and nothing here took it off."
+        )
+    }
+
+    /// **The message he asked to stop getting.** Told on the Tuesday morning
+    /// that the Monday call had come off the list, his answer was *"obviously
+    /// things from yesterday should come off the list — added, yes, removed I
+    /// think not meaningful?"*
+    func testATaskThatLapsedYesterdayLeavesInSilence() async {
+        var ledger = seeded()
+        ledger.knownTasks = ["t1": "planned"]
+        ledger.knownTaskTitles = ["t1": "Call with TII IT at 18:00 on Monday 3 August 2026."]
+        let node = ScriptedNode(tasks: [])
+
+        let report = await ProactiveWatch(source: node).check(
+            against: ledger,
+            now: Self.at(2026, 8, 4, 8, 28)
+        )
+
+        XCTAssertNil(report.message, report.message ?? "")
+    }
+
+    /// A dated task is only *explained* once its date has gone. Removed the day
+    /// before, it is as unexplained as an undated one.
+    func testATaskStillAheadOfItsDateIsNewsWhenItLeaves() async {
+        var ledger = seeded()
+        ledger.knownTasks = ["t1": "planned"]
+        ledger.knownTaskTitles = ["t1": "Call with Credence Tuesday 4 August 2026 at 11am"]
+        let node = ScriptedNode(tasks: [])
+
+        let report = await ProactiveWatch(source: node).check(
+            against: ledger,
+            now: Self.at(2026, 8, 4, 8, 28)
+        )
+
+        XCTAssertEqual(report.message?.contains("nothing here took it off"), true, report.message ?? "nil")
+    }
+
+    private static func at(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        var parts = DateComponents()
+        parts.year = year
+        parts.month = month
+        parts.day = day
+        parts.hour = hour
+        parts.minute = minute
+        return Calendar.current.date(from: parts)!
     }
 
     // MARK: One message, not five

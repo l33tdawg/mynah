@@ -530,6 +530,16 @@ actor ToolLoopTurnEngine: TurnEngine {
         let result = try await loop.run(transcript: transcript, tools: catalogue, history: grounded)
         conversationLog.info("turn: \(result.trace.summary)")
 
+        // He has just changed his own list, here, and watched it happen. The
+        // daemon's watch must not tell him about it over Signal fifteen minutes
+        // later as though a stranger had done it — which is exactly what it did
+        // on 4 August, six seconds after he typed "remove the monday items". The
+        // daemon cannot see this process, so the note goes through a file. See
+        // `OwnTaskEdits`.
+        if OwnTaskEdits.wroteToTheTaskList(result.trace) {
+            OwnTaskEdits.recordFromAnotherProcess(log: { conversationLog.error("\($0)") })
+        }
+
         // After the reply and never before. The node starts refusing outside
         // tool calls once enough turns pile up unrecorded, and web search is an
         // outside call — skipping this surfaces days later as "search broke".

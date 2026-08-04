@@ -1,6 +1,8 @@
 import Foundation
 import SageVoiceCore
 
+private let taskWriteLog = MynahLog(category: "board")
+
 /// Mynah's own plate, asked through MCP as Mynah.
 ///
 /// ## The third source, and why the first two were both wrong
@@ -83,6 +85,13 @@ actor MCPTaskSource: TaskSource {
     /// mynah to move it (wasting tokens / turns)"*.
     ///
     /// `BoardTask.id` is the memory id, so nothing has to be looked up first.
+    ///
+    /// The note to the daemon is written here rather than by the caller, so that
+    /// a second thing that moves a card cannot forget it. He dragged this with
+    /// his hand and watched it land; the watch reads the same backlog on a timer
+    /// from another process, and without the note it reports his own gesture
+    /// back to him over Signal a quarter of an hour later as though a stranger
+    /// had done it. See `OwnTaskEdits`.
     func move(taskID: String, to status: BoardTask.Progress) async throws {
         do {
             _ = try await SageMemoryStore.shared.callTool(
@@ -92,6 +101,7 @@ actor MCPTaskSource: TaskSource {
                     "status": .string(status.rawValue)
                 ]
             )
+            OwnTaskEdits.recordFromAnotherProcess(log: { taskWriteLog.error("\($0)") })
         } catch let error as MCPClientError {
             throw Self.failure(for: error)
         } catch {

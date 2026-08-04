@@ -109,6 +109,29 @@ public enum ReminderLadder {
         return said.filter { live.contains(String($0.prefix(while: { $0 != "#" }))) }
     }
 
+    // MARK: When a task stops being ahead of you
+
+    /// The moment a task written like this stops being in the future, or nil if
+    /// it never had a date in it.
+    ///
+    /// **A day-shaped task is not due at midnight.** "Meeting with TII IT on
+    /// Tuesday" is due *during* Tuesday, so it lapses when Tuesday ends. Read
+    /// literally, its `Date` is 00:00 and the task would be overdue for the whole
+    /// of the day it is meant to happen on.
+    ///
+    /// Shared with `ProactiveWatch`, which asks the same question for a different
+    /// reason — whether a task leaving the list needs explaining. Two copies of
+    /// this rule would drift, and they would drift silently: each is only visible
+    /// as a message that did or did not arrive.
+    public static func lapseTime(of title: String, calendar: Calendar = .current) -> Date? {
+        guard let written = SpokenDate.writtenDateMatch(in: title, calendar: calendar) else {
+            return nil
+        }
+        guard written.granularity != .minute else { return written.at }
+        return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: written.at))
+            ?? written.at
+    }
+
     // MARK: One task
 
     /// The one thing worth saying about this task now, if anything.
@@ -141,13 +164,9 @@ public enum ReminderLadder {
         }
         let what = SpokenDate.withoutWrittenDate(in: task.title, calendar: calendar)
 
-        // **A day-shaped task is not due at midnight.** "Meeting with TII IT on
-        // Tuesday" is due *during* Tuesday, so it lapses when Tuesday ends. Read
-        // literally, its `Date` is 00:00 and the task would be overdue for the
-        // whole of the day it is meant to happen on.
-        let lapsesAt = written.granularity == .minute
-            ? written.at
-            : calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: written.at)) ?? written.at
+        // See `lapseTime(of:calendar:)` — a day-shaped task is not due at
+        // midnight, and the rule lives there because the watch needs it too.
+        let lapsesAt = lapseTime(of: task.title, calendar: calendar) ?? written.at
 
         guard now < lapsesAt else {
             return overdue(task: task, what: what, due: written.at, now: now, calendar: calendar)
