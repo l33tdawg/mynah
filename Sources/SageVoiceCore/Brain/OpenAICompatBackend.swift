@@ -218,9 +218,21 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
         // added. A caller that names no ceiling still gets the provider's own
         // default: silence is not a budget this loop chose, and overriding it
         // here would quietly cap models that were previously uncapped.
+        //
+        // **By the provider's own tier, not unconditionally.** This read
+        // `hostedMaxOutputTokens`, which hardcodes `.hosted`, so an
+        // OpenAI-shaped server *on this Mac* — LM Studio — had a cloud
+        // reasoning model's floor applied to it and a deliberate 1,024 became
+        // 4,096. The floor exists to stop a local model's budget starving a
+        // model that spends its allowance thinking; a model on this Mac is
+        // governed by `ReplyStyle` and by the 190-second runaway that number was
+        // measured against.
         if request.maxOutputTokens != nil {
             body[provider.usesMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] =
-                request.hostedMaxOutputTokens(default: BrainRequest.hostedMinimumOutputTokens)
+                request.maxOutputTokens(
+                    for: provider.isLocal ? .onDevice : .hosted,
+                    default: BrainRequest.hostedMinimumOutputTokens
+                )
         }
         if provider.supportsReasoningEffort {
             switch request.reasoning {

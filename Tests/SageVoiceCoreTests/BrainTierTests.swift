@@ -204,4 +204,44 @@ final class BrainTierTests: XCTestCase {
             )
         }
     }
+
+    // MARK: The wire, which is where the floor actually has to happen
+
+    /// **The fix I claimed and did not make.** Commit 23703d0 said, in its
+    /// message and in a doc comment written as fact, that an OpenAI-shaped
+    /// *local* server had stopped getting the hosted 4,096 floor. It had not:
+    /// the tier-aware API was added and the one call site that needed it was
+    /// never rewired, so `maxOutputTokens(for:default:)` had zero production
+    /// callers and `requestBody` still hardcoded `.hosted`.
+    ///
+    /// Three independent reviewers found it within an hour, and nothing in the
+    /// suite could have: every `requestBody` test used `.deepSeek` or
+    /// `.openAI`, and there was no local-provider case anywhere in the file.
+    ///
+    /// So this asserts on the **wire body**, not on the helper. A floor that is
+    /// right in a function nobody calls is not a floor.
+    func testALocalOpenAIServerKeepsTheCeilingItAskedFor() throws {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hello")], maxOutputTokens: 1024),
+            model: "qwen3.5-4b",
+            provider: .lmStudio()
+        )
+
+        XCTAssertEqual(
+            body["max_tokens"] as? Int, 1024,
+            "a model on this Mac was raised to a cloud reasoning model's floor"
+        )
+    }
+
+    /// And the hosted side still gets its floor, or the fix would have traded
+    /// one silent truncation for another — this is the v1.5.1 bug's own path.
+    func testAHostedOpenAIProviderStillGetsTheFloor() throws {
+        let body = OpenAICompatBackend.requestBody(
+            for: BrainRequest(messages: [.user("hello")], maxOutputTokens: 1024),
+            model: "deepseek-v4-flash",
+            provider: .deepSeek
+        )
+
+        XCTAssertEqual(body["max_tokens"] as? Int, 4096)
+    }
 }
