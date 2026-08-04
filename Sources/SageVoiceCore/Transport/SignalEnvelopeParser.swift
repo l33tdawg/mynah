@@ -78,7 +78,29 @@ public enum SignalEnvelopeParser {
         }
 
         if let syncMessage = envelope["syncMessage"] as? [String: Any],
-           let sentMessage = syncMessage["sentMessage"] as? [String: Any] {
+           let rawSentMessage = syncMessage["sentMessage"] as? [String: Any] {
+            // **The same edit unwrap as above, on the path the appliance
+            // actually uses.**
+            //
+            // It was written for `dataMessage` only, and the appliance is driven
+            // from Note-to-Self — every message the owner sends it arrives as
+            // `syncMessage.sentMessage`, never as a direct `dataMessage`. So the
+            // one branch that had the fix was the one branch that never runs
+            // here.
+            //
+            // What it cost, on 4 August 2026: he typed a question, edited it to
+            // add a second question mark, and the appliance went silent. Signal
+            // re-delivers an edited message with its payload nested inside
+            // `editMessage.dataMessage`, so `text` came back empty and the
+            // daemon logged `ignored (no text, no audio)` and dropped it. From
+            // his side Signal was "completely dead" — every message he sent was
+            // one he had edited.
+            //
+            // Silent, because an envelope with no text is an ordinary thing: a
+            // receipt, a typing indicator, a read sync. This one looked exactly
+            // like those.
+            let sentMessage = (rawSentMessage["editMessage"] as? [String: Any])?["dataMessage"]
+                as? [String: Any] ?? rawSentMessage
             return SignalIncomingMessage(
                 kind: .syncSent,
                 account: account,
