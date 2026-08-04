@@ -87,31 +87,61 @@ public final class BrowserSearchBackend: NSObject, WebSearchBackend {
         view.navigationDelegate = self
         webView = view
         defer {
+            // Stopped explicitly. A timed-out load that is merely abandoned goes
+            // on fetching in a daemon that runs for weeks.
+            view.stopLoading()
             view.navigationDelegate = nil
             webView = nil
             pending = nil
         }
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { @MainActor in
-                try await withCheckedThrowingContinuation { continuation in
-                    self.pending = continuation
-                    view.load(URLRequest(url: url))
-                }
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(Self.loadTimeout))
-                throw WebSearchError.transport("the page did not finish loading in time")
-            }
-            // First to finish wins; the other is cancelled. A timeout that let
-            // the load keep running would leave a web view alive with nothing
-            // holding it.
-            try await group.next()
-            group.cancelAll()
+        // **The timeout resumes the wait; it does not race it in a task group.**
+        //
+        // This was a `withThrowingTaskGroup` holding the page load in one child
+        // and a sleeping timer in the other, taking whichever finished first. It
+        // deadlocked, and it deadlocked precisely when it was needed: a task
+        // group cannot leave its scope until every child has finished, so when
+        // the timer won, the group cancelled the load and then waited for it —
+        // and the load was parked in a `CheckedContinuation` that only a
+        // navigation delegate ever resumes. Cancellation does not resume a
+        // continuation. Nothing did, so `load` never returned.
+        //
+        // Measured on the owner's Mac, 4 August 2026: three consecutive Signal
+        // questions that reached for a search produced no `[web_search]` line at
+        // all and died on the daemon's own 360-second ceiling, which is the only
+        // reason he got an answer of any kind.
+        //
+        // One continuation, then, resumed by whichever arrives first — the
+        // delegate or the clock. `finishLoading` is the only place it happens
+        // and it can only happen once.
+        let timeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.loadTimeout))
+            guard !Task.isCancelled else { return }
+            self?.finishLoading(
+                .failure(WebSearchError.transport("the page did not finish loading in time"))
+            )
+        }
+        defer { timeout.cancel() }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            pending = continuation
+            view.load(URLRequest(url: url))
         }
 
         let html = try await outerHTML(of: view)
         return try DuckDuckGoSearchBackend.parse(html: html, limit: count)
+    }
+
+    /// Ends the wait, once, whoever gets here first.
+    ///
+    /// The delegate callbacks and the timeout all come through here, and all of
+    /// them run on the main actor, which is what makes "once" true without a
+    /// lock. Resuming a `CheckedContinuation` twice is a crash, and never
+    /// resuming it is the hang this replaced.
+    private func finishLoading(_ outcome: Result<Void, Error>) {
+        guard let continuation = pending else { return }
+        pending = nil
+        continuation.resume(with: outcome)
     }
 
     private func outerHTML(of view: WKWebView) async throws -> String {
@@ -126,8 +156,7 @@ public final class BrowserSearchBackend: NSObject, WebSearchBackend {
 extension BrowserSearchBackend: WKNavigationDelegate {
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        pending?.resume()
-        pending = nil
+        finishLoading(.success(()))
     }
 
     public func webView(
@@ -135,8 +164,7 @@ extension BrowserSearchBackend: WKNavigationDelegate {
         didFail navigation: WKNavigation!,
         withError error: any Error
     ) {
-        pending?.resume(throwing: WebSearchError.transport("\(error.localizedDescription)"))
-        pending = nil
+        finishLoading(.failure(WebSearchError.transport("\(error.localizedDescription)")))
     }
 
     public func webView(
@@ -144,8 +172,7 @@ extension BrowserSearchBackend: WKNavigationDelegate {
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: any Error
     ) {
-        pending?.resume(throwing: WebSearchError.transport("\(error.localizedDescription)"))
-        pending = nil
+        finishLoading(.failure(WebSearchError.transport("\(error.localizedDescription)")))
     }
 }
 #endif

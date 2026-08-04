@@ -112,6 +112,8 @@ final class LoopbackCallbackListener: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<String, Error>?
     private var finished = false
+    /// An outcome that landed before anybody was waiting for it. See `finish`.
+    private var arrived: Result<String, Error>?
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -149,23 +151,68 @@ final class LoopbackCallbackListener: @unchecked Sendable {
         return Int(port)
     }
 
+    /// Waits for the browser to come back, and gives up after `timeout`.
+    ///
+    /// **The timeout resumes the wait rather than racing it.** This was a task
+    /// group holding the continuation in one child and a sleeping timer in the
+    /// other. A task group cannot leave its scope until every child has
+    /// finished, so when the timer won, the group cancelled the waiting child
+    /// and then waited for it — and that child was parked on a continuation only
+    /// the HTTP callback ever resumes. Cancellation does not resume a
+    /// continuation, so sign-in hung for good instead of timing out.
+    ///
+    /// The identical mistake shipped in `withDeadline` and in
+    /// `BrowserSearchBackend`, and in both it broke exactly when it mattered.
+    /// This one was never reported because nobody had signed in while the
+    /// browser tab was left open — which is the only thing that made it luck
+    /// rather than correctness.
     func awaitCallback(timeout: TimeInterval) async throws -> String {
-        try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask { [self] in
-                try await withCheckedThrowingContinuation { continuation in
-                    lock.lock()
-                    self.continuation = continuation
-                    lock.unlock()
-                }
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                throw Failure.timedOut
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw Failure.timedOut }
-            return first
+        let timer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.finish(.failure(Failure.timedOut))
         }
+        defer { timer.cancel() }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            // The answer can beat the waiter here: the listener is already up,
+            // and a browser that redirects instantly resumes before this line
+            // runs. Held rather than dropped, or sign-in would hang on being
+            // fast.
+            if let early = arrived {
+                arrived = nil
+                lock.unlock()
+                continuation.resume(with: early)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    /// Ends the wait, once, whoever gets here first — the callback or the clock.
+    ///
+    /// `finished` is what makes it once. A second connection — a favicon
+    /// request, a retry, a browser prefetch — and a timeout that fires as the
+    /// answer lands both come through here, and only the first of them counts.
+    func finish(_ outcome: Result<String, Error>) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        guard let waiting = continuation else {
+            // Nobody is waiting yet: the browser beat the caller to it. Held for
+            // whoever turns up, rather than dropped on the floor.
+            arrived = outcome
+            lock.unlock()
+            return
+        }
+        continuation = nil
+        lock.unlock()
+        waiting.resume(with: outcome)
     }
 
     func stop() {
@@ -203,14 +250,8 @@ final class LoopbackCallbackListener: @unchecked Sendable {
         }
     }
 
-    /// Resumes exactly once. A second connection — a favicon request, a retry,
-    /// a browser prefetch — must not resume a continuation again.
+    /// The redirect came back. `finish` is what makes this happen exactly once.
     private func deliver(_ requestLine: String) {
-        lock.lock()
-        let pending = finished ? nil : continuation
-        finished = true
-        continuation = nil
-        lock.unlock()
-        pending?.resume(returning: requestLine)
+        finish(.success(requestLine))
     }
 }
