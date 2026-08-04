@@ -499,7 +499,7 @@ actor ToolLoopTurnEngine: TurnEngine {
     /// it on their first question. Local models only — a hosted API keeps no
     /// cache to warm, so the same request would just spend the owner's quota.
     func warmUp() async {
-        guard isPrepared, loop.backendIsLocal, let catalogue else { return }
+        guard isPrepared, loop.brain.servesOneCacheSlot, let catalogue else { return }
         _ = await loop.warmUp(tools: catalogue)
     }
 

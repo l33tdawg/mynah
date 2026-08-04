@@ -214,18 +214,38 @@ public struct BrainRequest: Sendable {
     ///
     /// Lives on the request rather than in either backend so there is one number
     /// and one reason, reachable by whoever writes the third backend.
-    public static let hostedMinimumOutputTokens = 4096
+    ///
+    /// **Now a mirror of `BrainCapabilities.hosted.minimumOutputTokens`**, which
+    /// is where every tier ceiling lives. Kept as a name because it reads
+    /// better at the two call sites than the path does, and pinned equal to the
+    /// tier by `BrainTierTests` so the two cannot drift — which they already did
+    /// once, as `AnthropicBackend.minimumMaxOutputTokens`: the same number, with
+    /// the same reasoning written out twice, in two files.
+    public static let hostedMinimumOutputTokens = BrainCapabilities.hosted.minimumOutputTokens
 
-    /// `maxOutputTokens` raised to `hostedMinimumOutputTokens`, for hosted
-    /// backends.
+    /// `maxOutputTokens` raised to the floor for a given tier.
     ///
     /// A deliberate tiny request stays tiny: `probe()` asks for a single token
     /// to check a key works, and inflating that to 4,096 would bill the owner
     /// for a reachability test. The floor exists to stop a local model's budget
     /// starving a reasoning model, not to override an explicit small ask.
-    public func hostedMaxOutputTokens(default fallback: Int) -> Int {
+    ///
+    /// On `.onDevice` the floor is zero, so this returns exactly what the caller
+    /// asked for. **That is a real change for an OpenAI-shaped local server**:
+    /// LM Studio used to be raised to 4,096 because the old code applied the
+    /// hosted floor to every provider it spoke to, local or not. It should not
+    /// have been — the floor exists for reasoning models spending an allowance
+    /// on thought, and a model on this Mac is governed by `ReplyStyle` and by
+    /// the 190-second runaway that number was measured against.
+    public func maxOutputTokens(for tier: BrainTier, default fallback: Int) -> Int {
         let requested = maxOutputTokens ?? fallback
-        return requested <= 4 ? requested : max(requested, Self.hostedMinimumOutputTokens)
+        return requested <= 4 ? requested : max(requested, tier.capabilities.minimumOutputTokens)
+    }
+
+    /// The old spelling, kept for the hosted-only call sites that read better
+    /// this way.
+    public func hostedMaxOutputTokens(default fallback: Int) -> Int {
+        maxOutputTokens(for: .hosted, default: fallback)
     }
 }
 
@@ -561,4 +581,18 @@ public extension BrainBackend {
     var displayDescription: String {
         "\(identifier) · \(modelName)\(isLocal ? " · local" : " · cloud")"
     }
+}
+
+public extension BrainBackend {
+
+    /// Which set of ceilings applies to this backend.
+    ///
+    /// **Derived from `isLocal`, never declared beside it.** A backend able to
+    /// state both is a backend able to make them disagree, and one place that
+    /// can be contradicted is not one place. See `BrainTier`.
+    var tier: BrainTier { isLocal ? .onDevice : .hosted }
+
+    /// What this backend is allowed to do — the owner's rule, in one place:
+    /// *"local model can do up to x - api models can do x + y + z"*.
+    var brain: BrainCapabilities { tier.capabilities }
 }

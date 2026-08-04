@@ -79,14 +79,16 @@ public enum VoiceToolBudget {
     ///   hardware, in parallel, and the honest cost is a few tokens. Holding a
     ///   cloud brain to a local model's latency budget buys nothing and loses
     ///   the tail of every long answer.
-    public static func budget(forTool tool: String, onLocalBrain isLocal: Bool) -> Int {
-        let carriesContent = contentTools.contains(tool)
-        switch (isLocal, carriesContent) {
-        case (true, false): return resultByteBudget
-        case (true, true): return resultByteBudget * 3
-        case (false, false): return resultByteBudget * 8
-        case (false, true): return resultByteBudget * 16
-        }
+    /// **The multipliers are gone, and losing them is the point.** This was
+    /// `resultByteBudget` times one of ×1/×3/×8/×16, which meant the hosted
+    /// content ceiling — 32,000 — existed only as arithmetic nobody could read
+    /// off the page. Meanwhile `ToolLoop` cut every result again at a hardcoded
+    /// 6,000, which is `resultByteBudget × 3` by coincidence rather than by
+    /// agreement, so the two numbers matched on device and silently cancelled
+    /// each other everywhere else. Two numbers that happen to be equal, in
+    /// different units, in different files, are not one rule. See `BrainTier`.
+    public static func budget(forTool tool: String, brain: BrainCapabilities) -> Int {
+        brain.toolResultBytes(carryingContent: contentTools.contains(tool))
     }
 
     /// The most any tool may be asked to return.
@@ -146,11 +148,18 @@ public enum VoiceToolBudget {
     /// - Parameters:
     ///   - tool: which tool answered, because a directory and the owner's own
     ///     content do not deserve the same room. See `contentTools`.
-    ///   - isLocal: whether the brain reading this runs on the owner's Mac. The
-    ///     whole budget is prefill arithmetic, and that arithmetic is about a
-    ///     local model.
-    public static func fit(_ result: String, tool: String = "", onLocalBrain isLocal: Bool = true) -> String {
-        let allowance = budget(forTool: tool, onLocalBrain: isLocal)
+    ///   - brain: the ceilings for the brain reading this. The whole budget is
+    ///     prefill arithmetic, and that arithmetic is about a local model — so
+    ///     defaulting to `.onDevice` keeps the tight number for any caller that
+    ///     has not been told which brain is asking. Erring tight is the safe
+    ///     direction: a result cut too short says so in the sentence below,
+    ///     while one left too long is eleven seconds of silence.
+    public static func fit(
+        _ result: String,
+        tool: String = "",
+        brain: BrainCapabilities = .onDevice
+    ) -> String {
+        let allowance = budget(forTool: tool, brain: brain)
         guard result.utf8.count > allowance else { return result }
 
         if let trimmed = fitCountedEntries(result) { return trimmed }

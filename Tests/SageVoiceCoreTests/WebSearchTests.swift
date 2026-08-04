@@ -324,7 +324,11 @@ final class WebSearchToolSourceTests: XCTestCase {
             snippetCharacters: WebSearchToolSource.defaultSnippetCharacters
         )
 
-        XCTAssertLessThan(output.count, ToolLoop.Configuration().maxToolResultCharacters)
+        // Against the tightest brain there is. `maxToolResultCharacters` is now
+        // `nil` by default, meaning "ask the tier" — and the tier that matters
+        // for this assertion is the local one, which is what the appliance
+        // ships with and the smallest ceiling a search result has to fit under.
+        XCTAssertLessThan(output.count, BrainCapabilities.onDevice.toolResultBackstopCharacters)
     }
 
     // MARK: Provider chain

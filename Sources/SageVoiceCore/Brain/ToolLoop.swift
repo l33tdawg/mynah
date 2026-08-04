@@ -601,7 +601,22 @@ public final class ToolLoop: @unchecked Sendable {
         public var maxGeneratedTokens: Int?
         /// Tool results longer than this are truncated before going back to the
         /// model; a 4B model's context is not the place for a 40 KB memory dump.
-        public var maxToolResultCharacters: Int
+        ///
+        /// **`nil` means "ask the brain", and it is now the default.** This was
+        /// a hardcoded 6,000 with no tier branch, applied *after*
+        /// `VoiceToolBudget.fit` had already fitted the result — so a hosted
+        /// brain granted 32,000 bytes for another agent's message had it cut
+        /// back to 6,000 on the way to the model. Invisible on this Mac,
+        /// because the local content budget is *also* 6,000 and the second cut
+        /// never bit; and the regression test that should have caught it calls
+        /// `fit` directly instead of going through the loop.
+        ///
+        /// Kept as an override rather than deleted, because a test needs to be
+        /// able to prove the backstop still fires — after the tier fix it is
+        /// unreachable for anything `fit` has seen, which is correct and also
+        /// means a guard with no way to fail. See
+        /// `BrainCapabilities.toolResultBackstopCharacters`.
+        public var maxToolResultCharacters: Int?
         /// Restrict the catalogue offered to the model to these names. Schemas
         /// still come from the server. Empty means "offer everything"; the
         /// default trades unreachable tools for a large accuracy win — see
@@ -641,7 +656,7 @@ public final class ToolLoop: @unchecked Sendable {
             reasoning: ReasoningPreference = .automatic,
             reasoningOnSummary: ReasoningPreference = .disabled,
             maxGeneratedTokens: Int? = ReplyStyle.default.maximumGeneratedTokens,
-            maxToolResultCharacters: Int = 6000,
+            maxToolResultCharacters: Int? = nil,
             allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist
         ) {
             self.systemPrompt = systemPrompt
@@ -762,12 +777,12 @@ public final class ToolLoop: @unchecked Sendable {
         }
     }
 
-    /// Whether the model runs on this machine.
+    /// What the brain currently answering is allowed to do.
     ///
-    /// Exposed because keeping a prompt cache warm is a purely local idea: it
-    /// preserves an on-device KV cache. Against a hosted API the same timer
-    /// buys nothing and spends real quota.
-    public var backendIsLocal: Bool { backend.isLocal }
+    /// **Replaces `backendIsLocal`, which three callers read to re-derive the
+    /// same rule three times** — each with its own copy of the reasoning about
+    /// on-device KV caches, one of them in a different target. See `BrainTier`.
+    public var brain: BrainCapabilities { backend.brain }
 
     /// Whether the brain currently answering does anything with an attached
     /// photo. See `BrainBackend.seesImages` for why this has to be asked rather
@@ -1315,7 +1330,17 @@ public final class ToolLoop: @unchecked Sendable {
                 messages.append(
                     .toolResult(
                         name: call.name,
-                        content: Self.truncate(record.result, to: configuration.maxToolResultCharacters),
+                        // The backstop, not the budget. `VoiceToolBudget.fit` has
+                        // already fitted this to the brain's ceiling; what is left
+                        // for this to catch is a string `execute` built itself — a
+                        // tool failure described by a server that answered with a
+                        // novel — which `fit` never sees. See
+                        // `BrainCapabilities.toolResultBackstopCharacters`.
+                        content: Self.truncate(
+                            record.result,
+                            to: configuration.maxToolResultCharacters
+                                ?? backend.brain.toolResultBackstopCharacters
+                        ),
                         // Carried so backends that match results to requests by
                         // id (Anthropic, OpenAI) can pair them up. Ollama
                         // matches by name and ignores it.
@@ -1466,11 +1491,11 @@ public final class ToolLoop: @unchecked Sendable {
             // Which tool and which brain, both of which change how much room
             // the answer deserves — a directory read by a 4B model on this Mac
             // and another agent's message read by a hosted one are not the same
-            // trade. See `VoiceToolBudget.budget(forTool:onLocalBrain:)`.
+            // trade. See `VoiceToolBudget.budget(forTool:brain:)`.
             let output = VoiceToolBudget.fit(
                 Self.withoutServerNudge(raw),
                 tool: call.name,
-                onLocalBrain: backend.isLocal
+                brain: backend.brain
             )
             return ToolCallRecord(
                 iteration: iteration,

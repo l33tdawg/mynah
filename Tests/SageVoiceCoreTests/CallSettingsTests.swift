@@ -443,8 +443,8 @@ final class ToolResultBudgetTests: XCTestCase {
 
     func testAnAgentsMessageGetsMoreRoomThanADirectory() {
         XCTAssertGreaterThan(
-            VoiceToolBudget.budget(forTool: "sage_inbox", onLocalBrain: true),
-            VoiceToolBudget.budget(forTool: "sage_status", onLocalBrain: true),
+            VoiceToolBudget.budget(forTool: "sage_inbox", brain: .onDevice),
+            VoiceToolBudget.budget(forTool: "sage_status", brain: .onDevice),
             "a truncated directory loses names nobody can hear read aloud; a truncated "
                 + "message loses the thing that was asked for"
         )
@@ -453,14 +453,14 @@ final class ToolResultBudgetTests: XCTestCase {
     func testTheOwnersOwnContentIsWhatEarnsTheRoom() {
         for tool in ["sage_inbox", "sage_recall", "read_note", "web_search"] {
             XCTAssertGreaterThan(
-                VoiceToolBudget.budget(forTool: tool, onLocalBrain: true),
+                VoiceToolBudget.budget(forTool: tool, brain: .onDevice),
                 VoiceToolBudget.resultByteBudget,
                 "\(tool) returns content, not a listing"
             )
         }
         for tool in ["sage_status", "sage_backlog", "sage_timeline", "list_notes"] {
             XCTAssertEqual(
-                VoiceToolBudget.budget(forTool: tool, onLocalBrain: true),
+                VoiceToolBudget.budget(forTool: tool, brain: .onDevice),
                 VoiceToolBudget.resultByteBudget,
                 "\(tool) is a directory and the measured 2 KB still applies to it"
             )
@@ -474,12 +474,12 @@ final class ToolResultBudgetTests: XCTestCase {
         // byte. Against a hosted model the prefill happens on somebody else's
         // hardware and the honest cost is a few tokens.
         XCTAssertGreaterThan(
-            VoiceToolBudget.budget(forTool: "sage_status", onLocalBrain: false),
-            VoiceToolBudget.budget(forTool: "sage_status", onLocalBrain: true)
+            VoiceToolBudget.budget(forTool: "sage_status", brain: .hosted),
+            VoiceToolBudget.budget(forTool: "sage_status", brain: .onDevice)
         )
         XCTAssertGreaterThan(
-            VoiceToolBudget.budget(forTool: "sage_inbox", onLocalBrain: false),
-            VoiceToolBudget.budget(forTool: "sage_inbox", onLocalBrain: true)
+            VoiceToolBudget.budget(forTool: "sage_inbox", brain: .hosted),
+            VoiceToolBudget.budget(forTool: "sage_inbox", brain: .onDevice)
         )
     }
 
@@ -487,11 +487,11 @@ final class ToolResultBudgetTests: XCTestCase {
         // Two long agent messages, which is what arrived: about 8 KB of inbox.
         let inbox = payload(8_000)
 
-        let onCloud = VoiceToolBudget.fit(inbox, tool: "sage_inbox", onLocalBrain: false)
+        let onCloud = VoiceToolBudget.fit(inbox, tool: "sage_inbox", brain: .hosted)
         XCTAssertEqual(onCloud, inbox, "nothing should have been cut")
         XCTAssertFalse(onCloud.contains("left"), "and nothing should claim it was")
 
-        let onDirectory = VoiceToolBudget.fit(inbox, tool: "sage_status", onLocalBrain: true)
+        let onDirectory = VoiceToolBudget.fit(inbox, tool: "sage_status", brain: .onDevice)
         XCTAssertLessThan(onDirectory.utf8.count, inbox.utf8.count)
     }
 
@@ -502,7 +502,7 @@ final class ToolResultBudgetTests: XCTestCase {
         // model handed a severed answer has to know it was severed, or it
         // answers confidently from half a result.
         let huge = payload(200_000)
-        let fitted = VoiceToolBudget.fit(huge, tool: "sage_inbox", onLocalBrain: false)
+        let fitted = VoiceToolBudget.fit(huge, tool: "sage_inbox", brain: .hosted)
 
         XCTAssertLessThan(fitted.utf8.count, huge.utf8.count)
         XCTAssertTrue(fitted.contains("left"), fitted.suffix(200).description)
@@ -514,7 +514,7 @@ final class ToolResultBudgetTests: XCTestCase {
         // accidentally hand a 4B model 31 KB.
         XCTAssertEqual(
             VoiceToolBudget.fit(payload(10_000)).utf8.count,
-            VoiceToolBudget.fit(payload(10_000), tool: "", onLocalBrain: true).utf8.count
+            VoiceToolBudget.fit(payload(10_000), tool: "", brain: .onDevice).utf8.count
         )
     }
 }

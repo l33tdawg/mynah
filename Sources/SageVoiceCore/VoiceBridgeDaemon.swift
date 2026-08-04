@@ -445,11 +445,10 @@ public actor VoiceBridgeDaemon {
         // Pay the prefill before anyone is waiting on it. An appliance boots
         // once and then sits idle for hours, so this cost belongs at startup.
         //
-        // Local models only, for the same reason keep-warm is: this primes an
-        // on-device KV cache. A hosted model has none, so the request buys
-        // nothing — and against Gemini's ten-per-minute free tier it spends a
-        // tenth of the owner's first minute to do it.
-        if loop.backendIsLocal, let tools = try? await toolCatalogue() {
+        // One slot only, for the same reason keep-warm is: this primes an
+        // on-device KV cache. See `BrainCapabilities.servesOneCacheSlot`, which
+        // now holds the whole of that reasoning.
+        if loop.brain.servesOneCacheSlot, let tools = try? await toolCatalogue() {
             let started = Date()
             let warmed = await loop.warmUp(tools: tools)
             log(String(
@@ -511,11 +510,9 @@ public actor VoiceBridgeDaemon {
     /// wrong place to save power. The interval is deliberately well inside the
     /// eviction window rather than close to it.
     private func startKeepWarm(tools: [MCPTool]) {
-        // Local models only. Re-warming preserves an on-device KV cache; a
-        // hosted API has none to preserve, so the timer would spend quota to
-        // buy nothing — 72 requests a day against Gemini's free tier before the
-        // owner has said a word, and the same again in tokens on a paid one.
-        guard loop.backendIsLocal else {
+        // One slot only. See `BrainCapabilities.servesOneCacheSlot` for the
+        // measurement and for why a hosted provider has no slot to protect.
+        guard loop.brain.servesOneCacheSlot else {
             log("[daemon] keep-warm off: a hosted backend has no local cache to keep warm")
             return
         }

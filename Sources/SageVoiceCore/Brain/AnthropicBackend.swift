@@ -35,7 +35,13 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     /// loop then forces a summary that fails the same way and throws
     /// `emptyReply`: the owner gets silence. A local model's token budget is
     /// not a sane cap for a cloud reasoning model.
-    public static let minimumMaxOutputTokens = 4096
+    ///
+    /// **This was a second copy of the same number with the same reasoning
+    /// written out twice**, in this file and on `BrainRequest`. Both now read
+    /// the hosted tier, which is the one place the rule lives — see
+    /// `BrainTier`. Two constants that must agree and cannot be made to is how
+    /// a floor gets raised in one file and not the other.
+    public static var minimumMaxOutputTokens: Int { BrainCapabilities.hosted.minimumOutputTokens }
 
     /// Models that still accept `temperature`.
     ///
