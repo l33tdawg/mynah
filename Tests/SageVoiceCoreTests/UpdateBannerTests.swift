@@ -189,6 +189,99 @@ final class UpdateBannerTests: XCTestCase {
         )
     }
 
+    // MARK: On the screen at all
+
+    /// **Everything above this line describes a banner nothing puts on screen.**
+    ///
+    /// The feature this file belongs to was complete and invisible once already
+    /// — every part of it worked, behind a settings screen nobody opens — and
+    /// the tests written afterwards repeated the mistake at one remove. Delete
+    /// `UpdateBanner(watch: updates)` from `RootView.swift` and every assertion
+    /// here still passes: they all call `UpdateWatch.banner(for:…)` directly and
+    /// ask what it *would* draw. The owner would once again have seen nothing,
+    /// and the suite would once again have said the banner was fine.
+    ///
+    /// Both source scans in this file open `UpdateWatch.swift`, which is where
+    /// the banner is *defined*. Neither had ever opened the file that decides
+    /// whether it is on screen.
+    func testTheBannerIsMountedInTheWindow() throws {
+        let scan = SwiftSourceScan(try Self.rootViewSource())
+
+        XCTAssertNotNil(
+            Self.mountedWatch(in: scan),
+            """
+            nothing in RootView.swift draws UpdateBanner, so the whole update feature is \
+            invisible again — which is the state the owner reported as "haven't even seen \
+            our version of the update banner"
+            """
+        )
+    }
+
+    /// And the loop that gives the banner something to say must be started.
+    ///
+    /// A mounted banner with a watch nobody starts is the same silence with more
+    /// code behind it: `UpdateWatch.answer` stays `nil` for ever, `banner(for:)`
+    /// draws nothing, and the tests above still pass because they pass their own
+    /// answer in.
+    ///
+    /// The watch is matched by name against the one the banner was handed, so
+    /// starting a *different* `UpdateWatch` — easy, since `UpdateWatch.shared`
+    /// can be written anywhere — does not count.
+    func testTheCheckingLoopIsStartedWhenTheWindowOpens() throws {
+        let scan = SwiftSourceScan(try Self.rootViewSource())
+        let watch = try XCTUnwrap(Self.mountedWatch(in: scan), "the banner is not mounted at all")
+
+        XCTAssertTrue(
+            Self.startupBodies(in: scan).contains { $0.contains("\(watch).start()") },
+            """
+            RootView never starts \(watch), so nothing ever asks GitHub whether there is a \
+            release: the banner is on screen and permanently empty
+            """
+        )
+    }
+
+    /// `RootView.swift`, as text.
+    ///
+    /// A source scan because the seam is SwiftUI's view tree. Rendering it in a
+    /// test means an `NSApplication`, a window and a run loop, to answer a
+    /// question — is this line present — that the file answers directly.
+    static func rootViewSource() throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/RootView.swift"),
+            encoding: .utf8
+        )
+    }
+
+    /// The name of the watch the banner is drawn with, or `nil` if no banner is
+    /// drawn.
+    static func mountedWatch(in scan: SwiftSourceScan) -> String? {
+        for call in scan.indices(of: "UpdateBanner(") {
+            guard let arguments = scan.arguments(from: call) else { continue }
+            let text = scan.text(in: arguments)
+            guard let label = text.range(of: "watch:") else { continue }
+            let name = text[label.upperBound...]
+                .prefix { $0 != ")" && $0 != "," }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        return nil
+    }
+
+    /// The body of every modifier that runs when the window appears.
+    ///
+    /// `.task` and `.onAppear` both, because either is a legitimate place to
+    /// start the loop and a guard that insisted on one would be telling somebody
+    /// which modifier to use rather than that the loop must run.
+    static func startupBodies(in scan: SwiftSourceScan) -> [String] {
+        (scan.indices(of: ".task") + scan.indices(of: ".onAppear"))
+            .compactMap { scan.block(from: $0) }
+            .map { scan.text(in: $0) }
+    }
+
+    // MARK: What it must not paint
+
     /// The band must never go back to owning a surface. This is the line that
     /// made it white both times, and it is one careless edit away from
     /// returning.

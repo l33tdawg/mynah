@@ -192,7 +192,7 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
     public func add(_ entry: CalendarEntry) async throws -> String {
         let event = EKEvent(eventStore: store)
         event.calendar = try calendar()
-        apply(entry, to: event)
+        Self.apply(entry, to: event)
         try store.save(event, span: .thisEvent, commit: true)
         guard let identifier = event.eventIdentifier else {
             throw Failure.eventVanished(entry.taskID)
@@ -210,7 +210,7 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
             log("[calendar] “\(entry.title)” was no longer there; writing it again")
             return try await add(entry)
         }
-        apply(entry, to: event)
+        Self.apply(entry, to: event)
         try store.save(event, span: .thisEvent, commit: true)
         log("[calendar] updated “\(entry.title)”")
         return event.eventIdentifier ?? eventID
@@ -240,10 +240,31 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         entry.isAllDay ? nil : current
     }
 
-    private func apply(_ entry: CalendarEntry, to event: EKEvent) {
+    /// Writes a task's fields onto an event.
+    ///
+    /// **Static and internal so it can be tested, and it had to be.** Every test
+    /// of the timezone rule called `timeZone(for:current:)` and none of them
+    /// could see whether anything ever *assigned* what it returned — the pure
+    /// function was right for four releases while this method was free to drop
+    /// it, and the failure that would have caused is a floating event, which
+    /// looks to the owner like his calendar being "set to GMT" and to us like a
+    /// missed appointment.
+    ///
+    /// Nothing here touches the store or the instance: the whole method reads a
+    /// `CalendarEntry` and sets properties, so `static` costs nothing and lets a
+    /// test hand it a bare `EKEvent`.
+    ///
+    /// - Parameter current: where this Mac is, injectable for the same reason
+    ///   `timeZone(for:current:)` and `alarms(for:now:)` take theirs. **A test
+    ///   that let this default could not see the assignment at all**: a fresh
+    ///   `EKEvent` already reports `TimeZone.current`, measured on this Mac on 4
+    ///   August 2026, so "the event carries the Mac's zone" is true of an event
+    ///   nothing has touched. Handing in a zone the Mac is not in is what makes
+    ///   the assignment visible.
+    static func apply(_ entry: CalendarEntry, to event: EKEvent, current: TimeZone = .current) {
         event.title = entry.title
         event.isAllDay = entry.isAllDay
-        event.timeZone = Self.timeZone(for: entry)
+        event.timeZone = Self.timeZone(for: entry, current: current)
         event.startDate = entry.starts
         event.endDate = entry.isAllDay ? entry.starts : entry.ends
         // Replaced rather than added to. Without this an event edited on four
