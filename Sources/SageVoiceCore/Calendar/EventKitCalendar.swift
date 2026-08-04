@@ -223,9 +223,27 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         log("[calendar] removed “\(name)”")
     }
 
+    /// The zone an event is written in, or `nil` to let it float.
+    ///
+    /// **A timed event with no zone is not "local", it is undefined.** EventKit
+    /// calls that floating, and a floating event syncing through iCloud is
+    /// re-read by whatever device opens it — so "1pm" written on a Mac in Kuala
+    /// Lumpur can come back as 1pm somewhere four hours away, which is a
+    /// different instant and a missed appointment. The task said 1pm *here*,
+    /// because the owner said it here, so the event has to say where here was.
+    ///
+    /// **All-day events float on purpose, and must.** A day is not an instant.
+    /// Pin "Sunday 9 August" to a zone and it becomes midnight-to-midnight in
+    /// that zone, which on a phone one timezone east is a hotel check-in that
+    /// starts on the Saturday.
+    static func timeZone(for entry: CalendarEntry, current: TimeZone = .current) -> TimeZone? {
+        entry.isAllDay ? nil : current
+    }
+
     private func apply(_ entry: CalendarEntry, to event: EKEvent) {
         event.title = entry.title
         event.isAllDay = entry.isAllDay
+        event.timeZone = Self.timeZone(for: entry)
         event.startDate = entry.starts
         event.endDate = entry.isAllDay ? entry.starts : entry.ends
         // Replaced rather than added to. Without this an event edited on four
