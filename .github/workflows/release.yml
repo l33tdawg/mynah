@@ -183,6 +183,35 @@ jobs:
           MYNAH_APPLE_ID: ${{ secrets.APPLE_ID }}
           MYNAH_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MYNAH_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # **This step runs the suite a second time, and without these it
+          # judges a hosted runner by the build Mac's numbers.**
+          # scripts/release.sh calls the same scripts/assert-test-run.sh, so the
+          # signed release path would die at its own gate after every
+          # provisioning step and the signing had been paid for — and with a
+          # message about a missing document surface, which is not what
+          # happened.
+          #
+          # The floor is the build Mac's, and that is derived rather than
+          # copied: release.sh provisions vendor/onnxruntime before the first
+          # SwiftPM command, so unlike the step above this run has the
+          # KokoroEngine targets in its graph and the same total to clear.
+          #
+          # **The ceiling is deliberately loose, because the honest number is
+          # unmeasured.** This path has never completed on a runner — it is
+          # gated on signing secrets — so how many Kokoro tests skip without the
+          # model in ~/sage-voice-lab is not something anybody here has counted.
+          # A tight number invented now would be a guess that fails a release,
+          # and a guess is what this whole gate exists to replace.
+          #
+          # Loosening it costs nothing that matters: the "Build and test" step
+          # above runs first, in this same job, on this same commit, with the
+          # runner's own measured numbers. A hollow suite is already caught
+          # there. This is the second lock on the same door.
+          #
+          # Replace it with the real figure the first time this path completes:
+          # assert-test-run.sh prints "N of M really ran, S skipped" on success.
+          MYNAH_MIN_EXECUTED_TESTS: "1815"
+          MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 
       - name: Publish

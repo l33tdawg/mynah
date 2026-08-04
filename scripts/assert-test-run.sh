@@ -59,24 +59,45 @@ Capture one with: arch -arm64 swift test 2>&1 | tee /tmp/tests.log"
   || die "no test log at $LOG.
 Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 
-# Measured on this checkout on 2026-08-04, deliberately not carried forward from
-# the earlier audit that said 1783: a fully provisioned run on the build Mac
-# reports "Executed 1815 tests, with 21 tests skipped".
+# Measured on this checkout on 2026-08-04: a fully provisioned run on the build
+# Mac reports "Executed 1840 tests, with 21 tests skipped".
 #
-# 1790 rather than something far lower, because the failure this floor has to
-# catch is not "zero tests" — it is losing a whole test target quietly. Staging
-# vendor/onnxruntime late leaves SwiftPM serving a cached manifest without the
-# KokoroEngine targets and the run drops to 1777 while still looking healthy;
-# anything under 1777 would wave that through. Test counts only ever grow, so a
-# floor 25 under today's number needs no headroom for new tests — the only thing
-# that lowers it is deleting tests, which ought to be reviewed anyway.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1790}"
+# **A floor is only a floor relative to the suite it was measured against, and
+# this one had already rotted.** It was set to 1790 when the suite was 1815,
+# which left 25 of headroom. Twenty-five tests were then added in this same
+# release, so losing the whole KokoroEngine target — 38 tests, the exact failure
+# this number exists to catch — leaves 1802 and clears 1790 comfortably. Caught
+# by the 1.7.0 audit.
+#
+# So the rule, rather than the number: **keep this within 38 of the true count**,
+# because the smallest interesting loss is a test target and the smallest test
+# target is Kokoro's 38. 1815 is 25 under today's 1840 and 13 above the 1802 a
+# missing onnxruntime produces.
+#
+# Raise it in the same commit that adds a batch of tests. Test counts only ever
+# grow; the only thing that lowers them is deleting tests, which ought to be
+# reviewed anyway.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1815}"
 # The ceiling has to sit above the 21 that skip on a healthy build Mac and below
-# the 33 a missing document surface produces, or it is decoration. 26 leaves
-# room for five new opt-in tests and still trips seven clear of the failure it
-# exists to catch. Widening it past 32 disarms it entirely — if you need that
-# much room, the right move is to stop skipping, not to raise this.
-MAX_SKIPPED="${MYNAH_MAX_SKIPPED_TESTS:-26}"
+# the smallest number a missing document tool produces. **26 was set against
+# pandoc's +12 and was blind to the tool this change was actually added to
+# provision.** Measured here on 2026-08-04 by holding each vendor tree aside and
+# running the whole suite:
+#
+#   vendor/pandoc absent           33 skipped   over 26, caught
+#   vendor/typst absent            31 skipped   over 26, caught
+#   vendor/typst-packages absent   25 skipped   UNDER 26, waved through
+#
+# provision-typst-packages.sh being missing from release.sh is the headline
+# omission this change fixed, and package-app.sh stops a real release dead when
+# its output is absent — so the one regression the gate most needed to see was
+# the one it could not. Found by the 1.7.0 audit.
+#
+# 24: above the healthy 21, below the 25 that means no Graphviz. That leaves
+# room for three new opt-in tests rather than five. If you need more than that,
+# the right move is to stop skipping — raising this past 24 restores the blind
+# spot, and past 30 the gate stops seeing a missing document surface at all.
+MAX_SKIPPED="${MYNAH_MAX_SKIPPED_TESTS:-24}"
 
 # The line after "Test Suite 'All tests' passed", specifically, rather than the
 # last line matching "Executed" anywhere. XCTest prints a summary per suite, so
@@ -105,6 +126,40 @@ if [[ "$SUMMARY" =~ with\ ([0-9]+)\ tests?\ skipped ]]; then
   SKIPPED="${BASH_REMATCH[1]}"
 else
   SKIPPED=0
+fi
+
+# **A run with failures in it verified nothing, and this script used to say it
+# had.** The awk above deliberately matches `Test Suite 'All tests' failed at`
+# as well as `passed`, because a failing run still has to be parsed to say what
+# went wrong — and then nothing downstream ever looked at the outcome. On a log
+# from a failing suite it printed "N of M really ran" and exited 0.
+#
+# In scripts/release.sh that was survivable by luck rather than design: `set -o
+# pipefail` makes the failing `swift test` abort the script before this file is
+# ever reached. Luck is not a gate, this file is invoked by name from two
+# places, and its own first line claims it decides whether a run verified
+# anything. So it decides.
+# `with` or `and`, because XCTest writes both: "with 0 failures" on a run that
+# skipped nothing, and "with 21 tests skipped and 3 failures" when it did. A
+# pattern that matched only `with` read a failing run as zero failures — which
+# is the same class of miss as reading a skipped test as an executed one, and it
+# is why this is checked against a real failing summary below rather than
+# reasoned about.
+if [[ "$SUMMARY" =~ (with|and)\ ([0-9]+)\ failures? ]]; then
+  FAILURES="${BASH_REMATCH[2]}"
+else
+  # No failure clause at all is not "no failures" — it is a summary this script
+  # cannot read, and the same wording change would retire the counts above.
+  die "could not read a failure count out of the XCTest summary in $LOG.
+The line was: $SUMMARY
+If XCTest has changed its wording, teach this script the new one rather than
+leaving it unable to parse — that would silently retire the gate."
+fi
+
+if (( FAILURES > 0 )); then
+  die "the suite reported $FAILURES failing test(s), so this run did not verify the release.
+See them with:
+  grep ' error: -\[' $LOG"
 fi
 
 RAN=$(( EXECUTED - SKIPPED ))
