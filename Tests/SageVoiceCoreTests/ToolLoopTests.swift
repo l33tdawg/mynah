@@ -240,6 +240,74 @@ final class ToolLoopTests: XCTestCase {
         XCTAssertEqual(fromForward, names.sorted())
     }
 
+    // MARK: Knowing what day it is
+
+    /// Today's date, worked out in the test rather than by the code under test.
+    private var todayInWords: String {
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_GB")
+        day.dateFormat = "EEEE d MMMM yyyy"
+        return day.string(from: Date())
+    }
+
+    /// **The guard for the bug, and it reads the wire on purpose.**
+    ///
+    /// `WhereWeAre` was written to put the date in front of the model and was
+    /// never called by anything — so a test of its formatting would have passed
+    /// every day the appliance was getting the date wrong. The only assertion
+    /// worth making is about the bytes the backend received.
+    func testTheTurnTheModelSeesIsStampedWithTodaysDate() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Nothing due today.")])
+        let tools = StubToolSource(toolNames: ["sage_task"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(transcript: "whats on our todo list today ?")
+
+        let sent = try XCTUnwrap(backend.requests.first)
+        let asked = try XCTUnwrap(sent.messages.last(where: { $0.role == .user })?.content)
+        XCTAssertTrue(asked.contains(todayInWords), "the model was not told what day it is: \(asked)")
+        XCTAssertTrue(asked.hasSuffix("whats on our todo list today ?"), asked)
+    }
+
+    /// The stamp goes on every turn, not just the first — a daemon that builds
+    /// its prompt once and runs for a week is the case this exists for.
+    func testEveryTurnIsStampedAfresh() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering("one"),
+            ScriptedBackend.answering("two")
+        ])
+        let tools = StubToolSource(toolNames: ["sage_task"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(transcript: "first")
+        _ = try await loop.run(transcript: "second")
+
+        XCTAssertEqual(backend.requests.count, 2)
+        for request in backend.requests {
+            let asked = try XCTUnwrap(request.messages.last(where: { $0.role == .user })?.content)
+            XCTAssertTrue(asked.contains(todayInWords), asked)
+        }
+    }
+
+    /// **The clock must stay out of the system prompt**, which is what
+    /// `warmUp()` and `anchorPromptCache()` replay to plant a cache checkpoint.
+    /// A per-minute string anywhere in that prefix invalidates the checkpoint on
+    /// every turn — measured at 11.4s of recomputation for ten new tokens. The
+    /// place belongs there; the moment does not.
+    func testTheSystemPromptSaysWhereWeAreAndNotWhenItIs() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("ok")])
+        let tools = StubToolSource(toolNames: ["sage_task"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(transcript: "hello")
+
+        let sent = try XCTUnwrap(backend.requests.first)
+        let system = try XCTUnwrap(sent.messages.first(where: { $0.role == .system })?.content)
+        XCTAssertTrue(system.contains("WHERE YOU ARE"), "the prompt does not say where the appliance is")
+        XCTAssertFalse(system.contains("Right now it is"), "the clock leaked into the cached prefix")
+        XCTAssertEqual(system, loop.systemPrompt, "warm-up and turns must send the same prefix")
+    }
+
     /// The allowlist path must sort too — it is the one the appliance runs.
     func testAllowlistedCatalogueIsAlsoStablyOrdered() async throws {
         let tools = StubToolSource(toolNames: ["web_search", "sage_task", "sage_recall", "sage_forget"])
@@ -464,7 +532,38 @@ final class ToolLoopTests: XCTestCase {
 
         let systemTurns = backend.requests[1].messages.filter { $0.role == .system }
         XCTAssertEqual(systemTurns.count, 1, "replaying history must not duplicate the system prompt")
-        XCTAssertEqual(systemTurns.first?.content, BrainPrompts.voiceAgentManager)
+        XCTAssertEqual(systemTurns.first?.content, loop.systemPrompt)
+        XCTAssertTrue(
+            systemTurns.first?.content.hasPrefix(BrainPrompts.voiceAgentManager) == true,
+            "the base prompt must still be the prefix, or nothing that was warmed matches"
+        )
+    }
+
+    /// **The stamp must not accumulate.** What `run` hands back is what the
+    /// caller replays, and a turn from an hour ago still saying "right now it
+    /// is" is a false sentence in the present tense. Several of them and the
+    /// model chooses which moment it is in — which is the original bug coming
+    /// back through the other door.
+    func testAReplayedTurnCarriesNoStaleClock() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering("Three items."),
+            ScriptedBackend.answering("Two now.")
+        ])
+        let tools = StubToolSource(toolNames: ["sage_inbox"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        let first = try await loop.run(transcript: "check my inbox")
+        XCTAssertFalse(
+            first.messages.contains { $0.content.contains("Right now it is") },
+            "the stamp was handed back to the caller"
+        )
+
+        _ = try await loop.run(transcript: "and now?", history: Array(first.messages.dropFirst()))
+
+        let second = backend.requests[1].messages
+        let stamped = second.filter { $0.content.contains("Right now it is") }
+        XCTAssertEqual(stamped.count, 1, "exactly one turn may claim to be now")
+        XCTAssertEqual(stamped.first?.content, second.last?.content, "and it must be this one")
     }
 
     // MARK: Empty replies

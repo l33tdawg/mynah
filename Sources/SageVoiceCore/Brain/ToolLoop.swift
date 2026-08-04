@@ -661,6 +661,13 @@ public final class ToolLoop: @unchecked Sendable {
     private let mcp: ToolProviding
     private let configuration: Configuration
 
+    /// Where this Mac is, read once. See `WhereWeAre` — the country comes from
+    /// the timezone and costs nothing, and the answer only changes when the
+    /// owner flies, which is a restart's worth of staleness at most.
+    ///
+    /// The *date* is deliberately not held here. See `WhereWeAre.rightNow`.
+    private let place: WhereWeAre
+
     /// Overrides `configuration.systemPrompt` once the session's SAGE context
     /// is known. Set at boot, before the warm-up, and not touched again — the
     /// lock is for publication rather than contention.
@@ -674,7 +681,9 @@ public final class ToolLoop: @unchecked Sendable {
     public var systemPrompt: String {
         promptLock.lock()
         defer { promptLock.unlock() }
-        return systemPromptOverride ?? configuration.systemPrompt
+        let base = systemPromptOverride ?? configuration.systemPrompt
+        guard let here = place.spokenForPrompt() else { return base }
+        return "\(base)\n\n\(here)"
     }
 
     /// Waits out a rate limit instead of failing the turn.
@@ -748,10 +757,16 @@ public final class ToolLoop: @unchecked Sendable {
     /// The loop drives whatever `BrainBackend` it is handed. Which model — and
     /// whether it runs on this machine at all — is decided at setup and is not
     /// this type's business.
-    public init(backend: BrainBackend, mcp: ToolProviding, configuration: Configuration = Configuration()) {
+    public init(
+        backend: BrainBackend,
+        mcp: ToolProviding,
+        configuration: Configuration = Configuration(),
+        place: WhereWeAre = .load()
+    ) {
         self.backend = backend
         self.mcp = mcp
         self.configuration = configuration
+        self.place = place
     }
 
     /// The tools this loop will offer the model, straight from the MCP server —
@@ -958,7 +973,11 @@ public final class ToolLoop: @unchecked Sendable {
 
         var messages: [BrainMessage] = [.system(systemPrompt)]
         messages.append(contentsOf: history.filter { $0.role != .system })
-        messages.append(.user(transcript, images: images))
+        // Stamped here and nowhere else. See `WhereWeAre.rightNow`.
+        messages.append(.user(WhereWeAre.stamp(transcript), images: images))
+        // Only appends follow, so this stays valid — it is where the stamp comes
+        // back off before the messages are handed to the caller to replay.
+        let ownTurn = messages.count - 1
 
         var trace = ToolLoopTrace(model: backend.modelName, toolsOffered: catalogue.count)
         var reply = ""
@@ -1343,7 +1362,15 @@ public final class ToolLoop: @unchecked Sendable {
             // to say", and the owner-facing sentence differs completely.
             throw trace.wasTruncated ? ToolLoopError.replyRanLong : ToolLoopError.emptyReply
         }
-        return ToolLoopResult(reply: reply, trace: trace, messages: messages)
+        // **The stamp comes off before this leaves.** `messages` is what a caller
+        // replays as the next turn's history, and a "right now" left in a turn
+        // from an hour ago is a present-tense sentence that has become false.
+        // Several of them and the model gets to pick which moment it is in —
+        // which is the bug this whole stamp was added to fix, arriving by the
+        // other door.
+        var replayable = messages
+        replayable[ownTurn] = .user(transcript, images: images)
+        return ToolLoopResult(reply: reply, trace: trace, messages: replayable)
     }
 
     /// Strips SAGE's server-side turn-discipline nudge out of a tool result.
