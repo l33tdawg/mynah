@@ -195,4 +195,46 @@ extension WorkingLineGateTests {
         )
         XCTAssertEqual(gate.quietPeriodEnded(), "Searching for that now.")
     }
+
+    // MARK: An unprompted line is not an answer
+
+    /// **The second bug in the same six-minute window as the history race.**
+    ///
+    /// `reply` took `isWorkingLine: Bool`, and everything that was not a working
+    /// line called `workingLines.answered()` — which marks the gate answered and
+    /// drops whatever the running turn is holding. Correct for an answer. Wrong
+    /// for an announcement, which the proactive watch sends on a sixty-second
+    /// tick straight through the middle of a turn that may take six minutes.
+    ///
+    /// So a task coming off the list silenced the "let me look that up" for a
+    /// question it had nothing to do with, and the owner waited in silence for
+    /// an appliance that had already decided it had spoken.
+    ///
+    /// Two booleans cannot express three states. `VoiceBridgeDaemon.Utterance`
+    /// can.
+    func testAnAnsweredGateDropsWhatItWasHolding() {
+        var gate = WorkingLineGate()
+        gate.beginTurn()
+        XCTAssertEqual(gate.offer("On it.", isArrivalOpener: true, previous: nil), .hold)
+
+        gate.answered()
+
+        XCTAssertNil(
+            gate.quietPeriodEnded(),
+            "a gate told the owner has been answered must not then say the held line"
+        )
+    }
+
+    /// And the states are distinct, so the daemon has somewhere to put the third
+    /// case rather than folding it into "not a working line".
+    func testTheThreeReasonsToSpeakAreDistinct() {
+        XCTAssertNotEqual(
+            String(describing: VoiceBridgeDaemon.Utterance.answer),
+            String(describing: VoiceBridgeDaemon.Utterance.unprompted)
+        )
+        XCTAssertNotEqual(
+            String(describing: VoiceBridgeDaemon.Utterance.workingLine),
+            String(describing: VoiceBridgeDaemon.Utterance.unprompted)
+        )
+    }
 }

@@ -301,7 +301,7 @@ public actor VoiceBridgeDaemon {
     private func endQuietPeriod(to recipient: SignalRecipient, thread: String) async {
         guard let line = workingLines.quietPeriodEnded() else { return }
         lastWorkingLines[thread] = line
-        await reply(line, to: recipient, isWorkingLine: true)
+        await reply(line, to: recipient, as: .workingLine)
     }
 
     /// Offers a "still working" line. It goes out, waits, or is dropped.
@@ -318,7 +318,7 @@ public actor VoiceBridgeDaemon {
         )
         guard decision == .say else { return }
         lastWorkingLines[thread] = line
-        await reply(line, to: recipient, isWorkingLine: true)
+        await reply(line, to: recipient, as: .workingLine)
     }
 
     /// Whether this thread has already been told the appliance is paused.
@@ -1271,13 +1271,13 @@ public actor VoiceBridgeDaemon {
             keepingLastTurns: configuration.historyTurnLimit
         )
         persistConversations()
-        await reply(text, to: recipient, allowSpeaking: false)
+        await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
     }
 
     public func postCallTranscript(_ text: String) async {
         guard let recipient = lastCallRecipient else { return }
         recordFromCall(text, for: recipient.description)
-        await reply(text, to: recipient, allowSpeaking: false)
+        await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
     }
 
     /// Files a call's written record in the thread it belongs to.
@@ -1330,14 +1330,36 @@ public actor VoiceBridgeDaemon {
     ///   because there are five ways a turn can end — the answer, four kinds of
     ///   failure — and the one that gets forgotten is the one that produces
     ///   "Here's your answer" followed by "On it."
+    /// Why the appliance is speaking, which decides what it does to the turn in
+    /// flight.
+    ///
+    /// **Two booleans could not say this, and the missing third case cost the
+    /// owner a working line.** `isWorkingLine: false` meant "this answers him",
+    /// so it called `workingLines.answered()` — which marks the gate answered
+    /// and drops whatever the running turn was holding. Correct for an answer.
+    /// Wrong for an announcement, which arrives from the proactive watch on a
+    /// sixty-second tick, in the middle of a turn that can last six minutes: it
+    /// silenced a working line for a question it had nothing to do with.
+    ///
+    /// Same window as the history race above it. Two bugs, one await.
+    enum Utterance {
+        /// The answer to what he asked. Ends the turn's narration.
+        case answer
+        /// "On it" — part of the turn, not the end of it.
+        case workingLine
+        /// Nobody asked: a proactive announcement, a call transcript. Must not
+        /// touch a turn it is not part of.
+        case unprompted
+    }
+
     private func reply(
         _ text: String,
         to recipient: SignalRecipient,
         attaching attachments: [URL] = [],
         allowSpeaking: Bool = true,
-        isWorkingLine: Bool = false
+        as utterance: Utterance = .answer
     ) async {
-        if !isWorkingLine {
+        if case .answer = utterance {
             workingLines.answered()
             quietPeriod?.cancel()
             quietPeriod = nil
@@ -1393,7 +1415,7 @@ public actor VoiceBridgeDaemon {
             log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")
             // Do not synthesize the same attachment again: the point of this
             // retry is an unconditionally plain-text path.
-            await reply(text, to: recipient, allowSpeaking: false)
+            await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
         }
     }
 
