@@ -141,7 +141,7 @@ final class DeadlineTests: XCTestCase {
     /// would cut off turns the loop was about to finish properly.
     func testTheTurnCeilingIsAboveTheLoopsOwnDeadline() {
         XCTAssertGreaterThan(
-            VoiceBridgeDaemon.turnCeiling,
+            VoiceBridgeDaemon.Configuration.defaultTurnCeilingSeconds,
             ToolLoop.defaultDeadlineSeconds,
             "the outer ceiling must not pre-empt the loop's own graceful stop"
         )
@@ -150,6 +150,6 @@ final class DeadlineTests: XCTestCase {
     /// And not so far above it that the owner is left in silence for long. He
     /// was promised a return; six minutes is the outside of honest.
     func testTheTurnCeilingIsNotOpenEnded() {
-        XCTAssertLessThanOrEqual(VoiceBridgeDaemon.turnCeiling, 420)
+        XCTAssertLessThanOrEqual(VoiceBridgeDaemon.Configuration.defaultTurnCeilingSeconds, 420)
     }
 }

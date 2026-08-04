@@ -146,6 +146,35 @@ public actor VoiceBridgeDaemon {
         /// delivered terseness, which is worse than leaving it off.
         public var speaksReplies: Bool
 
+        /// The hard ceiling on one turn, after which the appliance stops waiting.
+        ///
+        /// **Above `ToolLoop.defaultDeadlineSeconds`, and that is the whole
+        /// point.** The loop has its own 300-second brake and it is the right
+        /// one — it stops between iterations, keeps the work done so far, and
+        /// produces an answer. This never competes with it. This fires only when
+        /// that brake did not, which means something inside a single call is not
+        /// coming back.
+        ///
+        /// Sixty seconds of slack over it, rather than a round number: enough
+        /// that a turn legitimately finishing its last model call at 299 seconds
+        /// is not cut off, and short enough that the owner is never left in
+        /// silence for more than about six minutes.
+        ///
+        /// The failure this exists for: a question at 22:00, "I'll come back
+        /// when it's all done", and then nothing for fourteen minutes — with two
+        /// further messages accepted and never answered, because turns are
+        /// serialised and the first one never released the queue.
+        ///
+        /// **On `Configuration` rather than a static, so a test can shorten it.**
+        /// While it was a `static let`, nothing in the suite could construct a
+        /// daemon that gave up in under six minutes — so the only assertions
+        /// anybody wrote were on the constant's arithmetic, and deleting the one
+        /// line that *uses* it left the suite green.
+        public static let defaultTurnCeilingSeconds: TimeInterval = ToolLoop.defaultDeadlineSeconds + 60
+
+        /// See `defaultTurnCeilingSeconds`.
+        public var turnCeilingSeconds: TimeInterval
+
         public init(
             genericFailureReply: String = "Something went wrong handling that. It's logged.",
             replyPrefix: String = VoiceBridgeDaemon.Configuration.defaultReplyPrefix,
@@ -153,7 +182,8 @@ public actor VoiceBridgeDaemon {
             maximumTranscriptCharacters: Int = 4000,
             sendsThinkingAcknowledgement: Bool = false,
             messageQuietWindow: Duration = MessageCoalescer.defaultQuietWindow,
-            speaksReplies: Bool = false
+            speaksReplies: Bool = false,
+            turnCeilingSeconds: TimeInterval = VoiceBridgeDaemon.Configuration.defaultTurnCeilingSeconds
         ) {
             self.genericFailureReply = genericFailureReply
             self.replyPrefix = replyPrefix
@@ -162,6 +192,7 @@ public actor VoiceBridgeDaemon {
             self.sendsThinkingAcknowledgement = sendsThinkingAcknowledgement
             self.messageQuietWindow = messageQuietWindow
             self.speaksReplies = speaksReplies
+            self.turnCeilingSeconds = turnCeilingSeconds
         }
     }
 
@@ -244,11 +275,6 @@ public actor VoiceBridgeDaemon {
     /// off, and short enough that the owner is never left in silence for more
     /// than about six minutes.
     ///
-    /// The failure this exists for: a question at 22:00, "I'll come back when
-    /// it's all done", and then nothing for fourteen minutes — with two further
-    /// messages accepted and never answered, because turns are serialised and
-    /// the first one never released the queue.
-    static let turnCeiling: TimeInterval = ToolLoop.defaultDeadlineSeconds + 60
 
     private var workingLines = WorkingLineGate()
 
@@ -309,7 +335,7 @@ public actor VoiceBridgeDaemon {
     private var hasWarnedAboutSecondBridge: Set<String> = []
 
     /// Whether the owner has stopped the appliance answering.
-    private let pause = PauseState()
+    private let pause: PauseState
 
     /// Starts a call when the owner asks for one. `nil` disables `//call`.
     private let calls: CallHost?
@@ -388,9 +414,15 @@ public actor VoiceBridgeDaemon {
         callRefusal: CallInvitation.Refusal? = nil,
         onCallRequested: (@Sendable () async -> Void)? = nil,
         onTaskWrites: (@Sendable () async -> Void)? = nil,
+        /// The owner's pause switch. Injected because it reads a marker file in
+        /// his real Application Support directory, and a test that constructed a
+        /// daemon would otherwise answer according to whether he happened to
+        /// have the appliance paused while the suite ran.
+        pause: PauseState = PauseState(),
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
         self.signal = signal
+        self.pause = pause
         self.transcriber = transcriber
         self.loop = loop
         self.configuration = configuration
@@ -786,7 +818,7 @@ public actor VoiceBridgeDaemon {
             // Bounded from the outside. Everything inside has its own timeout
             // except the node's pipe, which has none, and the loop's own
             // deadline cannot help because it is checked between iterations
-            // rather than during one. See `turnCeiling`.
+            // rather than during one. See `Configuration.turnCeilingSeconds`.
             // Everything the loop needs, resolved here on the actor before the
             // deadline wrapper takes the work off it. The closure handed to
             // `withDeadline` runs outside this actor's isolation and so cannot
@@ -834,8 +866,8 @@ public actor VoiceBridgeDaemon {
             // was not company but a promise to return, which is now in the
             // wording rather than in a second notification — and, since that
             // promise can now be broken by a turn that never comes back,
-            // `turnCeiling` is what withdraws it out loud.
-            let result = try await withDeadline(Self.turnCeiling, label: "turn") {
+            // `Configuration.turnCeilingSeconds` is what withdraws it out loud.
+            let result = try await withDeadline(configuration.turnCeilingSeconds, label: "turn") {
                 try await brain.run(
                     transcript: prompt,
                     tools: tools,
