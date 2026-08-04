@@ -1507,11 +1507,35 @@ public actor VoiceBridgeDaemon {
             case .user:
                 carried.append(message)
             case .assistant:
-                guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                // **Judged on what is kept, not on what arrived.**
+                //
+                // This guard used to test `message.content` and then store
+                // `speakable(message.content)`, which are different strings —
+                // so anything non-empty that strips to nothing passed the guard
+                // and was stored as an empty assistant turn. A truncated
+                // `<think>` block does that (reasoning cut at
+                // `maxGeneratedTokens`), so does a bare fenced code block, and
+                // so does a model that writes its tool call as text, which
+                // `strippingToolCallMarkup` is documented to strip to nothing.
+                //
+                // An empty assistant turn bricks the thread. It goes back on
+                // the wire next turn as `{"role":"assistant","content":null}`
+                // with no `tool_calls`, and DeepSeek answers `400 Invalid
+                // assistant message: content or tool_calls must be set` — the
+                // error quoted verbatim in `ToolLoop`. History is written only
+                // on the success path, so no later turn is ever recorded and
+                // `trimmed` can never scroll the bad one out; `ConversationStore`
+                // persists it and restores it on restart. The thread stays dead
+                // for the owner, every message, until the six-hour on-disk
+                // expiry.
+                //
+                // Found by the 1.7.0 audit. The same guard is in the window's
+                // `ConversationModel`, whose doc comment says it must behave
+                // identically to this one — and did, including this.
+                let spoken = ToolLoop.speakable(message.content)
+                guard !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     continue
                 }
-                // Strip the tool-call metadata; keep the sentence.
-                let spoken = ToolLoop.speakable(message.content)
                 let links = Array(pendingLinks.prefix(SourceLinks.maximumPerTurn))
                 pendingLinks = []
                 carried.append(

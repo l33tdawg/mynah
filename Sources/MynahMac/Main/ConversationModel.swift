@@ -1297,10 +1297,17 @@ final class ConversationModel {
             case .user:
                 return message
             case .assistant:
-                guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                // Judged on what is kept, not on what arrived — see the same
+                // guard in `VoiceBridgeDaemon.conversationOnly` for the whole
+                // story. In short: a reply that is non-empty but strips to
+                // nothing used to be stored as an empty assistant turn, which
+                // goes back on the wire as `content: null` and is refused by the
+                // provider from then on. Here it also draws an empty bubble.
+                let spoken = ToolLoop.speakable(message.content)
+                guard !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     return nil
                 }
-                return BrainMessage(role: .assistant, content: ToolLoop.speakable(message.content))
+                return BrainMessage(role: .assistant, content: spoken)
             }
         }
     }
