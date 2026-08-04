@@ -231,7 +231,12 @@ public final class CallConnection: @unchecked Sendable {
 }
 
 /// Writes frames to one call.
-public struct CallFrameWriter {
+///
+/// `Sendable` because the write has to happen off the actor — see
+/// `CallTurnServer.send(_:over:)`. Safe to hand across: the descriptor is owned
+/// by the `CallConnection`, which serialises every write and retires exactly
+/// once.
+public struct CallFrameWriter: Sendable {
     private let connection: CallConnection
 
     public enum Failure: Error, Equatable {

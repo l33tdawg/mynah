@@ -811,7 +811,7 @@ public actor CallTurnServer {
                     SpeechRequest(text: opener.line, voice: configuration.voice, speed: configuration.speed)
                 ) {
                     guard !Task.isCancelled else { return }
-                    try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+                    try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
                     log("[call] said \"\(opener.line)\" after \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
                 }
             }
@@ -924,10 +924,10 @@ public actor CallTurnServer {
                 guard !Task.isCancelled else { return }
                 var audio = CallTurnServer.samples(fromWAV: speech.wav)
                 audio.append(CallTurnServer.pause(after: sentence))
-                try writer.send(.replyAudio(audio))
+                try await send(.replyAudio(audio), over: writer)
                 if firstSpoken == nil { firstSpoken = Date() }
             }
-            try writer.send(.replyEnd)
+            try await send(.replyEnd, over: writer)
 
             let seconds = { (from: Date, to: Date) in
                 String(format: "%.1f", to.timeIntervalSince(from))
@@ -949,7 +949,7 @@ public actor CallTurnServer {
             log("[call] the call ended before the answer did; leaving it unsaid")
         } catch {
             log("[call] could not answer: \(error)")
-            try? writer.send(.turnFailed("\(error)"))
+            try? await send(.turnFailed("\(error)"), over: writer)
         }
     }
 
@@ -960,7 +960,7 @@ public actor CallTurnServer {
     private func openTheCall(over writer: CallFrameWriter) async {
         // Prepared at //call, so this is usually already waiting.
         if let prepared = await preparation?.value {
-            try? writer.send(.replyAudio(prepared))
+            try? await send(.replyAudio(prepared), over: writer)
             log("[call] opened with the prepared briefing")
             if let opening = preparedOpening { transcript.said(opening) }
             preparation = nil
@@ -976,7 +976,7 @@ public actor CallTurnServer {
             log("[call] could not greet")
             return
         }
-        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
         log("[call] greeted: \(greeting)")
         transcript.said(greeting)
     }
@@ -1091,14 +1091,37 @@ public actor CallTurnServer {
         guard let audio = try? await synthesizer.synthesize(
             SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
         ) else { return }
-        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
         transcript.said(line)
         log("[call] said \"\(line)\"")
     }
 
+    /// Sends a frame without holding the actor while it goes.
+    ///
+    /// **`CallFrameWriter.send` is a blocking `write`, and every call site was on
+    /// the actor.** One reply frame carries a sentence plus `pause(after:)` — up
+    /// to 600ms of 48 kHz 16-bit, which is tens of kilobytes and more than a unix
+    /// socket buffers for a peer that is not draining fast enough. Parked in
+    /// there, the actor answers nothing at all: not the next utterance, not the
+    /// interruption that by definition arrives mid-turn, not the idle watch.
+    ///
+    /// The endpoint drains eagerly, so this is rare — but `SO_SNDTIMEO` now bounds
+    /// a stuck write at fifteen seconds, and fifteen seconds is precisely how long
+    /// the whole call surface would have been deaf for.
+    ///
+    /// Same reason `accept()` and `reader.next()` already go through
+    /// `withoutBlockingTheActor`. This was the third blocking syscall on this
+    /// surface and the one still holding the lock.
+    ///
+    /// Ordering survives: each caller awaits its own sends in sequence, and
+    /// `CallConnection` serialises anything that overlaps.
+    private func send(_ frame: CallFrame, over writer: CallFrameWriter) async throws {
+        try await withoutBlockingTheActor { try writer.send(frame) }
+    }
+
     private func endCall(over writer: CallFrameWriter) async {
         log("[call] no one has spoken for \(Int(CallTurnServer.hangUpAfter))s; ending the call")
-        try? writer.send(.endCall)
+        try? await send(.endCall, over: writer)
     }
 
     /// Keeps what this call was about, for the next one to open with.
@@ -1135,7 +1158,7 @@ public actor CallTurnServer {
             SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
         ) else { return }
         guard !Task.isCancelled else { return }
-        try? writer.send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)))
+        try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
         log("[call] said \"\(line)\" while working")
     }
 
