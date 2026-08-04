@@ -44,9 +44,21 @@ public final class WebSearchToolSource: ToolProviding {
     /// How long to wait before the single retry when a provider throttles.
     public static let secondsBeforeRetryingAThrottle: TimeInterval = 4
 
+    /// The longest any one provider may take before the chain moves on.
+    ///
+    /// Above `BrowserSearchBackend.loadTimeout` (20s) and above the HTTP
+    /// session's own timeout, so this only ever fires when a provider's own
+    /// bound failed — which is the case that took search down for a day.
+    /// A turn that spends this on one provider and then answers from the next is
+    /// slow; a turn that never comes back is broken.
+    public static let secondsBeforeGivingUpOnAProvider: TimeInterval = 25
+
     private let backends: [WebSearchBackend]
     private let resultCount: Int
     private let snippetCharacters: Int
+    /// Injected so a test can exercise the fall-through without spending the
+    /// real bound. See `WebSearchFallthroughTests`.
+    private let giveUpOnAProviderAfter: TimeInterval
     private let log: @Sendable (String) -> Void
     private let pace = SearchPacer()
 
@@ -57,11 +69,13 @@ public final class WebSearchToolSource: ToolProviding {
         backends: [WebSearchBackend],
         resultCount: Int = WebSearchToolSource.defaultResultCount,
         snippetCharacters: Int = WebSearchToolSource.defaultSnippetCharacters,
+        giveUpOnAProviderAfter: TimeInterval = WebSearchToolSource.secondsBeforeGivingUpOnAProvider,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.backends = backends
         self.resultCount = resultCount
         self.snippetCharacters = snippetCharacters
+        self.giveUpOnAProviderAfter = giveUpOnAProviderAfter
         self.log = log
     }
 
@@ -198,7 +212,26 @@ public final class WebSearchToolSource: ToolProviding {
                     // An empty result set is an answer, not a failure — falling
                     // through to the next provider on it would turn every
                     // genuinely obscure query into a full sweep of the chain.
-                    return try await backend.search(query: query, count: resultCount)
+                    //
+                    // **Bounded, because a provider that never answers took the
+                    // whole feature down for twenty-eight hours and eight
+                    // releases.** `BrowserSearchBackend` is `@MainActor`, and
+                    // `sage-voiced` parks its main thread in a semaphore with
+                    // nothing servicing the main queue — so the isolation hop
+                    // never completed, `search` never returned, and the chain
+                    // never reached the provider behind it. It logged nothing,
+                    // because it hung before it could.
+                    //
+                    // The chain's whole promise is that a provider which cannot
+                    // answer degrades to one that can. That promise has to cover
+                    // "does not answer at all", not only "throws".
+                    let wanted = resultCount
+                    return try await withDeadline(
+                        giveUpOnAProviderAfter,
+                        label: backend.providerName
+                    ) {
+                        try await backend.search(query: query, count: wanted)
+                    }
                 } catch {
                     lastError = error
                     throttled = throttled || Self.looksThrottled(error)

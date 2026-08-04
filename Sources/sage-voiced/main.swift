@@ -79,15 +79,34 @@ func parseFlags(_ arguments: [String]) -> [String: String] {
 }
 
 /// Runs an async body from the top level and exits with its status.
+///
+/// **`dispatchMain()`, not a semaphore, and it is not a style choice.**
+///
+/// This parked the main thread in `semaphore.wait()`. A blocked main thread
+/// services nothing, so the main queue never ran — and in Swift concurrency the
+/// main queue *is* the main actor's executor. Any `await` that hopped to
+/// `@MainActor` in this process suspended and was never resumed.
+///
+/// Exactly one thing does that, and it is load-bearing: `BrowserSearchBackend`
+/// is `@MainActor` because `WKWebView` must be. So every web search in the
+/// daemon parked at the isolation hop, never returned, never logged, and never
+/// fell through to the HTTP provider behind it. `web_search` was dead in the
+/// appliance from the commit that added the browser backend — 3 August, 10:55 —
+/// through eight releases, while the Mac app, which has a real main actor, went
+/// on searching perfectly.
+///
+/// The log says it plainly in hindsight: not one `[web_search]` line of any kind
+/// after 10:36 that morning, and `DuckDuckGo (browser)` never printed once in
+/// the appliance's entire history.
+///
+/// `dispatchMain()` hands the main thread to the main queue, which is what a
+/// process with any main-actor work at all needs. It never returns, so the exit
+/// moves inside the task.
 func runAndExit(_ body: @escaping () async -> Int32) -> Never {
-    let semaphore = DispatchSemaphore(value: 0)
-    var status: Int32 = 0
     Task {
-        status = await body()
-        semaphore.signal()
+        exit(await body())
     }
-    semaphore.wait()
-    exit(status)
+    dispatchMain()
 }
 
 /// Every line the daemon writes, stamped and unbuffered.
