@@ -37,7 +37,7 @@ final class UpdateBannerTests: XCTestCase {
             UpdateWatch.banner(for: .newer(version: "1.5.2", page: page), installedAndWaiting: nil)
         )
         XCTAssertEqual(banner.headline, "Mynah 1.5.2 is ready.")
-        XCTAssertEqual(banner.page, page, "What's new must land on the release being offered")
+        XCTAssertEqual(banner.page, page, "the release page must be the one being offered — the install sheet links it")
         XCTAssertFalse(banner.isWaitingForRestart)
     }
 
@@ -118,6 +118,34 @@ final class UpdateBannerTests: XCTestCase {
             UpdateWatch.banner(for: .newer(version: "1.5.2", page: page), installedAndWaiting: nil)
         )
         XCTAssertNil(UpdateWatch.banner(for: .upToDate, installedAndWaiting: nil))
+    }
+
+    // MARK: One verb, and only one
+
+    /// **No "What's new" on the band, by the owner's decision:** *"looks good but
+    /// remove the 'what's new'"*.
+    ///
+    /// Asserted the same way the missing dismiss is, and for the same reason: a
+    /// link to the release notes is exactly the sort of thing somebody adds back
+    /// believing they are being helpful. The notes are still one click away in
+    /// the install sheet, which is where somebody who wants them is already
+    /// looking.
+    func testTheBandOffersNothingToReadOnlySomethingToDo() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/Main/UpdateWatch.swift"),
+            encoding: .utf8
+        )
+        let body = try XCTUnwrap(source.range(of: "struct UpdateBanner").map { String(source[$0.lowerBound...]) })
+
+        XCTAssertFalse(
+            body.split(separator: "\n").contains {
+                let line = $0.trimmingCharacters(in: .whitespaces)
+                return line.contains("What's new") && !line.hasPrefix("//")
+            },
+            "the release-notes link is back on the band"
+        )
     }
 
     // MARK: The colour, twice asked for and twice missed

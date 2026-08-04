@@ -155,7 +155,8 @@ final class UpdateWatch {
     nonisolated struct Banner: Equatable {
         var headline: String
         var detail: String
-        /// The release's own page, for "What's new".
+        /// The release's own page. The banner no longer links it — see
+        /// `UpdateBanner` — but the install sheet still offers it.
         var page: URL
         /// True between the file landing on disk and the restart, when the verb
         /// is no longer "update" but "restart".
@@ -377,9 +378,6 @@ final class UpdateWatch {
 struct UpdateBanner: View {
 
     var watch: UpdateWatch
-    /// Opens a URL. Injected so the preview and the tests do not launch a
-    /// browser.
-    var open: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     var body: some View {
         if let banner = watch.banner {
@@ -403,14 +401,11 @@ struct UpdateBanner: View {
 
                 Spacer(minLength: s4)
 
-                // The release's own notes. A link rather than a button because
-                // it leaves the Mac, and because an owner who has been offered
-                // an update is entitled to read what is in it before taking it.
-                Button("What's new") { open(banner.page) }
-                    .buttonStyle(.link)
-                    .mynahFont(.body)
-                    .help("Open the release notes for this version")
-
+                // **No "What's new" here, by the owner's decision.** The notes
+                // are still one click away in the install sheet; what this strip
+                // is for is the one verb, and a second control beside it made
+                // the band a place to make a choice rather than a place to be
+                // told something.
                 if banner.isWaitingForRestart {
                     MynahButton("Restart Mynah") { watch.restartIntoNewVersion() }
                 } else {
@@ -458,6 +453,6 @@ struct UpdateBanner: View {
 
 #Preview("Update ready") {
     let watch = UpdateWatch()
-    return UpdateBanner(watch: watch, open: { _ in })
+    return UpdateBanner(watch: watch)
         .frame(width: 720)
 }
