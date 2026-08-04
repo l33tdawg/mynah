@@ -174,10 +174,24 @@ public struct ProactiveReport: Sendable, Equatable {
     /// owner's calendar entries.
     public let sawTasks: [WatchedTask]?
 
-    public init(message: String?, ledger: ProactiveLedger, sawTasks: [WatchedTask]? = nil) {
+    /// Whether `message` carries words written by something other than Mynah.
+    ///
+    /// Task news is Mynah's own observation of the owner's own list. An inbox
+    /// excerpt is another agent's prose, quoted. Those go to the same phone and
+    /// must not go into the model's history the same way — see
+    /// `VoiceBridgeDaemon.announce(_:to:quotingAnotherAgent:)`.
+    public let relaysAnotherAgent: Bool
+
+    public init(
+        message: String?,
+        ledger: ProactiveLedger,
+        sawTasks: [WatchedTask]? = nil,
+        relaysAnotherAgent: Bool = false
+    ) {
         self.message = message
         self.ledger = ledger
         self.sawTasks = sawTasks
+        self.relaysAnotherAgent = relaysAnotherAgent
     }
 }
 
@@ -316,7 +330,13 @@ public struct ProactiveWatch: Sendable {
             return ProactiveReport(message: nil, ledger: updated, sawTasks: tasks)
         }
         return ProactiveReport(
-            message: Self.message(from: lines), ledger: updated, sawTasks: tasks
+            message: Self.message(from: lines),
+            ledger: updated,
+            sawTasks: tasks,
+            // Task news is Mynah's own reading of the owner's own list. An inbox
+            // line quotes an agent that is not Mynah, so the message as a whole
+            // is a relay and has to be stored as one.
+            relaysAnotherAgent: !newMessages.isEmpty
         )
     }
 

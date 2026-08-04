@@ -1144,8 +1144,10 @@ func runDaemon(_ arguments: [String]) -> Never {
                     guard let ritual else { return [] }
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
-                say: { message in
-                    await daemon?.announce(message, to: .account(owner))
+                say: { message, quotingAnotherAgent in
+                    await daemon?.announce(
+                        message, to: .account(owner), quotingAnotherAgent: quotingAnotherAgent
+                    )
                 },
                 log: { note($0) }
             )
@@ -1412,7 +1414,11 @@ func runProactiveWatch(
     /// thing off; everything else here behaves exactly as it did before.
     calendar: CalendarSync? = nil,
     arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
-    say: @escaping @Sendable (String) async -> Void,
+    /// The second argument says whether the text quotes an agent that is not
+    /// Mynah, which decides how it is written into the thread's history rather
+    /// than how it reads on the phone. See
+    /// `VoiceBridgeDaemon.announce(_:to:quotingAnotherAgent:)`.
+    say: @escaping @Sendable (String, Bool) async -> Void,
     log: @escaping @Sendable (String) -> Void
 ) async {
     let watch = ProactiveWatch(source: source)
@@ -1464,7 +1470,7 @@ func runProactiveWatch(
                 try? ledger.save(to: ledgerURL)
                 for nudge in nudges {
                     log("[watch] reminder due: \(nudge.key)")
-                    await say(nudge.text)
+                    await say(nudge.text, false)
                 }
             }
         }
@@ -1517,12 +1523,12 @@ func runProactiveWatch(
         // the morning. That bug shipped once and the owner read it twice.
         for reply in await arrivedReplies() {
             log("[watch] a reply came back; telling the owner")
-            await say(reply)
+            await say(reply, true)
         }
 
         guard let message = report.message else { continue }
         log("[watch] something changed; telling the owner")
-        await say(message)
+        await say(message, report.relaysAnotherAgent)
     }
 }
 
