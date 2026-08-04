@@ -1770,22 +1770,37 @@ struct SettingsView: View {
     /// old advice switched to an API model, tried again, and was refused for a
     /// reason nothing had mentioned. So the row reports the *real* condition.
     ///
-    /// Still reading the same fact the daemon refuses on — `CallHost` is the one
-    /// source — so the two cannot drift into disagreeing.
+    /// **It reads the daemon's own refusal now, not one of the facts behind it.**
+    ///
+    /// That doc line used to say `CallHost` was the single source, "so the two
+    /// cannot drift into disagreeing" — and then 1.7.0 gave the refusal a second
+    /// barrier, `BrainCapabilities.holdsARealtimeCall`, and they disagreed
+    /// immediately. On a Mac with the relay secret and a local brain the row
+    /// showed a green "Ready" and an instruction to text //call, while //call
+    /// answered that a call needs a cloud brain. The secret is minted for every
+    /// owner at phone linking, so that was the default state, not an edge.
+    ///
+    /// Asking `CallInvitation.refusal` is what makes the claim structurally
+    /// true: a third barrier added tomorrow reaches this row without anybody
+    /// remembering it exists. Found by the 1.7.0 audit.
     @ViewBuilder
     private var callReadinessRow: some View {
-        let isSetUp = CallHost.isSetUpForCalls()
+        // `.hosted` when the brain choice was never recorded: that was this
+        // row's behaviour before the barrier existed, and an unset choice is not
+        // evidence of a local model.
+        let refusal = CallInvitation.refusal(
+            isSetUpForCalls: CallHost.isSetUpForCalls(),
+            brain: model.brainOption?.keepsWordsOnDevice == true ? .onDevice : .hosted
+        )
         SettingsRow(
             "Talking to Mynah out loud",
-            detail: isSetUp
-                ? "Text \(CallInvitation.command) to yourself and tap the link it sends back. "
+            detail: refusal?.sentence
+                ?? "Text \(CallInvitation.command) to yourself and tap the link it sends back. "
                     + "You can interrupt it mid-sentence."
-                : "This Mac hasn't been set up for calls yet. Voice notes work either way — "
-                    + "send one and Mynah answers with one."
         ) {
             StatusPill(
-                isSetUp ? "Ready" : "Not set up",
-                tone: isSetUp ? .good : .neutral
+                refusal == nil ? "Ready" : "Not set up",
+                tone: refusal == nil ? .good : .neutral
             )
         }
     }

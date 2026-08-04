@@ -1419,8 +1419,21 @@ public final class ToolLoop: @unchecked Sendable {
         // Several of them and the model gets to pick which moment it is in —
         // which is the bug this whole stamp was added to fix, arriving by the
         // other door.
+        //
+        // **And the photo comes off with it.** `BrainMessage.images` says image
+        // bytes are deliberately not carried in conversation history, and they
+        // were: this line put them back on the replay copy, `conversationOnly`
+        // keeps user turns verbatim, and `OllamaClient` re-encodes them on every
+        // later request. So one photo sat in the context and in the shared
+        // prompt-cache budget for all sixteen history turns, at roughly 125 KB
+        // of base64 a request.
+        //
+        // The in-flight `messages[ownTurn]` still carries them, so the model
+        // sees the photo on the turn that brought it. Only the replay loses it,
+        // which is what "not carried in history" meant. Found by the 1.7.0
+        // audit; the invariant had been documented and never implemented.
         var replayable = messages
-        replayable[ownTurn] = .user(transcript, images: images)
+        replayable[ownTurn] = .user(transcript)
         return ToolLoopResult(reply: reply, trace: trace, messages: replayable)
     }
 

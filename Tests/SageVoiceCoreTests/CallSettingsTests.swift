@@ -578,4 +578,56 @@ final class ToolResultBudgetTests: XCTestCase {
             VoiceToolBudget.fit(payload(10_000), tool: "", brain: .onDevice).utf8.count
         )
     }
+
+    // MARK: - What the Settings screen may claim
+
+    /// **The screen must not promise what the daemon refuses.**
+    ///
+    /// The readiness row read `CallHost.isSetUpForCalls()` and nothing else,
+    /// while the daemon refuses on that *and* `holdsARealtimeCall`. 1.7.0 added
+    /// the second barrier, so on a Mac with the relay secret and a local brain
+    /// the row showed a green "Ready" and "text //call", and //call answered
+    /// that a call needs a cloud brain. The secret is minted for every owner at
+    /// phone linking, so that was the default state.
+    ///
+    /// A source guard rather than a view test, because the regression worth
+    /// catching is somebody reintroducing a second source of truth for this —
+    /// which is what the row's own doc comment claimed was impossible while it
+    /// was happening.
+    func testTheReadinessRowAsksTheSameQuestionTheDaemonAnswers() throws {
+        let settings = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/Main/SettingsView.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(settings)
+        let bodies = scan.indices(of: "private var callReadinessRow")
+            .compactMap { scan.block(from: $0) }
+            .map { scan.text(in: $0) }
+
+        XCTAssertEqual(bodies.count, 1, "the readiness row was not found, so this guard checks nothing")
+        XCTAssertTrue(
+            bodies[0].contains("CallInvitation.refusal"),
+            """
+            the Voice tab decides readiness from its own reading of the facts \
+            instead of from the refusal the daemon actually returns, so it can \
+            show a green Ready on a Mac where //call is refused
+            """
+        )
+    }
+
+    /// And the refusal it reads has to be the one with both barriers in it —
+    /// otherwise the row above could ask a question that never mentions the
+    /// brain and still satisfy the guard.
+    func testTheRefusalTheRowReadsKnowsAboutTheBrain() {
+        XCTAssertNotNil(
+            CallInvitation.refusal(isSetUpForCalls: true, brain: .onDevice),
+            "a set-up Mac with a local brain is refused by the daemon; the row must hear that"
+        )
+        XCTAssertNil(
+            CallInvitation.refusal(isSetUpForCalls: true, brain: .hosted),
+            "a set-up Mac with a cloud brain is ready, and the row must not claim otherwise"
+        )
+    }
 }
