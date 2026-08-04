@@ -309,15 +309,32 @@ final class OwnTaskEditsTests: XCTestCase {
     /// the regression worth catching is "somebody added a way to write tasks",
     /// not any particular runtime value.
     ///
-    /// Scoped to files that invoke a tool *directly*, by `callTool`. Writes the
-    /// model makes go through `ToolLoop`'s generic dispatch, which never names
-    /// `sage_task` — those are caught after the fact by
-    /// `wroteToTheTaskList(_:)` reading the turn's trace, and both surfaces do.
-    /// The gap this closes is the other kind: UI that changes the list with no
-    /// turn to inspect, which is precisely what dragging a card is.
+    /// **The first version of this scan checked one file and said so in the
+    /// past tense.** It kept only files containing both `callTool(` and a
+    /// non-comment `"sage_task"`, which over the whole of `Sources/` is
+    /// `MCPTaskSource.swift` and nothing else, and its `checked > 0` sentinel
+    /// was satisfied at one. So it reported success having looked at the board's
+    /// drag gesture and at no other door into the list — the call surface, which
+    /// runs a full tool loop down a phone line, was never in scope at all.
     ///
-    /// Comments are excluded, so that *writing about* `sage_task` — as three
-    /// catalogue files in the brain do — is not mistaken for calling it.
+    /// Two kinds of door are checked now, because there are two.
+    ///
+    /// - A **direct** call: `callTool("sage_task", …)`. Nothing inspects a trace
+    ///   afterwards because there is no turn — dragging a card does not spend
+    ///   one — so the call site itself has to write the note, and the block it
+    ///   sits in must say `recordFromAnotherProcess`.
+    /// - A **model turn**: anything handed a `transcript:`. The model may call
+    ///   `sage_task` on any of them, through `ToolLoop`'s generic dispatch,
+    ///   which never names the tool. Those are caught after the fact by
+    ///   `wroteToTheTaskList(_:)` reading the turn's trace — so the guard
+    ///   follows the turn's own result binding and requires *that* value to
+    ///   reach it. Following the binding rather than the file is what stops one
+    ///   fixed call site in a file covering an unfixed one beside it.
+    ///
+    /// Comments are stripped from both halves. They were stripped from the
+    /// `"sage_task"` half only, so a file that merely *mentioned*
+    /// `recordFromAnotherProcess` in prose — as the fix's own comments do, at
+    /// length — counted as having called it.
     func testEveryPlaceThatWritesTasksTellsTheWatch() throws {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -328,31 +345,142 @@ final class OwnTaskEditsTests: XCTestCase {
             .filter { $0.pathExtension == "swift" } ?? []
         XCTAssertFalse(files.isEmpty, "found no Swift sources, so this guard is checking nothing")
 
-        var silent: [String] = []
-        var checked = 0
+        var sites: [TaskWriteSite] = []
         for file in files {
-            guard let source = try? String(contentsOf: file, encoding: .utf8),
-                  source.contains("callTool(") else { continue }
-            let writesTasks = source.split(separator: "\n").contains {
-                let line = $0.trimmingCharacters(in: .whitespaces)
-                return line.contains("\"sage_task\"") && !line.hasPrefix("//")
-            }
-            guard writesTasks else { continue }
-            checked += 1
-            if !source.contains("recordFromAnotherProcess") {
-                silent.append(file.lastPathComponent)
-            }
+            guard let source = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            sites += Self.taskWriteSites(in: source, file: file.lastPathComponent)
         }
-        XCTAssertGreaterThan(checked, 0, "the guard matched no direct task writer, so it checks nothing")
 
+        // Both sentinels name a kind rather than a count, because a count of one
+        // is exactly what the previous version was satisfied by.
+        XCTAssertTrue(
+            sites.contains { $0.kind == .directCall },
+            "no direct sage_task call was found anywhere in Sources/, so half this guard checks nothing"
+        )
+        XCTAssertTrue(
+            sites.contains { $0.kind == .modelTurn },
+            "no model turn was found anywhere in Sources/, so half this guard checks nothing"
+        )
+
+        let silent = sites.filter { !$0.tellsTheWatch }.map(\.description)
         XCTAssertEqual(
             silent, [],
             """
             these change the owner's task list without telling the proactive watch, \
-            so it will report his own edit back to him over Signal as news: \
-            \(silent.joined(separator: ", "))
+            so it will report his own edit back to him over Signal as news, a quarter of \
+            an hour later, as though a stranger had done it: \(silent.joined(separator: "; "))
             """
         )
+    }
+
+    // MARK: The scan
+
+    /// One place that can change the owner's task list.
+    struct TaskWriteSite {
+        enum Kind { case directCall, modelTurn }
+
+        let file: String
+        let line: Int
+        let kind: Kind
+        let tellsTheWatch: Bool
+        /// What it would have to do to stop being reported here.
+        let owed: String
+
+        var description: String { "\(file):\(line) — \(owed)" }
+    }
+
+    /// Every door into the task list in one file, and whether each tells the
+    /// watch it went through.
+    static func taskWriteSites(in source: String, file: String) -> [TaskWriteSite] {
+        let scan = SwiftSourceScan(source)
+        var sites: [TaskWriteSite] = []
+
+        for call in scan.indices(of: "callTool(") {
+            guard let arguments = scan.arguments(from: call),
+                  scan.text(in: arguments).contains("\"sage_task\"") else { continue }
+            // The block the call sits in, matched by brace depth. `MCPTaskSource`
+            // writes its note in the same `do { … }` as the call, which is the
+            // shape being required: a write and its note are one action.
+            let scope = scan.enclosingBlock(of: call).map { scan.text(in: $0) } ?? scan.text(in: 0..<scan.characters.count)
+            sites.append(
+                TaskWriteSite(
+                    file: file,
+                    line: scan.line(of: call),
+                    kind: .directCall,
+                    tellsTheWatch: scope.contains("recordFromAnotherProcess"),
+                    owed: "a direct sage_task call whose own block never calls OwnTaskEdits.recordFromAnotherProcess"
+                )
+            )
+        }
+
+        for call in scan.indices(of: ".run(") {
+            guard let arguments = scan.arguments(from: call),
+                  scan.text(in: arguments).contains("transcript:"),
+                  Self.callsTheBrainDirectly(scan.receiver(before: call), in: scan) else { continue }
+            // The turn's result, followed by name. The declaration is often a
+            // line above the call — the daemon's is
+            // `let result = try await withDeadline(…) { try await brain.run(…) }`
+            // — so it cannot be read off the call's own line, and a binding
+            // whose scope does not contain the call is a different statement's.
+            let binding = scan.bindingBefore(call).flatMap { binding -> (name: String, scope: String)? in
+                guard let scope = scan.enclosingBlock(of: binding.index), scope.contains(call) else { return nil }
+                return (binding.name, scan.text(in: scope))
+            }
+            guard let binding else {
+                sites.append(
+                    TaskWriteSite(
+                        file: file,
+                        line: scan.line(of: call),
+                        kind: .modelTurn,
+                        tellsTheWatch: false,
+                        owed: "a model turn whose result is discarded, so nothing can see whether it wrote a task"
+                    )
+                )
+                continue
+            }
+            sites.append(
+                TaskWriteSite(
+                    file: file,
+                    line: scan.line(of: call),
+                    kind: .modelTurn,
+                    tellsTheWatch: binding.scope.contains("wroteToTheTaskList(\(binding.name)"),
+                    owed: """
+                        a model turn whose result is never passed to \
+                        OwnTaskEdits.wroteToTheTaskList(\(binding.name).trace)
+                        """
+                )
+            )
+        }
+
+        return sites
+    }
+
+    /// Whether `receiver.run(transcript:)` reaches the brain here, or hands the
+    /// turn to something in this repository that runs it.
+    ///
+    /// **Not a nicety — without it this guard demands a second note for one
+    /// edit.** The window's view model calls `engine.run(transcript:history:)`
+    /// on a `TurnEngine`, whose implementation is `ConversationEngine.run`, and
+    /// that function is scanned in its own right at the line where it calls the
+    /// loop and already writes the note. Requiring the wrapper to write one too
+    /// would mean two markers for one edit and, worse, a guard that reads as
+    /// "record it wherever you happen to see the word run".
+    ///
+    /// An unrecognised receiver counts as the brain. A false name here costs a
+    /// comment and a re-read; a missed surface costs the owner his own edit read
+    /// back to him over Signal, which is the failure this file exists for.
+    static func callsTheBrainDirectly(_ receiver: String, in scan: SwiftSourceScan) -> Bool {
+        guard !receiver.isEmpty else { return true }
+        var annotated = false
+        for keyword in ["let \(receiver)", "var \(receiver)"] {
+            for declaration in scan.indices(of: keyword) {
+                let line = scan.statement(at: declaration)
+                if line.contains("ToolLoop") { return true }
+                let rest = line.components(separatedBy: receiver).dropFirst().first ?? ""
+                if rest.trimmingCharacters(in: .whitespaces).hasPrefix(":") { annotated = true }
+            }
+        }
+        return !annotated
     }
 
     // MARK: - Fixtures

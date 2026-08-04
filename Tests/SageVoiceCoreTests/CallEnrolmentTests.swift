@@ -121,7 +121,13 @@ final class CallEnrolmentTests: XCTestCase {
             XCTAssertEqual(outcome, .relayCannotMint)
             XCTAssertFalse(outcome.isReady)
             XCTAssertFalse(CallHost.isSetUpForCalls(secretURL: secret))
-            XCTAssertEqual(CallInvitation.refusal(isSetUpForCalls: false), .notSetUpForCalls)
+            // A hosted brain on purpose: the barrier being asserted here is the
+            // missing secret, so the one that depends on the model must not be
+            // able to answer for it.
+            XCTAssertEqual(
+                CallInvitation.refusal(isSetUpForCalls: false, brain: .hosted),
+                .notSetUpForCalls
+            )
         }
     }
 

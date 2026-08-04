@@ -33,16 +33,69 @@ public actor CallTurnServer {
         /// phone speaker.
         public var speed: Double
 
+        /// How long a caller may be left on an open line before being told.
+        ///
+        /// **The daemon has had one of these since 1.5.4 and this surface had
+        /// none**, which is the worse of the two places to be missing it: a
+        /// Signal thread that goes quiet is a thread, and a phone line that goes
+        /// quiet is a caller saying "hello? … hello?" into a live microphone
+        /// while the appliance holds it open. See `withDeadline` for the class of
+        /// hang this exists for, and why it is not a task group.
+        ///
+        /// **Ninety seconds, derived rather than picked.** `CallFiller` says its
+        /// last word at 26 seconds — 6, then 6, 8, 6 — and then deliberately goes
+        /// quiet, because a caller who has heard four "nearly there"s knows
+        /// everything a fifth would tell them. So 26s is the moment the line
+        /// genuinely falls silent, and this is roughly three times it: about a
+        /// minute of silence is the most a caller absorbs before concluding the
+        /// call has dropped.
+        ///
+        /// It is deliberately well under `ToolLoop.defaultDeadlineSeconds`, the
+        /// loop's own 300-second brake, which is the right bound for a written
+        /// thread and is five minutes of dead air on a phone. A call that needs
+        /// that long is a call that should have been a message, and
+        /// `CallTurnServer.tookTooLong` says exactly that to the caller.
+        ///
+        /// **On `Configuration` rather than a static, for the reason
+        /// `VoiceBridgeDaemon.Configuration.turnCeilingSeconds` is**: while that
+        /// one was a `static let`, nothing in the suite could build a surface that
+        /// gave up in under six minutes, so every assertion anybody wrote was on
+        /// the constant's arithmetic and deleting the line that *used* it left the
+        /// suite green.
+        public static let defaultTurnCeilingSeconds: TimeInterval = 90
+
+        /// See `defaultTurnCeilingSeconds`.
+        public var turnCeilingSeconds: TimeInterval
+
         public init(
             socketURL: URL = CallTurnServer.defaultSocket(),
             voice: String? = nil,
-            speed: Double = 1.15
+            speed: Double = 1.15,
+            turnCeilingSeconds: TimeInterval = CallTurnServer.Configuration.defaultTurnCeilingSeconds
         ) {
             self.socketURL = socketURL
             self.voice = voice
             self.speed = speed
+            self.turnCeilingSeconds = turnCeilingSeconds
         }
     }
+
+    /// What the caller hears when the ceiling above is reached.
+    ///
+    /// **A dead end with a door in it.** "Something went wrong" down a phone line
+    /// leaves the caller with a working appliance and no idea what to do next, so
+    /// this names the thing that will work: the Signal thread, whose own ceiling
+    /// is 360 seconds — four times this one — and which can take as long as the
+    /// question needs because nobody is holding a line open while it thinks.
+    ///
+    /// Not a promise to come back. The abandoned turn is cancelled on the way out
+    /// (see `withDeadline`) and there is nothing left running to come back *with*,
+    /// so saying "I'll message you when it's done" would be a lie the caller then
+    /// waits on.
+    public static let tookTooLong = """
+        Sorry — that one's taking longer than I can hold the line for. \
+        Send it to me on Signal and I'll give it the time it needs.
+        """
 
     private let configuration: Configuration
     private let transcriber: any AudioFileTranscribing
@@ -364,6 +417,28 @@ public actor CallTurnServer {
                 if errno == EINTR { continue }
                 break
             }
+            // **Never let a dead endpoint kill the appliance.**
+            //
+            // Without this, a `write()` to a peer that has hung up raises
+            // SIGPIPE, whose default disposition terminates the process — so the
+            // call endpoint crashing mid-sentence would take Signal, the
+            // proactive watch and everything else down with it, silently and
+            // with no log line, because the appliance is gone before it can
+            // write one. The endpoint is a separate binary this daemon launches
+            // and restarts, so this is a thing that happens rather than a thing
+            // that could.
+            //
+            // `SignalLineSocket` has done exactly this since the transport was
+            // written, for exactly this reason. This socket was simply never
+            // given the same line, and nothing noticed until a test drove a real
+            // connection and closed it — the failure arrives as the whole
+            // process dying with signal 13, which is not a shape anybody reading
+            // a call log would recognise.
+            var noSignalOnADeadPeer: Int32 = 1
+            setsockopt(
+                accepted, SOL_SOCKET, SO_NOSIGPIPE,
+                &noSignalOnADeadPeer, socklen_t(MemoryLayout<Int32>.size)
+            )
             // One call at a time. A second endpoint connecting means the first
             // is gone or something is wrong; either way the newest wins, which
             // matches how //call reissues the link.
@@ -655,7 +730,39 @@ public actor CallTurnServer {
                     await self.sayFiller(line, over: writer)
                 }
             }
-            let fullReply = try await answer(heard)
+            // **Bounded, because the line is open the whole time this runs.**
+            //
+            // The filler above stops at four lines and about 26 seconds, on
+            // purpose. Everything after that is silence on a live call, and until
+            // now there was no end to it: a turn parked in something cancellation
+            // cannot interrupt — the node's pipe read is the known one — held the
+            // caller on an open line indefinitely, with a hot microphone and no
+            // word from the appliance. The daemon has had this bound since 1.5.4
+            // and this surface never did.
+            //
+            // Read off the configuration rather than a constant so a test can
+            // shorten it; see `Configuration.turnCeilingSeconds` for where 90
+            // comes from.
+            //
+            // Hoisted out of `self` because the work runs outside this actor's
+            // isolation. It captures the closure and the caller's sentence and
+            // nothing else, which is what lets it be abandoned safely.
+            let think = answer
+            let fullReply: String
+            do {
+                fullReply = try await withDeadline(
+                    configuration.turnCeilingSeconds,
+                    label: "call turn"
+                ) {
+                    try await think(heard)
+                }
+            } catch let overrun as DeadlineExceeded {
+                // Spoken, not thrown. `turnFailed` ends the turn at the endpoint
+                // and the caller hears nothing at all — which is the failure
+                // this whole change is about, arriving by a different route.
+                log("[call] \(overrun); saying so rather than holding the line")
+                fullReply = CallTurnServer.tookTooLong
+            }
             waiting.cancel()
             let thought = Date()
             guard !Task.isCancelled else { return }

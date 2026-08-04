@@ -445,6 +445,17 @@ func runBrain(_ arguments: [String]) -> Never {
             print("---")
 
             let result = try await loop.run(transcript: transcript, tools: tools)
+            // **A door into the list that nobody was watching.** This is the
+            // one-shot invocation — a shell running `sage-voiced "…"` beside a
+            // live daemon — and the model may call `sage_task` on it like any
+            // other turn. It is a different process from the watch, so the note
+            // goes through the file rather than the actor, exactly as the window
+            // does. Without it the owner's own command-line edit comes back to
+            // him over Signal a quarter of an hour later as though a stranger had
+            // made it. See `OwnTaskEdits`.
+            if OwnTaskEdits.wroteToTheTaskList(result.trace) {
+                OwnTaskEdits.recordFromAnotherProcess(log: { note($0) })
+            }
             print(result.reply)
             print("---")
             print(result.trace.summary)
@@ -950,6 +961,16 @@ func runDaemon(_ arguments: [String]) -> Never {
         // Airlines as of 2025:" followed by markdown bullets, which is a list
         // nobody can hear and, until the synthesiser was fixed, a leading dash
         // that killed the answer outright.
+        // Shared with the call surface, the daemon and the proactive watch below,
+        // in memory rather than through the ledger file: all three live in this
+        // process, and a flag written to disk while the watch holds a copy across
+        // a node round trip is a flag that gets overwritten.
+        //
+        // **Declared here rather than beside the daemon**, which is where it used
+        // to be — twenty lines below the call server that needed it, which is
+        // most of why the call surface never got one.
+        let ownTaskEdits = OwnTaskEdits()
+
         let callLoop = ToolLoop(
             backend: backend,
             mcp: tools,
@@ -969,6 +990,16 @@ func runDaemon(_ arguments: [String]) -> Never {
                     history: await callHistory.recent()
                 )
                 await callHistory.remember(result.messages)
+                // **The same rule as the daemon's turn and the window's chat,
+                // and this was the surface that never had it.** A caller can add
+                // and finish things on the phone — it is the fastest way to use
+                // the appliance — and every one of those edits was news to the
+                // watch, which read it back to him over Signal fifteen minutes
+                // later as though somebody else had made it. Same process as the
+                // watch, so the actor rather than the file. See `OwnTaskEdits`.
+                if OwnTaskEdits.wroteToTheTaskList(result.trace) {
+                    await ownTaskEdits.record()
+                }
                 return result.reply
             },
             log: { note($0) }
@@ -1002,12 +1033,6 @@ func runDaemon(_ arguments: [String]) -> Never {
                 log: { note($0) }
             )
 
-        // Shared with the proactive watch below, in memory rather than through
-        // the ledger file: both live in this process, and a flag written to disk
-        // while the watch holds a copy across a node round trip is a flag that
-        // gets overwritten.
-        let ownTaskEdits = OwnTaskEdits()
-
         let daemon = VoiceBridgeDaemon(
             signal: signal,
             transcriber: transcriber,
@@ -1032,7 +1057,15 @@ func runDaemon(_ arguments: [String]) -> Never {
             calls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath)),
             // Decided once. The backend used to be part of this and no longer
             // is — see `CallInvitation.refusal(isSetUpForCalls:)`.
-            callRefusal: CallInvitation.refusal(isSetUpForCalls: CallHost.isSetUpForCalls()),
+            // The brain is part of this again, and this time as a declared
+            // capability rather than an `isLocal` proxy. See
+            // `BrainCapabilities.holdsARealtimeCall` for the evidence on both
+            // sides — the 29 July measurement that removed the old barrier, and
+            // the 4 August call that brought it back.
+            callRefusal: CallInvitation.refusal(
+                isSetUpForCalls: CallHost.isSetUpForCalls(),
+                brain: backend.brain
+            ),
             // //call is several seconds of warning. Spent warming the model,
             // SAGE, the voice and recognition — and building the opening — so
             // the caller arrives to something ready rather than to a pause.

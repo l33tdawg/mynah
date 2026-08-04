@@ -74,6 +74,9 @@ public enum CallInvitation {
     public enum Refusal: Sendable, Equatable {
         /// This Mac has never been set up for calls.
         case notSetUpForCalls
+        /// The brain answering today cannot hold a live conversation. See
+        /// `BrainCapabilities.holdsARealtimeCall`.
+        case brainCannotHoldALine
         case couldNotStart(String)
 
         public var sentence: String {
@@ -83,6 +86,19 @@ public enum CallInvitation {
                 // it the same way and for the same reason: a file he has never
                 // seen is not a next step, it is a puzzle.
                 return "This Mac hasn't been set up for calls yet. Voice notes still work."
+            case .brainCannotHoldALine:
+                // Names the next action, because there is a real one — unlike
+                // the case above it, where the file he would have to find is
+                // not a step, it is a puzzle. Here the door is a switch in
+                // Settings he has already seen.
+                //
+                // And it says voice notes still work, because that is the half
+                // he would otherwise have to discover by trying: the model on
+                // this Mac answers a voice note perfectly well. It is holding a
+                // *line* it cannot do.
+                return "A call needs a cloud brain — the model on this Mac can't keep up with a live "
+                    + "conversation. Switch to a cloud provider in Settings and //call will work. "
+                    + "Voice notes are fine either way."
             case .couldNotStart(let reason):
                 return "I couldn't start the call: \(reason)"
             }
@@ -112,8 +128,15 @@ public enum CallInvitation {
     /// **If a call on a local brain does turn out to be a dead line, the fix is
     /// to measure time to first token, not to reinstate the proxy.** A slow
     /// cloud model would have sailed straight past the old check too.
-    public static func refusal(isSetUpForCalls: Bool) -> Refusal? {
-        isSetUpForCalls ? nil : .notSetUpForCalls
+    /// - Parameter brain: what the brain answering today is allowed to do.
+    ///   **No default.** A defaulted "calls are fine" is precisely how this
+    ///   barrier would be forgotten at a fourth call site, and the whole reason
+    ///   it is a declared capability rather than a scattered `isLocal` check.
+    public static func refusal(isSetUpForCalls: Bool, brain: BrainCapabilities) -> Refusal? {
+        guard isSetUpForCalls else { return .notSetUpForCalls }
+        // The Mac is capable and the relay is there; the only question left is
+        // whether this brain can hold a conversation.
+        return brain.holdsARealtimeCall ? nil : .brainCannotHoldALine
     }
 
     /// An unguessable path segment.

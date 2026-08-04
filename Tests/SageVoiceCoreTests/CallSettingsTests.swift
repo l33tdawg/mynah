@@ -263,40 +263,101 @@ final class CallRefusalTests: XCTestCase {
     /// this ever fails, somebody has reinstated a speed proxy — and the fix for
     /// a slow call is to measure time to first token, not to guess from where
     /// the model runs. A slow cloud model sailed past the old check too.
-    func testABrainOnThisMacIsNoLongerAReasonToRefuse() {
+    ///
+    /// **That instruction still stands, and the barrier is back anyway.** On
+    /// 4 August 2026 a tester spent a call on `qwen3.5:4b` and reported it
+    /// unusable: *"quite slow to think"*, seven filler lines in one wait, a
+    /// laptop made *"very laggy"*, and answers lost outright when the model was
+    /// interrupted mid-thought. The owner's ruling: *"calling on qwen seems
+    /// unusable we should disable //call for local - only api - voice notes
+    /// local handles fine but realtime calls is too much"*.
+    ///
+    /// So the tier stands in for time-to-first-token again, knowingly, with the
+    /// measurement still owed. What is different from the old `backendTooSlow`
+    /// is where the decision lives: `BrainCapabilities.holdsARealtimeCall`, one
+    /// declared property, rather than an `isLocal` check re-derived at each call
+    /// site.
+    func testACloudBrainOnAReadyMacIsNotRefused() {
         XCTAssertNil(
-            CallInvitation.refusal(isSetUpForCalls: true),
-            "a local brain is being refused again on a Mac that is set up for calls"
+            CallInvitation.refusal(isSetUpForCalls: true, brain: .hosted),
+            "a hosted brain on a Mac that is set up for calls must not be refused"
         )
     }
 
-    /// The refusal must not be decided by the backend at all. Both brains reach
-    /// the same answer from the same Mac, which is what makes the model
-    /// irrelevant rather than merely tolerated.
-    func testTheBrainDoesNotEnterIntoIt() {
-        for isSetUp in [true, false] {
-            XCTAssertEqual(
-                CallInvitation.refusal(isSetUpForCalls: isSetUp),
-                isSetUp ? nil : .notSetUpForCalls
-            )
-        }
-        // Named so the stubs are not flagged as dead: they exist to say that
-        // this distinction used to matter and deliberately no longer does.
+    /// And the half the tester's report bought: a brain on this Mac is turned
+    /// away, with a sentence that names the next action rather than leaving him
+    /// to guess.
+    func testABrainOnThisMacIsRefusedWithSomethingToDo() {
+        let refusal = CallInvitation.refusal(isSetUpForCalls: true, brain: .onDevice)
+
+        XCTAssertEqual(refusal, .brainCannotHoldALine)
+        let sentence = refusal?.sentence ?? ""
+        XCTAssertTrue(sentence.contains("Settings"), sentence)
+        XCTAssertTrue(
+            sentence.lowercased().contains("voice note"),
+            "it must say voice notes still work, or he learns that by trying: \(sentence)"
+        )
+    }
+
+    /// The tier decides, and both tiers reach a different answer from the same
+    /// Mac — which is what makes this a capability rather than a coincidence.
+    func testTheTierIsWhatDecides() {
+        XCTAssertNil(CallInvitation.refusal(isSetUpForCalls: true, brain: .hosted))
+        XCTAssertEqual(
+            CallInvitation.refusal(isSetUpForCalls: true, brain: .onDevice),
+            .brainCannotHoldALine
+        )
+        // Named so the stubs are not flagged as dead: they are the two tiers
+        // this distinction is about.
         XCTAssertTrue(localBrain.isLocal && !cloudBrain.isLocal)
     }
 
-    /// The barrier that is real, and the one the owner is actually behind.
-    func testAMacWithNoSecretStillRefuses() {
-        XCTAssertEqual(CallInvitation.refusal(isSetUpForCalls: false), .notSetUpForCalls)
+    /// **A Mac with no relay loses on that first, whatever brain it has.** The
+    /// order matters: telling somebody to switch provider when the real barrier
+    /// is a missing secret sends them to fix the wrong thing.
+    func testTheMissingSecretIsReportedBeforeTheBrain() {
+        XCTAssertEqual(
+            CallInvitation.refusal(isSetUpForCalls: false, brain: .onDevice),
+            .notSetUpForCalls
+        )
+        XCTAssertEqual(
+            CallInvitation.refusal(isSetUpForCalls: false, brain: .hosted),
+            .notSetUpForCalls
+        )
     }
 
     /// No refusal reaches the owner carrying a path from his own home directory.
     /// `CallHost.Failure` learned this the hard way — it texted
     /// `/Users/<him>/.sage/call-relay.secret` to his phone.
+    ///
+    /// **Looks for a path, not for a slash.** It banned the `/` character
+    /// outright, which is not the same rule and is not one the product can keep:
+    /// the refusal that tells him to switch provider necessarily names the
+    /// command, and `//call` has two. Banning the character would have forced
+    /// the sentence to talk around its own subject to satisfy a test.
+    ///
+    /// So this names what actually leaked: an absolute path, a home directory, a
+    /// dotfile, the secret itself.
     func testNoRefusalLeaksAFilesystemPath() {
-        for refusal: CallInvitation.Refusal in [.notSetUpForCalls, .couldNotStart("timed out")] {
-            XCTAssertFalse(refusal.sentence.contains("/"), "path leaked: \(refusal.sentence)")
-            XCTAssertFalse(refusal.sentence.contains(".secret"), "path leaked: \(refusal.sentence)")
+        for refusal: CallInvitation.Refusal in [
+            .notSetUpForCalls, .brainCannotHoldALine, .couldNotStart("timed out")
+        ] {
+            let sentence = refusal.sentence
+            for leak in ["/Users/", "~/", ".sage/", ".secret", "Application Support", "/private/"] {
+                XCTAssertFalse(sentence.contains(leak), "leaked \(leak): \(sentence)")
+            }
+            // An absolute path anywhere in the sentence, which is the general
+            // shape rather than the spellings above.
+            //
+            // One leading slash, not two: `//call` and `//help` are this
+            // product's own commands and a refusal that recommends one has to be
+            // able to name it. `/Users/him` is a path; `//call` is a verb.
+            XCTAssertFalse(
+                sentence.split(separator: " ").contains {
+                    $0.hasPrefix("/") && !$0.hasPrefix("//") && $0.count > 1
+                },
+                "an absolute path leaked: \(sentence)"
+            )
         }
     }
 
@@ -304,7 +365,7 @@ final class CallRefusalTests: XCTestCase {
     /// barrier the refusal would. It used to re-author the reason from a Bool
     /// and could only ever name the model one.
     func testHelpDescribesTheRealBarrier() {
-        let help = CallInvitation.help(callRefusal: CallInvitation.refusal(isSetUpForCalls: false))
+        let help = CallInvitation.help(callRefusal: CallInvitation.refusal(isSetUpForCalls: false, brain: .hosted))
         XCTAssertTrue(help.contains("set up for calls"), help)
         XCTAssertFalse(
             help.contains("API model"),
@@ -313,7 +374,7 @@ final class CallRefusalTests: XCTestCase {
     }
 
     func testHelpOffersCallingWhenTheMacIsReady() {
-        let help = CallInvitation.help(callRefusal: CallInvitation.refusal(isSetUpForCalls: true))
+        let help = CallInvitation.help(callRefusal: CallInvitation.refusal(isSetUpForCalls: true, brain: .hosted))
         XCTAssertTrue(help.contains("I set up a voice call"), help)
         XCTAssertFalse(help.contains("Not yet"), help)
     }
