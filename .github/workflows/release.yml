@@ -88,9 +88,34 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$CERT"
 
+      # **Before the tests, because a tool that is not staged does not fail a
+      # test — it skips it.**
+      #
+      # `DocumentExporter.locate()` searches `../Resources/<tool>` inside
+      # Mynah.app and `vendor/<tool>` in a checkout, and `vendor/` is gitignored.
+      # A runner checks out the repository and therefore has neither, so until
+      # now every document test on this workflow threw `XCTSkip` and the bare
+      # `swift test` below reported success: no document test has ever run on a
+      # public runner. Measured locally, staging these three turns twelve skips
+      # back into twelve assertions.
+      #
+      # Only these three. provision-onnxruntime.sh and provision-espeak-ng.sh
+      # are what the *bundle* needs, and the tests they would add read a Kokoro
+      # model out of a directory no hosted runner has, so they would arrive as
+      # more skips rather than more coverage — and espeak-ng compiles from
+      # source, which is the slowest step in the release. provision-asr-assets.sh
+      # downloads 626 MB and unlocks no test at all. The counts below are set
+      # for exactly this list.
+      - name: Stage the document writers before testing them
+        run: |
+          set -euo pipefail
+          bash scripts/provision-pandoc.sh
+          bash scripts/provision-typst.sh
+          bash scripts/provision-typst-packages.sh
+
       # **Debug, and only the Swift package.** This is what a visitor to a
       # public repository actually wants to know: does it build, do the tests
-      # pass.
+      # pass — and now, did they actually run.
       #
       # It replaces a full `scripts/release.sh` run, which was failing here and
       # nowhere else. `error: fatalError` with no diagnostic, part way through
@@ -104,11 +129,50 @@ jobs:
       # It also could not have published: signing and notarisation need secrets
       # this repository does not hold, so the release path was doing expensive
       # work whose only possible outcome was an artifact nobody may install.
+      #
+      # The assertion is scripts/assert-test-run.sh, the same file
+      # scripts/release.sh uses, so this runner and the build Mac cannot come to
+      # different conclusions about what counts as a verified suite. It replaces
+      # nothing here, because there was nothing here: this step used to be a
+      # bare `swift test`, without even the executed-count check the release
+      # script had.
+      #
+      # The two numbers are runner numbers rather than the script's defaults,
+      # and each is derived rather than guessed.
+      #
+      # 1777 executed instead of 1815, because without vendor/onnxruntime
+      # Package.swift leaves the KokoroEngine targets out of the graph
+      # altogether — measured locally at exactly 1777 with those three targets
+      # absent, so the floor sits 17 under it.
+      #
+      # 27 skipped instead of 21, because ten further tests reach for
+      # voices-v1.0.bin and a runner has it in neither of the two places they
+      # look: `~/Library/Application Support/SAGE Voice Bridge/Kokoro`, which
+      # nothing here stages, and the owner's own ~/sage-voice-lab. Those ten are
+      # the nine tests in KokoroVoicesTests that go through `archive()` and the
+      # one in CallSettingsTests that reads the file directly, counted in the
+      # source rather than estimated. The ceiling is 28 — one of slack, and
+      # still eleven clear of the 39 an unstaged document surface would produce.
+      #
+      # If the first real run here disagrees, it prints the true figures and
+      # says so; correct these to them rather than widening them.
       - name: Build and test
+        env:
+          MYNAH_MIN_EXECUTED_TESTS: "1760"
+          MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
           swift build
-          swift test
+          TEST_LOG="$RUNNER_TEMP/tests.log"
+          # `arch -arm64` for the same reason release.sh uses it: where the
+          # xctest runner resolves to x86_64 the arm64 bundle fails to load, the
+          # run reports zero tests, and the command still exits 0.
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            arch -arm64 swift test 2>&1 | tee "$TEST_LOG"
+          else
+            swift test 2>&1 | tee "$TEST_LOG"
+          fi
+          bash scripts/assert-test-run.sh "$TEST_LOG"
 
       - name: Build, sign, notarize
         # Only where it can finish. Without signing secrets this produced an
