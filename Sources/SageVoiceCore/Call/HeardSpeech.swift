@@ -86,6 +86,29 @@ public enum HeardSpeech {
         "um"
     ]
 
+    /// Whether this is a courtesy or a filler noise rather than a request.
+    ///
+    /// **Used to protect work already in flight, and that rule needs no
+    /// threshold.** Whether the caller really said "thank you" or Whisper
+    /// invented it, neither is a reason to throw away the answer being prepared:
+    /// a real one is a pleasantry, and an invented one is nothing at all.
+    ///
+    /// A tester on 1.6.3, whose call transcript shows nine "Thank you." in a row
+    /// he never said: *"When he doesn't get to the answer, it's because his
+    /// thinking cycle is interrupted by him thinking I said 'Thank You'. So it
+    /// stops thinking and says 'You're welcome.'"* — and later, flatly, *"I
+    /// never even thanked it once"*.
+    ///
+    /// So the amplitude gate decides whether to *answer* one of these. This
+    /// decides whether one may *interrupt*, and the answer is never.
+    public static func isCourtesy(_ transcript: String) -> Bool {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        let normalised = normalise(trimmed)
+        return phrasesOnlyDiscardedInSilence.contains(normalised)
+            || stockPhrases.contains(normalised)
+    }
+
     /// - Parameter cameFromSilence: the captured audio contained no speech. See
     ///   `CallAudioEnergy`. Defaults to `false`, so a caller that cannot measure
     ///   gets exactly the previous behaviour.

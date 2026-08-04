@@ -64,7 +64,34 @@ public enum CallAudioEnergy {
     /// something with no voice in it at all should not. If this is ever wrong it
     /// should be wrong by letting a hallucination through, which is the failure
     /// the product already tolerated for months.
-    public static let silenceCeiling: Double = 60
+    ///
+    /// ## Measured, finally — and 60 was far too low to ever fire
+    ///
+    /// It was set from the segmenter's *reported* thresholds rather than from
+    /// audio, and every segment has been logging its amplitude since, precisely
+    /// so this could stop being a guess. Six segments from a real call, all
+    /// accepted as speech:
+    ///
+    ///     3751ms → 3944      2071ms → 3805      2041ms → 3020
+    ///     2261ms → 2884       521ms → 1879       401ms →  139
+    ///
+    /// Speech on real hardware is a *thousand* or more. A ceiling of 60 sits
+    /// below anything the microphone has ever produced, so `cameFromSilence` was
+    /// effectively never true, so the courtesy filter it gates never once ran —
+    /// which is exactly what a tester reported on 1.6.3: nine phantom
+    /// "Thank you." in a single call, and *"I never even thanked it once"*.
+    ///
+    /// 400 keeps a 4.7× margin under the quietest utterance anyone has actually
+    /// been recorded saying, and sits well above the one 401ms blip at 139 —
+    /// which is itself far likelier to have been an artefact accepted as speech
+    /// than a word.
+    ///
+    /// Still only six samples, from one call, on one Mac. The asymmetry the
+    /// paragraph above describes has not changed, so this stays nearer the floor
+    /// than the middle; and the rule that actually protects an answer —
+    /// `HeardSpeech.isCourtesy`, which forbids a pleasantry from cancelling work
+    /// in flight — deliberately does not depend on this number at all.
+    public static let silenceCeiling: Double = 400
 
     /// Whether the segment is quiet enough that nothing was said in it.
     ///

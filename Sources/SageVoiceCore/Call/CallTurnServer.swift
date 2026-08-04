@@ -531,6 +531,26 @@ public actor CallTurnServer {
             return
         }
 
+        // **A courtesy never takes an answer away.**
+        //
+        // `replaceTurn` cancels whatever is running, because words arriving
+        // mid-answer normally mean the caller has moved on. "Thank you" does not
+        // mean that, from either direction: said for real it is a pleasantry
+        // over the top of work the caller still wants, and invented over silence
+        // it is nothing at all. Either way, cancelling is the one response that
+        // cannot be right.
+        //
+        // This is what actually cost a tester his answers on 1.6.3 — nine
+        // phantom "Thank you." in one call, each one stopping the model
+        // mid-thought so the appliance could say "you're welcome" instead of the
+        // thing he asked for. Deliberately not gated on the amplitude: the
+        // threshold is a measurement and this is an argument, and the argument
+        // holds however loud the room was.
+        if HeardSpeech.isCourtesy(heard), turn.map({ !$0.isCancelled }) ?? false {
+            log("[call] heard \"\(heard)\" while working — not treating that as a new question")
+            return
+        }
+
         // Words. Now the previous turn is genuinely superseded.
         // Measurement only — `replaceTurn` already logs what was heard. This is
         // the number that tells us whether `silenceCeiling` is set anywhere near
