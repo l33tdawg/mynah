@@ -989,17 +989,42 @@ func runDaemon(_ arguments: [String]) -> Never {
                     transcript: heard,
                     history: await callHistory.recent()
                 )
-                await callHistory.remember(result.messages)
-                // **The same rule as the daemon's turn and the window's chat,
-                // and this was the surface that never had it.** A caller can add
-                // and finish things on the phone — it is the fastest way to use
-                // the appliance — and every one of those edits was news to the
-                // watch, which read it back to him over Signal fifteen minutes
-                // later as though somebody else had made it. Same process as the
-                // watch, so the actor rather than the file. See `OwnTaskEdits`.
+                // **A turn nobody is waiting for must not rewrite the history.**
+                //
+                // When the ceiling in `CallTurnServer.speak` fires, the caller
+                // hears the apology and this closure keeps running: the work is
+                // cancelled best-effort, but the wedge it was written for is by
+                // definition uncancellable, so it finishes eventually and
+                // arrives here. `CallHistory.remember` *replaces* the stored
+                // conversation, so a turn given up on ninety seconds ago would
+                // overwrite everything said since — the caller's next two
+                // questions and their answers — with a transcript that ends at
+                // an answer he never heard.
+                //
+                // The task write above is deliberately still recorded: the model
+                // really did change the list, whether or not anybody was
+                // listening by then, and the watch must not report it back as
+                // news. Only the *conversation* is dropped, and only because the
+                // caller was told something else instead.
+                //
+                // **First**, because it is true either way. The model really did
+                // change the list, whether or not anybody was still listening,
+                // and the watch must not read that change back to him as news.
+                //
+                // The same rule as the daemon's turn and the window's chat, and
+                // this was the surface that never had it: a caller can add and
+                // finish things on the phone — it is the fastest way to use the
+                // appliance — and every one of those edits was news to the
+                // watch. Same process as the watch, so the actor rather than the
+                // file. See `OwnTaskEdits`.
                 if OwnTaskEdits.wroteToTheTaskList(result.trace) {
                     await ownTaskEdits.record()
                 }
+                guard !Task.isCancelled else {
+                    note("[call] a turn that was given up on came back; not rewriting the history")
+                    return result.reply
+                }
+                await callHistory.remember(result.messages)
                 return result.reply
             },
             log: { note($0) }

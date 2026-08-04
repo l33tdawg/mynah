@@ -121,8 +121,21 @@ final class CallCeilingTests: XCTestCase {
             said,
             "the real answer was never spoken; everything said: \(everything)"
         )
-        XCTAssertFalse(
-            everything.contains(CallTurnServer.tookTooLong),
+        // **Compared sentence by sentence, because that is what is spoken.**
+        //
+        // This was `everything.contains(CallTurnServer.tookTooLong)`, which asks
+        // whether any single recorded line equals the whole two-sentence
+        // apology. `speak` only ever hands `sentences(in:)` pieces to the
+        // synthesiser, so no recorded line can ever equal the whole string, so
+        // the assertion was false by construction and `XCTAssertFalse` always
+        // passed. It could not have failed under any source edit — including
+        // deleting the ceiling entirely.
+        //
+        // Written in the same commit as a paragraph about guards that cannot
+        // fail, and caught by the 1.7.0 audit rather than by me.
+        let apology = Set(CallTurnServer.sentences(in: CallTurnServer.tookTooLong))
+        XCTAssertEqual(
+            everything.filter { apology.contains($0) }, [],
             "a turn that finished well inside the ceiling was apologised for anyway"
         )
     }
@@ -174,7 +187,7 @@ final class CallCeilingTests: XCTestCase {
 
     // MARK: - The fixtures
 
-    private static func scratchSocket() -> URL {
+    static func scratchSocket() -> URL {
         // Short path on purpose: sun_path is 104 bytes and the session temp
         // directory is most of that already.
         URL(fileURLWithPath: "/tmp/mynah-ceiling-\(UUID().uuidString.prefix(8)).sock")

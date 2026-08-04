@@ -97,6 +97,20 @@ public actor CallTurnServer {
         Send it to me on Signal and I'll give it the time it needs.
         """
 
+    /// How long the opening briefing may take before the call opens without it.
+    ///
+    /// Shorter than `Configuration.turnCeilingSeconds`, and the gap is the
+    /// point: an overrun here costs a warmer first sentence, an overrun there
+    /// costs the caller's actual answer. `//call` buys a handful of seconds of
+    /// warning and this is meant to fit inside them — a briefing still being
+    /// written when the caller picks up has already missed its purpose.
+    ///
+    /// The failure this bounds is not a slow briefing, though. It is a wedged
+    /// one: `prepare()` is awaited by `handle(connection:)` before it reaches
+    /// its read loop, so a briefing that never returns takes the whole call
+    /// surface with it. See `buildOpening`.
+    public static let openingCeilingSeconds: TimeInterval = 20
+
     private let configuration: Configuration
     private let transcriber: any AudioFileTranscribing
     private let synthesizer: any SpeechSynthesizing
@@ -119,6 +133,36 @@ public actor CallTurnServer {
 
     private var listening: Int32 = -1
     private var turn: Task<Void, Never>?
+
+    /// Which turn `turn` is holding, so the one that finishes can only retire
+    /// itself and never the one that superseded it.
+    private var turnNumber = 0
+
+    /// Whether a turn is actually in flight.
+    ///
+    /// **Three places asked this question by writing `turn.map { !$0.isCancelled }`,
+    /// and all three were wrong in the same way.** `Task.isCancelled` is false
+    /// for a task that finished normally, and `turn` was never cleared — so from
+    /// the first turn the appliance ever took, for the rest of the process and
+    /// across every later call, that expression was permanently true.
+    ///
+    /// What it cost, once each:
+    ///
+    /// - the courtesy guard swallowed every real "thanks", "okay" and "bye" the
+    ///   caller said for the rest of the call, logging `heard "thanks" while
+    ///   working` with nothing working. That is the failure `HeardSpeech`'s own
+    ///   comment calls the worse one — ignoring the owner, who has no idea why.
+    /// - `cutIn` gave every ordinary follow-up question the interrupted opening,
+    ///   so asking a second thing sounded like being caught talking over it.
+    /// - `quietFor` returned nil for ever, and `startIdleWatch` treated nil as a
+    ///   reason to stop, so the watchdog that checks in and hangs up an
+    ///   abandoned call died five seconds after the first utterance. A call
+    ///   nobody was on stayed open indefinitely, microphone included.
+    ///
+    /// Found by the 1.7.0 audit, not by the suite: every test of these three
+    /// exercised the predicate's inputs in isolation and none drove a turn to
+    /// completion first.
+    private var isAnswering: Bool { turn != nil }
 
     /// The opening line, made ready before anyone is listening.
     private var preparation: Task<Data?, Never>?
@@ -237,9 +281,36 @@ public actor CallTurnServer {
             lastCall: previous,
             recentMessages: await recentMessages()
         )
-        if let briefing = try? await answer(request),
-           !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // **The other call site of the same closure, and it had no ceiling.**
+        //
+        // 1.7.0 bounded `speak`, and stopped there — the fifth time this release
+        // cycle that a fix landed at one call site while an identical one went
+        // unwatched. This one is worse than the one that was fixed. `speak` runs
+        // inside `turn`, so a wedge there loses an answer; this runs inside
+        // `prepare()`, which `handle(connection:)` awaits *before* it enters its
+        // read loop. A wedge here means the caller is never recognised at all,
+        // `defer { close(connection) }` never runs, and `run()` never returns to
+        // `accept()`. The listen backlog is 1, so the second call queues
+        // unaccepted and the third is refused outright: the call surface is dead
+        // until the daemon restarts.
+        //
+        // Shorter than the turn ceiling on purpose. Nobody is on the line yet —
+        // this is the few seconds of warning //call buys — so overrunning costs
+        // a generic opening rather than a wrong answer, and `opening` already
+        // holds one worth saying. Waiting the full 90 here would mean the caller
+        // arrives to silence in the one place the appliance is supposed to be
+        // ready and waiting.
+        let brief = answer
+        let briefing = try? await withDeadline(
+            CallTurnServer.openingCeilingSeconds,
+            label: "call opening"
+        ) {
+            try await brief(request)
+        }
+        if let briefing, !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             opening = briefing
+        } else {
+            log("[call] the briefing did not arrive in time; opening with the plain line")
         }
         guard !Task.isCancelled else { return nil }
 
@@ -621,7 +692,7 @@ public actor CallTurnServer {
         // thing he asked for. Deliberately not gated on the amplitude: the
         // threshold is a measurement and this is an argument, and the argument
         // holds however loud the room was.
-        if HeardSpeech.isCourtesy(heard), turn.map({ !$0.isCancelled }) ?? false {
+        if HeardSpeech.isCourtesy(heard), isAnswering {
             log("[call] heard \"\(heard)\" while working — not treating that as a new question")
             return
         }
@@ -646,8 +717,10 @@ public actor CallTurnServer {
         // caller talking over the appliance; one that finished a moment ago is
         // the caller simply saying the next thing, and those deserve different
         // opening words.
-        let cutIn = turn.map { !$0.isCancelled } ?? false
+        let cutIn = isAnswering
         turn?.cancel()
+        turnNumber += 1
+        let mine = turnNumber
         turn = Task { [weak self] in
             await self?.speak(
                 heard,
@@ -655,7 +728,18 @@ public actor CallTurnServer {
                 interrupting: cutIn,
                 over: writer
             )
+            await self?.finished(mine)
         }
+    }
+
+    /// Retires a turn that has run to the end.
+    ///
+    /// Numbered, because a turn that was cancelled and replaced must not clear
+    /// the slot its replacement now occupies — it finishes later and would
+    /// otherwise report the live turn as over.
+    private func finished(_ number: Int) {
+        guard number == turnNumber else { return }
+        turn = nil
     }
 
     private func speak(
@@ -713,6 +797,21 @@ public actor CallTurnServer {
             // A cadence of short sounds instead: see `CallFiller` for why they
             // are sounds rather than sentences, why they escalate, and why
             // there are only four.
+            // **Cancelled on the way out, whichever way out it is.**
+            //
+            // `waiting.cancel()` used to sit after the answer, which meant every
+            // path that did not reach that line left this running: a barge-in
+            // (the caller's next question cancels the turn, `withDeadline`'s
+            // handler settles the gate with `CancellationError`, and control
+            // jumps past it), or any `BrainBackendError`. The orphan is
+            // unstructured, so it inherits no cancellation and keeps going —
+            // synthesising up to four filler lines into the live socket over
+            // about 26 seconds, on top of the *next* turn's own filler and its
+            // real answer. The caller hears two overlapping streams of "nearly
+            // there" while being answered.
+            //
+            // None of it reached the transcript either, because `sayFiller`
+            // deliberately does not record.
             let waiting = Task { [weak self] in
                 var position = 0
                 var previous: String?
@@ -730,6 +829,7 @@ public actor CallTurnServer {
                     await self.sayFiller(line, over: writer)
                 }
             }
+            defer { waiting.cancel() }
             // **Bounded, because the line is open the whole time this runs.**
             //
             // The filler above stops at four lines and about 26 seconds, on
@@ -763,7 +863,6 @@ public actor CallTurnServer {
                 log("[call] \(overrun); saying so rather than holding the line")
                 fullReply = CallTurnServer.tookTooLong
             }
-            waiting.cancel()
             let thought = Date()
             guard !Task.isCancelled else { return }
             log("[call] replying: \(fullReply)")
@@ -873,7 +972,11 @@ public actor CallTurnServer {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled, let self else { return }
-                guard let quiet = await self.quietFor() else { return }
+                // `continue`, not `return`. nil means a turn is in flight, which
+                // is a transient and entirely ordinary state — treating it as a
+                // reason to stop killed the watchdog at the first utterance and
+                // left an abandoned call open for ever.
+                guard let quiet = await self.quietFor() else { continue }
 
                 if !asked, quiet > CallTurnServer.checkInAfter {
                     asked = true
@@ -895,8 +998,17 @@ public actor CallTurnServer {
     /// A turn in flight means the appliance is working on something they asked
     /// for, and asking "still there?" over the top of that is the appliance
     /// interrupting itself.
+    /// What `quietFor` believes, for a test.
+    ///
+    /// **A seam, because the property could not be reached otherwise.** The bug
+    /// this exists for lived in the second utterance of a call and killed the
+    /// idle watch silently; the alternative to asking directly is a test that
+    /// waits out the real 60-second check-in, which buys nothing and costs a
+    /// minute of wall clock in every suite run.
+    func quietForTesting() -> TimeInterval? { quietFor() }
+
     private func quietFor() -> TimeInterval? {
-        if let turn, !turn.isCancelled { return nil }
+        if isAnswering { return nil }
         return Date().timeIntervalSince(lastHeard)
     }
 
