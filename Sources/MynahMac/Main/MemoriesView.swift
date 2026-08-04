@@ -300,6 +300,10 @@ actor SageMemoryStore: MemoryStoring {
 
     private var client: MCPClient?
 
+    /// What `sage_domains` said this appliance owns, asked once per connection.
+    /// See `ownedDomains()`.
+    private var cachedOwnedDomains: [String]?
+
     /// The identity this screen signs as — the appliance's, and nobody else's.
     ///
     /// **This screen spent its whole life querying the node as an agent that
@@ -390,18 +394,115 @@ actor SageMemoryStore: MemoryStoring {
     private func reset() {
         client?.stop()
         client = nil
+        // Cleared with the connection it was read over. A node that came back
+        // may have come back as a different one, and a stale owned-domain list
+        // is how this screen would go on scoping to a domain that is no longer
+        // Mynah's.
+        cachedOwnedDomains = nil
     }
 
     // MARK: Queries
 
     func recent(topic: String?, limit: Int, offset: Int) async throws -> MemoryPage {
-        var arguments: [String: JSONValue] = [
-            "limit": .int(limit),
-            "offset": .int(offset),
-            "sort": .string("newest")
-        ]
-        if let topic, !topic.isEmpty { arguments["domain"] = .string(topic) }
-        return try await page(from: "sage_list", arguments: arguments)
+        if let topic, !topic.isEmpty {
+            return try await page(from: "sage_list", arguments: [
+                "limit": .int(limit),
+                "offset": .int(offset),
+                "sort": .string("newest"),
+                "domain": .string(topic)
+            ])
+        }
+        return try await everythingMynahOwns(limit: limit, offset: offset)
+    }
+
+    /// The unfiltered list, asked one owned domain at a time.
+    ///
+    /// **It used to ask with no `domain` at all, and that is not the same
+    /// question.** Unscoped, `sage_list` answers with everything this agent may
+    /// *read*, and the owner watched his Memories screen — headed "What Mynah
+    /// remembers" — fill up with `mynah-sage-auth` entries: the SAGE team's own
+    /// working notes, *"SAGE v11.17.5 patch release…"*, *"[DON'T] Do not disrupt
+    /// Chrome tabs owned by another active control session"*. Fifty-nine things,
+    /// most of them nothing to do with him.
+    ///
+    /// Reading them may well be permitted — a Companion profile reads within
+    /// clearance and writes only to its own home — but *permitted to read* and
+    /// *its own* are different sentences, and only one of them is what that
+    /// heading promises. The destructive path never had this confusion:
+    /// `forgetEverythingMynahOwns` has always filtered to the owned set first,
+    /// so nothing of another agent's was ever at risk.
+    ///
+    /// Merged in memory rather than paged by the node, because `sage_list` takes
+    /// one domain and there is no cross-domain cursor. Each domain is asked for
+    /// `offset + limit` newest, the results are merged by date and then sliced —
+    /// correct as long as no single domain is starved, which two domains and a
+    /// page size in the tens comfortably satisfies. If that stops being true the
+    /// symptom is a missing older row, not a wrong one.
+    private func everythingMynahOwns(limit: Int, offset: Int) async throws -> MemoryPage {
+        let domains = await ownedDomains()
+
+        var everything: [Memory] = []
+        var total = 0
+        var lastError: Error?
+        for domain in domains {
+            do {
+                let page = try await page(from: "sage_list", arguments: [
+                    "limit": .int(offset + limit),
+                    "offset": .int(0),
+                    "sort": .string("newest"),
+                    "domain": .string(domain)
+                ])
+                everything.append(contentsOf: page.memories)
+                total += page.total
+            } catch {
+                // One unreadable domain must not blank the screen. The owner
+                // seeing half his memories beats him seeing an error where his
+                // memories were.
+                log.error("listing \(domain) failed: \(String(describing: error))")
+                lastError = error
+            }
+        }
+        if everything.isEmpty, let lastError { throw lastError }
+
+        let newestFirst = everything.sorted { $0.learned > $1.learned }
+        let window = newestFirst.dropFirst(offset).prefix(limit)
+        return MemoryPage(memories: Array(window), total: total)
+    }
+
+    /// The domains this appliance actually owns, from the node.
+    ///
+    /// `sage_domains` is 11.17.4's answer to exactly this question — "this
+    /// signed caller's authoritative current owned domains" — and it replaces a
+    /// hardcoded pair that was right only for as long as nobody added a third.
+    ///
+    /// Cached for the life of the connection: ownership does not change while
+    /// the app is open, and this is on the path of every page of every scroll.
+    ///
+    /// **Falls back to the known pair rather than to unscoped.** Unscoped is not
+    /// the cautious choice here — it is the bug. A node that cannot answer
+    /// should cost the owner a domain he rarely has, not show him somebody
+    /// else's memories under his own heading.
+    private func ownedDomains() async -> [String] {
+        if let cachedOwnedDomains { return cachedOwnedDomains }
+
+        let fallback = [SageRitual.memoryDomain, "mynah-home"]
+        do {
+            let payload = try await payload(from: "sage_domains", arguments: [:])
+            let named = (payload["domains"]?.arrayValue ?? []).compactMap {
+                $0.stringValue ?? $0["domain"]?.stringValue ?? $0["name"]?.stringValue
+            }
+            guard !named.isEmpty else {
+                log.error("sage_domains named none, so falling back to the known pair")
+                cachedOwnedDomains = fallback
+                return fallback
+            }
+            cachedOwnedDomains = named
+            return named
+        } catch {
+            log.error("sage_domains failed, falling back to the known pair: \(String(describing: error))")
+            cachedOwnedDomains = fallback
+            return fallback
+        }
     }
 
     func search(_ query: String, topic: String?, limit: Int) async throws -> MemoryPage {
