@@ -879,8 +879,14 @@ public actor VoiceBridgeDaemon {
                     onProgress: nil
                 )
             }
-            histories[key] = Self.trimmed(
-                Self.conversationOnly(result.messages),
+            // **Merged, never assigned.** See `history(_:after:startingFrom:)`.
+            // `histories[key]` is re-read here rather than reused from
+            // `priorTurns`, because up to six minutes of suspension sit between
+            // the two and this actor accepts other work in that window.
+            histories[key] = Self.history(
+                histories[key] ?? [],
+                after: result.messages,
+                startingFrom: priorTurns,
                 keepingLastTurns: configuration.historyTurnLimit
             )
             persistConversations()
@@ -1411,6 +1417,56 @@ public actor VoiceBridgeDaemon {
     /// these please" could not be answered from context and forced a second
     /// search across a conversation that by then held two subjects. The links
     /// are kept, attached to the answer that used them; the facts are not.
+    /// The thread's history after a turn, keeping whatever landed while it ran.
+    ///
+    /// **This assigned rather than merged, and it deleted things the appliance
+    /// had already said to the owner.**
+    ///
+    /// `priorTurns` is snapshotted before the turn starts. The turn then
+    /// suspends — for up to `Configuration.turnCeilingSeconds`, six minutes —
+    /// and this is an actor, so it accepts other work in that window. Two things
+    /// take it: `announce`, driven by the proactive watch every sixty seconds,
+    /// and `recordFromCall`. Both append to the same key. Assigning a value
+    /// derived only from the snapshot threw both away, and `persistConversations`
+    /// then wrote the loss to disk.
+    ///
+    /// What that looks like from his side: Mynah tells him on Signal that a task
+    /// came off the list, he replies "yes, do that", and it has no idea what
+    /// "that" refers to — because the message it sent is no longer in the
+    /// history it answers from. The window shows a gap in the same place.
+    ///
+    /// The six-minute ceiling made this window six times wider than it had been.
+    /// The `run` loop's sequential `await handle(batch)` already closes the same
+    /// hazard between *message* turns, and its comment names it — so it was seen
+    /// once and closed for one path only.
+    ///
+    /// - Parameters:
+    ///   - current: `histories[key]` read back *now*, after the await.
+    ///   - result: every message the loop worked with, including the prior turns
+    ///     it was handed.
+    ///   - startingFrom: the snapshot the turn began with, used only to find
+    ///     where its own contribution starts.
+    static func history(
+        _ current: [BrainMessage],
+        after result: [BrainMessage],
+        startingFrom priorTurns: [BrainMessage],
+        keepingLastTurns limit: Int
+    ) -> [BrainMessage] {
+        let whole = conversationOnly(result)
+        // The loop replays `history` verbatim ahead of the new turn and
+        // `priorTurns` is already conversation-only, so the prefix survives
+        // intact and everything past it is this turn's own work.
+        //
+        // Clamped rather than trusted. If that ever stops being true the honest
+        // failure is a duplicated turn in the transcript, not a crash on the
+        // owner's appliance — and `dropFirst` past the end is empty, which would
+        // silently lose the answer instead.
+        let mine = whole.count >= priorTurns.count
+            ? Array(whole.dropFirst(priorTurns.count))
+            : whole
+        return trimmed(current + mine, keepingLastTurns: limit)
+    }
+
     static func conversationOnly(_ messages: [BrainMessage]) -> [BrainMessage] {
         var carried: [BrainMessage] = []
         // Links seen since the last answer, so they land on the turn that used
