@@ -99,8 +99,39 @@ public enum SignalEnvelopeParser {
             // Silent, because an envelope with no text is an ordinary thing: a
             // receipt, a typing indicator, a read sync. This one looked exactly
             // like those.
-            let sentMessage = (rawSentMessage["editMessage"] as? [String: Any])?["dataMessage"]
-                as? [String: Any] ?? rawSentMessage
+            // **Read through the edit, do not stand on it.**
+            //
+            // The first version of this fix rebound `sentMessage` to the inner
+            // `dataMessage` wholesale, and that made the silence worse rather
+            // than better. `destination`, `destinationNumber` and
+            // `destinationUuid` live on the *outer* sentMessage; the inner one
+            // has none of them. So every field below came back nil,
+            // `destinationIdentifiers` was empty, and
+            // `SignalSenderAllowlist.evaluate` — which under the shipped
+            // `.noteToSelfOnly` policy requires the destination to be the
+            // account itself — denied it with
+            // `syncDestinationNotAllowlisted`. `SignalClient.handleReceive`
+            // then dropped it before the daemon ever saw it. From the owner's
+            // side nothing changed at all: every edited message still went
+            // unanswered, and the only difference was which line appeared in
+            // the log.
+            //
+            // The test was green throughout, because it asserted `text`,
+            // `hasText` and `kind` and nothing about who the message was for.
+            //
+            // So each field is read inner-first, outer-second. The payload
+            // fields — text, attachments, groupInfo, timestamp — genuinely move
+            // inside on an edit; the addressing fields genuinely do not. Asking
+            // both, in that order, is right whichever way signal-cli nests a
+            // given field, which matters because this is one shape of one
+            // version of a protocol nobody here controls.
+            let edited = (rawSentMessage["editMessage"] as? [String: Any])?["dataMessage"]
+                as? [String: Any]
+            let sentMessage = edited ?? rawSentMessage
+            /// Inner first, then outer. See above.
+            func field(_ key: String) -> Any? {
+                sentMessage[key] ?? rawSentMessage[key]
+            }
             return SignalIncomingMessage(
                 kind: .syncSent,
                 account: account,
@@ -109,11 +140,15 @@ public enum SignalEnvelopeParser {
                 sourceUUID: sourceUUID,
                 sourceName: sourceName,
                 sourceDevice: sourceDevice,
-                destination: string(sentMessage["destination"]),
-                destinationNumber: string(sentMessage["destinationNumber"]),
-                destinationUUID: string(sentMessage["destinationUuid"]) ?? string(sentMessage["destinationUUID"]),
-                groupID: groupID(from: sentMessage),
-                timestamp: int64(sentMessage["timestamp"]) ?? envelopeTimestamp,
+                destination: string(field("destination")),
+                destinationNumber: string(field("destinationNumber")),
+                destinationUUID: string(field("destinationUuid")) ?? string(field("destinationUUID")),
+                // Group info the same way, and not merely for symmetry: an
+                // edited group message whose `groupInfo` stayed on the outer
+                // object would lose `isGroupMessage` and walk past the
+                // `groupMessagesNotAllowed` gate.
+                groupID: groupID(from: sentMessage) ?? groupID(from: rawSentMessage),
+                timestamp: int64(field("timestamp")) ?? envelopeTimestamp,
                 text: text(from: sentMessage),
                 attachments: attachments(
                     from: sentMessage,

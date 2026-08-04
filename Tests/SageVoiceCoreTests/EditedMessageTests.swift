@@ -76,6 +76,93 @@ final class EditedMessageTests: XCTestCase {
         XCTAssertEqual(parsed.kind, .syncSent)
     }
 
+    // MARK: Carrying the text was not enough
+
+    /// **The first fix made this worse and the test above stayed green.**
+    ///
+    /// It rebound `sentMessage` to the inner `dataMessage` wholesale. The
+    /// addressing fields — `destination`, `destinationNumber`,
+    /// `destinationUuid` — live on the *outer* sentMessage and the inner one has
+    /// none of them, so `destinationIdentifiers` came back empty and
+    /// `SignalClient.handleReceive` dropped the message as
+    /// `syncDestinationNotAllowlisted` one stage before the daemon.
+    ///
+    /// The owner's experience did not change by a single message. Only the log
+    /// line did, from `ignored (no text, no audio)` to `DROPPED …`.
+    ///
+    /// The test above could not see it, because it asked what the message said
+    /// and never asked who it was for. Both are needed for a message to be
+    /// answered, and only one was pinned.
+    func testAnEditedNoteToSelfMessageIsStillAddressedToTheOwner() throws {
+        let parsed = try XCTUnwrap(parse(editedSyncEnvelope("edited and addressed")))
+
+        XCTAssertEqual(
+            parsed.destinationNumber, "+60123821767",
+            "the edit unwrap threw away who the message was for"
+        )
+        XCTAssertTrue(
+            parsed.destinationIdentifiers.contains("+60123821767"),
+            "no destination survived: \(parsed.destinationIdentifiers)"
+        )
+        XCTAssertNotNil(
+            parsed.replyRecipient,
+            "nothing to reply to, so the daemon would fail the turn before answering"
+        )
+    }
+
+    /// The whole point, stated as the thing the owner actually experiences:
+    /// **an edited message must survive the allowlist**, under the policy the
+    /// appliance really ships with.
+    ///
+    /// Note-to-Self only, which is the shipped default, and the one that denied
+    /// this message. Asserted against the same envelope unedited so the test
+    /// says the edit is what makes the difference rather than merely that
+    /// something was allowed.
+    func testAnEditedNoteToSelfMessageSurvivesTheAllowlist() throws {
+        // `.strict` is the shipped default and carries
+        // `syncDestinationRule: .noteToSelfOnly` — the rule that denied this.
+        let allowlist = try SignalSenderAllowlist(
+            commaSeparated: "+60123821767",
+            policy: .strict
+        )
+        XCTAssertEqual(
+            allowlist.policy.syncDestinationRule, .noteToSelfOnly,
+            "this test is only meaningful under the rule that did the denying"
+        )
+
+        let edited = try XCTUnwrap(parse(editedSyncEnvelope("edited")))
+        let plain = try XCTUnwrap(parse(uneditedSyncEnvelope("not edited")))
+
+        XCTAssertEqual(
+            allowlist.evaluate(plain), SignalSenderAllowlist.Decision.allow,
+            "the unedited case is the control and it must pass"
+        )
+        XCTAssertEqual(
+            allowlist.evaluate(edited), SignalSenderAllowlist.Decision.allow,
+            """
+            an edited message from the owner to his own Note-to-Self was refused \
+            by the allowlist, which is the appliance going silent on him again by \
+            a different route
+            """
+        )
+    }
+
+    /// The unedited shape, for the control above.
+    private func uneditedSyncEnvelope(_ text: String) -> [String: Any] {
+        [
+            "source": "+60123821767",
+            "sourceNumber": "+60123821767",
+            "timestamp": 1_785_839_007_659,
+            "syncMessage": [
+                "sentMessage": [
+                    "destinationNumber": "+60123821767",
+                    "timestamp": 1_785_839_007_000,
+                    "message": text
+                ]
+            ]
+        ]
+    }
+
     /// The direct path was already right. Pinned so a future tidy-up cannot
     /// "simplify" the two branches back into one that only handles one of them.
     func testAnEditedDirectMessageStillCarriesItsText() throws {
