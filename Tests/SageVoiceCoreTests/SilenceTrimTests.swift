@@ -10,23 +10,60 @@ import XCTest
 ///   - the fox sentence, 90,600 samples → `8192..<78848`
 ///   - "Hello.", 34,200 samples → `7168..<28160`
 ///
-/// Those runs need the captured arrays on disk, so they skip where the
-/// scratchpad has been cleared. Everything below them holds without any
-/// fixture, because a trim that is merely *approximately* right is the kind of
-/// thing that passes review and then clips the first consonant off every
-/// sentence.
+/// Those runs need the captured arrays on disk. Everything below them holds
+/// without any fixture, because a trim that is merely *approximately* right is
+/// the kind of thing that passes review and then clips the first consonant off
+/// every sentence.
+///
+/// **The two fixture tests skipped on every machine, for ever, and said nothing
+/// about it.** They read from `/private/tmp/claude-501/…/caf51fc9-…/scratchpad/`
+/// — an agent session's scratch directory, which stopped existing when that
+/// session did and cannot come back. So they were not "skipped until somebody
+/// stages the fixture", they were retired without anybody deciding to retire
+/// them, and they spent two places in the release gate's skip budget doing it.
+/// Found on 4 August 2026 by the audit of the gate itself.
+///
+/// They now read from the lab directory the Kokoro tests already use, and the
+/// skip says how to put the vectors there. A skip that names no action is a
+/// deleted test with extra steps.
 final class SilenceTrimTests: XCTestCase {
 
     // MARK: Against librosa
 
-    /// The captured raw model output, if this machine still has it.
-    private func golden(_ name: String) throws -> [Float] {
-        let path = "/private/tmp/claude-501/-Users-l33tdawg-nodejs-projects-sage"
-            + "/caf51fc9-1b10-4011-b26e-a33a6bb8ec9a/scratchpad/kokoro-golden/\(name).f32"
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("golden vector \(name) is not on this machine")
+    /// Where the captured arrays live, following `KokoroVoicesTests` and
+    /// `KokoroSessionTests` rather than inventing a third convention.
+    ///
+    /// Overridable, because the lab path is one person's home directory and the
+    /// vectors are a few hundred kilobytes that nobody should have to put there
+    /// to run them.
+    static var goldenDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["MYNAH_KOKORO_GOLDEN"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
         }
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("sage-voice-lab/kokoro-golden", isDirectory: true)
+    }
+
+    /// The captured raw model output, if this machine has it.
+    private func golden(_ name: String) throws -> [Float] {
+        let file = Self.goldenDirectory.appendingPathComponent("\(name).f32")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            throw XCTSkip("""
+                no golden vector at \(file.path). These are the raw float32 arrays \
+                kokoro_onnx returns before any trimming, captured once and compared \
+                against librosa's own intervals. Recapture with:
+
+                  python3 -c "import numpy, kokoro_onnx; \
+                k = kokoro_onnx.Kokoro('kokoro-v1.0.onnx', 'voices-v1.0.bin'); \
+                s, _ = k.create('The quick brown fox jumps over the lazy dog.', \
+                voice='am_puck', speed=1.0); \
+                numpy.asarray(s, dtype=numpy.float32).tofile('samples.f32')"
+
+                and 'Hello.' for samples-hello. Put both in \
+                \(Self.goldenDirectory.path), or point MYNAH_KOKORO_GOLDEN at them.
+                """)
+        }
+        let data = try Data(contentsOf: file)
         return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 

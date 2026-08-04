@@ -82,7 +82,27 @@ final class CourtesyNeverCancelsTests: XCTestCase {
     /// is why a filter that was written, tested and shipped did nothing for
     /// months.
     func testTheOldCeilingWouldHaveCalledTheQuietestArtefactSpeech() {
-        XCTAssertGreaterThan(139, 60, "the premise of the fix")
-        XCTAssertGreaterThan(CallAudioEnergy.silenceCeiling, 60)
+        // The measurement, named rather than inlined. `XCTAssertGreaterThan(139,
+        // 60)` was two literals compared with each other: true by arithmetic,
+        // unfalsifiable by any source edit, and it read as though it were
+        // checking something.
+        let quietestArtefactMeasured = 139.0
+        let oldCeiling = 60.0
+
+        // What the old ceiling did to that measurement: nothing. A blip at 139
+        // scored as speech, so the hallucination filter that depends on knowing
+        // the room was quiet never fired — written, tested and shipped, doing
+        // nothing for months.
+        XCTAssertGreaterThan(quietestArtefactMeasured, oldCeiling)
+        // And what the new one does, which is the assertion that can actually
+        // fail: lower `silenceCeiling` back under the artefact and this goes red.
+        XCTAssertGreaterThan(
+            CallAudioEnergy.silenceCeiling, quietestArtefactMeasured,
+            """
+            the ceiling is back below the quietest artefact ever measured here \
+            (\(quietestArtefactMeasured)), so a blip of room noise scores as \
+            speech again and the courtesy filter goes back to doing nothing
+            """
+        )
     }
 }

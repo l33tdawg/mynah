@@ -227,14 +227,42 @@ extension WorkingLineGateTests {
 
     /// And the states are distinct, so the daemon has somewhere to put the third
     /// case rather than folding it into "not a working line".
-    func testTheThreeReasonsToSpeakAreDistinct() {
-        XCTAssertNotEqual(
-            String(describing: VoiceBridgeDaemon.Utterance.answer),
-            String(describing: VoiceBridgeDaemon.Utterance.unprompted)
+    /// **Asserted on something that can be wrong, because the old version could
+    /// not be.** It compared `String(describing:)` of three different enum
+    /// cases, which the compiler guarantees to differ — so it was green whatever
+    /// the daemon did with them, including deleting the third case's meaning
+    /// entirely.
+    ///
+    /// The meaning is at the call sites rather than inside `reply`, which
+    /// branches on `.answer` and nothing else. What makes `.unprompted` a
+    /// separate thing from `.workingLine` is that **an unprompted line is never
+    /// spoken aloud**: a proactive announcement or a call transcript arriving
+    /// out of the blue must land in the thread, not out of the speaker over
+    /// whatever the owner is doing. That is a property a source edit can break,
+    /// so that is what this checks.
+    func testAnUnpromptedLineIsNeverSpokenAloud() throws {
+        let daemon = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/SageVoiceCore/VoiceBridgeDaemon.swift"),
+            encoding: .utf8
         )
-        XCTAssertNotEqual(
-            String(describing: VoiceBridgeDaemon.Utterance.workingLine),
-            String(describing: VoiceBridgeDaemon.Utterance.unprompted)
+        let scan = SwiftSourceScan(daemon)
+
+        let sites = scan.indices(of: "as: .unprompted").map { scan.statement(at: $0) }
+        XCTAssertFalse(
+            sites.isEmpty,
+            "no unprompted reply was found in the daemon at all, so this guard checks nothing"
+        )
+
+        let speaking = sites.filter { !$0.contains("allowSpeaking: false") }
+        XCTAssertEqual(
+            speaking, [],
+            """
+            an unprompted line is allowed to speak aloud, so a proactive \
+            announcement or a call transcript can come out of the speaker over \
+            whatever the owner is doing: \(speaking)
+            """
         )
     }
 }
