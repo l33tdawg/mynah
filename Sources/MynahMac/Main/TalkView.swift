@@ -256,10 +256,16 @@ struct TalkView: View {
             // beside the open board it would be saying twice what the columns
             // already say.
             if !shown {
-                Text(boardSummary)
-                    .mynahFont(.callout)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .lineLimit(1)
+                // The same pill the open board heads itself with. It was a plain
+                // line of text, and the owner spotted that the folded view was
+                // the undesigned one: *"when you expand there's a nice pill -
+                // when you collapse its plain - use the pill for both views"*.
+                //
+                // The sentence it used to be — which says *why* a list will not
+                // open, or that nothing is on it — moves to the tooltip rather
+                // than being lost.
+                TaskPill(title: "Tasks", count: foldedCount, tone: foldedTone)
+                    .help(boardSummary)
             }
             boardChevron(shown: shown)
         }
@@ -281,6 +287,13 @@ struct TalkView: View {
         .accessibilityLabel(shown ? "Hide the task board" : "Show the task board")
     }
 
+
+    /// What the folded pill counts, or `nil` when the list has not been read —
+    /// which is not zero, and the fold is not the place to invent an answer.
+    private var foldedCount: Int? { board.board?.planned.count }
+
+    /// A list that will not open says so in its colour as well as its tooltip.
+    private var foldedTone: MynahTone { board.trouble == nil ? .neutral : .critical }
 
     private var boardSummary: String {
         guard let plate = board.board else {

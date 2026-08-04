@@ -489,7 +489,7 @@ actor ToolLoopTurnEngine: TurnEngine {
         reporting(.signingIn)
         let bootContext = await ritual.boot { reporting(.readingBefore) }
         if bootContext != nil {
-            let prompt = await ritual.systemPrompt(base: loop.systemPrompt)
+            let prompt = await ritual.systemPrompt(base: loop.basePrompt)
             loop.setSystemPrompt(prompt)
         }
         isPrepared = true

@@ -403,25 +403,9 @@ private struct BoardColumnView: View {
     /// is in it are one fact, not two things that happen to be adjacent.
     private var header: some View {
         HStack(spacing: s3) {
-            HStack(spacing: s3) {
-                Text(title.uppercased())
-                    .mynahFont(.label)
-                    .tracking(0.6)
-                    .foregroundStyle(tone.ink)
-                if let count {
-                    Text("\(count)")
-                        .mynahFont(.mono)
-                        .monospacedDigit()
-                        .foregroundStyle(tone.ink.opacity(0.7))
-                }
-            }
-            .padding(.horizontal, s4)
-            .padding(.vertical, s2)
-            .background(tone.wash, in: Capsule())
+            TaskPill(title: title, count: count, tone: tone)
             Spacer(minLength: 0)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -451,6 +435,42 @@ private struct BoardColumnView: View {
 /// errands that share a slot perfectly well: *"some things can be done
 /// simultaneously; like send car to car wash and get groceries"*. Nothing here
 /// says conflict, nothing warns, nothing offers to move anything.
+/// The name of the list and how much is on it, as one pill.
+///
+/// **One definition, because it is shown in two places.** The owner, seeing the
+/// board's own header beside the folded version of it: *"when you expand there's
+/// a nice pill - when you collapse its plain - use the pill for both views"*.
+/// They were two renderings of the same fact, and only one of them had been
+/// designed; a copy would have gone on being two.
+struct TaskPill: View {
+    let title: String
+    /// `nil` when nothing has been read yet, which is not zero — an empty pill
+    /// says "not loaded", `0` says "nothing on your list", and the fold is not
+    /// the place to confuse those.
+    var count: Int?
+    var tone: MynahTone = .neutral
+
+    var body: some View {
+        HStack(spacing: s3) {
+            Text(title.uppercased())
+                .mynahFont(.label)
+                .tracking(0.6)
+                .foregroundStyle(tone.ink)
+            if let count {
+                Text("\(count)")
+                    .mynahFont(.mono)
+                    .monospacedDigit()
+                    .foregroundStyle(tone.ink.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s2)
+        .background(tone.wash, in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
+    }
+}
+
 /// A day's name over the cards belonging to it, or on its own when it has none.
 ///
 /// Same eyebrow as `SharedTimeBox`'s "At the same time · 11am", because it is the

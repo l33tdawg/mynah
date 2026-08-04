@@ -438,7 +438,7 @@ public actor VoiceBridgeDaemon {
         // first would cache a prompt no turn ever sends.
         if let ritual {
             if await ritual.boot() != nil {
-                loop.setSystemPrompt(await ritual.systemPrompt(base: loop.systemPrompt))
+                loop.setSystemPrompt(await ritual.systemPrompt(base: loop.basePrompt))
             }
         }
 

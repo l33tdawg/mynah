@@ -686,6 +686,32 @@ public final class ToolLoop: @unchecked Sendable {
         return "\(base)\n\n\(here)"
     }
 
+    /// The prompt **without** the where-you-are block, for a caller that means to
+    /// extend it rather than send it.
+    ///
+    /// **Both surfaces got this wrong the day the block was added**, in the same
+    /// line: `setSystemPrompt(ritual.systemPrompt(base: loop.systemPrompt))`.
+    /// The getter appends the place, so the boot context was folded into a
+    /// prompt that already carried it, stored as the override, and the getter
+    /// appended it a second time. Every turn after boot then sent:
+    ///
+    ///     …base…
+    ///     WHERE YOU ARE …
+    ///     WHAT YOU WERE DOING BEFORE …
+    ///     WHERE YOU ARE …
+    ///
+    /// Seventy tokens of duplicate in a prompt measured to have 73 characters of
+    /// headroom, and a model told twice where it is with its own history wedged
+    /// between the two.
+    ///
+    /// Reading and extending are different questions, so they are different
+    /// properties now rather than one that answers whichever the caller assumed.
+    public var basePrompt: String {
+        promptLock.lock()
+        defer { promptLock.unlock() }
+        return systemPromptOverride ?? configuration.systemPrompt
+    }
+
     /// Waits out a rate limit instead of failing the turn.
     ///
     /// A turn costs two to four model calls, and Gemini's free tier allows ten
