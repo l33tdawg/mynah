@@ -315,6 +315,180 @@ extension TaskBoard {
     }
 }
 
+// MARK: - Which day you are looking at
+
+/// A heading in the list: a day, or the pile with no day at all.
+///
+/// The owner: *"can we add day markers to the left hand column - would be really
+/// useful"*, and then the half that makes it worth building: *"so if there's
+/// something on thursday it says so, friday if nothing says open / free"*.
+///
+/// **The empty days are the feature.** A list that only labels the days it has
+/// cards for tells him what he already knows — he can read the dates on the
+/// cards. What he cannot read off a list of cards is where the gaps are, and
+/// "Friday is free" is the answer to the question he actually asks it: when can
+/// this go?
+struct TaskDay: Identifiable, Equatable {
+    /// Midnight on the day this heads. `nil` for the undated pile, which is the
+    /// one heading that is not a day.
+    let date: Date?
+    /// "Today", "Tomorrow", "Thursday 6 August", "No date".
+    let title: String
+    /// Nothing is on. Only ever true for a day inside the horizon.
+    let isFree: Bool
+
+    var id: String { date.map { "\($0.timeIntervalSince1970)" } ?? "undated" }
+}
+
+/// One row of the list, in the order it is drawn.
+enum TaskRow: Identifiable, Equatable {
+    case day(TaskDay)
+    case cluster(TaskCluster)
+
+    var id: String {
+        switch self {
+        case .day(let day): return "day-\(day.id)"
+        case .cluster(let cluster): return "cluster-\(cluster.id)"
+        }
+    }
+}
+
+extension TaskBoard {
+
+    /// How far ahead the list volunteers that a day is free.
+    ///
+    /// A week. Past that the gaps stop being useful and start being most of the
+    /// list — his own board runs to the nineteenth, and eleven consecutive
+    /// "free" rows between the eighth and it would bury the two things that are
+    /// actually on. Beyond the horizon a day is named only when it holds
+    /// something.
+    static let freeDayHorizon = 7
+
+    /// The list, with its days written in.
+    ///
+    /// Takes the **already ordered** list, for the same reason `clustered` does:
+    /// `byWhenTheyHappen` has sorted by date, so a day's cards are contiguous and
+    /// a heading can be emitted when the day changes rather than by grouping the
+    /// whole list into a dictionary and losing the order.
+    static func rows(
+        _ ordered: [BoardTask],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [TaskRow] {
+        let today = calendar.startOfDay(for: now)
+        let clusters = clustered(ordered, calendar: calendar)
+        // A column with no work says so in one sentence of its own. Seven days
+        // of "free" underneath an empty list is not a better answer to the same
+        // question, it is the same answer at seven times the height.
+        guard !clusters.isEmpty else { return [] }
+
+        // Undated work is not a day and cannot be interleaved with days. It is
+        // already last in the order, so it comes off the end here.
+        let dated = clusters.filter { day(of: $0, calendar: calendar) != nil }
+        let undated = clusters.filter { day(of: $0, calendar: calendar) == nil }
+
+        var rows: [TaskRow] = []
+        var cursor: Date?
+
+        for cluster in dated {
+            guard let when = day(of: cluster, calendar: calendar) else { continue }
+            // Every day between the last one written and this one, so a gap in
+            // the near future is named rather than merely absent.
+            for free in freeDays(after: cursor, upTo: when, today: today, calendar: calendar) {
+                rows.append(.day(TaskDay(date: free, title: title(for: free, today: today, calendar: calendar), isFree: true)))
+            }
+            if cursor != when {
+                rows.append(.day(TaskDay(
+                    date: when,
+                    title: title(for: when, today: today, calendar: calendar),
+                    isFree: false
+                )))
+                cursor = when
+            }
+            rows.append(.cluster(cluster))
+        }
+
+        // The tail of the horizon, when the last dated thing falls inside it.
+        // Without this a board whose last appointment is Wednesday says nothing
+        // about Thursday through Sunday, which is exactly the stretch he is
+        // asking about when he asks.
+        //
+        // Only when something is scheduled at all. A board holding nothing but
+        // undated work would otherwise open with seven "free" rows above the one
+        // heading that already says it — the week is not news when there is no
+        // week on the board.
+        let horizonEnd = calendar.date(byAdding: .day, value: freeDayHorizon - 1, to: today) ?? today
+        if !dated.isEmpty,
+           let after = cursor.flatMap({ calendar.date(byAdding: .day, value: 1, to: $0) }) ?? Optional(today) {
+            var day = max(after, today)
+            while day <= horizonEnd {
+                rows.append(.day(TaskDay(
+                    date: day,
+                    title: title(for: day, today: today, calendar: calendar),
+                    isFree: true
+                )))
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
+
+        if !undated.isEmpty {
+            rows.append(.day(TaskDay(date: nil, title: "No date", isFree: false)))
+            rows.append(contentsOf: undated.map { .cluster($0) })
+        }
+        return rows
+    }
+
+    /// The days with nothing on between two that have something, bounded to the
+    /// horizon and never in the past — a gap that has already gone is not an
+    /// opening.
+    private static func freeDays(
+        after previous: Date?,
+        upTo next: Date,
+        today: Date,
+        calendar: Calendar
+    ) -> [Date] {
+        let horizonEnd = calendar.date(byAdding: .day, value: freeDayHorizon - 1, to: today) ?? today
+        // From the day after the last heading, or from today on the first pass:
+        // the run-up to a first appointment later this week is a gap too.
+        let start = previous.flatMap { calendar.date(byAdding: .day, value: 1, to: $0) } ?? today
+        var days: [Date] = []
+        var day = max(start, today)
+        while day < next, day <= horizonEnd {
+            days.append(day)
+            guard let following = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = following
+        }
+        return days
+    }
+
+    /// Midnight on the day a cluster happens, or nil when nothing in it is dated.
+    static func day(of cluster: TaskCluster, calendar: Calendar = .current) -> Date? {
+        cluster.tasks
+            .lazy
+            .compactMap { SpokenDate.writtenDate(in: $0.title, calendar: calendar) }
+            .first
+            .map { calendar.startOfDay(for: $0) }
+    }
+
+    /// **"Today" and "Tomorrow" by name.** A date is a lookup; a name is not, and
+    /// the two rows he reads most should not need one.
+    static func title(for day: Date, today: Date, calendar: Calendar) -> String {
+        let gap = calendar.dateComponents([.day], from: today, to: day).day ?? 0
+        if gap == 0 { return "Today" }
+        if gap == 1 { return "Tomorrow" }
+
+        let written = DateFormatter()
+        written.calendar = calendar
+        written.timeZone = calendar.timeZone
+        written.locale = Locale(identifier: "en_GB")
+        // No year: everything on this board is within days, and "Thursday 6
+        // August 2026" in a column this narrow wraps for no information.
+        written.dateFormat = "EEEE d MMMM"
+        return written.string(from: day)
+    }
+}
+
 // MARK: - How near a task is
 
 /// Near enough to mark on the card.

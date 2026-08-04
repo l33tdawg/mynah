@@ -288,18 +288,29 @@ private struct BoardColumnView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: s4) {
-                        ForEach(TaskBoard.clustered(tasks)) { cluster in
-                            if cluster.isShared, !isHistory {
-                                SharedTimeBox(
-                                    cluster: cluster,
-                                    onRemove: onRemove
-                                )
-                            } else {
-                                // History never boxes: two haircuts that happened
-                                // at the same time is not a thing anyone needs
-                                // pointed out afterwards.
-                                ForEach(cluster.tasks) { task in
-                                    draggableCard(task)
+                        // History is a pile, not a plan. Day headings — and
+                        // especially "Friday is free" — answer "when can this
+                        // go?", which is not a question anybody asks of work
+                        // that is already finished.
+                        ForEach(isHistory
+                            ? TaskBoard.clustered(tasks).map { TaskRow.cluster($0) }
+                            : TaskBoard.rows(tasks)) { row in
+                            switch row {
+                            case .day(let day):
+                                DayHeading(day: day)
+                            case .cluster(let cluster):
+                                if cluster.isShared, !isHistory {
+                                    SharedTimeBox(
+                                        cluster: cluster,
+                                        onRemove: onRemove
+                                    )
+                                } else {
+                                    // History never boxes: two haircuts that
+                                    // happened at the same time is not a thing
+                                    // anyone needs pointed out afterwards.
+                                    ForEach(cluster.tasks) { task in
+                                        draggableCard(task)
+                                    }
                                 }
                             }
                         }
@@ -440,6 +451,36 @@ private struct BoardColumnView: View {
 /// errands that share a slot perfectly well: *"some things can be done
 /// simultaneously; like send car to car wash and get groceries"*. Nothing here
 /// says conflict, nothing warns, nothing offers to move anything.
+/// A day's name over the cards belonging to it, or on its own when it has none.
+///
+/// Same eyebrow as `SharedTimeBox`'s "At the same time · 11am", because it is the
+/// same kind of thing: a small true statement about the cards under it, in the
+/// vocabulary the column already speaks.
+///
+/// **A free day is quieter, not louder.** It carries no cards, so nothing anchors
+/// it, and drawn at the same weight as a day with three appointments it would
+/// read as the busiest row on the board.
+private struct DayHeading: View {
+    let day: TaskDay
+
+    var body: some View {
+        HStack(spacing: s2) {
+            Text(day.title)
+                .mynahFont(.eyebrow)
+                .foregroundStyle(day.isFree ? Palette.ink.tertiary : Palette.ink.secondary)
+            if day.isFree {
+                Text("· Free")
+                    .mynahFont(.eyebrow)
+                    .foregroundStyle(Palette.ink.tertiary)
+            }
+        }
+        .padding(.horizontal, s2)
+        .padding(.top, day.isFree ? 0 : s2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(day.isFree ? "\(day.title), nothing on" : day.title)
+    }
+}
+
 private struct SharedTimeBox: View {
     let cluster: TaskCluster
     var onRemove: ((String) -> Void)?
