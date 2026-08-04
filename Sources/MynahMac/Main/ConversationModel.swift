@@ -324,7 +324,28 @@ actor ToolLoopTurnEngine: TurnEngine {
             arguments: ["mcp"],
             environment: memoryEnvironment
         )
-        let notes = NotesToolSource()
+        // **With a log sink, and that is not decoration — this is the third time
+        // this exact omission has cost a diagnosis.**
+        //
+        // `NotesToolSource.log` and `DocumentExporter.log` both default to
+        // `{ _ in }`, this call site passed neither, and the daemon passes one
+        // — so a PDF that failed on Signal said why in `bridge.log` and the same
+        // failure in the window said nothing anywhere.
+        //
+        // Which is exactly what happened. Asked for an infographic, the window
+        // answered "The PDF conversion failed on a temporary-file error, so the
+        // content is saved as a markdown note instead" — the model paraphrasing
+        // a reason the code had in its hand and threw away. Converting that same
+        // note afterwards, with the same binaries and the same staged packages,
+        // succeeded on the first try, so the only copy of the evidence went into
+        // a closure that discards it.
+        //
+        // See `SageRitual` below, where the identical mistake is written up at
+        // length. A store that fails silently is worse than one that fails.
+        let notes = NotesToolSource(
+            exporter: DocumentExporter.locate(log: { conversationLog.error("\($0)") }),
+            log: { conversationLog.error("\($0)") }
+        )
         self.notes = notes
         var sources: [CompositeToolSource.Source] = [
             CompositeToolSource.Source(

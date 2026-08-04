@@ -353,7 +353,7 @@ public struct DocumentExporter: Sendable {
         }
         arguments.append(trimmed.path)
 
-        try await run(arguments: arguments)
+        try await run(arguments: arguments, workingDirectory: scratch)
 
         guard FileManager.default.fileExists(atPath: destination.path) else {
             throw Failure.producedNothing
@@ -362,10 +362,28 @@ public struct DocumentExporter: Sendable {
         log("[notes] converted a note to \(destination.lastPathComponent)")
     }
 
-    private func run(arguments: [String]) async throws {
+    private func run(arguments: [String], workingDirectory: URL) async throws {
         let process = Process()
         process.executableURL = pandoc
         process.arguments = arguments
+        // **Somewhere writable to work in, named rather than inherited.**
+        //
+        // A process started by this app inherits the app's working directory,
+        // and for an app launched from the Finder that is `/`. Pandoc's PDF
+        // route puts intermediate files somewhere before handing them to the
+        // engine, and somewhere it cannot write is a conversion that fails on a
+        // temporary file.
+        //
+        // Which is what the owner saw, and the evidence narrows to exactly this
+        // difference: every PDF the appliance has ever made successfully was
+        // made by the *daemon*, a launchd job with its own environment. The same
+        // note, the same staged pandoc and typst, and the same vendored packages
+        // convert on the first attempt outside the app.
+        //
+        // `scratch` is made by the caller, owned by us, and deleted with the
+        // rest of the run — so this costs nothing and removes a whole class of
+        // failure that depends on where the app happened to be started from.
+        process.currentDirectoryURL = workingDirectory
 
         // A file rather than a `Pipe`, because nothing drains a pipe while this
         // waits and a converter that fills the buffer would block forever
@@ -397,6 +415,20 @@ public struct DocumentExporter: Sendable {
 
         guard process.terminationStatus == 0 else {
             let output = (try? String(contentsOf: errorFile, encoding: .utf8)) ?? ""
+            // **All of it to the log, one line of it to the owner.**
+            //
+            // Only the last line used to survive this method, and it is chosen
+            // to be the readable half — Pandoc puts the path on one line and the
+            // reason on the next. That is right for a sentence somebody reads on
+            // their phone and wrong for the only record of what went wrong: a
+            // failure reported as "a temporary-file error" could not be traced
+            // afterwards, because the four lines above the one kept were the
+            // ones naming the file and the operation.
+            //
+            // Cheap, and only on the failing path — a conversion that works logs
+            // one line as it always did.
+            log("[document] \(pandoc.lastPathComponent) exited \(process.terminationStatus)"
+                + (output.isEmpty ? " with no output" : ":\n\(output)"))
             // The last line with anything in it. Pandoc puts the path and the
             // reason on separate lines and the reason is the half worth
             // repeating to somebody.
