@@ -997,14 +997,37 @@ final class ConversationModel {
         Task { await candidate.warmUp() }
     }
 
-    /// The node vendored inside this app first, then whatever the probe finds.
+    /// The same node every other part of this appliance talks to.
     ///
-    /// The vendored copy inherits this app's notarization, so it launches with
-    /// nothing for the owner to approve. Probing is the fallback for a build
-    /// that was not vendored, and it spawns processes — hence only on that path.
+    /// **This preferred the vendored copy, and everything else prefers the
+    /// installed one, so one app was running two SAGEs at once.** Verified from
+    /// the live process tree on 4 August: a single window launch had two
+    /// children — `/Applications/SAGE.app` for the Memories page and the agents
+    /// roster, and `Mynah.app/Contents/Resources/SAGE.app` for the chat — while
+    /// the daemon, resolving the same way as the former, had one.
+    ///
+    /// So the conversation was answering out of a different node, on a different
+    /// version, from the screen that shows the owner what it remembers. Two
+    /// writable stores with no arbiter, which `EventKitCalendar` has a paragraph
+    /// about and this had none. The owner, on being shown it: *"we should not be
+    /// doing that bro; will cause conflicts for sure"*.
+    ///
+    /// `SageNodeChoice.resolve` is the one answer, and it already encodes the
+    /// right preference: an installed SAGE is the owner's own node with his own
+    /// memories and his own governance, and a vendored copy is what a Mac
+    /// without one falls back to. Preferring the bundle meant preferring an
+    /// empty stranger over his real brain.
+    ///
+    /// The old reasoning — that the vendored copy inherits this app's
+    /// notarization and so launches with nothing to approve — is true and is not
+    /// worth a split appliance. It survives as the fallback, which is the case
+    /// it was actually describing.
+    ///
+    /// The probe stays behind both, for a build that vendored nothing and a Mac
+    /// with no SAGE in the usual places. It spawns processes, hence last.
     private static func locateMemoryNode() async -> URL? {
-        if let vendored = SageNodeLocator.vendoredExecutableURL() {
-            return vendored
+        if let chosen = SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL()) {
+            return chosen.executable
         }
         let probe = await EnvironmentProbe().run()
         guard let path = probe.sage.executablePath else { return nil }
