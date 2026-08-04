@@ -121,9 +121,70 @@ final class MemoryOwnedScopeTests: XCTestCase {
             encoding: .utf8
         )
 
+        // **Comments stripped, because `sage_domains` appears twice in prose in
+        // that file.** The guard passed with the node call deleted: it was
+        // reading the paragraph that explains the fix as evidence the fix was
+        // there. Found by the 1.7.0 audit.
+        let scan = SwiftSourceScan(source)
+        let code = scan.text(in: 0..<scan.characters.count)
         XCTAssertTrue(
-            source.contains("sage_domains"),
-            "11.17.4 answers 'which domains does this caller own' directly; ask it"
+            code.contains("sage_domains"),
+            """
+            the Memories page no longer asks the node which domains it owns — \
+            11.17.4 answers that directly, and everything else is a guess about \
+            somebody else's memories
+            """
+        )
+    }
+
+    /// **The same question, one method below, and the fix missed it.**
+    ///
+    /// `recent` was scoped to the owned set and `search` was left calling
+    /// `sage_recall` with no domain whenever the owner has not picked a topic —
+    /// which is the unscoped question the whole change exists to remove, and
+    /// the one that put another agent's notes on the screen. The owner's report
+    /// was about what he *saw*, and typing in the box is how he sees it.
+    ///
+    /// Found by the 1.7.0 audit.
+    func testAnUnfilteredSearchIsScopedToWhatMynahOwns() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/Main/MemoriesView.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(source)
+
+        // The body of the store's `search`, matched by brace depth so the
+        // assertion is about that method rather than about the file containing
+        // the words somewhere.
+        let bodies = scan.indices(of: "func search(_ query: String, topic: String?, limit: Int)")
+            .compactMap { scan.block(from: $0) }
+            .map { scan.text(in: $0) }
+        XCTAssertFalse(
+            bodies.isEmpty,
+            "no search method was found, so this guard is checking nothing"
+        )
+
+        // Only the ones that ask the node. `PreviewMemoryStore` implements the
+        // same protocol out of an array in memory — it has no node to ask which
+        // domains it owns, and demanding one of it would be a guard crying wolf
+        // at a SwiftUI preview. What makes a store real here is that it goes
+        // through `sage_recall`.
+        let real = bodies.filter { $0.contains("sage_recall") }
+        XCTAssertFalse(
+            real.isEmpty,
+            "no search reaches sage_recall, so this guard is watching a stub"
+        )
+
+        let unscoped = real.filter { !$0.contains("ownedDomains()") }
+        XCTAssertEqual(
+            unscoped.count, 0,
+            """
+            a search with no topic still asks the node for everything this \
+            caller may read, which is how the SAGE team's notes appeared under \
+            "What Mynah remembers"
+            """
         )
     }
 

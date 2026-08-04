@@ -505,13 +505,39 @@ actor SageMemoryStore: MemoryStoring {
         }
     }
 
+    /// **The scoping fix landed on the list and not on the search.**
+    ///
+    /// With a topic picked, `sage_recall` is asked for that domain and comes
+    /// back scoped. With none, it is asked for nothing in particular — and an
+    /// unscoped recall answers with everything this caller may *read*, which is
+    /// precisely the question that put the SAGE team's working notes on a screen
+    /// headed "What Mynah remembers". The owner reported that; `recent` was
+    /// fixed and this was not, one method below it.
+    ///
+    /// Filtered after the fact rather than asked N times: `sage_recall` takes
+    /// one domain and ranks by relevance across the corpus, so N top-k requests
+    /// merged locally would be a different and worse ordering. Dropping what is
+    /// not Mynah's keeps the node's ranking and shows only what the heading
+    /// claims.
     func search(_ query: String, topic: String?, limit: Int) async throws -> MemoryPage {
         var arguments: [String: JSONValue] = [
             "query": .string(query),
             "top_k": .int(limit)
         ]
         if let topic, !topic.isEmpty { arguments["domain"] = .string(topic) }
-        return try await page(from: "sage_recall", arguments: arguments)
+        let found = try await page(from: "sage_recall", arguments: arguments)
+        guard topic?.isEmpty ?? true else { return found }
+
+        let owned = Set(await ownedDomains().map { $0.lowercased() })
+        let mine = found.memories.filter { memory in
+            guard let domain = memory.domain?.lowercased() else { return false }
+            return owned.contains(domain)
+                || MemorySubjectName.isOwnHome(
+                    domain,
+                    applianceAgentID: SageAgentIdentity.applianceAgentID()
+                )
+        }
+        return MemoryPage(memories: mine, total: found.total)
     }
 
     func forget(id: String) async throws -> ForgetOutcome {
