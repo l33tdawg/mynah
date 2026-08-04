@@ -135,17 +135,39 @@ final class OwnTaskEditsTests: XCTestCase {
     /// **"A task came off the list." twice told him nothing.** Two identical
     /// lines are indistinguishable from each other and from any other pair, so
     /// the only thing they carried was that something had happened somewhere.
-    func testADepartedTaskIsNamed() {
+    /// **The clock is pinned, and it has to be.** Written against `Date()` this
+    /// passed all morning and began failing at one o'clock — the appointment in
+    /// the fixture lapsed, the departure became explained, and the line it
+    /// asserts correctly stopped being emitted. It then crashed on `lines[0]`
+    /// rather than failing, which is how a green suite turns into a fatal error
+    /// between two runs with no edit in between.
+    ///
+    /// A test whose result depends on the hour it is run is not a test.
+    func testADepartedTaskIsNamed() throws {
         let lines = ProactiveWatch.taskNews(
             [],
             against: ["a": "open"],
             titles: ["a": "Dentist appointment — Tuesday 4 August 2026, 1pm"],
-            seeded: true
+            seeded: true,
+            // The morning of, so the appointment is still ahead and its
+            // departure is genuinely unexplained.
+            now: Self.at(2026, 8, 4, 9, 0)
         )
 
         XCTAssertEqual(lines.count, 1)
-        XCTAssertTrue(lines[0].contains("Dentist appointment"), lines[0])
-        XCTAssertTrue(lines[0].contains("came off the list"), lines[0])
+        let first = try XCTUnwrap(lines.first)
+        XCTAssertTrue(first.contains("Dentist appointment"), first)
+        XCTAssertTrue(first.contains("came off the list"), first)
+    }
+
+    private static func at(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        var parts = DateComponents()
+        parts.year = year
+        parts.month = month
+        parts.day = day
+        parts.hour = hour
+        parts.minute = minute
+        return Calendar.current.date(from: parts)!
     }
 
     func testTwoDeparturesAreTwoDifferentSentences() {
