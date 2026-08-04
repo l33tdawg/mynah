@@ -119,4 +119,66 @@ final class UpdateBannerTests: XCTestCase {
         )
         XCTAssertNil(UpdateWatch.banner(for: .upToDate, installedAndWaiting: nil))
     }
+
+    // MARK: The colour, twice asked for and twice missed
+
+    /// **"still white solid", after two attempts to make it green.**
+    ///
+    /// Both attempts painted `Palette.surface.raised` — pure `0xFFFFFF` — and
+    /// then tinted it with a 10% wash. That is white with a hint in it, and no
+    /// amount of reordering the layers changes what colour opaque white is. The
+    /// owner asked for *"translucent green like quiettype-ish"*, and translucent
+    /// means the window shows through, so the band cannot have an opaque surface
+    /// of its own at all.
+    ///
+    /// Asserted on the alpha rather than on a screenshot, because the alpha is
+    /// the thing that was wrong both times.
+    func testTheBandIsTranslucentRatherThanASurfaceWithATint() throws {
+        let band = try XCTUnwrap(NSColor(Palette.state.goodBand).usingColorSpace(.sRGB))
+
+        XCTAssertLessThan(
+            band.alphaComponent, 0.5,
+            "the band is nearly opaque, so nothing shows through it"
+        )
+        XCTAssertGreaterThan(
+            band.alphaComponent, 0.12,
+            "the band is fainter than the reference it was asked to match"
+        )
+    }
+
+    /// Green, and green by more than a rounding error — the failure mode here is
+    /// a tint so slight it reads as grey.
+    func testTheBandIsActuallyGreen() throws {
+        let band = try XCTUnwrap(NSColor(Palette.state.goodBand).usingColorSpace(.sRGB))
+
+        XCTAssertGreaterThan(
+            band.greenComponent, band.redComponent + 0.15,
+            "the band is not meaningfully greener than it is red"
+        )
+        XCTAssertGreaterThan(
+            band.greenComponent, band.blueComponent + 0.15,
+            "the band is not meaningfully greener than it is blue"
+        )
+    }
+
+    /// The band must never go back to owning a surface. This is the line that
+    /// made it white both times, and it is one careless edit away from
+    /// returning.
+    func testTheBannerPaintsNoOpaqueSurfaceBehindItself() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/Main/UpdateWatch.swift"),
+            encoding: .utf8
+        )
+        let body = try XCTUnwrap(source.range(of: "struct UpdateBanner").map { String(source[$0.lowerBound...]) })
+
+        XCTAssertFalse(
+            body.split(separator: "\n").contains {
+                let line = $0.trimmingCharacters(in: .whitespaces)
+                return line.hasPrefix(".background") && line.contains("Palette.surface")
+            },
+            "the banner is painting an opaque surface again, which is what made it white"
+        )
+    }
 }

@@ -371,9 +371,9 @@ final class UpdateWatch {
 /// translucent green like quiettype-ish"*. It shipped white first, on the
 /// reasoning that this palette had spent a long argument stripping colour of
 /// accumulated meanings and an update is neither good news nor bad. He saw it
-/// working and asked for green, which settles it — and `Palette.state.goodWash`
-/// is the app's own token for exactly this, a low-alpha tint made for inline
-/// notes, so the band is green without any new colour entering the palette.
+/// working and asked for green, which settles it — and `Palette.state.goodBand`
+/// carries the palette's own `good` hue at the reference's alpha, so the band is
+/// green without any new colour entering the design system.
 struct UpdateBanner: View {
 
     var watch: UpdateWatch
@@ -425,28 +425,23 @@ struct UpdateBanner: View {
             .padding(.horizontal, s6)
             .padding(.vertical, s4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // **The wash goes on top of the surface, not behind it.**
+            // **Nothing opaque underneath. That is the whole fix.**
             //
-            // This was `.background(raised).background(goodWash)`, which reads
-            // like "surface, then tint" and does the opposite: each `background`
-            // sits behind the one before it, so the *opaque* raised surface was
-            // painted straight over the tint. The icon turned green, the band
-            // stayed white, and the modifier that was supposed to colour it did
-            // nothing at all.
+            // Twice now this band has been "made green" and arrived white, and
+            // both attempts had the same root: `Palette.surface.raised` is solid
+            // white, and a 10% wash over solid white is solid white with a hint
+            // in it. The first attempt layered it wrongly as well
+            // — `.background(raised).background(goodWash)` paints the *opaque*
+            // surface over the tint — and fixing the order made the band 4%
+            // greener, which is not what the owner had asked for either time:
+            // *"please make it translucent green like quiettype-ish"*, then
+            // *"still white solid"*.
             //
-            // Composed in one `background` now, where the order is the order it
-            // is drawn in and cannot be read two ways.
-            //
-            // Twice, because a single pass of `goodWash` is paler than the
-            // reference the owner pointed at. Doubling the palette's own token
-            // keeps the light and dark pair it encodes — 0x1D8A4E under a light
-            // appearance, 0x3FD07E under a dark one — rather than inventing a
-            // second green that would then have to be maintained.
-            .background {
-                Palette.surface.raised
-                    .overlay(Palette.state.goodWash)
-                    .overlay(Palette.state.goodWash)
-            }
+            // Translucent means the window shows through it. So there is no
+            // surface here at all, only the tint, exactly as the reference does
+            // it: `Color.green.opacity(0.16)` over whatever is behind. See
+            // `Palette.state.goodBand`.
+            .background(Palette.state.goodBand)
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Palette.state.good.opacity(0.28))

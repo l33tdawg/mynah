@@ -188,6 +188,24 @@ enum Palette {
             light: .mynahHex(0x1D8A4E, alpha: 0.10),
             dark: .mynahHex(0x3FD07E, alpha: 0.12)
         )
+
+        /// A full-width band that tints whatever it is laid over. See
+        /// `UpdateBanner`, which is the only thing that should use it.
+        ///
+        /// **Stronger than `goodWash` and used differently, which is the point.**
+        /// A wash sits inside a card that has already painted an opaque surface,
+        /// so it only ever has to tint white. A band has nothing of its own
+        /// underneath — the window shows through it — which is what the owner
+        /// meant by *"translucent green like quiettype-ish"*, and it needs the
+        /// weight to read as green rather than as a smudge.
+        ///
+        /// The alphas are the reference's own: QuietType's band is
+        /// `Color.green.opacity(0.16)` light and `0.24` dark. The hue stays this
+        /// palette's `good` so no new colour enters the design system.
+        static let goodBand = Color.mynah(
+            light: .mynahHex(0x1D8A4E, alpha: 0.16),
+            dark: .mynahHex(0x3FD07E, alpha: 0.24)
+        )
         static let criticalWash = Color.mynah(
             light: .mynahHex(0xC0392B, alpha: 0.09),
             dark: .mynahHex(0xFF6B5E, alpha: 0.12)
