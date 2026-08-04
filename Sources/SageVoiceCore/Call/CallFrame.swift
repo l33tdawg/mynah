@@ -145,16 +145,71 @@ public struct CallFrameReader {
     }
 }
 
-/// Writes frames to a file descriptor.
-public struct CallFrameWriter {
+/// One call's write end, and the authority on whether it is still that call.
+///
+/// ## Why a descriptor number is not an identity
+///
+/// A turn runs in its own task and holds whatever it needs to speak. When the
+/// caller hangs up mid-answer that task is cancelled, but cancellation in Swift
+/// is cooperative: the task keeps running until it next checks, and a turn
+/// waiting on the model or the synthesiser can be seconds from its next check.
+/// Meanwhile the call ends and the descriptor is closed.
+///
+/// POSIX then hands the *lowest available* number to the next `accept()` —
+/// which is the number just freed. Verified on this Mac with a C probe:
+/// listening socket on fd 3, first call accepted on fd 5, closed, second call
+/// accepted on fd 5 again. So the abandoned turn wakes up holding a live
+/// descriptor that now belongs to somebody else's call, and speaks the previous
+/// caller's answer into the new caller's ear.
+///
+/// Nothing about that is visible in a log: the write succeeds, the endpoint
+/// plays what it is given, and the transcript of the new call simply contains a
+/// sentence nobody asked for.
+///
+/// So writers no longer hold a number, they hold *this* — an object that is
+/// retired exactly once, when its call ends. A retired connection refuses to
+/// write no matter what the descriptor number is now doing.
+///
+/// The lock is held across the whole write, which buys two more things:
+///
+///  - **Frames stay whole.** Two tasks writing at once could interleave partial
+///    writes and hand the endpoint a spliced frame. Nothing serialised them
+///    before.
+///  - **`retire()` waits for a write in flight,** so `close()` afterwards
+///    cannot free the descriptor out from under one. That is the ordering the
+///    whole fix rests on, and it is why `retire()` is called before the close
+///    rather than beside it.
+public final class CallConnection: @unchecked Sendable {
+    private let lock = NSLock()
     private let descriptor: Int32
+    private var usable = true
 
     public init(descriptor: Int32) {
         self.descriptor = descriptor
     }
 
-    public func send(_ frame: CallFrame) throws {
-        let data = frame.encoded
+    /// Ends this connection's writing life. Idempotent.
+    ///
+    /// Does not close the descriptor — whoever opened it closes it, and doing
+    /// both here would mean two owners of one number, which is the class of bug
+    /// this type exists to end.
+    public func retire() {
+        lock.lock()
+        usable = false
+        lock.unlock()
+    }
+
+    public var isUsable: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return usable
+    }
+
+    func write(_ data: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard usable else { throw CallFrameWriter.Failure.callEnded }
+
         var sent = 0
         while sent < data.count {
             let wrote: Int = data.withUnsafeBytes { raw in
@@ -162,9 +217,40 @@ public struct CallFrameWriter {
             }
             if wrote <= 0 {
                 if errno == EINTR { continue }
+                // A frame that stopped part-way leaves the reader waiting on a
+                // length it will never be given, so every later frame lands
+                // inside the corpse of this one. There is no recovering the
+                // stream: the connection is finished, and saying so here stops
+                // the next `try?` writing more into the wreck.
+                usable = false
                 throw CallFrameReader.Failure.truncated
             }
             sent += wrote
         }
+    }
+}
+
+/// Writes frames to one call.
+public struct CallFrameWriter {
+    private let connection: CallConnection
+
+    public enum Failure: Error, Equatable {
+        /// The call this writer belongs to is over. Raised instead of writing,
+        /// because the descriptor may well belong to the *next* call by now.
+        case callEnded
+    }
+
+    public init(_ connection: CallConnection) {
+        self.connection = connection
+    }
+
+    /// For a descriptor whose life is managed elsewhere — the caller side of a
+    /// test, and nothing in the appliance.
+    public init(descriptor: Int32) {
+        self.init(CallConnection(descriptor: descriptor))
+    }
+
+    public func send(_ frame: CallFrame) throws {
+        try connection.write(frame.encoded)
     }
 }

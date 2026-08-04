@@ -510,6 +510,25 @@ public actor CallTurnServer {
                 accepted, SOL_SOCKET, SO_NOSIGPIPE,
                 &noSignalOnADeadPeer, socklen_t(MemoryLayout<Int32>.size)
             )
+            // **No write may park forever.**
+            //
+            // Ending a call retires its `CallConnection`, and retiring waits for
+            // any write already in flight — that wait is what stops the
+            // descriptor being closed and reissued underneath a turn that is
+            // still speaking. An unbounded write would therefore be an unbounded
+            // wait, on the actor, with the whole call surface behind it.
+            //
+            // Fifteen seconds is far outside anything healthy. `enqueue` on the
+            // endpoint side appends to an in-memory slice and never blocks, so a
+            // working endpoint drains this socket as fast as the kernel will
+            // hand it over; it does not pace reads to playback. Fifteen seconds
+            // of *no progress at all* means the endpoint is wedged, and a wedged
+            // endpoint is a dead call whether or not this side admits it.
+            var sendTimeout = timeval(tv_sec: 15, tv_usec: 0)
+            setsockopt(
+                accepted, SOL_SOCKET, SO_SNDTIMEO,
+                &sendTimeout, socklen_t(MemoryLayout<timeval>.size)
+            )
             // One call at a time. A second endpoint connecting means the first
             // is gone or something is wrong; either way the newest wins, which
             // matches how //call reissues the link.
@@ -562,9 +581,20 @@ public actor CallTurnServer {
     }
 
     private func handle(connection: Int32) async {
-        defer { close(connection) }
+        // The identity of *this* call, as distinct from the number the kernel
+        // happens to be using for it.
+        //
+        // Retired before the descriptor is closed, never after. `retire()` waits
+        // for any write in flight, so by the time `close` runs no turn can be
+        // inside a write — which is what makes it safe for the next `accept()`
+        // to be handed this same number, as POSIX will.
+        let live = CallConnection(descriptor: connection)
+        defer {
+            live.retire()
+            close(connection)
+        }
         let reader = CallFrameReader(descriptor: connection)
-        let writer = CallFrameWriter(descriptor: connection)
+        let writer = CallFrameWriter(live)
         log("[call] a call connected")
         transcript = CallTranscript()
         lastHeard = Date()
@@ -908,6 +938,15 @@ public actor CallTurnServer {
                 + "— talking after \(seconds(started, firstSpoken ?? thought))s")
         } catch is CancellationError {
             return
+        } catch CallFrameWriter.Failure.callEnded {
+            // The caller hung up while this answer was being prepared.
+            //
+            // Not an error, and specifically not "could not answer" — it was
+            // answered, there is simply nobody on the line to hear it. What
+            // matters is that it stops here rather than writing into a
+            // descriptor the kernel may already have handed to the next call.
+            // See `CallConnection`.
+            log("[call] the call ended before the answer did; leaving it unsaid")
         } catch {
             log("[call] could not answer: \(error)")
             try? writer.send(.turnFailed("\(error)"))
