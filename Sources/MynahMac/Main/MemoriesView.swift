@@ -281,6 +281,44 @@ protocol MemoryStoring: Sendable {
     func search(_ query: String, topic: String?, limit: Int) async throws -> MemoryPage
 
     func forget(id: String) async throws -> ForgetOutcome
+
+    /// The domains this appliance owns, according to the node.
+    ///
+    /// On the protocol because the *controls* need it, not just the queries.
+    /// Scoping the list and the search was done by asking `sage_domains`, while
+    /// `isMynahs` — which decides whether a card gets a Forget cross, and what
+    /// "forget everything Mynah owns" walks — kept using a hardcoded pair. So a
+    /// third owned domain would have been listed and shown and then quietly
+    /// treated as somebody else's.
+    func domainsMynahOwns() async -> [String]
+}
+
+extension MemoryStoring {
+    /// Stores that have no node to ask fall back to the pair that was hardcoded.
+    func domainsMynahOwns() async -> [String] { MynahOwnedDomains.knownPair }
+}
+
+/// The domains this appliance is known to write to, for when the node cannot say.
+///
+/// **One copy, because there were two and they were the same list.** The store's
+/// fallback and the model's `ownDomains` both spelled out `voice-interface` and
+/// `mynah-home`; adding a third owned domain meant remembering both, and the
+/// whole class of bug being fixed here is a fix applied to one site while an
+/// identical one goes unwatched.
+///
+/// Both are established rather than guessed. `voice-interface` is
+/// `SageRitual.memoryDomain`, this app's own constant for where it stores what it
+/// is told. `mynah-home` is not this identity's: a `sage_backlog` signed as the
+/// Claude Code agent returns `local-<that id>` and `voice-interface` and never
+/// `mynah-home`, and a `sage_list` for it is refused with "agent does not have
+/// read access".
+///
+/// **A fallback, never the answer.** Falling back to these beats falling back to
+/// unscoped: a node that cannot answer should cost the owner a domain he rarely
+/// has, not show him somebody else's memories under his own heading — or worse,
+/// offer him a Forget cross on them.
+enum MynahOwnedDomains {
+    static let knownPair = [SageRitual.memoryDomain, "mynah-home"]
 }
 
 // MARK: - The real one
@@ -482,10 +520,12 @@ actor SageMemoryStore: MemoryStoring {
     /// the cautious choice here — it is the bug. A node that cannot answer
     /// should cost the owner a domain he rarely has, not show him somebody
     /// else's memories under his own heading.
+    func domainsMynahOwns() async -> [String] { await ownedDomains() }
+
     private func ownedDomains() async -> [String] {
         if let cachedOwnedDomains { return cachedOwnedDomains }
 
-        let fallback = [SageRitual.memoryDomain, "mynah-home"]
+        let fallback = MynahOwnedDomains.knownPair
         do {
             let payload = try await payload(from: "sage_domains", arguments: [:])
             let named = (payload["domains"]?.arrayValue ?? []).compactMap {
@@ -933,6 +973,9 @@ final class MemoriesModel {
 
     private func performLoad() async {
         phase = .loading
+        // Before the page, so no row is ever laid out — and no Forget cross ever
+        // drawn — against a stale idea of what this appliance owns.
+        await refreshOwnedDomains()
         do {
             let page = try await fetchFirstPage()
             guard !Task.isCancelled else { return }
@@ -1103,32 +1146,33 @@ final class MemoriesModel {
         if MemorySubjectName.isOwnHome(domain, applianceAgentID: SageAgentIdentity.applianceAgentID()) {
             return true
         }
-        return Self.ownDomains.contains(domain.lowercased())
+        return ownDomains.contains(domain.lowercased())
     }
 
-    /// The named domains this appliance writes to, beyond its `local-<id>` home.
+    /// What the node says this appliance owns, lowercased for comparison.
     ///
-    /// **`isOwnHome` alone matched nothing, so the control never appeared.** It
-    /// recognises only the app-v23 form, `local-` followed by the agent's public
-    /// key — and Mynah's own work does not carry that name. On the owner's node
-    /// its tasks sit in `mynah-home`, which is what the board draws under every
-    /// card it calls "the work assigned to Mynah".
+    /// **Synchronous, because a control cannot await.** `isMynahs` decides
+    /// whether a card draws a Forget cross, and SwiftUI asks that question while
+    /// laying out a row. So the answer is fetched once per load and held here
+    /// rather than asked per row.
     ///
-    /// Both are established rather than guessed. `voice-interface` is
-    /// `SageRitual.memoryDomain`, this app's own constant for where it stores
-    /// what it is told. And `mynah-home` is not this identity's: a `sage_backlog`
-    /// signed as the Claude Code agent returns `local-<that id>` and
-    /// `voice-interface` and never `mynah-home`, and a `sage_list` for it is
-    /// refused outright with "agent does not have read access".
+    /// Seeded with `MynahOwnedDomains.knownPair` so the screen is correct before
+    /// the first answer arrives and stays correct if none ever does — see that
+    /// type for why the fallback is this rather than nothing.
+    private(set) var ownDomains: Set<String> = Set(
+        MynahOwnedDomains.knownPair.map { $0.lowercased() }
+    )
+
+    /// Asks the node what it owns, and keeps it.
     ///
-    /// The node is still the authority. `sage_forget` refuses anything this
-    /// appliance may not deprecate, and `forgetEverythingMynahOwns` counts those
-    /// refusals and reports them rather than pretending they worked — so this
-    /// list decides what is *offered*, never what is permitted.
-    private static let ownDomains: Set<String> = [
-        SageRitual.memoryDomain.lowercased(),
-        "mynah-home"
-    ]
+    /// Failure is not reported to the owner: the seeded pair is a working answer
+    /// and a banner about domain resolution on the Memories page would be noise
+    /// about something they cannot act on.
+    private func refreshOwnedDomains() async {
+        let named = await store.domainsMynahOwns()
+        guard !named.isEmpty else { return }
+        ownDomains = Set(named.map { $0.lowercased() })
+    }
 
     /// Clears what Mynah filed, one at a time, and says what it could not.
     ///

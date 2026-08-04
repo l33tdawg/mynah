@@ -221,9 +221,24 @@ final class MemoryOwnedScopeTests: XCTestCase {
         )
 
         XCTAssertTrue(source.contains("let mine = mynahOwned"), "bulk forget stopped filtering by ownership")
+
+        // **This used to assert `private static let ownDomains` existed**, which
+        // made it a test of a spelling rather than of a rule — and worse, a test
+        // that would fail the moment the constant was correctly replaced by the
+        // node's answer. It did exactly that.
+        //
+        // What has to stay true is that the set is *asked for*. The behaviour is
+        // pinned properly in MemoryClearScopeTests, which drives a node that owns
+        // a third domain; this only catches the constant coming back.
+        let scan = SwiftSourceScan(source)
+        let code = scan.text(in: 0..<scan.characters.count)
         XCTAssertTrue(
-            source.contains("private static let ownDomains"),
-            "the owned set that bulk forget filters through is gone"
+            code.contains("store.domainsMynahOwns()"),
+            """
+            the owned set that bulk forget and the per-card Forget cross filter \
+            through is a constant again. A third owned domain would be listed, \
+            shown, and then treated as somebody else's.
+            """
         )
     }
 }
