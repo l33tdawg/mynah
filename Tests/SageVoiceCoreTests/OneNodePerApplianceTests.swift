@@ -161,17 +161,72 @@ final class OneNodePerApplianceTests: XCTestCase {
     /// because verification fails for ordinary reasons on the machine of
     /// somebody who works on SAGE, and none of them entitle an appliance to
     /// overwrite the store holding their memories, agents and keys.
+    /// **Stated as "nothing was fetched", not as "the outcome was
+    /// `.alreadyPresent`".**
+    ///
+    /// Those are different claims, and the difference is what made this test
+    /// depend on the machine it ran on. It handed `provision` the path
+    /// `/Applications/SAGE.app/...`, which exists on the owner's Mac and does
+    /// not exist on a CI runner — so verification succeeded here and failed
+    /// there, and the test that passed locally failed the **release build**,
+    /// after the artefact had already been signed and notarized.
+    ///
+    /// Both surviving outcomes honour the instruction: `.alreadyPresent` uses
+    /// the node, `.unusable` reports it and stops. The one that would break it
+    /// is `.downloadedAwaitingUser` — a replacement being fetched over the store
+    /// holding somebody's memories, agents and keys.
+    ///
+    /// Driven with both a node this Mac may or may not have and one that is
+    /// guaranteed absent, so the assertion is the same everywhere it runs.
     func testAPresentNodeIsNeverReinstalledOver() async {
+        let absent = NSTemporaryDirectory()
+            + "no-such-sage-\(UUID().uuidString)/SAGE.app/Contents/MacOS/sage-gui"
+
+        for path in ["/Applications/SAGE.app/Contents/MacOS/sage-gui", absent] {
+            var probe = EnvironmentProbeResult()
+            probe.sage = SageInstallReport(executablePath: path)
+
+            let outcome = await SageNodeInstaller().provision(given: probe)
+
+            switch outcome {
+            case .alreadyPresent, .unusable:
+                break // Both leave the owner's node exactly where it is.
+            case .downloadedAwaitingUser, .unavailable:
+                XCTFail(
+                    """
+                    a SAGE already on this Mac (\(path)) was not left alone — \
+                    Mynah went looking for a replacement: \(outcome)
+                    """
+                )
+            }
+        }
+    }
+
+    /// And that a node which *does* verify is actually used, not merely spared.
+    ///
+    /// Separated from the test above and skipped rather than folded into it,
+    /// because this one genuinely cannot run without a real SAGE installed. The
+    /// alternative — asserting it anyway — is the arrangement that just failed a
+    /// release.
+    func testAVerifiableNodeIsUsedRatherThanOnlySpared() async throws {
+        let installed = "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+        guard FileManager.default.fileExists(atPath: installed) else {
+            throw XCTSkip(
+                "no SAGE installed at /Applications/SAGE.app, so there is no verifiable "
+                    + "node on this machine to check against"
+            )
+        }
+
         var probe = EnvironmentProbeResult()
-        probe.sage = SageInstallReport(executablePath: "/Applications/SAGE.app/Contents/MacOS/sage-gui")
+        probe.sage = SageInstallReport(executablePath: installed)
 
         let outcome = await SageNodeInstaller().provision(given: probe)
 
-        switch outcome {
-        case .alreadyPresent(let path, _):
-            XCTAssertEqual(path, "/Applications/SAGE.app/Contents/MacOS/sage-gui")
-        default:
-            XCTFail("a SAGE that is already installed was not left alone: \(outcome)")
+        guard case .alreadyPresent(let path, _) = outcome else {
+            XCTFail("a SAGE that verifies was not adopted: \(outcome)")
+            return
         }
+        XCTAssertEqual(path, installed)
+        XCTAssertTrue(outcome.isReady, "a verified node left the setup flow waiting on something")
     }
 }
