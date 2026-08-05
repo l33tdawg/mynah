@@ -29,7 +29,7 @@ final class SageNodeSupervisorTests: XCTestCase {
             env["SAGE_VENDORED_AGENT_KEY_FILE"],
             MynahIdentity.applianceKeyURL(homeDirectory: home).path
         )
-        XCTAssertEqual(env["SAGE_VENDORED_AGENT_HOME_DOMAIN"], "voice-interface")
+        XCTAssertEqual(env["SAGE_VENDORED_AGENT_HOME_DOMAIN"], "mynah-home")
         XCTAssertEqual(env["SAGE_VENDORED_AGENT_CLEARANCE"], "2")
     }
 

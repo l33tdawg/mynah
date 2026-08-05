@@ -179,14 +179,24 @@ final class SageRitualTests: XCTestCase {
         XCTAssertEqual(tools.names, [SageRitual.Tool.turn])
         let arguments = tools.recorded[0].arguments
         XCTAssertEqual(arguments["topic"]?.stringValue, "what is the population of Kuala Lumpur")
-        // The constant, not the literal. This asserted "voice-appliance" and
-        // therefore had to be edited when the domain changed — which is the
-        // wrong way round: the name has to match a domain an administrator
-        // actually assigns on the node, so it will change again, and a test
-        // that pins the old spelling turns a deliberate change into a failure
-        // instead of checking the thing that matters. What matters is that the
-        // turn is written to whichever domain this appliance claims as its own.
-        XCTAssertEqual(arguments["domain"]?.stringValue, SageRitual.memoryDomain)
+        // **No domain at all, which is the point.**
+        //
+        // The comment this replaces was right about the danger and reached for
+        // the wrong remedy. It said the name "has to match a domain an
+        // administrator actually assigns on the node, so it will change again",
+        // and asserted the constant rather than the literal so a rename would
+        // not turn into a failure. That made the test agree with the code by
+        // construction — and both went on naming `voice-interface`, a subject
+        // belonging to another agent, for as long as the constant said so. A
+        // test pinned to a constant cannot notice the constant being wrong.
+        //
+        // So the invariant moved. SAGE routes a domainless write to this
+        // agent's own approved home subject, and an explicit domain is never
+        // remapped — so naming one can be wrong and omitting one cannot.
+        XCTAssertNil(
+            arguments["domain"],
+            "naming a domain here is how every turn came to be filed under another agent's subject"
+        )
     }
 
     /// SAGE silently drops observations under 30 characters as low-value, so a

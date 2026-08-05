@@ -1,0 +1,53 @@
+{
+  "access_scope": "home_domain",
+  "agent_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "approval_required": false,
+  "can_read": true,
+  "can_write": true,
+  "capabilities": 31,
+  "clearance": 1,
+  "counts_available": true,
+  "counts_scope": "home_domain",
+  "domain_scope": "mynah-home",
+  "enrollment_status": "active",
+  "has_more": true,
+  "home_domain": "mynah-home",
+  "memory_access_available": true,
+  "owned_domains": [
+    "mynah-home",
+    "sage-v3.6.0-audit",
+    "user-interaction"
+  ],
+  "profile": "companion",
+  "readable_domains": [
+    "mynah-home",
+    "dhillon-music",
+    "general",
+    "meta",
+    "sage-architecture",
+    "sage-comms",
+    "sage-development",
+    "sage-distribution",
+    "sage-operations",
+    "sage-release",
+    "sage-roadmap",
+    "sage-security",
+    "sage-v3.6.0-audit",
+    "session-context",
+    "user-interaction",
+    "voice-infrastructure",
+    "voice-interface"
+  ],
+  "readable_domains_scope": "bounded_policy_and_provenance",
+  "readable_domains_truncated": true,
+  "registration_status": "active",
+  "role": "member",
+  "scope": "caller_home_domain",
+  "total_exact": false,
+  "total_memories": 2,
+  "writable_domains": [
+    "mynah-home",
+    "sage-v3.6.0-audit",
+    "user-interaction"
+  ]
+}

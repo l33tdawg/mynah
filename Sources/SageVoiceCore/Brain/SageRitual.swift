@@ -180,7 +180,64 @@ public actor SageRitual {
     /// mismatch fails the same silent way the original bug did — writes refused,
     /// nothing said. A test asserts the system prompt names the same domain this
     /// constant does, so the two cannot drift apart unnoticed.
-    public static let memoryDomain = "voice-interface"
+    ///
+    /// ## And it did not match. It named a domain belonging to another agent.
+    ///
+    /// Everything above was true when it was written and stopped being true
+    /// without a word. The transfer it is waiting on never happened:
+    /// `voice-interface` is owned by the developer's own agent, and on the
+    /// owner's node it is readable by this appliance and absent from its
+    /// `writable_domains`. So for as long as this constant has existed, every
+    /// episodic turn Mynah recorded — one per spoken exchange — has been filed
+    /// under somebody else's subject.
+    ///
+    /// The owner, 5 August 2026, on being shown the standing: *"we should make
+    /// it default to its own home domain bro - voice-interface is YOUR DOMAIN -
+    /// we will transfer it back to you"*.
+    ///
+    /// It survived because the failure it was written to prevent never
+    /// happened: `PERMANENTLY REFUSED` has never been logged, on any of his
+    /// machines, ever. The writes went through. A guard against silent refusal
+    /// cannot catch a silent *success* in the wrong place.
+    ///
+    /// ## Nothing replaces it, which is the point
+    ///
+    /// The writes below no longer name a domain at all. SAGE's own instruction
+    /// to every connecting agent says why: *"Omit domain to use your approved
+    /// owned home domain. Pass a domain only when you intentionally need that
+    /// exact authorized domain; explicit domains are never remapped."* Omitting
+    /// asks the node where this agent's work belongs, every time, and the node
+    /// is the only thing that knows. A constant here — even the right one today,
+    /// even `mynah-home` — is a claim about a node's configuration made months
+    /// earlier, and it fails exactly the way this one did. Naming it explicitly
+    /// would be worse than omitting it, because an explicit domain is *never
+    /// remapped*: a stale name would be refused rather than corrected.
+    ///
+    /// ## What this is now
+    ///
+    /// The home domain the appliance's **own vendored node is configured with** —
+    /// `SageNodeSupervisor` passes exactly this string as
+    /// `SAGE_VENDORED_AGENT_HOME_DOMAIN`. On a fresh install that makes it a
+    /// statement of something we set, not a guess about someone else's node,
+    /// which is the only footing on which a constant here can be trusted at all.
+    ///
+    /// It stays `mynah-home` because that is what the owner's node already
+    /// assigns this agent, so the two arrangements agree rather than diverging
+    /// on the one machine anybody has tested.
+    ///
+    /// **It is a default and a label, never the domain a write names.** The
+    /// writes below pass no `domain`, so the node routes each one to whatever it
+    /// currently owns; see `recordTurn`. Where the real domain has to be shown
+    /// to a person — the CEREBRUM bio, the daemon's log — it is learned from
+    /// `sage_status` and this is only the fallback until that answers.
+    public static let memoryDomain = "mynah-home"
+
+    /// What the node says this agent's home domain is, once it has been asked.
+    ///
+    /// Nil until `noteWhichDomainsItMaySearch` runs, and nil forever on a node
+    /// that will not answer — in which case `memoryDomain` is the honest
+    /// fallback and the appliance still works.
+    public private(set) var homeDomain: String?
 
     private let tools: ToolProviding
     private let log: @Sendable (String) -> Void
@@ -459,12 +516,16 @@ public actor SageRitual {
         defer { record.save(to: readableDomainsFile) }
         do {
             let reply = try await tools.call(name: Tool.status, arguments: [:])
-            guard let discovered = ReadableDomains.fromStatus(reply, writesTo: Self.memoryDomain) else {
+            homeDomain = ReadableDomains.homeDomain(inStatus: reply)
+            guard let discovered = ReadableDomains.fromStatus(reply) else {
                 log("[sage] sage_status did not name any searchable domains; using the known ones")
                 return
             }
             record = discovered
-            log("[sage] recall is scoped to \(discovered.domains.joined(separator: ", "))")
+            log(
+                "[sage] recall is scoped to \(discovered.domains.joined(separator: ", "))"
+                    + "; writes go to \(homeDomain ?? "whichever subject the node owns for this agent")"
+            )
         } catch {
             log("[sage] could not ask which domains are searchable, using the known ones: \(error)")
         }
@@ -606,11 +667,13 @@ public actor SageRitual {
                 arguments: [
                     "topic": .string(topic),
                     "observation": .string(observation),
-                    // A dedicated domain, so the appliance's episodic chatter
-                    // does not dilute recall in the domains real work uses —
-                    // and, since app-v22, the only domain it is able to write.
-                    // See `memoryDomain`.
-                    "domain": .string(Self.memoryDomain)
+                    // **No domain, deliberately.** SAGE routes a write with no
+                    // domain to this agent's own approved home subject and says
+                    // so to every client that connects. Naming one explicitly is
+                    // strictly worse: "explicit domains are never remapped", so a
+                    // name that goes stale is refused rather than corrected —
+                    // which is how every turn came to be filed under an unrelated
+                    // agent's subject. See `memoryDomain`.
                 ]
             )
             // **This answer used to be `_`, and that discarded every reply the
@@ -686,8 +749,7 @@ public actor SageRitual {
                     "observation": .string(
                         "Periodic check for results from work piped to other agents. "
                             + "No conversation with the owner at this point."
-                    ),
-                    "domain": .string(Self.memoryDomain)
+                    )
                 ]
             )
             noteResults(in: answer)
@@ -784,8 +846,7 @@ public actor SageRitual {
                 arguments: [
                     "task_summary": .string(
                         "Voice appliance handled \(turnCount) spoken turns for the owner over Signal."
-                    ),
-                    "domain": .string(Self.memoryDomain)
+                    )
                 ]
             )
             log("[sage] reflected after \(turnCount) turns")

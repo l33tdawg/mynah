@@ -114,14 +114,24 @@ final class MemoryClearScopeTests: XCTestCase {
         )
     }
 
-    /// And a node that says nothing leaves the known pair working, rather than
+    /// And a node that says nothing leaves Mynah's own home working, rather than
     /// stripping every Forget control off the screen.
-    func testANodeThatWillNotAnswerStillLeavesTheKnownPairForgettable() async {
+    ///
+    /// **The fixture used to put "mine" in `voice-interface`, and that was the
+    /// bug.** That subject belongs to the developer's own agent — readable by
+    /// this appliance, absent from its `writable_domains` — and the fallback
+    /// list named it, so on a node that would not answer the Memories page
+    /// offered the owner a Forget cross on another agent's memories. Precisely
+    /// the harm `MynahOwnedDomains` says in its own comment that it exists to
+    /// prevent. The owner, 5 August: *"voice-interface is YOUR DOMAIN - we will
+    /// transfer it back to you"*.
+    func testANodeThatWillNotAnswerStillLeavesItsOwnHomeForgettable() async {
         let store = StubMemoryStore(
             owns: [],
             holding: [
-                Self.memory("mine", domain: "voice-interface"),
+                Self.memory("mine", domain: "mynah-home"),
                 Self.memory("theirs", domain: "sage-team-notes"),
+                Self.memory("the developers", domain: "voice-interface"),
             ]
         )
         let model = MemoriesModel(store: store)
@@ -130,6 +140,10 @@ final class MemoryClearScopeTests: XCTestCase {
         XCTAssertEqual(
             Set(model.mynahOwned.map(\.id)), ["mine"],
             "a node that could not answer took the Forget control away from Mynah's own memories"
+        )
+        XCTAssertFalse(
+            model.mynahOwned.map(\.id).contains("the developers"),
+            "a fallback must never offer a Forget cross on a subject belonging to another agent"
         )
     }
 

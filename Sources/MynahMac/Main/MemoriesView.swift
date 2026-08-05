@@ -331,8 +331,22 @@ extension MemoryStoring {
 /// unscoped: a node that cannot answer should cost the owner a domain he rarely
 /// has, not show him somebody else's memories under his own heading — or worse,
 /// offer him a Forget cross on them.
+/// **It is no longer a pair, and the reason matters more than the count.**
+///
+/// `voice-interface` was never Mynah's. It is the developer's own agent's
+/// subject — readable by this appliance, absent from its `writable_domains`,
+/// and confirmed as such by the owner on 5 August: *"voice-interface is YOUR
+/// DOMAIN - we will transfer it back to you"*. Listing it here offered the owner
+/// a Forget cross on another agent's memories, which is the exact harm the note
+/// above says this fallback exists to prevent.
+///
+/// Signed as the appliance key `74140c2d…` against his live 11.17.9 node,
+/// `sage_status` returns `owned_domains: [mynah-home, sage-v3.6.0-audit,
+/// user-interaction]` — so `mynah-home` is right, and the real answer is to ask
+/// rather than to keep a list here at all. This stays as the fallback for a node
+/// that will not answer.
 enum MynahOwnedDomains {
-    static let knownPair = [SageRitual.memoryDomain, "mynah-home"]
+    static let knownPair = [SageRitual.memoryDomain]
 }
 
 // MARK: - The real one

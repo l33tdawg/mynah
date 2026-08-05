@@ -46,19 +46,25 @@ public struct ReadableDomains: Codable, Equatable, Sendable {
 
     /// What to search when the node has not said otherwise.
     ///
-    /// Not a guess and not a default in the lazy sense — these are the two
-    /// domains this appliance is known to use, both established by evidence
-    /// rather than assumption and both already written down in `MemoriesView`
-    /// for the same reason: `SageRitual.memoryDomain` is where it files what it
-    /// is told, and `mynah-home` is where its own work lives on the owner's
-    /// node. Discovery exists to *add* to this when a shared domain has been
-    /// granted, not to establish it.
+    /// Not a guess and not a default in the lazy sense: it is the home domain
+    /// this appliance's own vendored node is configured with, and the one the
+    /// owner's node independently assigns it. Discovery exists to *add* to this
+    /// once the node has been asked, not to establish it.
     ///
-    /// **Recall has to work while `sage_status` does not.** With no fallback,
-    /// a node that never answers the question leaves recall unscoped, which
-    /// 11.16.4 refuses outright — so the owner's memory would be unreachable
-    /// for as long as that bug lives.
-    public static let wellKnown = [SageRitual.memoryDomain, "mynah-home"]
+    /// **Recall has to work while `sage_status` does not.** With no fallback, a
+    /// node that never answers the question leaves recall unscoped, which
+    /// 11.16.4 refuses outright — so the owner's memory would be unreachable for
+    /// as long as that bug lives.
+    ///
+    /// **This was two domains and they are now one.** It read
+    /// `[SageRitual.memoryDomain, "mynah-home"]`, which was two names for two
+    /// places while `memoryDomain` was `voice-interface` — a subject belonging
+    /// to another agent. Correcting that constant collapsed the pair into the
+    /// same string twice, which is how a list of "the domains we are known to
+    /// use" quietly became a list of one domain searched twice. Written out
+    /// rather than derived, so the next person to change `memoryDomain` cannot
+    /// do the same thing by accident.
+    public static let wellKnown = ["mynah-home"]
 
     /// The search order, falling back when nothing has been discovered.
     public var searchOrder: [String] { domains.isEmpty ? Self.wellKnown : domains }
@@ -109,13 +115,43 @@ public struct ReadableDomains: Codable, Equatable, Sendable {
 
     /// Reads a `sage_status` reply into a search order.
     ///
-    /// `home_domain` leads because it is where this agent's own work lives.
-    /// `writesTo` follows and is included **whether or not the node listed it**:
-    /// `by_domain` reports what the caller can currently see, and a domain with
-    /// nothing in it yet is still the domain the next `sage_remember` lands in.
-    /// Everything else the node named comes after, so a granted shared domain is
-    /// searched but never ahead of the appliance's own.
-    public static func fromStatus(_ reply: String, writesTo: String) -> ReadableDomains? {
+    /// `home_domain` leads because it is where this agent's own work lives, and
+    /// the rest of what it owns follows. **The subjects this agent owns are the
+    /// answer, and they come from the node rather than from a constant here.**
+    ///
+    /// ## This read `by_domain`, and app-v26 does not send it
+    ///
+    /// The previous version took `home_domain`, then a `writesTo` the caller
+    /// passed in, then every key of `by_domain`. On the owner's node — SAGE
+    /// 11.17.9, app-v26 — `toolStatus` returns `callerBoundedStatus`, which
+    /// emits `owned_domains`, `writable_domains` and `readable_domains` and
+    /// never `by_domain`. SAGE's own route-security test asserts `by_domain` is
+    /// *forbidden* in a caller-scoped response, so it is not coming back.
+    ///
+    /// The effect was visible in his log and nobody read it:
+    ///
+    ///     2026-08-03 18:42  recall is scoped to mynah-home, voice-interface,
+    ///                       agent-104bda8bb082, … (about seven hundred more)
+    ///     2026-08-05 19:52  recall is scoped to mynah-home, voice-interface
+    ///
+    /// Both are wrong and they are wrong in opposite directions. Seven hundred
+    /// subjects is every domain the caller may *read* — most of them other
+    /// people's projects — ordered arbitrarily and searched one after another.
+    /// Two is whatever survived the key vanishing. Neither was chosen.
+    ///
+    /// ## Owned, not readable
+    ///
+    /// The owner's ruling, 5 August, on being shown that recall covered two of
+    /// seventeen readable subjects: *"that is correct - that means the rbac is
+    /// working as intended"*. Readable is not the right set — it is everything
+    /// policy and provenance let this agent see, which on his node is most of
+    /// his working life. Owned is: the subjects this appliance is responsible
+    /// for, which is where the answer to "what did I tell you" actually lives.
+    ///
+    /// So `readable_domains` is deliberately not read here, though it is right
+    /// there in the reply. A wider net would look like an improvement and would
+    /// quietly widen recall past what he confirmed he wants.
+    public static func fromStatus(_ reply: String) -> ReadableDomains? {
         guard let status = SageReply.object(in: reply) else { return nil }
         var ordered: [String] = []
         func add(_ domain: String?) {
@@ -123,14 +159,35 @@ public struct ReadableDomains: Codable, Equatable, Sendable {
             ordered.append(domain)
         }
         add(status["home_domain"] as? String)
-        add(writesTo)
-        if let counts = status["by_domain"] as? [String: Any] {
-            // Sorted, so two boots in a row produce the same order and the
-            // cached file does not churn for a dictionary's iteration order.
-            for domain in counts.keys.sorted() { add(domain) }
-        }
+        // Sorted, so two boots in a row produce the same order and the cached
+        // file does not churn for an array the node may reorder.
+        for domain in (status["owned_domains"] as? [String] ?? []).sorted() { add(domain) }
         guard !ordered.isEmpty else { return nil }
         return ReadableDomains(domains: ordered, checkedAt: Date())
+    }
+
+    /// Where a write belongs: the subject this agent is responsible for.
+    ///
+    /// **Separate from the search order because it used to be a constant, and
+    /// the constant named a domain belonging to somebody else.**
+    /// `SageRitual.memoryDomain` was `voice-interface`, chosen when this
+    /// appliance owned nothing and an administrator was going to transfer that
+    /// subject to it. The transfer never happened. On the owner's node
+    /// `voice-interface` is readable and is not in `writable_domains`, and it
+    /// belongs to a different agent — so every episodic turn Mynah recorded went
+    /// into another agent's subject.
+    ///
+    /// The owner, 5 August: *"we should make it default to its own home domain
+    /// bro - voice-interface is YOUR DOMAIN - we will transfer it back to you"*.
+    ///
+    /// Asked rather than assumed, for the reason the whole of this file exists:
+    /// a hardcoded domain is a claim about a node's configuration made months
+    /// earlier, and it fails silently when it stops being true.
+    public static func homeDomain(inStatus reply: String) -> String? {
+        guard let status = SageReply.object(in: reply),
+              let home = status["home_domain"] as? String,
+              !home.isEmpty else { return nil }
+        return home
     }
 }
 

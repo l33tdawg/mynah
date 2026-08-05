@@ -109,10 +109,10 @@ final class ProactiveReplyCollectionTests: XCTestCase {
             return XCTFail("the poll recorded no observation")
         }
         XCTAssertTrue(observation.contains("No conversation with the owner"))
-        guard case .string(let domain)? = tools.arguments.first?["domain"] else {
-            return XCTFail("the poll wrote outside a named domain")
-        }
-        XCTAssertEqual(domain, SageRitual.memoryDomain)
+        // No domain, so the node files it wherever this agent's work belongs.
+        // This asserted a named one and passed while the name was another
+        // agent's subject — see `testEveryTurnIsRecordedWithSage`.
+        XCTAssertNil(tools.arguments.first?["domain"])
     }
 
     /// **The ledger is what stops a timer becoming a nag.** A poll every half
