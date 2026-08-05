@@ -1029,6 +1029,22 @@ func runDaemon(_ arguments: [String]) -> Never {
             },
             log: { note($0) }
         )
+        // **The same prompt-cache work the daemon has done since 1.5.x, on the
+        // surface where latency is actually audible.**
+        //
+        // Ollama serves one slot, so the checkpoint belongs to whoever spoke
+        // last. Without this the call never planted one — so every call turn
+        // paid full prefill, *and* the first Signal message after a call did
+        // too, because an unanchored call turn evicts the thread's anchor. The
+        // daemon measures that cost next door: 12.0s and 2,613 tokens.
+        //
+        // After the reply is spoken, not inside `answer` — see `onTurnSpoken`.
+        // Awaited rather than detached, deliberately: one slot means a second
+        // anchor in flight queues or thrashes rather than overlapping.
+        await callServer.onTurnSpoken {
+            await callLoop.anchorPromptCache(history: await callHistory.recent())
+        }
+
         // Detached, so a call that fails to start never stops Signal working.
         // The socket is the only thing //call needs; everything else about the
         // appliance carries on without it.

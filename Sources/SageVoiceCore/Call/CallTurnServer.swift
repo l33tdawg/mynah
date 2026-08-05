@@ -129,6 +129,10 @@ public actor CallTurnServer {
     /// opened a call with "last we talked, you were heading to bed" on an
     /// evening whose actual last exchange had been about tonkatsu shops.
     private var recentMessages: @Sendable () async -> String?
+
+    /// See `onTurnSpoken`. Does nothing until the daemon that owns the model
+    /// hands it something, which is the same shape as `recentMessages`.
+    private var afterSpeaking: @Sendable () async -> Void = {}
     private let log: @Sendable (String) -> Void
 
     private var listening: Int32 = -1
@@ -218,6 +222,21 @@ public actor CallTurnServer {
     /// Where finished transcripts are posted.
     public func onTranscript(_ deliver: @escaping @Sendable (String) async -> Void) {
         deliverTranscript = deliver
+    }
+
+    /// Housekeeping to run once a turn has actually been spoken.
+    ///
+    /// **The distinction the daemon already makes, and this surface did not
+    /// have anywhere to make.** `answer` returns before a word is synthesised,
+    /// so anything hung off it is paid for in dead air on the caller's ear.
+    /// This runs after `replyEnd` — the caller is listening to the answer rather
+    /// than waiting for it, which is precisely when the appliance is free.
+    ///
+    /// Awaited rather than detached. What goes here is `anchorPromptCache`, and
+    /// Ollama serves one slot: two anchors in flight queue against each other or
+    /// thrash the KV cache, which costs more than it saves.
+    public func onTurnSpoken(_ housekeeping: @escaping @Sendable () async -> Void) {
+        afterSpeaking = housekeeping
     }
 
     public static func defaultSocket(
@@ -936,6 +955,10 @@ public actor CallTurnServer {
                 + "thought in \(seconds(recognised, thought))s, "
                 + "spoke in \(seconds(thought, firstSpoken ?? thought))s "
                 + "— talking after \(seconds(started, firstSpoken ?? thought))s")
+
+            // The answer is on its way to the caller's ear; the appliance is
+            // free until they speak again. See `onTurnSpoken`.
+            await afterSpeaking()
         } catch is CancellationError {
             return
         } catch CallFrameWriter.Failure.callEnded {
@@ -1279,24 +1302,46 @@ func withoutBlockingTheActor<T: Sendable>(
 /// just now.
 public actor CallHistory {
     private var messages: [BrainMessage] = []
-    private let limit: Int
+    private let turns: Int
 
-    public init(limit: Int = 24) {
-        self.limit = limit
+    /// Twelve exchanges, counted as the daemon counts them.
+    ///
+    /// **Turns, not messages, and that is the whole point.** This was
+    /// `suffix(24)` over raw messages, which slides by one on nearly every
+    /// append — so the byte prefix the model is asked to prefill moved almost
+    /// every turn, and Ollama's KV checkpoint matched nothing. Cutting only at a
+    /// user message means the prefix is stable until a turn genuinely falls out
+    /// of the window.
+    public init(keepingLastTurns turns: Int = 12) {
+        self.turns = turns
     }
 
     public func recent() -> [BrainMessage] {
         messages
     }
 
+    /// **The daemon's own filter, called rather than reimplemented.**
+    ///
+    /// This stored `conversation.dropFirst()` unfiltered: assistant tool-call
+    /// turns and whole `.toolResult` messages included, and a result can run to
+    /// six thousand characters. The daemon strips those through
+    /// `conversationOnly` for a reason it writes down — with last turn's tool
+    /// output still in context a 4B model concludes it already has the facts and
+    /// stops calling the tool — and the call path had neither that protection
+    /// nor the tokens back.
+    ///
+    /// Calling the daemon's function instead of copying it is deliberate. A
+    /// second copy of this idea is exactly how the two surfaces drifted apart in
+    /// the first place, and `conversationOnly` has since grown a fix (the empty
+    /// assistant turn that bricks a thread) that a copy here would not have.
+    ///
+    /// No `dropFirst` any more either: that assumed message zero is the system
+    /// prompt, and `conversationOnly` drops every system message wherever it is.
     public func remember(_ conversation: [BrainMessage]) {
-        // The first message is the system prompt, which ToolLoop supplies each
-        // time. Passing it back would stack a second copy on every turn.
-        var kept = Array(conversation.dropFirst())
-        if kept.count > limit {
-            kept = Array(kept.suffix(limit))
-        }
-        messages = kept
+        messages = VoiceBridgeDaemon.trimmed(
+            VoiceBridgeDaemon.conversationOnly(conversation),
+            keepingLastTurns: turns
+        )
     }
 
     public func forget() {
