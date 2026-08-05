@@ -72,9 +72,14 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
 
     /// What the node says about this agent, or that it has never heard of it.
     public enum Standing: Sendable, Equatable {
-        /// Found, with its mask.
-        case registered(mask: UInt32)
-        /// The roster came back and this agent is not in it. Normal on a first
+        /// The node answered about the caller that signed the question.
+        ///
+        /// **This carried a bare `mask: UInt32` until 1.7.5**, read out of an
+        /// unsigned roster row that on any 11.17.x node comes back `401`. It now
+        /// carries the node's own statement — see `ApplianceStanding` for why a
+        /// signed self-report is the only thing that can answer this at all.
+        case registered(ApplianceStanding)
+        /// The node answered and does not know this agent. Normal on a first
         /// run before the first boot completes; a fault if it persists.
         case notRegistered
         /// The node could not be reached or did not answer usefully. NOT the
@@ -98,8 +103,11 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     /// is what stops someone re-introducing the warn-on-any-denial bug that a
     /// test caught here once already. Not for owner-facing display: nothing a
     /// person reads should contain this number.
-    public var mask: UInt32? {
-        if case .registered(let mask) = standing { return mask }
+    public var mask: UInt32? { self.reported?.capabilities }
+
+    /// The node's own statement, when it made one.
+    public var reported: ApplianceStanding? {
+        if case .registered(let standing) = self.standing { return standing }
         return nil
     }
 
@@ -122,24 +130,51 @@ public struct ApplianceWriteReadiness: Sendable, Equatable {
     /// have to tell them something true.
     ///
     /// So the signal is not "is it restricted" but "has anybody looked at it".
-    /// A mask that is still the untouched self-registration default means no
-    /// administrator has, which is the state SAGE itself calls pending review.
-    /// If an assigned profile turns out to be wrong, the refusal speaks for
-    /// itself through `SageRitual.WriteDenial`, with the server's own reason.
+    ///
+    /// ## This was `mask == 30`, and it could not fire in any state
+    ///
+    /// Two independent reasons, either of which alone was fatal. The mask was
+    /// read from an unsigned `GET /v1/agents`, which answers `401` on every
+    /// 11.17.x node — so `mask` was always nil and `standing` was always
+    /// `.unknown`. And even with the read working, the appliance's live mask is
+    /// **31**, not 30, so the equality could not hold. The Ready-screen warning
+    /// that exists to catch a never-reviewed appliance key was dead from both
+    /// ends at once.
+    ///
+    /// It now asks the node instead of inferring: `approval_required` and
+    /// `can_write` are stated in a signed `sage_status`, which is necessarily
+    /// about whoever signed it. See `ApplianceStanding`.
+    ///
+    /// The exclusion that used to be the interesting part is now free. Warning
+    /// on "any write denial" would keep shouting after the owner had done
+    /// everything correctly — the Companion profile still carries all three
+    /// write denials, and the one surviving route is a domain the agent owns.
+    /// Reading `approval_required` cannot make that mistake, because it is the
+    /// node reporting a review state rather than us reconstructing one.
     public var needsTheOwner: Bool {
-        mask == Capability.pendingReview
+        self.reported?.needsReview ?? false
     }
 
     /// Whether an administrator has assigned this agent the named profile for a
     /// co-located voice appliance. Not a promise that writes will succeed — that
-    /// additionally needs an owned domain, which is not visible from here.
+    /// additionally needs an owned domain.
+    ///
+    /// **Read as a name now, and that was a third dead guard.** This was
+    /// `mask == Capability.companion`, which is 15. The owner's node reports
+    /// `profile: "companion"` alongside `capabilities: 31` — companion plus the
+    /// federated-delivery denial — so the appliance held the profile and the
+    /// predicate for it was false.
     public var hasCompanionProfile: Bool {
-        mask == Capability.companion
+        self.reported?.profile?.lowercased() == "companion"
     }
 
-    /// Reading is unaffected by every bit here — the mask restricts writing and
-    /// federated delivery. Bit 1 *widens* reading rather than narrowing it.
-    public var canRead: Bool { true }
+    /// What the node says about reading, rather than what the bits imply.
+    ///
+    /// Still true in every state it has been observed in — the mask restricts
+    /// writing and federated delivery, and bit 1 *widens* reading rather than
+    /// narrowing it — but a hardcoded `true` is a claim this type is in no
+    /// position to make, and the node states the answer.
+    public var canRead: Bool { self.reported?.canRead ?? true }
 
     /// Deliberately not the inverse of `needsTheOwner`.
     ///
@@ -410,34 +445,77 @@ extension ApplianceWriteReadiness {
 
 // MARK: - Asking the node
 
-/// Reads the appliance's own standing from the node's public agent roster.
+/// Asks the node about the appliance, **signed as the appliance**.
 ///
-/// Unauthenticated on purpose, and that is a property of the endpoint rather
-/// than a shortcut: `GET /v1/agents` needs no signature, so this works at setup
-/// before any identity has been established and from the daemon without holding
-/// a signing context open.
+/// ## This read an unsigned roster until 1.7.5, and never once succeeded
+///
+/// The old comment here said `GET /v1/agents` "needs no signature, so this works
+/// at setup before any identity has been established". That was false on every
+/// node this product has shipped against. The route sits inside the group that
+/// applies `Ed25519AuthMiddleware` and is additionally wrapped in
+/// `appV23PipelineAgentBoundary`, which 403s any non-active caller; only
+/// `/health` and `/ready` are public. Measured on the owner's node on 5 August
+/// 2026: `/v1/agents` → `401 Missing authentication headers`, `/health` → `200`.
+///
+/// So every call landed in `.unknown(...)`, `needsTheOwner` was permanently
+/// false, and the Ready-screen warning that exists to catch a never-reviewed
+/// appliance key could not fire in any state. Nothing reported this, because a
+/// check that silently answers "I don't know" looks exactly like a check that
+/// answers "all fine".
+///
+/// The premise underneath the mistake is worth naming, because it is the same
+/// one that put the wrong agent id in `SageAgentIdentity`: a *developer's* MCP
+/// session on this Mac signs with more standing than the appliance, so a SAGE
+/// surface verified through it green-lights screens that are broken for Mynah.
+/// The route was almost certainly checked, and checked as the wrong caller.
+///
+/// ## Why signing is not the obstacle it was taken for
+///
+/// The worry the old comment encodes is real — this runs at setup, before an
+/// identity exists. That is handled by `checkStartingNodeIfNeeded`, which starts
+/// a node and mints the key, and by the no-identity branch below returning
+/// `.unknown` rather than a verdict. There is no state in which an unsigned read
+/// was necessary, and one in which it was actively wrong.
 public struct ApplianceWriteReadinessCheck: Sendable {
 
-    private let endpoint: URL
-    private let session: URLSession
+    /// Asks the node `sage_status` and returns its raw reply.
+    ///
+    /// Injected so the window can hand over the connection it already holds.
+    /// `SageMemoryStore` keeps one long-lived `sage-gui mcp` child signing as
+    /// the appliance, and a second child would be a second process answering as
+    /// the same identity — which this codebase has already paid for once.
+    public typealias StatusSource = @Sendable () async throws -> String
 
-    public init(endpoint: URL? = nil, timeout: TimeInterval = 5) {
-        self.endpoint = endpoint ?? Self.defaultEndpoint()
-        // No cookies, no credentials, no caching, and no redirect off loopback.
-        self.session = LoopbackSecurity.makeSession(timeout: timeout)
+    private let status: StatusSource
+
+    public init(status: StatusSource? = nil, timeout: TimeInterval = 30) {
+        self.status = status ?? { try await Self.signedStatus(timeout: timeout) }
     }
 
-    /// `127.0.0.1:8080` is the shipped REST default. `SAGE_API_URL` overrides it
-    /// for a node running elsewhere, and is ignored unless it points at this
-    /// machine — a mask read from a stranger's node would be somebody else's
-    /// permissions reported as the owner's.
-    public static func defaultEndpoint(
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> URL {
-        let fallback = URL(string: "http://127.0.0.1:8080")!
-        let configured = environment["SAGE_API_URL"].flatMap(URL.init(string:))
-        let base = LoopbackSecurity.isLoopback(configured) ? (configured ?? fallback) : fallback
-        return base.appendingPathComponent("v1/agents")
+    /// The default source: a short-lived signed MCP connection.
+    ///
+    /// Resolved the way `sage-voiced` and the Memories page resolve it, so all
+    /// three operate the same node rather than whichever binary each happened to
+    /// find — `SageNodeChoice` is the owner's rule that an already-installed
+    /// SAGE is used and left alone.
+    ///
+    /// The environment is pinned to the appliance's. Without it the node derives
+    /// identity from the launch working directory, which would make the `cd` in
+    /// a launch script decide whose standing this reports.
+    static func signedStatus(timeout: TimeInterval) async throws -> String {
+        guard let executable = SageNodeChoice.resolve(
+            vendored: SageNodeLocator.vendoredExecutableURL()
+        )?.executable else {
+            throw MCPClientError.missingExecutable("no SAGE node on this Mac to ask")
+        }
+        let client = MCPClient(
+            executableURL: executable,
+            arguments: ["mcp"],
+            environment: MynahIdentity.applianceEnvironment(),
+            requestTimeoutSeconds: timeout
+        )
+        defer { client.stop() }
+        return try await client.call(name: SageRitual.Tool.status, arguments: [:])
     }
 
     public func check(
@@ -511,37 +589,51 @@ public struct ApplianceWriteReadinessCheck: Sendable {
     }
 
     private func roster(for agentID: String) async throws -> ApplianceWriteReadiness {
-        try LoopbackSecurity.requireLoopback(endpoint)
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
-        try LoopbackSecurity.verifyResponseOrigin(response, expected: endpoint)
-        guard let code = (response as? HTTPURLResponse)?.statusCode, code == 200 else {
-            return ApplianceWriteReadiness(agentID: agentID, standing: .unknown("the node did not answer"))
-        }
-        return ApplianceWriteReadiness(
+        ApplianceWriteReadiness(
             agentID: agentID,
-            standing: Self.standing(inRoster: data, for: agentID)
+            standing: Self.standing(inStatus: try await status(), expecting: agentID)
         )
     }
 
-    /// Finds this agent's row and reads its mask.
+    /// Reads a signed `sage_status` reply into standing.
     ///
-    /// An absent `capabilities` field means unrestricted, and that is the
-    /// documented meaning rather than a convenient reading of a missing key:
-    /// agents already registered when app-v22 activated keep mask `0`, and the
-    /// REST layer overlays live policy onto legacy rows so a stale zero cannot
-    /// make a restricted agent look unrestricted.
-    static func standing(inRoster data: Data, for agentID: String) -> ApplianceWriteReadiness.Standing {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let agents = root["agents"] as? [[String: Any]] else {
+    /// ## The one check a roster could not do
+    ///
+    /// The reply is compared against the key this Mac signs with, and a
+    /// disagreement is reported as `.unknown` rather than silently accepted.
+    /// That is not defensive padding — it is the check that would have caught
+    /// the bug in `SageAgentIdentity`, where a comment asserted with total
+    /// confidence that the appliance signed as an id belonging to a developer's
+    /// MCP session on the same machine.
+    ///
+    /// It is only possible because the answer is signed. A roster row can be
+    /// matched by name or by id and both match the wrong agent; a signed reply
+    /// is *by construction* about whoever signed it, so "does the node's answer
+    /// name the key I hold" is a real question with a real answer.
+    ///
+    /// Reported as unknown rather than as a fault because the honest reading is
+    /// "this appliance cannot tell whose standing it just read", and telling an
+    /// owner their permissions are wrong on that basis would be worse than
+    /// saying nothing.
+    static func standing(
+        inStatus reply: String,
+        expecting agentID: String
+    ) -> ApplianceWriteReadiness.Standing {
+        guard let reported = ApplianceStanding.fromStatus(reply) else {
             return .unknown("the node's answer could not be read")
         }
-        for agent in agents where (agent["agent_id"] as? String)?.lowercased() == agentID.lowercased() {
-            let mask = (agent["capabilities"] as? NSNumber)?.uint32Value ?? 0
-            return .registered(mask: mask)
+        // An empty `agent_id` is an older node that does not echo it, not a
+        // mismatch. Only a stated, different id is evidence of one.
+        if let signed = reported.agentID, !signed.isEmpty,
+           signed.lowercased() != agentID.lowercased() {
+            return .unknown(
+                "the node answered for agent \(signed.prefix(16)), "
+                    + "but this Mac signs as \(agentID.prefix(16))"
+            )
         }
-        return .notRegistered
+        // `pending_review` is the node naming the state this whole type exists
+        // for, so it is honoured even when the booleans below it look clear.
+        if reported.registrationStatus == "unregistered" { return .notRegistered }
+        return .registered(reported)
     }
 }

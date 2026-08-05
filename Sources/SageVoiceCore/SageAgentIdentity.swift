@@ -17,31 +17,51 @@ import Foundation
 ///     nothing registers this key any more. On the author's machine it derives
 ///     to `17641c48…`, which is genuinely absent from the roster.
 ///   * `MynahIdentity.applianceKeyURL()` — the identity everything actually
-///     signs as. On the author's machine it derives to `1ab7aa10…`, the node's
-///     active `agent/sage-voice-bridge`. It has since moved to
-///     `~/.sage/agents/mynah/agent.key`, where CEREBRUM can find it; the bytes
-///     and therefore the id are unchanged, which is the whole point of that
-///     migration.
+///     signs as. It has since moved to `~/.sage/agents/mynah/agent.key`, where
+///     CEREBRUM can find it; the bytes and therefore the id are unchanged,
+///     which is the whole point of that migration.
 ///
-/// Both were checked against the live node before this file was written.
+/// ## Which agent that is, and how to find out rather than believe this
 ///
-/// ## A correction, because the earlier version of this comment was evidence
+/// **The appliance signs as `74140c2d…`.** On the owner's node that is the
+/// agent displayed as *"Mynah - Sage Voice Bridge"*, registered name
+/// `agent-74140c2d`, provider `audit`.
 ///
-/// This said the pinned key derived to `74140c2d…`, "which is the row named
-/// 'Mynah - Sage Voice Bridge'". Every word of that was observed and it still
-/// pointed at the wrong key. `74140c2d…` *was* a row under that name — because
-/// `sage_inception` auto-registers whatever key signs it, and the row it had
-/// created was `pending_review`. A pending row and an active one look identical
-/// through the only question that was asked, "does a row exist".
+/// `1ab7aa10…` is a *different agent*: `agent/sage-voice-bridge`, the Claude
+/// Code MCP identity belonging to this repository. It is a developer key, and
+/// it holds more standing than the appliance does. Confusing the two is not an
+/// academic error — it is how the owner's messages once reached strangers.
 ///
-/// The question that separates them is **status**, and the node answers it
-/// plainly: `sage_find_agent` lists only active agents, and it returns exactly
-/// one for this appliance. So an id checked against the live node is worth
-/// nothing here unless the check was for an *active* registration — finding the
-/// name you expected is the failure mode, not the confirmation.
+/// **This comment used to assert the opposite, in a section headed "A
+/// correction", and said both ids had been "checked against the live node".**
+/// That is why the paragraph below matters more than the two hex strings above.
 ///
-/// See `MynahIdentity.migrateApplianceKeyIfNeeded` for how the wrong key came
-/// to be pinned in the first place.
+/// The retraction reasoned like this: `74140c2d…` was a row created by
+/// `sage_inception` auto-registering whatever key signed it, and that row was
+/// `pending_review`, so an active row under the expected name must be the real
+/// one. The premise was probably true when it was written. The inference was
+/// not, and the conclusion is false today — `74140c2d…` is `active`, and
+/// `1ab7aa10…` was never the appliance at all.
+///
+/// The reason it went wrong is worth more than the fix. Every question it
+/// asked — does a row exist under this name, is that row active — is a question
+/// a *developer's* key passes too, because the developer's key is also
+/// registered, also active, and also named after this project. A roster row
+/// proves nothing about which key file a process signs with.
+///
+/// So do not trust the hex above. Ask the appliance's own signature:
+///
+///     Run `sage_status` signed as the appliance and read `agent_id`.
+///
+/// That is the one check that cannot be answered by the wrong key, because the
+/// answer *is* the signature. It is also the route `ApplianceWriteReadiness`
+/// and the Memories page now read standing from, for the same reason. Verifying
+/// any SAGE surface through a developer's own MCP connection green-lights
+/// screens that are broken for Mynah — which is precisely how a 401 on a roster
+/// came to be read as "the appliance cannot report its own standing".
+///
+/// See `MynahIdentity.migrateApplianceKeyIfNeeded` for how a wrong key came to
+/// be pinned in the first place.
 ///
 /// Matching on the name is not merely less exact, it is actively wrong over
 /// time: `SageRitual.adoptDisplayName` deliberately lets an operator's rename in

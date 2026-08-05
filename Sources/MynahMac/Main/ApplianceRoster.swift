@@ -29,15 +29,32 @@ private let rosterLog = MynahLog(category: "roster")
 ///
 /// A roster a few hours stale is fine. The failure this avoids is not staleness.
 ///
-/// ## Why it is still REST
+/// ## Why REST still supplies the names — and why the old reason was wrong
 ///
-/// There is no MCP enumeration to move to. `sage_find_agent` needs a name and
-/// answers about one agent; `sage_status.by_agent` gives ids with no names,
-/// roles or clearances. So "get it from MCP" is not buildable today, and he
-/// offered the alternative himself in the same sentence.
+/// This said: *"There is no MCP enumeration to move to. `sage_find_agent` needs
+/// a name and answers about one agent; `sage_status.by_agent` gives ids with no
+/// names, roles or clearances."*
 ///
-/// `AgentDirectorySource` is the seam for when it is. One type conforms, this
-/// store's initialiser takes it, and nothing else changes — the same shape as
+/// **Both halves of that are false.** `by_agent` does not appear anywhere in
+/// 11.17.x's tool surface — a caller-scoped `sage_status` is forbidden from
+/// returning per-agent breakdowns at all, which SAGE's own route-security test
+/// asserts. And `sage_directory` *is* the enumeration it says does not exist:
+/// its own reference describes it as listing "recipients this signed caller is
+/// currently authorized to address", each row carrying display name, immutable
+/// registered name, provider, exact `agent_id`, and local/federated provenance.
+/// That is the owner's ruling — *"you only see the agents you can actually talk
+/// to"* — answered in one signed call.
+///
+/// So the honest position today is that `MCPAgentDirectory` takes candidate
+/// *names* from REST and puts every one to `sage_find_agent` for the verdict,
+/// and `sage_directory` would replace both halves with a single signed read.
+/// That change is worth making and is deliberately not being made here: #51 was
+/// about a comment asserting something untrue, and swapping the source would
+/// change what this page shows the owner, which is a decision to take on purpose
+/// rather than as a side effect of correcting prose. Filed separately.
+///
+/// `AgentDirectorySource` is the seam. One type conforms, this store's
+/// initialiser takes it, and nothing else changes — the same shape as
 /// `AgentSubjectSource`, and for the same reason.
 @MainActor
 @Observable

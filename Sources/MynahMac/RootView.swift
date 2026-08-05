@@ -369,7 +369,16 @@ struct ReadyStage: View {
         // Starts a node if nothing is listening, because on a Mac that never had
         // SAGE nothing ever did: Mynah only spawns `sage-gui mcp`, which is a
         // client. Lazy, so a Mac already running SAGE is untouched.
-        .task { writeReadiness = await ApplianceWriteReadinessCheck().checkStartingNodeIfNeeded() }
+        // Asked over the connection this window already holds, rather than
+        // opening a second one. `SageMemoryStore` keeps one long-lived
+        // `sage-gui mcp` child signing as the appliance; a second child would be
+        // a second process answering as the same identity, and this codebase has
+        // already paid once for two things believing they were the appliance.
+        .task {
+            writeReadiness = await ApplianceWriteReadinessCheck(
+                status: { try await SageMemoryStore.shared.toolProvider().call(name: "sage_status", arguments: [:]) }
+            ).checkStartingNodeIfNeeded()
+        }
         // Polled rather than read once, because this is the one number on the
         // screen that is *expected* to change while somebody watches it. Five
         // seconds is slower than a block and fast enough that the remaining

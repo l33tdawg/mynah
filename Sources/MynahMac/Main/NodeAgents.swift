@@ -518,9 +518,21 @@ protocol AgentDirectorySource: Sendable {
 /// rather than assumed. This Mac's node is encrypted, so `/v1/dashboard/stats`,
 /// `/v1/dashboard/tasks` and `/v1/dashboard/network/agents` all answer `401
 /// {"login_required":true}` to an unsigned local caller, and
-/// `/v1/access/grants/{agent_id}` answers 401 as well. `/v1/agents` is public
-/// and answered in full. The whole screen is built on what a locked node will
-/// still say, which is why it works at all.
+/// `/v1/access/grants/{agent_id}` answers 401 as well.
+///
+/// **`/v1/agents` is not public either, and that was believed until 1.7.5.**
+/// Measured on the owner's node on 5 August 2026: `GET /v1/agents` → `401
+/// Missing authentication headers`; only `/health` and `/ready` answer unsigned.
+/// The route sits inside the group that applies `Ed25519AuthMiddleware` and is
+/// wrapped in `appV23PipelineAgentBoundary`, which 403s any non-active caller.
+///
+/// It very likely *was* public when this comment was written and the boundary
+/// closed underneath it. Either way, "the whole screen is built on what a locked
+/// node will still say" is no longer true of this type, and
+/// `ApplianceWriteReadinessCheck` — which was built on the same belief — silently
+/// reported "I don't know" for every launch until it was moved to a signed
+/// `sage_status`. `MCPAgentDirectory` is what the Agents page actually uses; this
+/// supplies candidate names to it and nothing the page claims rests on it.
 struct NodeAgentDirectory: AgentDirectorySource {
 
     private let endpoint: URL

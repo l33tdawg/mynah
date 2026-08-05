@@ -815,6 +815,20 @@ final class MemoriesModel {
     /// answer usually is "nothing changed".
     private(set) var isRefreshing = false
 
+    /// **What the node says about Mynah itself**, read once per visit.
+    ///
+    /// #6, and the premise it was filed under was wrong. This was blocked on
+    /// `GET /v1/agents` returning 401 — read as "the appliance cannot report its
+    /// own standing" — when in fact a 401 on a *roster* says nothing about a
+    /// caller's ability to report on itself. `sage_status` is signed, so the
+    /// answer is necessarily about whoever asked, and it states home domain,
+    /// profile, approval and the writable set outright.
+    ///
+    /// nil means not asked yet or not answerable. The header draws nothing in
+    /// that case: a screen that has not asked must not answer, which is the same
+    /// rule `ApplianceRoster.Phase.notAsked` exists for.
+    private(set) var standing: ApplianceStanding?
+
     /// Topics offered in the filter, taken from what has been loaded. It is
     /// only ever a superset of nothing — a topic cannot appear here unless a
     /// memory in it exists — so the menu never promises an empty result.
@@ -1011,11 +1025,31 @@ final class MemoriesModel {
     /// re-entry still asks the node — quietly, behind what is already drawn, and
     /// changing only what actually changed.
     func loadIfNeeded() async {
+        await loadStanding()
         guard !memories.isEmpty || phase != .loading else {
             await load()
             return
         }
         await refresh()
+    }
+
+    /// Asks the node who Mynah is and what it may do, over the connection this
+    /// screen already holds.
+    ///
+    /// Failure is silence. This is a line of context beside a list that works,
+    /// so a node that will not answer costs the owner nothing and owes them no
+    /// banner — `SageRitual.WriteDenial` still speaks with the server's own
+    /// reason if a write is actually refused.
+    private func loadStanding() async {
+        guard standing == nil else { return }
+        do {
+            let reply = try await SageMemoryStore.shared.toolProvider().call(
+                name: "sage_status", arguments: [:]
+            )
+            standing = ApplianceStanding.fromStatus(reply)
+        } catch {
+            log.error("could not read Mynah's own standing: \(error)")
+        }
     }
 
     /// Ask again without taking anything off the screen.
@@ -1576,10 +1610,67 @@ struct MemoriesView: View {
                     .mynahFont(.title1)
                     .foregroundStyle(Palette.ink.primary)
                 countLine
+                standingLine
             }
             Spacer(minLength: 0)
             clearControl
         }
+    }
+
+    /// **Where Mynah files things, and whether it is allowed to.**
+    ///
+    /// #6. The question this answers used to be unanswerable from here: the page
+    /// knew what it had *read*, and nothing about the agent doing the reading.
+    /// So an appliance writing into another agent's subject — which is exactly
+    /// what 1.7.4 found it doing for months — looked identical on this screen to
+    /// one filing correctly.
+    ///
+    /// Deliberately one quiet line rather than a panel. This is context beside a
+    /// list, not a dashboard: the owner comes here to see what Mynah knows, and
+    /// the useful addition is where it goes and whether it lands.
+    ///
+    /// **Draws nothing until the node has answered.** A screen that has not
+    /// asked must not answer, and an absent line is honest where an empty one
+    /// would read as "Mynah owns nothing".
+    @ViewBuilder
+    private var standingLine: some View {
+        if let standing = model.standing {
+            Text(Self.standingSentence(standing))
+                .mynahFont(.callout)
+                .foregroundStyle(standing.needsReview ? Palette.ink.primary : Palette.ink.secondary)
+        }
+    }
+
+    /// The sentence, in the owner's vocabulary.
+    ///
+    /// "Subject", never "domain" — SAGE's word stays in the code and the owner
+    /// reads what the rest of the app already says to them. Same rule
+    /// `ApplianceWriteReadiness` follows, and `OneVerbForMemoryTests` polices.
+    ///
+    /// The review state leads when there is one, because it is the only part
+    /// that asks the owner to do something. Everything else is description.
+    static func standingSentence(_ standing: ApplianceStanding) -> String {
+        if standing.needsReview {
+            return "Waiting to be approved in CEREBRUM — nothing is being saved yet."
+        }
+        guard let home = standing.homeDomain, !home.isEmpty else {
+            // Signed, answered, and did not name a home. Says only what it knows.
+            return standing.writableDomains.isEmpty
+                ? "No subject of its own yet."
+                : "Files into \(list(standing.writableDomains))."
+        }
+        // The others it may write to, if there are any beyond home. Named rather
+        // than counted: three names are shorter than "and 2 more" is useful, and
+        // the owner has to recognise them to act on them.
+        let alsoWritable = standing.writableDomains.filter { $0 != home }
+        guard !alsoWritable.isEmpty else { return "Files into \(home)." }
+        return "Files into \(home), and may also write to \(list(alsoWritable))."
+    }
+
+    private static func list(_ names: [String]) -> String {
+        guard let last = names.last else { return "" }
+        guard names.count > 1 else { return last }
+        return names.dropLast().joined(separator: ", ") + " and " + last
     }
 
     /// Clears what Mynah filed — and only that.

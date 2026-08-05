@@ -15,15 +15,28 @@ import XCTest
 /// the wrong time or inventing a second remedy.
 final class ReadyStagePromiseTests: XCTestCase {
 
-    private func readiness(mask: UInt32) -> ApplianceWriteReadiness {
-        ApplianceWriteReadiness(agentID: "74140c2d", standing: .registered(mask: mask))
+    /// An agent the node says is still waiting for a person to look at it.
+    private func awaitingReview(mask: UInt32) -> ApplianceWriteReadiness {
+        ApplianceWriteReadiness(agentID: "74140c2d", standing: .registered(ApplianceStanding(
+            registrationStatus: "pending_review",
+            approvalRequired: true,
+            canWrite: false,
+            capabilities: mask
+        )))
+    }
+
+    /// An agent an administrator has assigned a profile to.
+    private func reviewed(mask: UInt32, profile: String? = nil) -> ApplianceWriteReadiness {
+        ApplianceWriteReadiness(agentID: "74140c2d", standing: .registered(ApplianceStanding(
+            profile: profile, approvalRequired: false, canWrite: true, capabilities: mask
+        )))
     }
 
     // MARK: When it speaks
 
     /// The one state that means nobody has looked at this key.
     func testItWarnsOnTheUntouchedSelfRegistrationMask() {
-        let pending = readiness(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let pending = awaitingReview(mask: ApplianceWriteReadiness.Capability.pendingReview)
 
         XCTAssertTrue(pending.needsTheOwner)
         XCTAssertNotNil(pending.headline)
@@ -38,7 +51,9 @@ final class ReadyStagePromiseTests: XCTestCase {
     /// warning that never clears teaches people to ignore the one place we have
     /// to tell them something true.
     func testItIsSilentOnceAnAdministratorHasAssignedTheCompanionProfile() {
-        let companion = readiness(mask: ApplianceWriteReadiness.Capability.companion)
+        let companion = reviewed(
+            mask: ApplianceWriteReadiness.Capability.companion, profile: "companion"
+        )
 
         XCTAssertFalse(companion.needsTheOwner, "the Ready screen would warn at a correctly set up appliance")
         XCTAssertNil(companion.headline)
@@ -56,8 +71,8 @@ final class ReadyStagePromiseTests: XCTestCase {
     }
 
     func testItIsSilentOnAnUnrestrictedKey() {
-        XCTAssertFalse(readiness(mask: 0).needsTheOwner)
-        XCTAssertNil(readiness(mask: 0).shortRemedy)
+        XCTAssertFalse(reviewed(mask: 0).needsTheOwner)
+        XCTAssertNil(reviewed(mask: 0).shortRemedy)
     }
 
     /// An appliance that cannot see its node must not tell the owner their
@@ -72,21 +87,37 @@ final class ReadyStagePromiseTests: XCTestCase {
         XCTAssertNil(unregistered.shortRemedy)
     }
 
-    /// **The number, pinned against a live observation.**
+    /// **The number is no longer what decides, and that is the 1.7.5 fix.**
     ///
-    /// `GET /v1/agents` on the owner's own node reports capability mask **30**
-    /// for the appliance today, and `needsTheOwner` is an equality test — so if
-    /// this constant ever drifts from what SAGE actually stamps on a
-    /// self-registered key, the warning does not become wrong, it becomes
-    /// *silent*. That is the same failure shape as the ghost identity and the
-    /// scoped backlog: everything keeps working, nothing throws, and the screen
-    /// quietly goes back to promising something it cannot deliver.
+    /// This test used to say: `GET /v1/agents` reports mask 30 for the appliance
+    /// today, `needsTheOwner` is an equality test, so if the constant drifts
+    /// from what SAGE stamps the warning does not become wrong — it becomes
+    /// *silent*.
     ///
-    /// 30 = deny shared write (2) · deny owning a subject (4) · deny foreign
-    /// write (8) · deny other SAGEs (16).
-    func testTheSelfRegistrationMaskIsStillTheNumberTheNodeStamps() {
+    /// It was right about the failure mode and wrong about the mask, and the
+    /// warning was silent the whole time it was green. Two reasons, either
+    /// fatal on its own: `/v1/agents` answers `401` to an unsigned caller, so
+    /// no mask was ever read; and the appliance's live mask is **31**, not 30.
+    ///
+    /// The lesson is not "pin a better number" — it is that a fact about the
+    /// node has no business being reconstructed here at all. `approval_required`
+    /// is stated in a signed `sage_status`, so there is nothing left to drift.
+    /// The mask stays only to explain *which* restriction applies.
+    func testTheWarningIsTrippedByTheNodesStatementAndNotByAMask() {
+        // The old trigger, at both the mask it was written for and the one the
+        // node actually reports. Neither warns on its own any more.
+        for stamped: UInt32 in [30, 31] {
+            XCTAssertFalse(
+                reviewed(mask: stamped).needsTheOwner,
+                "mask \(stamped) tripped the warning by itself; that is the guess this replaced"
+            )
+            XCTAssertTrue(
+                awaitingReview(mask: stamped).needsTheOwner,
+                "the node said approval is required at mask \(stamped) and the screen stayed quiet"
+            )
+        }
+        // Kept because `reasons` still explains the bits to the owner.
         XCTAssertEqual(ApplianceWriteReadiness.Capability.pendingReview, 30)
-        XCTAssertTrue(readiness(mask: 30).needsTheOwner, "the live mask no longer trips the warning")
     }
 
     /// Companion must stay a different number, or the trap closes: the screen
@@ -104,7 +135,7 @@ final class ReadyStagePromiseTests: XCTestCase {
     /// verbatim, so if a second phrasing is ever written here this stops being
     /// true and the surfaces start disagreeing.
     func testTheShortRemedyPointsAtThePageThatExplainsIt() {
-        let remedy = try? XCTUnwrap(readiness(mask: ApplianceWriteReadiness.Capability.pendingReview).shortRemedy)
+        let remedy = try? XCTUnwrap(awaitingReview(mask: ApplianceWriteReadiness.Capability.pendingReview).shortRemedy)
 
         XCTAssertEqual(remedy?.contains("Agents page"), true)
         // The long version belongs on that page, not on a screen somebody is
@@ -116,7 +147,7 @@ final class ReadyStagePromiseTests: XCTestCase {
     /// so a reinstall is the instinctive fix that provably cannot work. Neither
     /// string may suggest it.
     func testNeitherRemedySuggestsReinstalling() {
-        let pending = readiness(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let pending = awaitingReview(mask: ApplianceWriteReadiness.Capability.pendingReview)
         for sentence in [pending.headline, pending.shortRemedy, pending.remedy].compactMap({ $0 }) {
             let said = sentence.lowercased()
             for wrong in ["reinstall", "install it again", "install it once more", "set it up again",
@@ -130,7 +161,7 @@ final class ReadyStagePromiseTests: XCTestCase {
     /// own word is domain and stays in the code. The Ready banner renders these
     /// strings, so it inherits the rule rather than restating it.
     func testTheOwnerFacingStringsSaySubjectRatherThanDomain() {
-        let pending = readiness(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let pending = awaitingReview(mask: ApplianceWriteReadiness.Capability.pendingReview)
         for sentence in [pending.headline, pending.shortRemedy].compactMap({ $0 }) {
             XCTAssertFalse(
                 sentence.lowercased().contains("domain"),

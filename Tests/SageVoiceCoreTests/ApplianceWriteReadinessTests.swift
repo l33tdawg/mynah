@@ -9,17 +9,37 @@ import XCTest
 /// two apart.
 final class ApplianceWriteReadinessTests: XCTestCase {
 
-    private func readiness(mask: UInt32) -> ApplianceWriteReadiness {
-        ApplianceWriteReadiness(agentID: String(repeating: "a", count: 64), standing: .registered(mask: mask))
+    /// An agent an administrator has looked at: no approval outstanding, writes
+    /// allowed. The mask still describes *which* restrictions apply.
+    private func reviewed(mask: UInt32, profile: String? = nil) -> ApplianceWriteReadiness {
+        readiness(ApplianceStanding(
+            profile: profile, approvalRequired: false, canWrite: true, capabilities: mask
+        ))
     }
 
-    // MARK: - The mask that actually shipped
+    /// An agent the node says is still waiting for a person.
+    private func awaitingReview(mask: UInt32) -> ApplianceWriteReadiness {
+        readiness(ApplianceStanding(
+            registrationStatus: "pending_review",
+            approvalRequired: true,
+            canWrite: false,
+            capabilities: mask
+        ))
+    }
+
+    private func readiness(_ reported: ApplianceStanding) -> ApplianceWriteReadiness {
+        ApplianceWriteReadiness(
+            agentID: String(repeating: "a", count: 64),
+            standing: .registered(reported)
+        )
+    }
+
+    // MARK: - The state that actually shipped
 
     /// 30 is `DefaultSelfRegisteredAgentCapabilities` — what consensus assigns
-    /// to any key self-registering after app-v22, and what the appliance on the
-    /// author's node carries.
-    func testTheRealMaskIsReportedAsUnableToRemember() {
-        let state = readiness(mask: 30)
+    /// to any key self-registering after app-v22.
+    func testTheUnreviewedStateIsReportedAsUnableToRemember() {
+        let state = awaitingReview(mask: 30)
         XCTAssertTrue(state.needsTheOwner)
         XCTAssertFalse(state.canSave)
         // "remember", not "save" — see the note on `headline`. The distinction
@@ -28,49 +48,75 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         XCTAssertEqual(state.headline, "Approve Mynah in CEREBRUM so it can start remembering.")
     }
 
-    /// Reading is never what the mask takes away, and saying otherwise would
-    /// send the owner looking for the wrong problem.
+    /// Reading is never what this takes away, and saying otherwise would send
+    /// the owner looking for the wrong problem.
     func testReadingIsNeverReportedAsBroken() {
-        XCTAssertTrue(readiness(mask: 30).canRead)
-        XCTAssertTrue(readiness(mask: 15).canRead)
+        XCTAssertTrue(awaitingReview(mask: 30).canRead)
+        XCTAssertTrue(reviewed(mask: 15).canRead)
     }
 
     /// The confirmed remedy: the Companion profile plus an owned domain.
     ///
-    /// This is the test that caught the design being wrong. Mask 15 still
-    /// carries all three write denials — under it the one surviving route is a
-    /// domain the agent owns, which is precisely what the remedy sets up. An
-    /// implementation that warned on "any write denial" therefore kept warning
-    /// after the owner had done everything right, and could never stop, because
-    /// domain ownership is not visible without a signature. A warning that
-    /// never clears teaches people to ignore the one channel we have.
+    /// This is the test that caught the design being wrong the first time. Mask
+    /// 15 still carries all three write denials — under it the one surviving
+    /// route is a domain the agent owns, which is precisely what the remedy sets
+    /// up. An implementation that warned on "any write denial" therefore kept
+    /// warning after the owner had done everything right, and could never stop.
+    /// A warning that never clears teaches people to ignore the one channel we
+    /// have.
     func testCompanionProfileStopsTheWarningEvenThoughItStillDeniesWrites() {
-        let state = readiness(mask: 15)
-        XCTAssertNotEqual(
-            state.standing, .registered(mask: 0),
-            "mask 15 is restricted — this test is meaningless if that stops being true"
-        )
+        let state = reviewed(mask: 15, profile: "companion")
+        XCTAssertNotEqual(state.mask, 0, "mask 15 is restricted — this test is meaningless otherwise")
         XCTAssertTrue(state.hasCompanionProfile)
         XCTAssertFalse(state.needsTheOwner, "an assigned profile is not an unreviewed one")
         XCTAssertNil(state.headline)
     }
 
-    /// The signal is "has anybody looked at this agent", not "is it
-    /// restricted". Only the untouched self-registration default means nobody
-    /// has.
-    func testOnlyTheUnreviewedDefaultRaisesTheWarning() {
-        XCTAssertTrue(readiness(mask: 30).needsTheOwner)
-        for assigned: UInt32 in [15, 14, 12, 8, 4, 2, 31] where assigned != 30 {
+    /// **The live mask is 31, and the old predicate tested for 15.**
+    ///
+    /// Measured from a `sage_status` signed as the appliance on the owner's
+    /// node: `profile: "companion"` with `capabilities: 31` — the Companion
+    /// profile plus the federated-delivery denial. So the appliance held the
+    /// profile and `hasCompanionProfile` was false, which is the third dead
+    /// guard #51 found in this file. Reading the node's name for the profile
+    /// cannot drift with the bits.
+    func testTheCompanionProfileIsRecognisedAtTheMaskTheNodeReallyReports() {
+        let live = reviewed(mask: 31, profile: "companion")
+        XCTAssertTrue(
+            live.hasCompanionProfile,
+            "mask 31 with profile 'companion' is what the owner's node reports; testing mask == 15 missed it"
+        )
+        XCTAssertFalse(live.needsTheOwner)
+    }
+
+    /// **The signal is the node's own statement, not a mask this code decodes.**
+    ///
+    /// The old rule was `mask == 30`, and it could not fire in any state: the
+    /// mask came from an unsigned `/v1/agents` that answers 401, and the live
+    /// mask is 31 anyway. Now a restricted-looking mask says nothing on its own,
+    /// and `approval_required` says everything.
+    func testOnlyTheNodeSayingSoRaisesTheWarning() {
+        for restricted: UInt32 in [30, 31, 15, 14, 12, 8, 4, 2, 0] {
             XCTAssertFalse(
-                readiness(mask: assigned).needsTheOwner,
-                "mask \(assigned) was assigned by an administrator; a refusal speaks for itself"
+                reviewed(mask: restricted).needsTheOwner,
+                "mask \(restricted) was assigned by an administrator; a refusal speaks for itself"
+            )
+            XCTAssertTrue(
+                awaitingReview(mask: restricted).needsTheOwner,
+                "the node said approval is required and mask \(restricted) argued it out of it"
             )
         }
     }
 
+    /// Writing refused outright is the other half, and it is stated too.
+    func testARefusedWriteRaisesTheWarningWithoutAnApprovalFlag() {
+        let refused = readiness(ApplianceStanding(approvalRequired: false, canWrite: false, capabilities: 30))
+        XCTAssertTrue(refused.needsTheOwner)
+    }
+
     /// Nineteen of the twenty agents on the owner's node.
     func testAnUnrestrictedAgentSaysNothingAtAll() {
-        let state = readiness(mask: 0)
+        let state = reviewed(mask: 0)
         XCTAssertFalse(state.needsTheOwner)
         XCTAssertNil(state.headline)
         XCTAssertNil(state.remedy)
@@ -81,13 +127,13 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// Bit 16 blocks federated delivery and nothing about saving locally, so on
     /// its own it must not raise a "can't save" alarm.
     func testFederationOnlyRestrictionIsNotAWriteProblem() {
-        XCTAssertFalse(readiness(mask: 16).needsTheOwner)
+        XCTAssertFalse(reviewed(mask: 16).needsTheOwner)
     }
 
     // MARK: - What it says
 
     func testEachWriteDenialIsExplainedWithoutANumber() {
-        let reasons = readiness(mask: 30).reasons
+        let reasons = awaitingReview(mask: 30).reasons
         XCTAssertEqual(reasons.count, 3)
         for reason in reasons {
             for leak in ["mask", "bit", "capabilit", "app-v22", "RBAC", "30"] {
@@ -105,7 +151,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// grant is consulted. The SAGE team confirmed it: "a level-2 grant is not
     /// a substitute."
     func testTheRemedyNeverAdvisesALevelTwoGrant() {
-        let remedy = readiness(mask: 30).remedy ?? ""
+        let remedy = awaitingReview(mask: 30).remedy ?? ""
         XCTAssertFalse(remedy.lowercased().contains("level 2"))
         XCTAssertFalse(remedy.lowercased().contains("level-2"))
         XCTAssertTrue(remedy.contains("companion profile"))
@@ -118,14 +164,14 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// It must say the consequence the owner actually cares about, which is not
     /// "permissions are wrong" but "it will forget everything you say".
     func testTheRemedySaysWhatHappensUntilItIsFixed() {
-        XCTAssertTrue(readiness(mask: 30).remedy?.contains("won't remember anything") == true)
+        XCTAssertTrue(awaitingReview(mask: 30).remedy?.contains("won't remember anything") == true)
     }
 
     /// The remedy tells somebody to assign a specific subject; if that name is
     /// spelled by hand it can drift from the one the appliance actually writes,
     /// and the failure is silent again.
     func testTheRemedyNamesTheSubjectTheApplianceActuallyWrites() {
-        XCTAssertTrue(readiness(mask: 30).remedy?.contains(SageRitual.memoryDomain) == true)
+        XCTAssertTrue(awaitingReview(mask: 30).remedy?.contains(SageRitual.memoryDomain) == true)
     }
 
     /// One verb across every owner-facing sentence.
@@ -137,7 +183,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// behind is how a codebase ends up with two vocabularies, which is what
     /// collapsing "subject" versus "domain" was about.
     func testEveryOwnerFacingSentenceUsesTheSameVerb() {
-        let state = readiness(mask: 30)
+        let state = awaitingReview(mask: 30)
         for sentence in [state.headline, state.remedy, state.shortRemedy].compactMap({ $0 }) {
             XCTAssertFalse(
                 sentence.lowercased().contains("save"),
@@ -152,7 +198,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// Owner-facing strings say "subject". SAGE's word is "domain" and the code
     /// keeps it, but no owner-facing string in this app says it.
     func testOwnerFacingStringsNeverSayDomain() {
-        let state = readiness(mask: 30)
+        let state = awaitingReview(mask: 30)
         let owner = ([state.headline, state.remedy, state.shortRemedy].compactMap { $0 } + state.reasons)
         for sentence in owner {
             XCTAssertFalse(
@@ -181,37 +227,129 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         XCTAssertNil(state.headline)
     }
 
-    // MARK: - Reading the roster
+    // MARK: - Reading a signed sage_status
 
-    func testTheMaskIsReadFromTheAgentsRoster() {
-        let id = "74140c2d6b710a1812f609031a541995d7da551096c4d0fc4d74b9d9013912db"
-        let json = Data("""
-        {"agents":[{"agent_id":"\(id)","name":"Mynah - Sage Voice Bridge","capabilities":30}]}
-        """.utf8)
-        XCTAssertEqual(ApplianceWriteReadinessCheck.standing(inRoster: json, for: id), .registered(mask: 30))
-    }
-
-    /// An absent `capabilities` field means unrestricted — the documented
-    /// meaning, not a convenient reading. Nineteen rows on the owner's node
-    /// omit it entirely.
-    func testAnAbsentCapabilitiesFieldMeansUnrestricted() {
-        let id = String(repeating: "b", count: 64)
-        let json = Data("{\"agents\":[{\"agent_id\":\"\(id)\",\"name\":\"x\"}]}".utf8)
-        XCTAssertEqual(ApplianceWriteReadinessCheck.standing(inRoster: json, for: id), .registered(mask: 0))
-    }
-
-    func testAnAgentMissingFromTheRosterIsNotRegistered() {
-        let json = Data("{\"agents\":[{\"agent_id\":\"ffff\",\"name\":\"someone else\"}]}".utf8)
-        XCTAssertEqual(
-            ApplianceWriteReadinessCheck.standing(inRoster: json, for: String(repeating: "c", count: 64)),
-            .notRegistered
+    /// **Read from a captured reply, not one written from memory.**
+    ///
+    /// `sage_status` signed as the appliance on the owner's node, 11.17.9 /
+    /// app-v26, with only the agent id redacted. The 1.7.4 sweep found ~30 tests
+    /// across 8 files asserting over SAGE shapes the node had stopped producing,
+    /// every one a literal somebody wrote by hand and every one green; of the
+    /// files in `Tests/Fixtures`, the ones that have never rotted are the ones
+    /// captured from the thing they stand for.
+    private func capturedStatus() throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/sage_status-11.17.9-appv26-appliance.json"),
+            encoding: .utf8
         )
     }
 
+    private var capturedAgentID: String { String(repeating: "a", count: 64) }
+
+    func testStandingIsReadFromTheNodesOwnStatement() throws {
+        let standing = ApplianceWriteReadinessCheck.standing(
+            inStatus: try capturedStatus(), expecting: capturedAgentID
+        )
+        guard case .registered(let reported) = standing else {
+            return XCTFail("the captured live reply did not read as a registration: \(standing)")
+        }
+        XCTAssertEqual(reported.capabilities, 31, "the live mask, which the old mask == 30 guard could never match")
+        XCTAssertEqual(reported.profile, "companion")
+        XCTAssertFalse(reported.approvalRequired)
+        XCTAssertTrue(reported.canWrite)
+        XCTAssertEqual(reported.homeDomain, "mynah-home")
+        XCTAssertEqual(reported.writableDomains, ["mynah-home", "sage-v3.6.0-audit", "user-interaction"])
+        XCTAssertTrue(reported.readableDomainsTruncated, "the node said its own list is cut short")
+    }
+
+    /// And the whole appliance reads as working, which it is.
+    func testTheOwnersLiveApplianceIsNotWarnedAbout() throws {
+        let state = ApplianceWriteReadiness(
+            agentID: capturedAgentID,
+            standing: ApplianceWriteReadinessCheck.standing(
+                inStatus: try capturedStatus(), expecting: capturedAgentID
+            )
+        )
+        XCTAssertTrue(state.hasCompanionProfile)
+        XCTAssertFalse(state.needsTheOwner)
+        XCTAssertNil(state.headline)
+        XCTAssertTrue(state.canSave)
+    }
+
+    /// **The check a roster could never do.**
+    ///
+    /// A signed reply is by construction about whoever signed it, so "does the
+    /// node's answer name the key I hold" has a real answer. This is the
+    /// question that would have caught the bug in `SageAgentIdentity`, where a
+    /// comment asserted the appliance signed as an id belonging to a developer's
+    /// MCP session on the same Mac — both are registered, both are active, and
+    /// both are named after this project, so every question a roster can be
+    /// asked says yes to both.
+    func testAReplyForADifferentAgentIsNotAcceptedAsOurOwn() throws {
+        let standing = ApplianceWriteReadinessCheck.standing(
+            inStatus: try capturedStatus(),
+            expecting: String(repeating: "b", count: 64)
+        )
+        guard case .unknown(let why) = standing else {
+            return XCTFail("a status signed by another key was read as this appliance's standing")
+        }
+        XCTAssertTrue(why.contains("aaaaaaaa"), why)
+    }
+
+    /// An older node that does not echo the id is not a mismatch.
+    func testAStatusWithNoAgentIDIsStillOurs() {
+        let standing = ApplianceWriteReadinessCheck.standing(
+            inStatus: #"{"approval_required": false, "can_write": true, "capabilities": 15}"#,
+            expecting: capturedAgentID
+        )
+        XCTAssertEqual(standing, .registered(ApplianceStanding(
+            approvalRequired: false, canWrite: true, capabilities: 15
+        )))
+    }
+
+    /// The leading auto-inception banner is still real on 11.17.10 — the node
+    /// prepends it on the first tool call of a session, separated by `---`. The
+    /// *trailing* `[SAGE] Reminder:` nudge has not existed since 11.16.1.
+    func testTheInceptionBannerDoesNotStopItParsing() throws {
+        let banner = "Welcome back. Your institutional memory is online.\n\n---\n\n"
+        let standing = ApplianceWriteReadinessCheck.standing(
+            inStatus: banner + (try capturedStatus()), expecting: capturedAgentID
+        )
+        guard case .registered = standing else {
+            return XCTFail("the banner the node really sends made the status unreadable: \(standing)")
+        }
+    }
+
     func testUnreadableAnswerIsUnknownRatherThanUnrestricted() {
-        guard case .unknown = ApplianceWriteReadinessCheck.standing(inRoster: Data("not json".utf8), for: "a") else {
+        guard case .unknown = ApplianceWriteReadinessCheck.standing(inStatus: "not json", expecting: "a") else {
             return XCTFail("a node answer we cannot parse must never read as 'no restrictions'")
         }
+    }
+
+    /// **The route the old check read is not public, and this proves it from the
+    /// source rather than from a comment.**
+    ///
+    /// The comment it replaces said `GET /v1/agents` "needs no signature". It
+    /// answers `401` on every 11.17.x node, so the readiness check landed in
+    /// `.unknown` every single time and the Ready-screen warning could not fire
+    /// in any state. Nothing noticed, because a check that silently answers "I
+    /// don't know" looks exactly like one that answers "all fine".
+    func testTheReadinessCheckNoLongerReadsTheUnsignedRoster() throws {
+        let scan = SwiftSourceScan(try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/SageVoiceCore/Setup/ApplianceWriteReadiness.swift"),
+            encoding: .utf8
+        ))
+        let hits = scan.indices(of: "\"v1/agents\"")
+        XCTAssertEqual(
+            hits, [],
+            "ApplianceWriteReadiness still builds a /v1/agents URL at line "
+                + hits.map { String(scan.line(of: $0)) }.joined(separator: ", ")
+                + " — that route answers 401 unsigned, so the warning it feeds cannot fire"
+        )
     }
 
     // MARK: - Identity
@@ -250,16 +388,16 @@ final class ApplianceWriteReadinessTests: XCTestCase {
 
     /// The whole path, against whatever SAGE is running on this machine.
     ///
-    /// Read-only: one unauthenticated GET, nothing signed and nothing written.
-    /// Skipped unless `SAGE_LIVE_NODE=1`, following the same convention as the
-    /// call test that dials a real relay — a test that needs a running node has
-    /// no business failing a build on a machine without one.
+    /// Read-only: one signed `sage_status`, which reports on the caller and
+    /// writes nothing. Skipped unless `SAGE_LIVE_NODE=1`, following the same
+    /// convention as the call test that dials a real relay — a test that needs a
+    /// running node has no business failing a build on a machine without one.
     ///
-    /// It asserts the shape rather than a particular mask, because the mask is
-    /// exactly what the owner is going to change. What it proves is the part
-    /// that unit tests cannot: that the appliance's key derives to an id that
-    /// is really on the roster, which is the step the Agents screen had
-    /// concluded was impossible.
+    /// **It signs as the appliance, and that is the point rather than a
+    /// detail.** The previous version made one unauthenticated GET, which is
+    /// exactly how this defect survived: a developer's own MCP session on this
+    /// Mac has more standing than Mynah, so a surface verified through it
+    /// green-lights screens that are broken for the appliance.
     func testAgainstTheLiveNode() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["SAGE_LIVE_NODE"] == "1",
@@ -270,12 +408,15 @@ final class ApplianceWriteReadinessTests: XCTestCase {
         XCTAssertEqual(id.count, 64)
 
         switch state.standing {
-        case .registered(let mask):
-            print("LIVE: appliance \(id.prefix(16)) is registered with capability mask \(mask)")
+        case .registered(let reported):
+            print("LIVE: appliance \(id.prefix(16)) profile=\(reported.profile ?? "none") "
+                + "mask=\(reported.capabilities.map(String.init) ?? "none") "
+                + "approval_required=\(reported.approvalRequired) can_write=\(reported.canWrite)")
+            print("LIVE: home=\(reported.homeDomain ?? "none") writable=\(reported.writableDomains)")
             print("LIVE: needsTheOwner=\(state.needsTheOwner) companion=\(state.hasCompanionProfile)")
             if let line = state.logLine { print("LIVE: \(line)") }
         case .notRegistered:
-            XCTFail("the appliance key derived to \(id.prefix(16)), which is not on the roster")
+            XCTFail("the node does not know the key this Mac signs as (\(id.prefix(16)))")
         case .unknown(let why):
             throw XCTSkip("no reachable SAGE node: \(why)")
         }
@@ -293,7 +434,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
             reasonCode: "shared_write_restricted",
             remedy: "Submit to the agent's owned non-shared home domain."
         )
-        let status = readiness(mask: 0).status(observing: denial)
+        let status = reviewed(mask: 0).status(observing: denial)
         XCTAssertEqual(status?.isObserved, true, "a clear mask silenced a refusal we watched happen")
         XCTAssertEqual(status?.remedy, "Submit to the agent's owned non-shared home domain.")
         XCTAssertEqual(status?.detail, denial.detail)
@@ -301,7 +442,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
 
     /// With no denial, the predictive half still speaks.
     func testThePredictionSpeaksWhenNothingHasBeenRefusedYet() {
-        let status = readiness(mask: 30).status(observing: nil)
+        let status = awaitingReview(mask: 30).status(observing: nil)
         XCTAssertEqual(status?.isObserved, false)
         XCTAssertNil(status?.detail, "there is no server sentence to quote yet")
         XCTAssertTrue(status?.remedy.contains("companion profile") == true)
@@ -310,15 +451,15 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// The rule the whole feature turns on: when Mynah is working, this state
     /// does not exist. No badge, no green tick, no "all good" row.
     func testAWorkingApplianceProducesNothingToRender() {
-        XCTAssertNil(readiness(mask: 0).status(observing: nil))
-        XCTAssertNil(readiness(mask: 15).status(observing: nil))
+        XCTAssertNil(reviewed(mask: 0).status(observing: nil))
+        XCTAssertNil(reviewed(mask: 15).status(observing: nil))
     }
 
     /// An older server sends no per-cause remedy, and that is not rare — it is
     /// every server before v11.14.2. Ours has to stand in.
     func testAnOlderServersDenialFallsBackToOurRemedy() {
         let denial = SageRitual.WriteDenial(domain: "voice-interface", detail: "access denied")
-        let status = readiness(mask: 30).status(observing: denial)
+        let status = awaitingReview(mask: 30).status(observing: denial)
         XCTAssertEqual(status?.isObserved, true)
         XCTAssertTrue(status?.remedy.contains("companion profile") == true)
     }
@@ -326,10 +467,10 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// One voice across both paths, so a screen cannot say one thing when it
     /// predicted and another when it observed.
     func testBothPathsUseTheSameHeadline() {
-        let observed = readiness(mask: 30).status(
+        let observed = awaitingReview(mask: 30).status(
             observing: SageRitual.WriteDenial(domain: "d", detail: "x")
         )
-        let predicted = readiness(mask: 30).status(observing: nil)
+        let predicted = awaitingReview(mask: 30).status(observing: nil)
         XCTAssertEqual(observed?.headline, predicted?.headline)
         XCTAssertEqual(observed?.headline, "Approve Mynah in CEREBRUM so it can start remembering.")
     }
@@ -345,7 +486,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// `testNeitherRemedySuggestsReinstalling` polices the wrong remedies; this
     /// polices the absence of a right one.
     func testTheOwnerIsToldWhatToDoRatherThanWhatIsWrong() throws {
-        let state = readiness(mask: ApplianceWriteReadiness.Capability.pendingReview)
+        let state = awaitingReview(mask: ApplianceWriteReadiness.Capability.pendingReview)
         let headline = try XCTUnwrap(state.headline)
         let short = try XCTUnwrap(state.shortRemedy)
 
@@ -373,7 +514,12 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     func testTheRemedyNamesTheAgentToApprove() throws {
         let state = ApplianceWriteReadiness(
             agentID: "1ab7aa10deadbeefcafef00d",
-            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+            standing: .registered(ApplianceStanding(
+                registrationStatus: "pending_review",
+                approvalRequired: true,
+                canWrite: false,
+                capabilities: ApplianceWriteReadiness.Capability.pendingReview
+            ))
         )
         XCTAssertTrue(try XCTUnwrap(state.remedy).contains("1ab7aa10deadbeef"))
     }
@@ -384,7 +530,12 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     func testAMissingAgentIDLeavesACompleteSentence() throws {
         let state = ApplianceWriteReadiness(
             agentID: nil,
-            standing: .registered(mask: ApplianceWriteReadiness.Capability.pendingReview)
+            standing: .registered(ApplianceStanding(
+                registrationStatus: "pending_review",
+                approvalRequired: true,
+                canWrite: false,
+                capabilities: ApplianceWriteReadiness.Capability.pendingReview
+            ))
         )
         let remedy = try XCTUnwrap(state.remedy)
         XCTAssertFalse(remedy.contains("id starts"))
@@ -403,7 +554,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// one this week: a true sentence that stopped being the whole truth
     /// because something else changed.
     func testTheRemedyNamesTheReadingItAlsoTurnsOn() {
-        let remedy = readiness(mask: 30).remedy ?? ""
+        let remedy = awaitingReview(mask: 30).remedy ?? ""
         XCTAssertTrue(
             remedy.contains("read across subjects it wasn't given"),
             "applying our advice opens reading and we do not say so"
@@ -418,14 +569,14 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// than alarming: reading lifts only to the agent's own clearance, so
     /// anything classified above stays invisible.
     func testTheDisclosureCarriesTheClearanceBound() {
-        XCTAssertTrue(readiness(mask: 30).remedy?.contains("up to its own clearance") == true)
+        XCTAssertTrue(awaitingReview(mask: 30).remedy?.contains("up to its own clearance") == true)
     }
 
     /// Stated evenly. The remedy is correct and the owner should apply it —
     /// wording that made the fix sound risky would discourage the right action
     /// in order to look careful, which is its own dishonesty.
     func testTheDisclosureIsNotWordedAsAWarning() {
-        let remedy = (readiness(mask: 30).remedy ?? "").lowercased()
+        let remedy = (awaitingReview(mask: 30).remedy ?? "").lowercased()
         for alarm in ["careful", "warning", "caution", "beware", "risk", "danger", "be aware"] {
             XCTAssertFalse(
                 remedy.contains(alarm),
@@ -439,7 +590,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// boot when the owner is waiting rather than reading, and off `reasons`,
     /// which describe today.
     func testTheDisclosureStaysOnTheRemedyAndNowhereElse() {
-        let state = readiness(mask: 30)
+        let state = awaitingReview(mask: 30)
         XCTAssertFalse(state.shortRemedy?.contains("read across") == true)
         for reason in state.reasons {
             XCTAssertFalse(reason.contains("read across"), "a consequence leaked into a present-tense fact")
@@ -448,7 +599,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
 
     /// And it says nothing at all when there is nothing to apply.
     func testAWorkingApplianceIsToldNoneOfThis() {
-        XCTAssertNil(readiness(mask: 15).remedy)
-        XCTAssertNil(readiness(mask: 0).remedy)
+        XCTAssertNil(reviewed(mask: 15).remedy)
+        XCTAssertNil(reviewed(mask: 0).remedy)
     }
 }
