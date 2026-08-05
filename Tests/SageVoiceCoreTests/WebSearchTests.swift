@@ -203,11 +203,21 @@ final class BraveSearchBackendTests: XCTestCase {
     /// **The order is the whole design, so it is asserted rather than assumed.**
     ///
     /// A key first, because a provider with a quota answers in ~200 ms and never
-    /// sees a challenge page. Then the browser, because a Mac already has an
-    /// engine and asking like a browser beats asking like a program. The raw
-    /// HTTP scrape stays last rather than being deleted: WebKit outside an app
-    /// bundle is the genuinely uncertain part of this, and a Mac where it will
-    /// not start must be no worse off than it was before.
+    /// sees a challenge page. The raw HTTP scrape stays last, as the floor.
+    ///
+    /// **The browser used to sit between them, unconditionally, and that is what
+    /// killed the appliance.** This comment used to say the scrape stayed last
+    /// because "WebKit outside an app bundle is the genuinely uncertain part of
+    /// this, and a Mac where it will not start must be no worse off than it was
+    /// before". Both halves were wrong. WebKit2 does not fail to start outside
+    /// an application — it traps the process — so the floor described here was
+    /// unreachable code that never ran once in the daemon, and a Mac where
+    /// WebKit "will not start" was not no-worse-off, it was dead. See
+    /// `BrowserEngineAvailability` and `NoBrowserEngineOutsideTheAppTests`.
+    ///
+    /// So the browser is now absent unless the caller proves it is an
+    /// application, and this test asserts that absence — because it is the
+    /// default every caller gets and the one the daemon must keep.
     func testBraveIsPreferredWhenAKeyIsPresent() {
         let empty = ProviderKeyStore(url: FileManager.default.temporaryDirectory
             .appendingPathComponent("keys-\(UUID().uuidString).json"))
@@ -221,6 +231,42 @@ final class BraveSearchBackendTests: XCTestCase {
         let without = WebSearchToolSource.defaultBackends(environment: [:], keys: empty)
         XCTAssertFalse(without.map(\.providerName).contains("Brave Search"))
         XCTAssertEqual(without.map(\.providerName).last, "DuckDuckGo", "the plain scrape must stay as the floor")
+    }
+
+    /// The default chain carries no browser engine, in either shape.
+    ///
+    /// Stated as an equality rather than a `contains` check on purpose: what
+    /// must hold is that the daemon's chain is *exactly* these providers, so a
+    /// fourth one appearing between them is a failure too. A caller that says
+    /// nothing about the browser is the daemon, the CLI, and this test runner —
+    /// none of which has an `NSApplication`, all of which would trap.
+    func testTheDefaultChainNeverCarriesTheBrowserEngine() {
+        let empty = ProviderKeyStore(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("keys-\(UUID().uuidString).json"))
+
+        XCTAssertEqual(
+            WebSearchToolSource.defaultBackends(environment: [:], keys: empty).map(\.providerName),
+            ["DuckDuckGo"],
+            """
+            the default provider chain is not exactly the keyless scrape. If \
+            "DuckDuckGo (browser)" is in there, every web search in sage-voiced \
+            traps the process on WKWebViewConfiguration.init and launchd restarts \
+            the appliance mid-answer.
+            """
+        )
+
+        XCTAssertEqual(
+            WebSearchToolSource.defaultBackends(
+                environment: ["BRAVE_SEARCH_API_KEY": "abc"],
+                keys: empty
+            ).map(\.providerName),
+            ["Brave Search", "DuckDuckGo"],
+            """
+            a Brave key must not reintroduce the browser behind it. It would not \
+            even be a rare path: the chain falls through on the first throttle, \
+            so a keyed daemon would crash on the first 429 rather than degrade.
+            """
+        )
     }
 
     /// **The bug that made every other search fix beside the point.** Brave was

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import OSLog
@@ -299,10 +300,23 @@ actor ToolLoopTurnEngine: TurnEngine {
     ///   file the daemon reads, because the window and Signal are one appliance
     ///   and a setting that applies to half of it is a bug waiting to be
     ///   reported. Injectable for tests; nothing else passes it.
+    /// - Parameter browserEngine: whether this process may start WebKit.
+    ///   Defaults to `.unavailable` like every other caller, even though this
+    ///   type only ever runs inside the window app — the one site that may say
+    ///   otherwise is `performConnect()`, which is main-actor isolated and can
+    ///   therefore read `NSApp`. A preview or a test that builds an engine gets
+    ///   the safe chain without having to know to ask for it.
+    ///
+    ///   It sits next to `allowsWebSearch`, which defaults *open*, and the two
+    ///   are not in tension: that one decides whether the owner gets a search
+    ///   tool at all, this one decides which engine answers it. Turning search
+    ///   off costs a capability; turning the browser on in the wrong process
+    ///   costs the process.
     init(
         backend: BrainBackend,
         memoryExecutable: URL,
         allowsWebSearch: Bool = true,
+        browserEngine: BrowserEngineAvailability = .unavailable,
         style: ReplyStyle = ReplyPreferences().style()
     ) {
         // The appliance's identity, not one of its own.
@@ -384,7 +398,9 @@ actor ToolLoopTurnEngine: TurnEngine {
             sources.append(
                 CompositeToolSource.Source(
                     label: "web",
-                    provider: WebSearchToolSource(backends: WebSearchToolSource.defaultBackends()),
+                    provider: WebSearchToolSource(
+                        backends: WebSearchToolSource.defaultBackends(browserEngine: browserEngine)
+                    ),
                     // The owner's phone is a long way from this Mac. "The
                     // internet lookup is down" must not read as "Mynah is down".
                     isRequired: false,
@@ -967,7 +983,29 @@ final class ConversationModel {
             return
         }
 
-        let candidate = ToolLoopTurnEngine(backend: backend, memoryExecutable: memory)
+        // **The one place in the appliance that may arm a browser engine, and
+        // it is here because of where `NSApp` can legally be read.**
+        //
+        // `performConnect()` is a method of `ConversationModel`, which is
+        // `@MainActor`, so the main-actor-isolated `NSApp` is readable
+        // synchronously. `ToolLoopTurnEngine.init` cannot do this — it belongs
+        // to an `actor`, and the daemon reaches the same chain builder from a
+        // non-main thread during start-up, where reading `NSApp` would mean an
+        // isolation hop. See `BrowserEngineAvailability`.
+        //
+        // `NSApp` is nil until an `NSApplication` exists and reading it does not
+        // create one. Under `@NSApplicationDelegateAdaptor` no view body runs
+        // before it exists, so this is non-nil by the time anything connects —
+        // and if it ever were nil the window would quietly fall back to the HTTP
+        // search provider rather than fail, which is why the resolved chain is
+        // logged below rather than assumed.
+        let browserEngine = BrowserEngineAvailability.hostedBy(NSApp)
+        conversationLog.info("search engine: browser \(browserEngine.isAvailable ? "armed" : "not armed")")
+        let candidate = ToolLoopTurnEngine(
+            backend: backend,
+            memoryExecutable: memory,
+            browserEngine: browserEngine
+        )
         do {
             // Reported onto the main actor rather than assigned directly: the
             // steps are announced from wherever the work runs, and the pill is

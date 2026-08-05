@@ -80,17 +80,29 @@ public final class WebSearchToolSource: ToolProviding {
     }
 
     /// The provider chain this machine can actually use, best first.
+    ///
+    /// - Parameter browserEngine: whether this process may start WebKit.
+    ///   **Defaults to `.unavailable`, and that default is load-bearing** — see
+    ///   `BrowserEngineAvailability`. Only the window app passes anything else.
+    ///
     /// - Note: reads the stored key as well as the environment. Environment-only
     ///   was the bug: nothing sets `BRAVE_SEARCH_API_KEY` on a shipped Mac — the
     ///   daemon is launched by launchd from a plist that never carried it — so
     ///   the keyed provider was unreachable in every install and the scraper
     ///   behind it took every query. `ProviderKeyStore` is the same 0600 file
-    ///   both processes already read for brain keys, so a key set once in
-    ///   Settings reaches the daemon without a restart dance or a Keychain
-    ///   prompt on an unattended reboot.
+    ///   both processes already read for brain keys, so a key set once reaches
+    ///   the daemon without a Keychain prompt on an unattended reboot.
+    ///
+    ///   It does **not** reach a *running* daemon: this is evaluated once per
+    ///   process, at start-up, and the array is frozen into the tool source that
+    ///   serves every turn for the life of the process. An earlier version of
+    ///   this note claimed a key set in Settings arrives "without a restart
+    ///   dance". That was wrong twice over — Settings has no control that writes
+    ///   this key at all, and the daemon would not re-read it if it did.
     public static func defaultBackends(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        keys: ProviderKeyStore = ProviderKeyStore()
+        keys: ProviderKeyStore = ProviderKeyStore(),
+        browserEngine: BrowserEngineAvailability = .unavailable
     ) -> [WebSearchBackend] {
         var backends: [WebSearchBackend] = []
         if let key = keys.key(forProvider: ProviderKeyStore.searchProvider, environment: environment),
@@ -102,11 +114,24 @@ public final class WebSearchToolSource: ToolProviding {
         // we using a scraper bro ? its running on the users machine right"* —
         // and on a Mac the browser engine is already there, so asking like a
         // browser costs a page load rather than a dependency.
-        backends.append(BrowserSearchBackend())
+        //
+        // **The `#if` is a portability check and was never a safety one.** It is
+        // true of every macOS build of both targets, so for two days it appended
+        // a `WKWebView` to the daemon's chain as readily as to the window's. The
+        // runtime test beside it is the one that tells the two apart.
+        if browserEngine.isAvailable {
+            backends.append(BrowserSearchBackend())
+        }
         #endif
-        // Kept last rather than replaced. WebKit outside an app bundle is the
-        // part of this that is genuinely uncertain, and a Mac where it will not
-        // start must be no worse off than it was before.
+        // Kept last: the floor nobody falls through.
+        //
+        // **This said the browser was "genuinely uncertain" and that a Mac where
+        // it will not start is "no worse off than it was before". Both halves
+        // were wrong, and the appliance paid for it.** WebKit outside an
+        // application does not fail to start — it traps the process. Nothing
+        // placed behind a `SIGTRAP` is a fallback, because nothing behind it
+        // runs: this line never once executed in the daemon, in the whole life
+        // of the browser backend, on any query. See `BrowserEngineAvailability`.
         backends.append(DuckDuckGoSearchBackend())
         return backends
     }
@@ -216,7 +241,7 @@ public final class WebSearchToolSource: ToolProviding {
                     // **Bounded, because a provider that never answers took the
                     // whole feature down for twenty-eight hours and eight
                     // releases.** `BrowserSearchBackend` is `@MainActor`, and
-                    // `sage-voiced` parks its main thread in a semaphore with
+                    // `sage-voiced` parked its main thread in a semaphore with
                     // nothing servicing the main queue — so the isolation hop
                     // never completed, `search` never returned, and the chain
                     // never reached the provider behind it. It logged nothing,
@@ -225,6 +250,15 @@ public final class WebSearchToolSource: ToolProviding {
                     // The chain's whole promise is that a provider which cannot
                     // answer degrades to one that can. That promise has to cover
                     // "does not answer at all", not only "throws".
+                    //
+                    // **And it cannot cover "kills the process", which is what
+                    // happened next.** Giving the daemon a main queue let that
+                    // isolation hop finally complete — so on 5 August the
+                    // `WKWebView` was reached for real and WebKit2 trapped.
+                    // A deadline no more survives a `SIGTRAP` than a `catch`
+                    // does. This bound is still right for a slow provider; it
+                    // was never what stood between the owner and a dead
+                    // appliance. `BrowserEngineAvailability` is.
                     let wanted = resultCount
                     return try await withDeadline(
                         giveUpOnAProviderAfter,
