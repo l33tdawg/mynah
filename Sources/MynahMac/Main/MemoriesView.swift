@@ -1028,7 +1028,28 @@ final class MemoriesModel {
         }
         guard !Task.isCancelled else { return }
 
-        if memories.count <= Self.pageSize, page.isComplete {
+        // **An incomplete page changes nothing at all.**
+        //
+        // Routing it to the additive branch was wrong and worse than the bug it
+        // fixed. That branch inserts unknown rows at the top without a re-sort,
+        // on the sound premise that a *whole* first page is the newest N of the
+        // whole set — so anything new in it is newer than everything on screen.
+        // A partial page is the newest N of a *subset*, so its rows can be older
+        // than the bottom of the list and still get pinned above it. And the
+        // additive branch never removes, so while any owned domain keeps
+        // failing — which `ownedDomains`' fallback pair can make permanent — a
+        // memory the owner asked Mynah to forget would stay on this screen for
+        // ever, telling him it is still remembered when it is not.
+        //
+        // A page that cannot testify about every domain is exactly the case
+        // `refresh()` already handles above: it is a failed background refresh.
+        // Keep what is on screen and say so in the log.
+        guard page.isComplete else {
+            log.error("background refresh saw only part of the owner's domains; keeping what is on screen")
+            return
+        }
+
+        if memories.count <= Self.pageSize {
             // Everything on screen is inside the window this page speaks for, so
             // it is the whole truth: new ones in, forgotten ones out.
             //
@@ -1600,7 +1621,17 @@ struct MemoriesView: View {
         // no task therefore told the owner he had nothing on his list while he
         // did, with nothing on screen naming a next action.
         if count == 0 {
-            return model.hasMore ? "None in the newest \(model.loadedCount)" : "Nothing yet"
+            // **Only on a shelf whose count and paging are the same list.**
+            //
+            // `count` is `files.count` on the Files shelf while `hasMore` and
+            // `loadedCount` describe memory paging, so this sentence read
+            // "None in the newest 20" above FilesBox's own honest "Nothing kept
+            // yet" — two contradictory lines on one screen, one of them counting
+            // something that is not on it and implying rows he cannot reach.
+            guard model.shelf != .files else { return "Nothing yet" }
+            return model.hasMore && model.loadedCount > 0
+                ? "None in the newest \(model.loadedCount)"
+                : "Nothing yet"
         }
         return count == 1 ? "1 thing" : "\(count) things"
     }

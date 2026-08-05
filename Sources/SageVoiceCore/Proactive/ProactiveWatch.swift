@@ -373,7 +373,11 @@ public struct ProactiveWatch: Sendable {
         }
         for task in tasks {
             guard let before = known[task.id], before != task.status else { continue }
-            lines.append("“\(task.title)” is now \(readable(task.status)).")
+            // Flattened like the other two. This line was left raw, which made
+            // the claim beside `relaysAnotherAgent` — that the injection risk is
+            // answered by not letting a title forge structure — false for a
+            // third of the digest.
+            lines.append("“\(flattened(task.title))” is now \(readable(task.status)).")
         }
         // Gone from the open list, which on this node means finished or dropped.
         // Which of the two is not knowable from an absence, so it does not claim
@@ -439,15 +443,26 @@ public struct ProactiveWatch: Sendable {
         // model that the owner's own list is somebody else's words is the worse
         // error, so the answer is to stop a title forging structure rather than
         // to mislabel the digest that carries it.
-        let flattened = title
+        let bounded = flattened(title)
+        guard let last = bounded.last else { return "" }
+        return ".!?…".contains(last) ? bounded : bounded + "."
+    }
+
+    /// A title made safe to interpolate, without being made into a sentence.
+    ///
+    /// Split out from `ending(_:)` because the status-change line supplies its
+    /// own full stop — `“\(x)” is now planned.` — so running the sentence-ender
+    /// over it produced `“Book the hotel.” is now planned.` Flattening and
+    /// bounding are what every line needs; the full stop is what only two of
+    /// them need.
+    static func flattened(_ title: String) -> String {
+        let oneLine = title
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let bounded = flattened.count > excerptCharacters
-            ? String(flattened.prefix(excerptCharacters)).trimmingCharacters(in: .whitespaces) + "…"
-            : flattened
-        guard let last = bounded.last else { return "" }
-        return ".!?…".contains(last) ? bounded : bounded + "."
+        return oneLine.count > excerptCharacters
+            ? String(oneLine.prefix(excerptCharacters)).trimmingCharacters(in: .whitespaces) + "…"
+            : oneLine
     }
 
     static func readable(_ status: String) -> String {

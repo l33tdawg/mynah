@@ -645,6 +645,15 @@ public actor CallTurnServer {
                 frame = try await withoutBlockingTheActor { try reader.next() }
             } catch CallFrameReader.Failure.closed {
                 log("[call] the call ended")
+                // **Before `postTranscript`, not at scope exit.**
+                //
+                // The `defer` below is the backstop and covers every other way
+                // out, but it fires *after* this body — so an abandoned turn
+                // that resumed during `postTranscript()`'s await was still live
+                // and still pushed its links message. Stopping it first is the
+                // difference between a turn that cannot file anything and one
+                // that merely usually does not.
+                endTheCurrentTurn()
                 idleWatch?.cancel()
                 lastCallEnded = Date()
                 rememberThisCall()
@@ -652,6 +661,15 @@ public actor CallTurnServer {
                 return
             } catch {
                 log("[call] the endpoint stopped: \(error)")
+                // **Before `postTranscript`, not at scope exit.**
+                //
+                // The `defer` below is the backstop and covers every other way
+                // out, but it fires *after* this body — so an abandoned turn
+                // that resumed during `postTranscript()`'s await was still live
+                // and still pushed its links message. Stopping it first is the
+                // difference between a turn that cannot file anything and one
+                // that merely usually does not.
+                endTheCurrentTurn()
                 idleWatch?.cancel()
                 lastCallEnded = Date()
                 rememberThisCall()

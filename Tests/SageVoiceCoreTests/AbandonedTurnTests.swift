@@ -284,3 +284,123 @@ private struct PlainVoice: SpeechSynthesizing {
         )
     }
 }
+
+/// A transcription that lands after the hang-up must not open a turn.
+///
+/// Round two of the 1.7.2 audit found that half the call fix — the
+/// `writer.isUsable` guard in `replaceTurn` and the `CallFrameWriter.isUsable`
+/// it reads — had no test at all: both could be deleted with the suite green.
+/// It was right. The other half (`endTheCurrentTurn`) is covered by
+/// `AbandonedTurnTests`, which never lands a transcription after the call ends.
+///
+/// This is the path that matters when recognition is slow: the utterance tasks
+/// the read loop spawns are not cancelled with the call, so one finishing after
+/// the hang-up would start a fresh turn, write `transcript.heard` into whatever
+/// call is current, and speak into a connection belonging to somebody else.
+final class LateTranscriptionTests: XCTestCase {
+
+    func testATranscriptionFinishingAfterTheHangUpStartsNoTurn() async throws {
+        let socket = CallCeilingTests.scratchSocket()
+        defer { try? FileManager.default.removeItem(at: socket) }
+
+        let recognising = SlowEar()
+        let logged = LateLog()
+        let server = CallTurnServer(
+            configuration: CallTurnServer.Configuration(socketURL: socket, turnCeilingSeconds: 30),
+            transcriber: recognising,
+            synthesizer: SilentVoice(),
+            answer: { _ in "The visa form is still open." },
+            log: { logged.add($0) }
+        )
+
+        let running = Task { try? await server.run() }
+        defer { running.cancel() }
+
+        let caller = try await CallCeilingTests.connect(to: socket)
+        CallCeilingTests.drain(caller)
+        try CallFrameWriter(descriptor: caller).send(.utterance(CallCeilingTests.aSecondOfSpeech()))
+
+        // Wait until recognition is genuinely in flight, then hang up under it.
+        let started = await recognising.waitUntilBusy(within: 10)
+        XCTAssertTrue(started, "recognition never started: \(logged.everything)")
+        close(caller)
+        try await Task.sleep(for: .milliseconds(400))
+
+        // Now let recognition finish. It must not open a turn.
+        await recognising.finish()
+        let refused = await logged.waitFor("recognised after the call ended", within: 10)
+
+        XCTAssertNotNil(
+            refused,
+            """
+            a transcription that landed after the hang-up opened a turn on the \
+            dead call. Everything logged: \(logged.everything)
+            """
+        )
+        XCTAssertFalse(
+            logged.everything.contains { $0.contains("replying:") },
+            "the late turn ran all the way into the reply path: \(logged.everything)"
+        )
+    }
+}
+
+/// Recognition the test can hold open across a hang-up.
+private actor SlowEar: AudioFileTranscribing {
+    private var busy = false
+    private var release: CheckedContinuation<Void, Never>?
+
+    func waitUntilBusy(within seconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if busy { return true }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return false
+    }
+
+    func finish() {
+        release?.resume()
+        release = nil
+    }
+
+    func transcribe(audioFile: URL, options: AudioTranscriptionOptions) async throws -> String {
+        busy = true
+        await withCheckedContinuation { release = $0 }
+        return "what's still open"
+    }
+}
+
+private final class LateLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+    var everything: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+    func waitFor(_ fragment: String, within seconds: TimeInterval) async -> String? {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if let hit = everything.first(where: { $0.localizedCaseInsensitiveContains(fragment) }) { return hit }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return nil
+    }
+}
+
+private struct SilentVoice: SpeechSynthesizing {
+    let identifier = "silent"
+    let defaultVoice = "none"
+    func isAvailable() async -> Bool { true }
+    func synthesize(_ request: SpeechRequest) async throws -> SynthesizedSpeech {
+        var wav = Data()
+        wav.append(contentsOf: Array("RIFF".utf8))
+        wav.append(contentsOf: [0, 0, 0, 0])
+        wav.append(contentsOf: Array("WAVE".utf8))
+        wav.append(contentsOf: Array("fmt ".utf8))
+        wav.append(contentsOf: [16, 0, 0, 0])
+        wav.append(contentsOf: [UInt8](repeating: 0, count: 16))
+        wav.append(contentsOf: Array("data".utf8))
+        wav.append(contentsOf: [4, 0, 0, 0])
+        wav.append(contentsOf: [0x10, 0x00, 0x20, 0x00])
+        return SynthesizedSpeech(wav: wav, sampleRate: 48_000, channelCount: 1,
+                                 duration: 0.001, timeToFirstAudio: 0, generationDuration: 0)
+    }
+}
