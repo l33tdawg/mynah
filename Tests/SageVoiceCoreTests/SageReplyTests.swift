@@ -119,7 +119,7 @@ final class SageReplyCallersTests: XCTestCase {
         // this failed by telling the owner nobody had written to them.
         let reply = withReminder("""
         {"count":1,"items":[
-          {"pipe_id":"p1","from":"Cerebrum","payload":"The quote came back.",
+          {"message_id":"p1","completed_at":"2026-08-05T09:15:00Z","counterparty":"Cerebrum","payload":"The quote came back.",
            "trust":"agent_untrusted","requires_result":false}]}
         """)
 
@@ -184,29 +184,48 @@ final class PipeReplyTests: XCTestCase {
         return ritual
     }
 
-    /// Seeding needs a turn that actually carries results — an empty array is
-    /// not a first look, it is a quiet turn.
+    /// Seeding needs a poll that actually carries an answered send — an empty
+    /// outbox is not a first look, it is a quiet one.
     private func seeded() async -> SageRitual {
         let ritual = ritual()
-        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
+        await ritual.noteResults(in: outbox(#"{"counterparty":"x","completed_at":"\#(then)","result":"old"}"#))
         _ = await ritual.drainReplies()
         return ritual
     }
 
-    private func turnAnswer(_ results: String) -> String {
+    /// A `sage_message_history(folder: "outbox")` answer.
+    ///
+    /// **Shaped after the capture, not after the old fixture.** The previous
+    /// version of this helper wrapped items in `pipe_results` and appended a
+    /// trailing `[SAGE] Reminder:` line, and both were wrong about the node —
+    /// `pipe_results` was removed at 11.17.9 and the trailing nudge has not
+    /// existed since 11.16.1. See `Tests/Fixtures/sage_message_history-outbox-11.17.10.json`,
+    /// which is a real reply from the owner's node.
+    ///
+    /// The *leading* auto-inception banner is still real, so it is here: the
+    /// node prepends it on the first tool call of a session with a `---`
+    /// separator, which is what keeps `SageReply`'s brace-scanning parser
+    /// load-bearing.
+    private func outbox(_ items: String) -> String {
         """
-        {"stored": true, "topic": "agents",
-         "pipe_results": [\(results)]}
+        Welcome back. Your institutional memory is online.
 
-        [SAGE] Reminder: call sage_turn with the current topic + observation.
+        ---
+
+        {"folder": "outbox", "count": 1, "items": [\(items)]}
         """
     }
+
+    /// Any completion timestamp. The value is never parsed — presence is what
+    /// separates an answered send from one still in flight.
+    private let then = "2026-08-05T09:15:00Z"
 
     func testAReplyBecomesSomethingToSay() async {
         let ritual = await seeded()
 
-        await ritual.noteResults(in: turnAnswer(
-            #"{"pipe_id":"p1","from":"Claude","result":"Acknowledged — the pipeline works."}"#
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-p1","counterparty":"Claude","completed_at":"\#(then)","#
+                + #""result":"Acknowledged — the pipeline works."}"#
         ))
 
         let replies = await ritual.drainReplies()
@@ -217,9 +236,57 @@ final class PipeReplyTests: XCTestCase {
         )
     }
 
+    /// **An outbox is mostly things still in flight, and none of it is news.**
+    ///
+    /// This is the failure the transport change would otherwise have
+    /// introduced. `pipe_results` only ever contained answers, so everything in
+    /// it was worth saying; the outbox contains every message this appliance has
+    /// sent, and announcing those would have Mynah telling the owner about its
+    /// own outgoing messages the moment they left. Both items in the captured
+    /// live reply are unanswered.
+    func testAnUnansweredSendIsNotNews() async {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-1","counterparty":"Claude","completed_at":"","status":"pending","#
+                + #""payload":"Please look into the ferry timetable."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertTrue(
+            replies.isEmpty,
+            "the appliance announced a message it had just sent as though somebody had replied"
+        )
+    }
+
+    /// **`payload` in an outbox is what *we* said, and reading it as an answer
+    /// is worse than silence because it is convincing.**
+    ///
+    /// The old candidate list included `payload`, and it was correct there:
+    /// `pipe_results` entries *were* answers, so their payload was the answer.
+    /// Carrying that list over unexamined would have had Mynah read the owner
+    /// his own outgoing message back in another agent's name.
+    func testOurOwnOutgoingMessageIsNeverReadAsAReply() async {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-2","counterparty":"Kestrel","completed_at":"\#(then)","#
+                + #""payload":"Mynah here — could you check the ferry times?"}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertTrue(
+            replies.isEmpty,
+            "Mynah read its own sent message back to the owner as Kestrel's reply: "
+                + (replies.first?.spokenDescription ?? "")
+        )
+    }
+
     func testDrainingClearsThem() async {
         let ritual = await seeded()
-        await ritual.noteResults(in: turnAnswer(#"{"from":"Claude","result":"Done."}"#))
+        await ritual.noteResults(in: outbox(
+            #"{"counterparty":"Claude","completed_at":"\#(then)","result":"Done."}"#
+        ))
 
         _ = await ritual.drainReplies()
 
@@ -231,36 +298,85 @@ final class PipeReplyTests: XCTestCase {
         let ritual = await seeded()
         let id = String(repeating: "a1b2c3d4", count: 8)
 
-        await ritual.noteResults(in: turnAnswer(#"{"from":"\#(id)","result":"Done."}"#))
+        await ritual.noteResults(in: outbox(
+            #"{"counterparty":"\#(id)","completed_at":"\#(then)","result":"Done."}"#
+        ))
 
         let replies = await ritual.drainReplies()
         XCTAssertEqual(replies.first?.from, "a1b2c3d4…")
     }
 
-    func testTheFieldNamesAreReadLeniently() async {
-        // The exact shape is not documented. A reply whose text is under
-        // `payload` rather than `result` must not vanish — that would silently
-        // reproduce the bug this fixes.
+    /// **The reply key could not be read off the live node**, because neither
+    /// retained item in the capture has been answered. So the candidates are
+    /// tried in order rather than pinned to one guess — which is exactly the
+    /// mistake that made this whole family: a key was guessed, was right for two
+    /// releases, and was then silently wrong for two more.
+    func testTheReplyKeyIsReadLeniently() async {
+        for key in ["result", "reply", "response", "result_payload"] {
+            let ritual = await seeded()
+            // A distinct id per key. Without one the dedup ledger — which is
+            // shared across this loop's iterations because they share a file —
+            // would swallow every reply after the first and the loop would
+            // report the last three keys as broken.
+            await ritual.noteResults(in: outbox(
+                #"{"message_id":"msg-\#(key)","counterparty":"Kestrel","#
+                    + #""completed_at":"\#(then)","\#(key)":"Looked it up: 4,200."}"#
+            ))
+
+            let replies = await ritual.drainReplies()
+            XCTAssertEqual(replies.first?.from, "Kestrel", "a reply under \"\(key)\" vanished")
+            XCTAssertTrue(replies.first?.text.contains("4,200") ?? false, "under \"\(key)\"")
+        }
+    }
+
+    /// An answered send whose reply is under a key nobody anticipated is skipped
+    /// rather than announced hollow. An owner told "Kestrel replied" with
+    /// nothing attached learns less than one told nothing.
+    func testAnAnsweredSendWithNoRecognisableReplyIsNotAnnounced() async {
         let ritual = await seeded()
 
-        await ritual.noteResults(in: turnAnswer(
-            #"{"agent":"Kestrel","payload":"Looked it up: 4,200."}"#
+        await ritual.noteResults(in: outbox(
+            #"{"counterparty":"Kestrel","completed_at":"\#(then)","some_future_key":"4,200."}"#
         ))
 
         let replies = await ritual.drainReplies()
-        XCTAssertEqual(replies.first?.from, "Kestrel")
-        XCTAssertTrue(replies.first?.text.contains("4,200") ?? false)
+        XCTAssertTrue(replies.isEmpty)
     }
 
-    func testATurnWithNoRepliesSaysNothing() async {
+    func testAPollWithNoRepliesSaysNothing() async {
         let ritual = await seeded()
 
-        await ritual.noteResults(in: #"{"stored": true, "pipe_results": []}"#)
-        await ritual.noteResults(in: #"{"stored": true}"#)
+        await ritual.noteResults(in: #"{"folder":"outbox","count":0,"items": []}"#)
+        await ritual.noteResults(in: #"{"folder":"outbox"}"#)
         await ritual.noteResults(in: "Error: node unavailable")
 
         let replies = await ritual.drainReplies()
         XCTAssertTrue(replies.isEmpty)
+    }
+
+    /// **Against the bytes the node really sent.**
+    ///
+    /// Read from the capture rather than from a literal here, so a change in the
+    /// outbox shape shows up as a failing test instead of as a fixture that
+    /// still agrees with a codebase both of which have drifted. Both items are
+    /// unanswered, so the correct behaviour is silence — which is also the one
+    /// property this file can assert against a real reply today.
+    func testTheCapturedOutboxAnnouncesNothing() async throws {
+        let captured = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/sage_message_history-outbox-11.17.10.json"),
+            encoding: .utf8
+        )
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: captured)
+
+        let replies = await ritual.drainReplies()
+        XCTAssertTrue(
+            replies.isEmpty,
+            "nothing in the captured outbox has been answered, so nothing is news"
+        )
     }
 }
 
@@ -303,13 +419,13 @@ final class RepeatedReplyTests: XCTestCase {
     }
 
     private let turnAnswer = """
-    {"stored": true, "pipe_results": [
-      {"pipe_id":"p-1","from":"Claude","result":"Acknowledged — the pipeline works."}]}
+    {"stored": true, "items": [
+      {"message_id":"p-1","completed_at":"2026-08-05T09:15:00Z","counterparty":"Claude","result":"Acknowledged — the pipeline works."}]}
     """
 
     func testTheSameResultIsNotSaidTwice() async {
         let ritual = ritual()
-        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
+        await ritual.noteResults(in: #"{"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"x","result":"old"}]}"#)
 
         await ritual.noteResults(in: turnAnswer)
         let first = await ritual.drainReplies()
@@ -327,7 +443,7 @@ final class RepeatedReplyTests: XCTestCase {
 
     func testARestartDoesNotReplayEverything() async {
         let first = ritual()
-        await first.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
+        await first.noteResults(in: #"{"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"x","result":"old"}]}"#)
         await first.noteResults(in: turnAnswer)
         _ = await first.drainReplies()
 
@@ -342,12 +458,12 @@ final class RepeatedReplyTests: XCTestCase {
 
     func testADifferentReplyStillArrives() async {
         let ritual = ritual()
-        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
+        await ritual.noteResults(in: #"{"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"x","result":"old"}]}"#)
         await ritual.noteResults(in: turnAnswer)
         _ = await ritual.drainReplies()
 
         await ritual.noteResults(in: """
-        {"pipe_results": [{"pipe_id":"p-2","from":"Codex","result":"Wave 3 is done."}]}
+        {"items": [{"message_id":"p-2","completed_at":"2026-08-05T09:15:00Z","counterparty":"Codex","result":"Wave 3 is done."}]}
         """)
 
         let arrived = await ritual.drainReplies()
@@ -359,8 +475,8 @@ final class RepeatedReplyTests: XCTestCase {
         // text are indistinguishable to a reader anyway, so treating them as
         // one costs nothing and saying them twice costs the owner's patience.
         let ritual = ritual()
-        await ritual.noteResults(in: #"{"pipe_results": [{"from":"x","result":"old"}]}"#)
-        let anonymous = #"{"pipe_results": [{"from":"Codex","result":"Wave 3 is done."}]}"#
+        await ritual.noteResults(in: #"{"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"x","result":"old"}]}"#)
+        let anonymous = #"{"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"Codex","result":"Wave 3 is done."}]}"#
 
         await ritual.noteResults(in: anonymous)
         let first = await ritual.drainReplies()
@@ -412,9 +528,9 @@ final class FirstLookTests: XCTestCase {
     }
 
     private let backlog = """
-    {"pipe_results": [
-      {"from":"Claude","result":"Acknowledged."},
-      {"from":"Codex","result":"Wave 3 is done."}]}
+    {"items": [
+      {"completed_at":"2026-08-05T09:15:00Z","counterparty":"Claude","result":"Acknowledged."},
+      {"completed_at":"2026-08-05T09:15:00Z","counterparty":"Codex","result":"Wave 3 is done."}]}
     """
 
     func testNothingAlreadyWaitingIsSaid() async {
@@ -443,7 +559,7 @@ final class FirstLookTests: XCTestCase {
         await ritual.noteResults(in: backlog)
 
         await ritual.noteResults(in: """
-        {"pipe_results": [{"from":"Kestrel","result":"Found it: 4,200."}]}
+        {"items": [{"completed_at":"2026-08-05T09:15:00Z","counterparty":"Kestrel","result":"Found it: 4,200."}]}
         """)
 
         let replies = await ritual.drainReplies()

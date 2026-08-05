@@ -11,7 +11,7 @@ private final class TurnSpy: ToolProviding, @unchecked Sendable {
     func call(name: String, arguments: [String: JSONValue]) async throws -> String {
         names.append(name)
         self.arguments.append(arguments)
-        return name == SageRitual.Tool.turn ? turnReply : "{}"
+        return name == SageRitual.Tool.messageHistory ? turnReply : "{}"
     }
 }
 
@@ -24,10 +24,17 @@ private final class TurnSpy: ToolProviding, @unchecked Sendable {
 ///
 /// `ProactiveWatch` already polls every half hour. It reads `sage_inbox` and
 /// `sage_backlog`, and `sage_inbox` is by SAGE's own definition the one place a
-/// reply to work *you* sent never lands. `sage_turn.pipe_results` is the only
-/// channel, and `sage_turn` only ran when the owner said something — so the
-/// appliance was checking for news on schedule, correctly, somewhere it could
-/// not be.
+/// reply to work *you* sent never lands — so the appliance was checking for
+/// news on schedule, correctly, somewhere it could not be.
+///
+/// **The channel this then used is itself gone.** It drove a `sage_turn` with
+/// no conversation attached and read `pipe_results` off the answer; that key
+/// was renamed at 11.17.4 and removed at 11.17.9, and .9 also made `sage_turn`
+/// payload-free. So on the shipped build the poll wrote one episodic memory per
+/// tick and could not learn anything. It now reads
+/// `sage_message_history(folder: "outbox")`, which is a passive read of what
+/// this appliance sent and what came back — no claim, no re-queue, and no
+/// consensus write per tick.
 final class ProactiveReplyCollectionTests: XCTestCase {
 
     private var directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -51,7 +58,7 @@ final class ProactiveReplyCollectionTests: XCTestCase {
     }
 
     private let oneReply = """
-    {"pipe_results":[{"from":"agent/sage-voice-bridge","result":"Received your test note."}]}
+    {"items":[{"completed_at":"2026-08-05T09:15:00Z","counterparty":"agent/sage-voice-bridge","result":"Received your test note."}]}
     """
 
     /// A ledger that has already seen a turn — which is every ledger on every
@@ -71,7 +78,14 @@ final class ProactiveReplyCollectionTests: XCTestCase {
 
         let replies = await ritual.collectArrivedReplies()
 
-        XCTAssertEqual(tools.names, [SageRitual.Tool.turn], "sage_turn is the only channel a reply arrives on")
+        XCTAssertEqual(
+            tools.names, [SageRitual.Tool.messageHistory],
+            "a reply to work this appliance sent lives in its own outbox and nowhere else"
+        )
+        guard case .string(let folder)? = tools.arguments.first?["folder"] else {
+            return XCTFail("the poll did not say which folder it wanted")
+        }
+        XCTAssertEqual(folder, "outbox", "the inbox is the one place a reply to our own send never lands")
         XCTAssertEqual(replies.count, 1)
         XCTAssertEqual(replies.first?.text, "Received your test note.")
     }
@@ -96,27 +110,40 @@ final class ProactiveReplyCollectionTests: XCTestCase {
         XCTAssertTrue(replies.isEmpty)
     }
 
-    /// The poll writes, and its record should say what it was: a look, not a
-    /// conversation. Filing it as though the owner had spoken would put words
-    /// in their mouth in the appliance's own memory.
-    func testThePollRecordsItselfAsAPollRatherThanAConversation() async {
+    /// **The poll no longer writes anything, and that is the point.**
+    ///
+    /// It used to be a `sage_turn` with no conversation attached — one episodic
+    /// consensus write per tick, purely to see what rode back on the answer. At
+    /// the intervals on offer that is a few dozen writes a day into the owner's
+    /// ledger recording that Mynah looked and found nothing.
+    ///
+    /// `sage_message_history` is passive. Its own answer says so — *"This is
+    /// passive history; it did not claim or re-queue any message"* — so checking
+    /// for news now costs a read and changes nothing on the node.
+    ///
+    /// This test replaces one that asserted the observation was worded as a look
+    /// rather than a conversation. That was the right rule for a mechanism that
+    /// had to write; the better answer is not to write.
+    func testThePollDoesNotWriteToTheOwnersLedger() async {
         let tools = TurnSpy()
         let ritual = makeRitual(tools)
 
         await ritual.collectArrivedReplies()
 
-        guard case .string(let observation)? = tools.arguments.first?["observation"] else {
-            return XCTFail("the poll recorded no observation")
-        }
-        XCTAssertTrue(observation.contains("No conversation with the owner"))
-        // No domain, so the node files it wherever this agent's work belongs.
-        // This asserted a named one and passed while the name was another
-        // agent's subject — see `testEveryTurnIsRecordedWithSage`.
-        XCTAssertNil(tools.arguments.first?["domain"])
+        XCTAssertFalse(
+            tools.names.contains(SageRitual.Tool.turn),
+            "checking for replies recorded an episodic memory; on a half-hourly timer that is "
+                + "a few dozen writes a day saying nothing happened"
+        )
+        XCTAssertFalse(tools.names.contains(SageRitual.Tool.reflect))
+        // And nothing that claims. `sage_messages_receive` would take the
+        // message out of the queue, which is destructive to anything else
+        // reading it — passive history is the whole reason this can be polled.
+        XCTAssertFalse(tools.names.contains("sage_messages_receive"))
     }
 
     /// **The ledger is what stops a timer becoming a nag.** A poll every half
-    /// hour against a node that keeps returning the same `pipe_results` for
+    /// hour against a node that keeps listing the same answered send for
     /// hours is the exact shape of the bug the owner already read twice —
     /// *"you repeated yourself two three tiems"* — only now it repeats without
     /// him saying anything at all.

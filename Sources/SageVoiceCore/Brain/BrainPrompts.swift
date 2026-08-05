@@ -369,8 +369,10 @@ public enum BrainPrompts {
         // The owner: *"message inbox outbox is the official way now"*. The pipe
         // aliases still work and no 11.17.x removal is scheduled, so nothing
         // breaks for an appliance that has not updated — but the messages
-        // surface is where the durability landed: 11.17.7 keeps agent messages
-        // for 24 hours by default, where a pipe did not.
+        // surface is where the durability landed. **Not a 24-hour window,
+        // which is what this used to say:** that was 11.17.7's default, and
+        // 11.17.9 changed `ttl_minutes` to 0, meaning no expiry. Nothing here
+        // pins it, so sends are durable. See `SageAgentMessaging.send`.
         //
         // Swapped together deliberately. Removing `sage_pipe` first would ship
         // a build where the model cannot send to an agent at all, and adding

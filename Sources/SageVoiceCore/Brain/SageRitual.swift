@@ -79,6 +79,15 @@ public actor SageRitual {
         public static let register = "sage_register"
         public static let rename = "sage_rename"
         public static let status = "sage_status"
+
+        /// A passive read of what this appliance sent and what came back.
+        ///
+        /// Passive is the operative word and the tool's own answer says so —
+        /// *"This is passive history; it did not claim or re-queue any
+        /// message."* That is why it can be polled on a timer where
+        /// `sage_messages_receive` cannot: claiming is destructive to whoever
+        /// else might read the queue.
+        public static let messageHistory = "sage_message_history"
     }
 
     /// What the phone appliance registers as.
@@ -730,27 +739,36 @@ public actor SageRitual {
     /// He is right about the mechanism and the reason is structural.
     /// `ProactiveWatch` polls `sage_inbox` and `sage_backlog` on a timer — and
     /// `sage_inbox` is by SAGE's own definition the one place a reply to work
-    /// *you* sent never appears. `sage_turn.pipe_results` is the only channel,
-    /// and `sage_turn` only ran when the owner said something. So the appliance
-    /// checked for news every half hour, correctly, in the wrong place.
+    /// *you* sent never appears. So the appliance checked for news every half
+    /// hour, correctly, in the wrong place.
     ///
-    /// This is a `sage_turn` with no conversation attached to it, which is the
-    /// honest description of what a poll is: one episodic write per tick, in
-    /// the appliance's own domain, saying that it looked. At the intervals on
-    /// offer that is a few dozen writes a day against a ledger that already
-    /// takes one per spoken turn.
+    /// ## The channel this used moved, and then stopped existing
+    ///
+    /// It read `sage_turn.pipe_results`, driving a `sage_turn` with no
+    /// conversation attached to it purely to see what rode back. That key was
+    /// renamed at 11.17.4 and **removed at 11.17.9**, and 11.17.9 also made
+    /// `sage_turn` payload-free — it returns `message_inbox_unread` and a count
+    /// now, nothing more. So on the shipped build this poll wrote an episodic
+    /// memory every tick and could not learn anything, ever.
+    ///
+    /// The replacement is `sage_message_history(folder: "outbox")`, which is
+    /// what it should always have been: a passive read of what *this* appliance
+    /// sent and what came back to it. Its own description is explicit that it
+    /// "did not claim or re-queue any message", so unlike the turn it has no
+    /// side effect on anybody's queue — and unlike the turn it does not cost a
+    /// consensus write per tick.
+    ///
+    /// **Bounded by sends, not by replies.** `GetOutbox` is `ORDER BY created_at
+    /// DESC LIMIT ?`, so a reply is only visible while its original send is
+    /// still in the newest N rows. 100 is the tool's maximum and is asked for
+    /// deliberately: an appliance that sent 30 messages this morning and gets an
+    /// answer to the first one this afternoon still sees it.
     public func collectArrivedReplies() async -> [PipeReply] {
         guard writeDenial == nil else { return [] }
         do {
             let answer = try await tools.call(
-                name: Tool.turn,
-                arguments: [
-                    "topic": .string("checking whether other agents have replied"),
-                    "observation": .string(
-                        "Periodic check for results from work piped to other agents. "
-                            + "No conversation with the owner at this point."
-                    )
-                ]
+                name: Tool.messageHistory,
+                arguments: ["folder": .string("outbox"), "limit": .int(100)]
             )
             noteResults(in: answer)
         } catch {
@@ -773,21 +791,42 @@ public actor SageRitual {
         return drained
     }
 
-    /// Pulls any `pipe_results` out of a `sage_turn` answer.
+    /// Pulls answered sends out of a `sage_message_history` outbox reply.
     ///
-    /// **Read tolerantly and logged the first time, because the exact shape is
-    /// not documented and this appliance cannot afford to be wrong about it in
-    /// either direction.** A key that turns out to be named something else
-    /// would silently reproduce the very bug this fixes, so the raw payload is
-    /// logged whenever the field is present — one line, once per arrival, and
-    /// the log then says what the real keys are rather than this comment
-    /// guessing.
+    /// ## The shape, and the one part of it that is not verified
+    ///
+    /// Captured from the owner's node at 11.17.10 and kept as
+    /// `Tests/Fixtures/sage_message_history-outbox-11.17.10.json`. Every item
+    /// carries `message_id`, `counterparty`, `created_at`, `completed_at`,
+    /// `status`, `intent` and `payload` — `payload` being what *we* sent, not
+    /// what came back.
+    ///
+    /// **What is not in that capture is a reply.** Both retained items are
+    /// unanswered (`pending` and `expired`), so the key an answer arrives under
+    /// could not be read off the live node. That is stated rather than papered
+    /// over: the previous version of this function guessed a key name, was
+    /// right for two releases, and then was silently wrong for two more.
+    ///
+    /// So the candidates are tried in order and **anything completed is logged
+    /// raw the first time**, which makes the log say what the real key is
+    /// instead of this comment guessing. If none of them matches, the item is
+    /// skipped rather than announced empty — an owner told "Kestrel replied"
+    /// with nothing attached learns less than one told nothing.
+    ///
+    /// Note `completed_at` is an empty *string* when absent, not a missing key,
+    /// which is why emptiness is checked rather than nullity.
     func noteResults(in answer: String) {
         guard let root = SageReply.object(in: answer) else { return }
-        guard let results = root["pipe_results"] as? [[String: Any]], !results.isEmpty else {
-            return
+        guard let items = root["items"] as? [[String: Any]], !items.isEmpty else { return }
+        // Answered only. An outbox is mostly things still in flight, and every
+        // one of those would otherwise be announced as news the moment it was
+        // sent — the appliance telling the owner about its own message.
+        let results = items.filter { item in
+            !(Self.text(item, ["completed_at"]) ?? "").isEmpty
+                || Self.text(item, ["status"]) == "completed"
         }
-        log("[sage] \(results.count) pipe result(s) came back: \(String(describing: results).prefix(300))")
+        guard !results.isEmpty else { return }
+        log("[sage] \(results.count) answered send(s) in the outbox: \(String(describing: results).prefix(300))")
 
         // Born on this turn. Everything the node is holding gets written down
         // and none of it is said — see `AlreadySaid.hasSeeded`.
@@ -798,17 +837,28 @@ public actor SageRitual {
 
         var changed = false
         for result in results {
-            let from = Self.text(result, ["from", "from_name", "agent", "responder"])
+            // `counterparty` is the outbox's word for the agent this was sent
+            // to, and on an answered send that is the agent who answered.
+            let from = Self.text(result, ["counterparty", "from", "from_name", "agent", "responder"])
                 ?? "one of your agents"
-            guard let said = Self.text(result, ["result", "payload", "content", "text", "message"]) else {
+            // **Never `payload`.** In an outbox `payload` is the message *this
+            // appliance sent*, so reading it as an answer would have Mynah
+            // telling the owner its own words back as though somebody had
+            // replied — which is worse than silence, because it is convincing.
+            // That key was in the old candidate list, where it was correct:
+            // `pipe_results` entries were answers, and their payload was the
+            // answer. The list could not be carried over unexamined.
+            guard let said = Self.text(result, ["result", "reply", "response", "result_payload"]) else {
+                log("[sage] an answered send carried no reply under any known key: "
+                    + "\(String(describing: result.keys.sorted()))")
                 continue
             }
-            // Once, ever. The node goes on offering a result after it has been
-            // handed over, so what stops a repeat is this ledger and nothing
-            // else. The pipe id when there is one; otherwise what was said, by
-            // whom — two replies identical in both are indistinguishable to a
-            // reader anyway, so treating them as one costs nothing.
-            let identity = Self.text(result, ["pipe_id", "id"]) ?? "\(from)|\(said)"
+            // Once, ever. The node goes on listing an answered send after it has
+            // been handed over, so what stops a repeat is this ledger and
+            // nothing else. `message_id` is exact and durable — the outbox's own
+            // identifier, renamed from `pipe_id` at 11.17.4 by `toolMessageHistory`
+            // rather than by the formatter, which is why both are read.
+            let identity = Self.text(result, ["message_id", "pipe_id", "id"]) ?? "\(from)|\(said)"
             guard !alreadySaid.has(identity) else { continue }
             alreadySaid.remember(identity)
             changed = true

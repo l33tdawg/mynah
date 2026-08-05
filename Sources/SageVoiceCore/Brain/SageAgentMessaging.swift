@@ -88,9 +88,20 @@ public struct SageAgentMessaging: AgentMessaging {
             // **`sage_message_send`, not `sage_pipe`.** The owner: "message
             // inbox outbox is the official way now". The pipe aliases still
             // work — no 11.17.x removal is scheduled — but they are the older
-            // surface, and the messages one is what gets durability: 11.17.7
-            // keeps agent messages for 24 hours by default, where a pipe did
-            // not.
+            // surface, and the messages one is where durability landed.
+            //
+            // **That durability is not a 24-hour window.** This said "11.17.7
+            // keeps agent messages for 24 hours by default", which was true of
+            // .7 and is not true of what ships today: 11.17.9 made the default
+            // `ttl_minutes` **0**, meaning no expiry at all. Nothing in this
+            // codebase pins `ttl_minutes` — there is no message-protocol hit
+            // anywhere in Sources/ — so Mynah's sends have been durable since
+            // the .9 revendor without anything being changed here.
+            //
+            // Left as a correction rather than deleted, because a comment
+            // stating a shorter window than reality is how a future reader
+            // talks themselves into a re-send loop for messages that never
+            // expired.
             reply = try await tools.call(name: "sage_message_send", arguments: arguments)
         } catch {
             // Deliberately left in the journal. The request went out and the
@@ -167,7 +178,27 @@ public struct SageAgentMessaging: AgentMessaging {
             ),
             intent: string(raw, "intent"),
             arrived: (string(raw, "created_at")).flatMap(ISO8601DateFormatter().date(from:)),
-            expectsAResult: (raw["requires_result"] as? Bool) ?? false
+            // **`requires_reply`, and it was `requires_result` until 1.7.5.**
+            //
+            // SAGE renamed this at 11.17.4. Mynah has been vendoring .7 and
+            // later ever since, so `expectsAResult` has been false for every
+            // message that ever arrived — and `ProactiveWatch.line(forMessage:)`
+            // has announced every one of them on the owner's phone as *"X sent
+            // a message"* when the node was telling us *"X sent work"*.
+            //
+            // Live on the shipped build, not a latent risk. Worth stating
+            // plainly because the shape is the one this release keeps finding:
+            // a key that vanishes reads as `false`, `false` is a legal value,
+            // and nothing anywhere fails.
+            //
+            // The old name is still read as a fallback. Not defensiveness — a
+            // Mac that has not updated SAGE is running 11.16.x or earlier, where
+            // `requires_result` is the *only* spelling, and this appliance
+            // ships a vendored node but does not force it on a machine that
+            // already has one. See `SageNodeChoice`.
+            expectsAResult: (raw["requires_reply"] as? Bool)
+                ?? (raw["requires_result"] as? Bool)
+                ?? false
         )
     }
 
