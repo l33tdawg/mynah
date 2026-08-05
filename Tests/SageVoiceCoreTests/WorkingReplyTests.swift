@@ -378,6 +378,13 @@ final class WorkingReplyTests: XCTestCase {
 /// queued locally — so from the caller's side the appliance goes abruptly
 /// silent, and the next words they hear are the only evidence of whether it
 /// heard them or merely stopped.
+///
+/// **These moved from `WorkingReply` to `CallOpening` in 1.7.5 and did not
+/// otherwise change.** Interruption is a call-only event: Signal has no
+/// barge-in, and `CallTurnServer` was the only call site in the tree even while
+/// the function sat on the shared type. The lines these assert over are
+/// unchanged because the pools they draw from are inherited — see `CallOpening`
+/// for why only the catch-all is overridden.
 final class InterruptedOpeningTests: XCTestCase {
 
     /// Deterministic: always the first option, so a wording change fails the
@@ -385,7 +392,7 @@ final class InterruptedOpeningTests: XCTestCase {
     private let first: (Int) -> Int = { _ in 0 }
 
     func testItLeadsWithTheTurnRatherThanTheTask() {
-        let opening = WorkingReply.interruptedOpening(
+        let opening = CallOpening.interruptedOpening(
             forRequest: "actually look up the flight times instead",
             chooser: first
         )
@@ -395,7 +402,7 @@ final class InterruptedOpeningTests: XCTestCase {
 
     func testASpecificRequestKeepsItsOwnOpener() {
         // Both halves in one sentence: heard you, and here is what I am doing.
-        let opening = WorkingReply.interruptedOpening(
+        let opening = CallOpening.interruptedOpening(
             forRequest: "search online for the ferry timetable",
             chooser: first
         )
@@ -413,7 +420,7 @@ final class InterruptedOpeningTests: XCTestCase {
         // Nothing specific to name. Inventing a subject here would be the
         // appliance guessing out loud on the one turn where the caller has just
         // demonstrated it was heading the wrong way.
-        let opening = WorkingReply.interruptedOpening(forRequest: "no wait", chooser: first)
+        let opening = CallOpening.interruptedOpening(forRequest: "no wait", chooser: first)
 
         XCTAssertEqual(opening?.line, "Right — let me get that instead.")
         XCTAssertEqual(opening?.isSpecific, false)
@@ -423,8 +430,8 @@ final class InterruptedOpeningTests: XCTestCase {
         // The bug this exists to remove: being interrupted and being asked
         // produced the same sentence, which answers a question the caller did
         // not have and not the one they did.
-        let plain = WorkingReply.opening(forRequest: "no wait", chooser: first)?.line
-        let cutIn = WorkingReply.interruptedOpening(forRequest: "no wait", chooser: first)?.line
+        let plain = CallOpening.opening(forRequest: "no wait", chooser: first)?.line
+        let cutIn = CallOpening.interruptedOpening(forRequest: "no wait", chooser: first)?.line
 
         XCTAssertNotEqual(plain, cutIn)
     }
@@ -436,7 +443,7 @@ final class InterruptedOpeningTests: XCTestCase {
         // call.
         for request in ["add a note about the roof", "", "hmm", "no no no"] {
             XCTAssertNotNil(
-                WorkingReply.interruptedOpening(forRequest: request, chooser: first),
+                CallOpening.interruptedOpening(forRequest: request, chooser: first),
                 "nothing said after \"\(request)\""
             )
         }

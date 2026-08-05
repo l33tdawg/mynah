@@ -209,6 +209,47 @@ struct SwiftSourceScan {
 
     func contains(_ needle: String) -> Bool { !indices(of: needle).isEmpty }
 
+    /// Every string literal written in the file, comments excluded.
+    ///
+    /// **The reason a guard reads literals instead of calling the function.**
+    /// `FillerAndOpenerPoolsAreDisjointTests` got its own job wrong twice by
+    /// probing: a hand-written list of requests missed ten of sixteen pools,
+    /// because a probe list is a guess about a function's branches that goes
+    /// stale the moment somebody adds a `case` — and the sentinel meant to catch
+    /// that had been calibrated to what the probes happened to return.
+    ///
+    /// Literals cannot drift that way. A new pool, a new `case`, a new fallback
+    /// sentence: all of them are string literals, so all of them are here the
+    /// moment they are written, with nobody having to remember anything.
+    ///
+    /// Deliberately over-broad. It also collects keywords that are matched
+    /// against rather than spoken, like `"add a note"`. That is the safe
+    /// direction for every guard using it — each asks "is any of this text wrong
+    /// to say out loud", and a keyword that is never spoken cannot make the
+    /// answer wrongly lenient.
+    func stringLiterals() -> Set<String> {
+        let code = Array(text(in: 0..<characters.count))
+        var literals: Set<String> = []
+        var index = 0
+        while index < code.count {
+            guard code[index] == "\"" else { index += 1; continue }
+            var end = index + 1
+            var body = ""
+            while end < code.count, code[end] != "\"" {
+                // A backslash escape cannot end the literal.
+                if code[end] == "\\", end + 1 < code.count {
+                    end += 2
+                    continue
+                }
+                body.append(code[end])
+                end += 1
+            }
+            if end < code.count { literals.insert(body) }
+            index = end + 1
+        }
+        return literals
+    }
+
     /// The code text of a range, for putting in a failure message.
     func text(in range: Range<Int>) -> String {
         String(characters[range.clamped(to: 0..<characters.count)])

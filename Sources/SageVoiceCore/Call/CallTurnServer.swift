@@ -940,10 +940,15 @@ public actor CallTurnServer {
             // instantly, so from the caller's side the appliance goes abruptly
             // silent — and the next thing they hear is what tells them whether
             // it *heard* them or merely *stopped*. See
-            // `WorkingReply.interruptedOpening`.
+            // `CallOpening.interruptedOpening`.
+            //
+            // **`CallOpening`, not `WorkingReply`.** These read the shared
+            // pool until 1.7.5, and the shared catch-all promises to come back
+            // later — true on Signal, and on a call a promise to a line that is
+            // about to drop. See `CallOpening` for the owner's ruling.
             let chosen = interrupting
-                ? WorkingReply.interruptedOpening(forRequest: heard, previous: lastOpener)
-                : WorkingReply.opening(forRequest: heard, previous: lastOpener)
+                ? CallOpening.interruptedOpening(forRequest: heard, previous: lastOpener)
+                : CallOpening.opening(forRequest: heard, previous: lastOpener)
             if let opener = chosen {
                 lastOpener = opener.line
                 if let audio = try? await synthesizer.synthesize(

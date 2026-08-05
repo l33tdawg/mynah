@@ -70,16 +70,69 @@ public enum WorkingReply {
         public let isSpecific: Bool
     }
 
+    /// What the owner's own sentence says they are asking for.
+    ///
+    /// **Split out of `instantOptions` so that two surfaces can answer the same
+    /// classification differently.** The call and the thread hear the identical
+    /// request and must not say the identical thing back: on Signal "I'll come
+    /// back to you" is true and is what the owner asked for, while on a call
+    /// Mynah is present and about to speak, and a promise to return is a promise
+    /// nothing will keep. See `CallOpening`.
+    ///
+    /// `CaseIterable` is load-bearing rather than decorative. It is what lets
+    /// `CallOpeningPromisesNothingTests` walk every pool the call can reach
+    /// instead of probing with a hand-written list of requests — the mistake the
+    /// 1.7.3 review found twice, where hand-picked probes missed ten of sixteen
+    /// pools and the sentinel was then calibrated to what the probes returned.
+    /// Adding a case here is a compile error in `CallOpening`, not a silent gap.
+    public enum RequestKind: String, CaseIterable, Sendable {
+        /// They named their backlog, task list or inbox.
+        case backlog
+        /// They asked about something already said.
+        case earlier
+        /// They asked for something written.
+        case document
+        /// They asked to find something out.
+        case lookup
+        /// Nothing was named. The catch-all, which is most turns.
+        case anything
+    }
+
     public static func opening(
         forRequest request: String,
         previous: String? = nil,
         chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
     ) -> Opening? {
-        guard let options = instantOptions(forRequest: request), !options.isEmpty else { return nil }
+        opening(forRequest: request, previous: previous, chooser: chooser, from: lines(for:))
+    }
+
+    /// The shared half of both surfaces' openers: classify, then draw.
+    ///
+    /// Only the pool differs, which is the point — a request that Signal treats
+    /// as a lookup is a lookup on a call too, and letting each surface classify
+    /// separately would be two keyword lists to keep in step.
+    static func opening(
+        forRequest request: String,
+        previous: String?,
+        chooser: (Int) -> Int,
+        from pool: (RequestKind) -> [String]
+    ) -> Opening? {
+        guard let kind = kind(forRequest: request) else { return nil }
+        let options = pool(kind)
+        guard !options.isEmpty else { return nil }
+        // `isSpecific` is now the classification itself rather than a membership
+        // test against the catch-all strings. Same answer, and it stops being a
+        // question about wording: a specific pool that happened to be written
+        // with a catch-all sentence in it used to read as "not specific".
+        return Opening(line: draw(from: options, previous: previous, chooser: chooser), isSpecific: kind != .anything)
+    }
+
+    /// One line from a pool, never the previous one unless there is no other.
+    static func draw(from options: [String], previous: String?, chooser: (Int) -> Int) -> String {
         let fresh = options.filter { $0 != previous }
+        // Every option was the last one said, which means there is only one.
         let pool = fresh.isEmpty ? options : fresh
-        let line = pool[min(max(chooser(pool.count), 0), pool.count - 1)]
-        return Opening(line: line, isSpecific: !catchAllOptions.contains(line))
+        return pool[min(max(chooser(pool.count), 0), pool.count - 1)]
     }
 
     public static func instantLine(
@@ -90,53 +143,16 @@ public enum WorkingReply {
         opening(forRequest: request, previous: previous, chooser: chooser)?.line
     }
 
-    /// The opener for a turn that cut another one off.
+    /// The catch-all pool.
     ///
-    /// **Being interrupted is a different event from being asked**, and until
-    /// now it produced the same sentence. The owner: *"if user starts speaking
-    /// half way, we have the agent say something when they end that
-    /// acknowledges the new ask before actually doing it."*
+    /// **This is Signal's, and only Signal's.** The call reads
+    /// `CallOpening.lines(for: .anything)` instead, because every line below
+    /// commits to coming back later and a call cannot come back — the line drops
+    /// and there is no thread to return to. That was the defect in #47: these
+    /// six sentences were spoken to live callers, who then waited for a delivery
+    /// nothing was going to make.
     ///
-    /// On a call that matters more than in a thread. Cutting in stops the
-    /// audio instantly — the endpoint drops what is queued locally — so from
-    /// the caller's side the appliance goes abruptly silent, and the next thing
-    /// they hear decides whether it *heard* them or merely *stopped*. "Let me
-    /// have a look." is what it would have said anyway; it does not answer the
-    /// question the caller now has.
-    ///
-    /// So the line leads with the turn: the old answer is being dropped, on
-    /// purpose, in favour of what was just said. Where the request is specific
-    /// enough for a real opener, that opener is kept and prefixed — the caller
-    /// hears both that they were heard and what is now being done.
-    public static func interruptedOpening(
-        forRequest request: String,
-        previous: String? = nil,
-        chooser: (Int) -> Int = { Int.random(in: 0..<$0) }
-    ) -> Opening? {
-        let acknowledgements = [
-            "Right —", "Okay —", "Sure —"
-        ]
-        let turn = acknowledgements[
-            min(max(chooser(acknowledgements.count), 0), acknowledgements.count - 1)
-        ]
-
-        // A specific opener names what is about to happen, so the two halves
-        // read as one sentence: "Right — looking that up online."
-        if let specific = opening(forRequest: request, previous: previous, chooser: chooser),
-           specific.isSpecific {
-            let lowered = specific.line.prefix(1).lowercased() + specific.line.dropFirst()
-            return Opening(line: "\(turn) \(lowered)", isSpecific: true)
-        }
-        // Nothing specific to name. Say only the true part: the previous answer
-        // is abandoned and this one is heard. Inventing a subject here would be
-        // the appliance guessing out loud on the one turn where the caller has
-        // just demonstrated it was heading the wrong way.
-        return Opening(line: "\(turn) let me get that instead.", isSpecific: false)
-    }
-
-    /// The catch-all pool, named once so `opening` can recognise it rather than
-    /// re-deriving which branch fired."""
-    /// **These now promise a return, because they are the only thing said.**
+    /// **These promise a return, because they are the only thing said.**
     ///
     /// They were "Let me have a look.", "One moment." and "On it." — true, and
     /// each one a sentence that expires in about fifteen seconds. They were
@@ -173,9 +189,54 @@ public enum WorkingReply {
         "Doing that now. Give me a little while and I'll come back when it's ready."
     ]
 
+    /// Signal's line pool for a classification.
+    ///
+    /// The strings are byte-identical to what they were before `RequestKind`
+    /// existed. Only `.anything` differs between the two surfaces today, but the
+    /// split is by kind rather than by "the catch-all plus overrides" so that the
+    /// next divergence has somewhere to go without another special case.
+    static func lines(for kind: RequestKind) -> [String] {
+        switch kind {
+        case .backlog:
+            return [
+                "Let me check your backlog.",
+                "Checking the list now.",
+                "One sec, pulling up your tasks."
+            ]
+        case .earlier:
+            return [
+                "Let me go back through that.",
+                "Digging that up now.",
+                "One sec, looking back."
+            ]
+        case .document:
+            return [
+                "On it — let me pull that together.",
+                "Right, working on that now.",
+                "Give me a minute on that."
+            ]
+        case .lookup:
+            return [
+                "Looking into that now.",
+                "On it — give me a moment.",
+                "Right, let me find out."
+            ]
+        case .anything:
+            return catchAllOptions
+        }
+    }
+
+    static func instantOptions(forRequest request: String) -> [String]? {
+        kind(forRequest: request).map(lines(for:))
+    }
+
     /// Classifies the request from its wording alone. Deliberately conservative:
     /// every branch here has to be true of *any* turn that reaches it.
-    static func instantOptions(forRequest request: String) -> [String]? {
+    ///
+    /// `nil` means say nothing at all, which is a real answer and not a failure
+    /// to classify — a fast write answers before an acknowledgement would land,
+    /// and small talk has nothing to acknowledge.
+    static func kind(forRequest request: String) -> RequestKind? {
         let text = request.lowercased()
 
         func mentions(_ words: [String]) -> Bool {
@@ -195,37 +256,15 @@ public enum WorkingReply {
         }
         guard text.count > 12 else { return nil }
 
-        if mentions(["backlog", "task list", "todo", "to-do", "inbox"]) {
-            return [
-                "Let me check your backlog.",
-                "Checking the list now.",
-                "One sec, pulling up your tasks."
-            ]
-        }
+        if mentions(["backlog", "task list", "todo", "to-do", "inbox"]) { return .backlog }
         // Stems, not whole phrases. "what did we talk about" and "the shops we
         // talked about" are the same question, and matching only the past tense
         // sent the first one to the generic branch.
         if mentions(["we talk", "we discuss", "we said", "you told me", "from before", "earlier", "last time", "remember when"]) {
-            return [
-                "Let me go back through that.",
-                "Digging that up now.",
-                "One sec, looking back."
-            ]
+            return .earlier
         }
-        if mentions(["note", "document", "write up", "markdown", "list of", "compile", "export"]) {
-            return [
-                "On it — let me pull that together.",
-                "Right, working on that now.",
-                "Give me a minute on that."
-            ]
-        }
-        if mentions(["news", "latest", "price", "who is", "what's on", "look up", "search", "find me"]) {
-            return [
-                "Looking into that now.",
-                "On it — give me a moment.",
-                "Right, let me find out."
-            ]
-        }
+        if mentions(["note", "document", "write up", "markdown", "list of", "compile", "export"]) { return .document }
+        if mentions(["news", "latest", "price", "who is", "what's on", "look up", "search", "find me"]) { return .lookup }
         // Everything else. Speaking is the default, and that is a correction:
         // this started as a keyword allowlist, and "the ramen shops near klcc"
         // matched none of it — so the owner waited about 30 seconds for the
@@ -234,10 +273,10 @@ public enum WorkingReply {
         // unless it would be wrong", because the cases where it is wrong are
         // few and nameable while the cases where it is right are unbounded.
         //
-        // Safe as a default because these three name nothing: no tool, no
-        // source, no claim beyond having received the message. They are true of
-        // any turn that reaches here, which small talk and fast writes do not.
-        return catchAllOptions
+        // Safe as a default because the pools behind it name nothing: no tool,
+        // no source, no claim beyond having received the message. They are true
+        // of any turn that reaches here, which small talk and fast writes do not.
+        return .anything
     }
 
     // MARK: - Not saying it twice

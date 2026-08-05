@@ -38,7 +38,7 @@ import XCTest
 /// It now checks both pools, and `WorkingReply` is the load-bearing one.
 final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
 
-    /// Every sentence written down in `WorkingReply`, taken from the file.
+    /// Every sentence written down in either opener file, taken from the files.
     ///
     /// ## Why this reads the source instead of calling the functions
     ///
@@ -52,50 +52,45 @@ final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
     /// calibrated the sentinel to what my probes happened to collect.
     ///
     /// Reading the literals cannot drift. A new pool, a new `case`, a new
-    /// fallback sentence — all of them are string literals in this file, so all
-    /// of them are here the moment they are written, with nobody having to
+    /// fallback sentence — all of them are string literals in these files, so
+    /// all of them are here the moment they are written, with nobody having to
     /// remember to add a probe.
     ///
     /// It is deliberately over-broad: it also collects keyword literals like
     /// `"add a note"` that are matched against rather than spoken. That is the
     /// safe direction. It means a filler line may not collide with anything
-    /// written in `WorkingReply`, which is stronger than what is needed and
-    /// costs nothing — none of the ladder's lines is a keyword.
-    private func everySentenceWrittenInWorkingReply() throws -> Set<String> {
-        let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("Sources/SageVoiceCore/Brain/WorkingReply.swift"),
-            encoding: .utf8
-        )
-        let scan = SwiftSourceScan(source)
-        let code = Array(scan.text(in: 0..<scan.characters.count))
-
-        var literals: Set<String> = []
-        var index = 0
-        while index < code.count {
-            guard code[index] == "\"" else { index += 1; continue }
-            var end = index + 1
-            var body = ""
-            while end < code.count, code[end] != "\"" {
-                // A backslash escape cannot end the literal.
-                if code[end] == "\\", end + 1 < code.count {
-                    end += 2
-                    continue
-                }
-                body.append(code[end])
-                end += 1
-            }
-            if end < code.count { literals.insert(body) }
-            index = end + 1
+    /// written in either file, which is stronger than what is needed and costs
+    /// nothing — none of the ladder's lines is a keyword.
+    ///
+    /// ## Why there are two files now
+    ///
+    /// **1.7.5 moved the call's opener into `CallOpening`, and this guard would
+    /// have gone on reading `WorkingReply` alone.** That is the precise defect
+    /// this file's own header describes — a rule enforced against one surface
+    /// while the identical one goes unexamined — and it would have been
+    /// committed for the third time in the test written to catch it, by nobody
+    /// touching this file at all. The call's catch-all now lives in
+    /// `CallOpening.swift`, so a filler colliding with what the caller actually
+    /// hears would have gone unwatched from the day #47 landed.
+    private func everySentenceWrittenInTheOpenerPools() throws -> Set<String> {
+        try [
+            "Sources/SageVoiceCore/Brain/WorkingReply.swift",
+            "Sources/SageVoiceCore/Call/CallOpening.swift"
+        ].reduce(into: Set<String>()) { collected, path in
+            let source = try String(
+                contentsOf: URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent(path),
+                encoding: .utf8
+            )
+            collected.formUnion(SwiftSourceScan(source).stringLiterals())
         }
-        return literals
     }
 
     /// **The one that matters: the ladder against what the call actually says.**
     func testNoFillerLineIsAlsoSomethingTheCallSaysAsAnOpener() throws {
         let ladder = Set(CallFiller.pools.flatMap { $0 })
-        let shared = ladder.intersection(try everySentenceWrittenInWorkingReply()).sorted()
+        let shared = ladder.intersection(try everySentenceWrittenInTheOpenerPools()).sorted()
 
         XCTAssertEqual(
             shared, [],
@@ -141,12 +136,21 @@ final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
             "WaitingPhrases has no lines, so the disjointness above is vacuously true"
         )
 
-        let collected = try everySentenceWrittenInWorkingReply()
+        let collected = try everySentenceWrittenInTheOpenerPools()
 
         for option in WorkingReply.catchAllOptions {
             XCTAssertTrue(
                 collected.contains(option),
                 "the extractor missed a catch-all option, so it is not reading WorkingReply properly: \(option)"
+            )
+        }
+        // And the call's own pool, which is the one a caller actually hears and
+        // the one this guard is nominally about. Reading only WorkingReply after
+        // 1.7.5 would leave these six unwatched.
+        for option in CallOpening.catchAllOptions {
+            XCTAssertTrue(
+                collected.contains(option),
+                "the extractor is not reading CallOpening, so the call's real opener pool is unguarded: \(option)"
             )
         }
         // A per-tool line, reached through a `case` in a switch. Nothing about
