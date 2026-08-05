@@ -251,8 +251,48 @@ final class CompositeToolSourceTests: XCTestCase {
     func testTheModelIsNotOfferedTheToolThatSendsResultsToOtherAgents() {
         XCTAssertFalse(BrainPrompts.voiceToolAllowlist.contains("sage_pipe_result"))
         XCTAssertTrue(
-            BrainPrompts.voiceToolAllowlist.contains("sage_pipe"),
-            "sending work out is still Mynah's job — it is only answering somebody else's that is not"
+            BrainPrompts.voiceToolAllowlist.contains("sage_message_send"),
+            """
+            sending work out is still Mynah's job. `sage_pipe` was swapped for \
+            `sage_message_send` on 5 August 2026 — "message inbox outbox is the \
+            official way now" — and the pipe aliases still work upstream, so \
+            this is a change of surface rather than of capability.
+            """
         )
+    }
+
+    /// **`sage_message_reply` is in, and it is the closest thing to
+    /// `sage_pipe_result` that this catalogue carries. Recorded so a recurrence
+    /// is recognised rather than rediscovered.**
+    ///
+    /// The argument that excluded `pipe_result` had two halves, and only one of
+    /// them dies here.
+    ///
+    /// The half that dies is the name trap: `pipe_result` reads as "the result
+    /// of a pipe", which is precisely what the owner is asking for when he says
+    /// "any updates?", so the model fired a *write* while hunting for a *read*.
+    /// `message_reply` cannot be misread that way — it is a verb, and it says
+    /// what it does.
+    ///
+    /// The half that survives is the one worth watching: *"an appliance nobody
+    /// assigns work to — it answers one person's phone"*. Mynah completing
+    /// another agent's task is still not a thing anybody asked for. What makes
+    /// it acceptable is that a reply now needs a `message_id` the owner's own
+    /// inbox produced, and the owner asking for a reply is the ordinary case.
+    ///
+    /// **The signature to watch for** is the one from the incident: a trace
+    /// where a read was asked for and a send went out — `sage_inbox,
+    /// sage_inbox, sage_message_reply` on "did anyone get back to me". If that
+    /// appears, this comes out and the argument above is why.
+    func testReplyingIsOfferedWithItsRiskWrittenDown() {
+        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains("sage_message_reply"))
+        // Still classified as a send, so `WorkingReply` narrates it as an action
+        // and the receipt discipline applies — the thing that made the
+        // pipe_result incident legible after the fact.
+        XCTAssertTrue(
+            ToolLoopTrace.sendingTools.contains("sage_message_reply"),
+            "a reply that is not counted as a send disappears from the record that shows it fired"
+        )
+        XCTAssertTrue(ToolLoopTrace.sendingTools.contains("sage_message_send"))
     }
 }

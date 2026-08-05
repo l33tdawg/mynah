@@ -364,7 +364,33 @@ public enum BrainPrompts {
         // re-measuring routing, because 19 tools is already past the 14 where
         // the catalogue scored 12/12.
         "sage_directory",
-        "sage_pipe",
+        // **`sage_pipe` is gone and these two replace it, in one commit.**
+        //
+        // The owner: *"message inbox outbox is the official way now"*. The pipe
+        // aliases still work and no 11.17.x removal is scheduled, so nothing
+        // breaks for an appliance that has not updated — but the messages
+        // surface is where the durability landed: 11.17.7 keeps agent messages
+        // for 24 hours by default, where a pipe did not.
+        //
+        // Swapped together deliberately. Removing `sage_pipe` first would ship
+        // a build where the model cannot send to an agent at all, and adding
+        // these first would offer two ways to do one thing to a 4B — which is
+        // the condition the routing measurement in this file punishes.
+        //
+        // `sage_message_reply` is here for the model and *not* wired through
+        // `SageAgentMessaging`: replying is a direct call with a `message_id`
+        // the model already has from the inbox, so an adapter would be a
+        // passthrough with a typed wrapper around nothing.
+        //
+        // The other three stay out and stay reachable programmatically:
+        // `sage_message_status` answers "was this delivered" about an id the
+        // model does not hold, `sage_message_history` and
+        // `sage_messages_receive` are bulk reads that duplicate `sage_inbox`.
+        // Same reasoning as `sage_pipe_result`, one comment down: a tool whose
+        // name answers the owner's question but whose behaviour does not is the
+        // trap, and three more of those is how a catalogue rots.
+        "sage_message_send",
+        "sage_message_reply",
         "sage_federation",
         // Added for 11.16.x, and only these two of the thirteen it exposes that
         // this list does not.

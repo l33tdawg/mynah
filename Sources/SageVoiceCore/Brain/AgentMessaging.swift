@@ -118,7 +118,7 @@ public struct AgentInboxItem: Sendable, Equatable, Identifiable {
 
 /// A message the owner sent, as far as the node is concerned.
 public struct SentAgentMessage: Sendable, Equatable {
-    public let pipeID: String
+    public let messageID: String
     public let to: AgentAddress
     public let sent: Date
 }

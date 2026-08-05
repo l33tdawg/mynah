@@ -118,6 +118,8 @@ enum ToolActivity {
         "sage_federation": "Checked your other machines",
         "sage_find_agent": "Asked one of your other helpers",
         "sage_pipe": "Asked one of your other helpers",
+        "sage_message_send": "Sent a message to one of your other helpers",
+        "sage_message_reply": "Replied to one of your other helpers",
         "sage_pipe_result": "Asked one of your other helpers",
         "web_search": "Searched the web"
     ]

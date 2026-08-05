@@ -48,14 +48,14 @@ final class AgentMessagingTests: XCTestCase {
     func testAnAddressOnlyComesFromAResolve() async throws {
         let tools = ScriptedTools(replies: [
             "sage_find_agent": #"{"to":"wire-value","name":"Agent"}"#,
-            "sage_pipe": #"{"pipe_id":"p1"}"#
+            "sage_message_send": #"{"message_id":"m1"}"#
         ])
         let messaging = SageAgentMessaging(tools: tools)
         let address = try await messaging.findAgent(named: "Agent")
         _ = try await messaging.send("do the thing", to: address)
 
         // The wire value went out, not the name the owner typed.
-        let sent = await tools.lastArguments("sage_pipe")
+        let sent = await tools.lastArguments("sage_message_send")
         XCTAssertEqual(sent?["to"]?.stringValue, "wire-value")
     }
 
@@ -64,16 +64,24 @@ final class AgentMessagingTests: XCTestCase {
     func testSendingReturnsTheNodesReceipt() async throws {
         let tools = ScriptedTools(replies: [
             "sage_find_agent": #"{"to":"w","name":"Agent"}"#,
-            "sage_pipe": #"{"pipe_id":"pipe-77"}"#
+            "sage_message_send": #"{"message_id":"msg-77"}"#
         ])
         let messaging = SageAgentMessaging(tools: tools)
         let address = try await messaging.findAgent(named: "Agent")
         let sent = try await messaging.send("look into this", to: address, intent: "research")
 
-        XCTAssertEqual(sent.pipeID, "pipe-77")
-        let arguments = await tools.lastArguments("sage_pipe")
+        XCTAssertEqual(sent.messageID, "msg-77")
+        let arguments = await tools.lastArguments("sage_message_send")
         XCTAssertEqual(arguments?["intent"]?.stringValue, "research")
         XCTAssertEqual(arguments?["payload"]?.stringValue, "look into this")
+
+        // `idempotency_key` is required by the node, so a send without one is a
+        // 400 rather than a duplicate — which would show up as "Mynah couldn't
+        // send that" for every single agent message.
+        XCTAssertFalse(
+            (arguments?["idempotency_key"]?.stringValue ?? "").isEmpty,
+            "no idempotency key: sage_message_send requires one and refuses the send without it"
+        )
     }
 
     /// No pipe id means nothing was queued. Reporting success would leave the
@@ -81,7 +89,7 @@ final class AgentMessagingTests: XCTestCase {
     func testASendWithNoReceiptIsAFailureRatherThanASuccess() async {
         let tools = ScriptedTools(replies: [
             "sage_find_agent": #"{"to":"w","name":"Agent"}"#,
-            "sage_pipe": #"{"status":"maybe"}"#
+            "sage_message_send": #"{"status":"maybe"}"#
         ])
         let messaging = SageAgentMessaging(tools: tools)
         do {

@@ -323,7 +323,7 @@ public enum WorkingReply {
                 "One sec, pulling that up."
             ]
 
-        case "sage_pipe", "sage_find_agent":
+        case "sage_pipe", "sage_message_send", "sage_message_reply", "sage_find_agent":
             // The only genuinely long one: another agent has to pick it up,
             // do the work, and come back. Worth setting expectations wider.
             return [
@@ -531,7 +531,7 @@ public enum WorkingReply {
             case "write_note":
                 return found.map { "\($0) — let me compile that." }
                     ?? "Got what I need, writing it up now."
-            case "sage_pipe", "sage_find_agent":
+            case "sage_pipe", "sage_message_send", "sage_message_reply", "sage_find_agent":
                 return "Passing part of this to another agent now."
             default:
                 break

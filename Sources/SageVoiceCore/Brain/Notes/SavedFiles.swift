@@ -44,10 +44,20 @@ public struct SavedFile: Identifiable, Sendable, Hashable {
     }
 
     /// Rounded the way a person reads a file size.
+    ///
+    /// **`.useBytes` is in the list because leaving it out reads as a bug.**
+    /// Without it `ByteCountFormatter` rounds anything under half a kilobyte to
+    /// "0 KB", and the owner saw exactly that: a 274-byte note beside a photo,
+    /// displayed as `0 KB`, which he read as an empty file being written. The
+    /// note was fine; the label was lying about it.
+    ///
+    /// Companion notes are routinely this small — a title, a date and the path
+    /// of the attachment — so the size the screen is worst at is the size it
+    /// shows most often.
     public var readableSize: String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
-        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
         return formatter.string(fromByteCount: bytes)
     }
 }

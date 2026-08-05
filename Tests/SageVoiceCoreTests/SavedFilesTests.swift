@@ -82,6 +82,46 @@ final class SavedFilesTests: XCTestCase {
         XCTAssertEqual(found.map(\.name), ["new.md", "old.md"])
     }
 
+    /// **A small file must not read as an empty one.**
+    ///
+    /// The owner, looking at the Files list: *"we seem to be storing .md files
+    /// of the task along with the file itself"* — pointing at a companion note
+    /// shown as `0 KB` next to the photo it describes. The note was 274 bytes
+    /// and perfectly fine; `ByteCountFormatter` with `.useKB` as its smallest
+    /// unit rounds anything under half a kilobyte to zero.
+    ///
+    /// Worth its own test because the sizes this screen is worst at are the
+    /// ones it shows most often: every attachment writes a companion note of a
+    /// few hundred bytes.
+    func testASmallFileDoesNotReadAsAnEmptyOne() {
+        let note = SavedFile(
+            path: "/tmp/x.md", name: "x.md", kind: .note, bytes: 274, saved: Date()
+        )
+
+        XCTAssertFalse(
+            note.readableSize.hasPrefix("0"),
+            """
+            a 274-byte note is displayed as "\(note.readableSize)", which reads \
+            as an empty file the appliance wrote for no reason
+            """
+        )
+        XCTAssertTrue(
+            note.readableSize.localizedCaseInsensitiveContains("byte"),
+            "expected bytes for a sub-kilobyte file, got \(note.readableSize)"
+        )
+    }
+
+    /// And the units still work upwards, so the fix is not "always bytes".
+    func testALargeFileStillReadsInKilobytes() {
+        let photo = SavedFile(
+            path: "/tmp/p.jpg", name: "p.jpg", kind: .attachment, bytes: 218_000, saved: Date()
+        )
+        XCTAssertTrue(
+            photo.readableSize.contains("KB") || photo.readableSize.contains("MB"),
+            "a 218 KB photo is displayed as \(photo.readableSize)"
+        )
+    }
+
     // MARK: Removing
 
     func testAFileThatIsOursIsRemoved() throws {

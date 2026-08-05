@@ -9,9 +9,11 @@ import Foundation
 public struct SageAgentMessaging: AgentMessaging {
 
     private let tools: any ToolProviding
+    private let journal: AgentSendJournal
 
-    public init(tools: any ToolProviding) {
+    public init(tools: any ToolProviding, journal: AgentSendJournal = AgentSendJournal()) {
         self.tools = tools
+        self.journal = journal
     }
 
     // MARK: Finding
@@ -61,29 +63,59 @@ public struct SageAgentMessaging: AgentMessaging {
         to recipient: AgentAddress,
         intent: String?
     ) async throws -> SentAgentMessage {
+        // **One key per logical send, written down before the request.**
+        //
+        // `sage_message_send` requires it and SAGE says what it is for: a retry
+        // returns the original `message_id` rather than creating a duplicate,
+        // and it is "reused only when retrying this exact send". Fresh per call,
+        // never derived from the message text — a content-derived key would make
+        // two deliberate sends of the same sentence collide, and the second
+        // would report success while nothing arrived. See `AgentSendJournal`.
+        let key = AgentSendJournal.newKey()
+        journal.starting(key: key, to: recipient.wire, message: message)
+
         var arguments: [String: JSONValue] = [
             // The resolved wire value, never the display name. `AgentAddress`
             // exists so this cannot accidentally be the thing the owner typed.
             "to": .string(recipient.wire),
-            "payload": .string(message)
+            "payload": .string(message),
+            "idempotency_key": .string(key)
         ]
         if let intent, !intent.isEmpty { arguments["intent"] = .string(intent) }
 
         let reply: String
         do {
-            reply = try await tools.call(name: "sage_pipe", arguments: arguments)
+            // **`sage_message_send`, not `sage_pipe`.** The owner: "message
+            // inbox outbox is the official way now". The pipe aliases still
+            // work — no 11.17.x removal is scheduled — but they are the older
+            // surface, and the messages one is what gets durability: 11.17.7
+            // keeps agent messages for 24 hours by default, where a pipe did
+            // not.
+            reply = try await tools.call(name: "sage_message_send", arguments: arguments)
         } catch {
+            // Deliberately left in the journal. The request went out and the
+            // answer never came back, so whether it was delivered is genuinely
+            // unknown — `sage_message_status` is the way to find out, and it
+            // needs a `message_id` this appliance does not have. An entry with
+            // no matching id is exactly that state, recorded.
             throw Self.trouble(from: "\(error)", name: recipient.displayName)
         }
 
         let root = Self.object(in: reply)
-        // A pipe id is the node's receipt. Without one nothing was queued, and
-        // reporting success would leave the owner waiting for a reply to a
-        // message that does not exist.
-        guard let pipeID = root.flatMap({ Self.string($0, "pipe_id") ?? Self.string($0, "id") }) else {
+        // The node's receipt. Without one nothing was queued, and reporting
+        // success would leave the owner waiting for a reply to a message that
+        // does not exist.
+        //
+        // `pipe_id` is still read: a node on the older surface answers with
+        // that name, and refusing it would break sending against every 11.17.x
+        // before the messages tools landed.
+        guard let messageID = root.flatMap({
+            Self.string($0, "message_id") ?? Self.string($0, "pipe_id") ?? Self.string($0, "id")
+        }) else {
             throw Self.trouble(from: reply, name: recipient.displayName)
         }
-        return SentAgentMessage(pipeID: pipeID, to: recipient, sent: Date())
+        journal.finished(key: key)
+        return SentAgentMessage(messageID: messageID, to: recipient, sent: Date())
     }
 
     // MARK: Reading
@@ -114,7 +146,7 @@ public struct SageAgentMessaging: AgentMessaging {
     // MARK: Shapes
 
     static func item(from raw: [String: Any]) -> AgentInboxItem? {
-        guard let id = string(raw, "pipe_id") ?? string(raw, "id") else { return nil }
+        guard let id = string(raw, "message_id") ?? string(raw, "pipe_id") ?? string(raw, "id") else { return nil }
         let sender = string(raw, "from") ?? string(raw, "from_network") ?? "another agent"
 
         // Trust is read from the node rather than inferred. `foreign` and the

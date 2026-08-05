@@ -336,7 +336,8 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// whether it had been refused or had never been sent. A log that cannot
     /// answer "did it send" about a send is not a log.
     static let sendingTools: Set<String> = [
-        "sage_pipe", "sage_pipe_result", "sage_task", "sage_remember", "sage_forget",
+        "sage_pipe", "sage_pipe_result", "sage_message_send", "sage_message_reply",
+        "sage_task", "sage_remember", "sage_forget",
         "sage_reflect", "sage_turn", "write_note"
     ]
 
