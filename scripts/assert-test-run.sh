@@ -102,9 +102,15 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      1928
-#   without Kokoro  1890   (1928 - 38)
-#   floor           1916   (12 under measured, 26 above the failure it must catch)
+#   measured      1954   (1.7.5; was 1928 at 1.7.4)
+#   without Kokoro  1916   (1954 - 38)
+#   floor           1942   (12 under measured, 26 above the failure it must catch)
+#
+# **1.7.5 raised it by 26 and that is the whole point of the rule.** The floor
+# was 1916, which is exactly the without-Kokoro number for this suite — so the
+# gate had drifted to the edge where losing the entire target would have gone
+# unnoticed, purely because the suite grew. Nobody changed the gate; arithmetic
+# did. That is what FLOOR_SITS_UNDER exists to make automatic.
 #
 # **The check caught its own author within the hour.** 1890 was set from a run of
 # 1915, on the "25 under" rule — and 25 under is wrong, because the check fires
@@ -116,7 +122,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1916}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1942}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
