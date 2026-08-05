@@ -1041,7 +1041,30 @@ func runDaemon(_ arguments: [String]) -> Never {
         // After the reply is spoken, not inside `answer` — see `onTurnSpoken`.
         // Awaited rather than detached, deliberately: one slot means a second
         // anchor in flight queues or thrashes rather than overlapping.
+        // **Gated, and on this surface that means it effectively never runs.**
+        //
+        // The daemon's identical call site got this guard earlier the same day
+        // and this one did not — the seventh time in this audit that a fix
+        // landed on one of two twins, and the first where the two were written
+        // hours apart by the same hand.
+        //
+        // It matters more here than there. `CallInvitation` refuses `//call`
+        // unless `brain.holdsARealtimeCall`, which is false on device — so a
+        // call is *always* hosted, and an ungated anchor was a second billed
+        // full-context request after every single spoken turn, buying nothing
+        // against a cache that is server-side and prefix-keyed.
+        //
+        // With the guard, this closure does nothing on any brain that can
+        // currently hold a line. It stays because the condition is the honest
+        // one — anchor a brain with a slot to protect — and because
+        // `holdsARealtimeCall` is a policy that has already flipped once.
+        //
+        // **The useful half of that work was never this.** Cleaning the call's
+        // history — dropping tool traffic, trimming on turn boundaries — shrinks
+        // the prompt and holds the prefix still, and a hosted provider's own
+        // prefix cache is what pays for that. The replay was the local half.
         await callServer.onTurnSpoken {
+            guard callLoop.brain.servesOneCacheSlot else { return }
             await callLoop.anchorPromptCache(history: await callHistory.recent())
         }
 

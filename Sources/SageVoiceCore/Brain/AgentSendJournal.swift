@@ -91,7 +91,35 @@ public struct AgentSendJournal: Sendable {
         write(kept)
     }
 
+    /// Whether this journal may touch the file it was given.
+    ///
+    /// **The suite wrote fabricated sends into the owner's real journal, and it
+    /// took an audit to notice.** Every `SageAgentMessaging(tools:)` in the
+    /// tests took the default journal, so a run left entries reading "do the
+    /// thing" to "wire-value" in `agent-sends.json` — the one file that answers
+    /// "did that message to my agent actually go out". Test noise in a
+    /// diagnostic is bad; *fabricated* entries in the diagnostic somebody
+    /// reaches for after a message goes missing is worse, and a real stranded
+    /// send could be pushed out by the 50-entry bound.
+    ///
+    /// `MynahLog.mayWriteToFile` is the same rule for the same reason, found the
+    /// same way — nearly reporting a bug that was the test suite. Borrowed
+    /// rather than invented, and narrow in the same way: a test that passes its
+    /// own URL is unaffected, so this only ever blocks the default path.
+    ///
+    /// A guard here rather than an injected journal at each call site, because
+    /// "remember to pass a scratch path" is the kind of rule that holds until
+    /// somebody adds the eighth test.
+    static func mayWrite(
+        to url: URL,
+        isTesting: Bool = MynahLog.isRunningUnderXCTest
+    ) -> Bool {
+        guard isTesting else { return true }
+        return url.standardizedFileURL != defaultFileURL().standardizedFileURL
+    }
+
     private func write(_ entries: [Entry]) {
+        guard Self.mayWrite(to: fileURL) else { return }
         // Bounded. This file is written for the life of the appliance, and a
         // stranded entry that nobody ever looks at should not grow without end.
         let bounded = entries.suffix(50)

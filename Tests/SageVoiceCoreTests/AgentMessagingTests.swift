@@ -246,3 +246,59 @@ private actor ScriptedTools: ToolProviding {
 
     struct Missing: Error {}
 }
+
+/// The suite must not write into the owner's own appliance data.
+///
+/// **It did.** Every `SageAgentMessaging(tools:)` above takes the default
+/// journal, so a run left fabricated entries in `agent-sends.json` — "do the
+/// thing" to "wire-value", "look into this" to "w". That is the one file that
+/// answers "did that message to my agent actually go out", so the pollution is
+/// not noise in a scratch file: it is invented evidence in the record somebody
+/// reaches for after a message goes missing, and the 50-entry bound means a real
+/// stranded send can be pushed out by test data.
+///
+/// Found by the 1.7.2 re-audit. `MynahLog` had exactly this bug, found exactly
+/// this way — by nearly reporting a defect that was the test suite — and
+/// `AgentSendJournal.mayWrite(to:)` is its rule, borrowed rather than invented.
+final class AgentSendJournalIsolationTests: XCTestCase {
+
+    func testTheSuiteCannotWriteToTheOwnersJournal() {
+        XCTAssertFalse(
+            AgentSendJournal.mayWrite(to: AgentSendJournal.defaultFileURL(), isTesting: true),
+            "a test run writes fabricated sends into the file the owner diagnoses a lost message from"
+        )
+    }
+
+    /// And the running appliance still writes there, or the journal records
+    /// nothing and the guard has broken the feature instead of the test.
+    func testTheRunningApplianceStillWritesToItsJournal() {
+        XCTAssertTrue(
+            AgentSendJournal.mayWrite(to: AgentSendJournal.defaultFileURL(), isTesting: false)
+        )
+    }
+
+    /// A test that brings its own path is unaffected — the guard is narrow on
+    /// purpose, so tests that assert on file contents still work.
+    func testAScratchPathIsStillWritable() {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("journal-\(UUID().uuidString).json")
+        XCTAssertTrue(AgentSendJournal.mayWrite(to: scratch, isTesting: true))
+    }
+
+    /// End to end: a send through the default journal leaves the real file alone.
+    func testASendDuringTheSuiteLeavesTheRealFileUntouched() async throws {
+        let real = AgentSendJournal.defaultFileURL()
+        let before = (try? Data(contentsOf: real).count) ?? -1
+
+        let tools = ScriptedTools(replies: [
+            "sage_find_agent": #"{"to":"w","name":"Agent"}"#,
+            "sage_message_send": #"{"message_id":"m9"}"#
+        ])
+        let messaging = SageAgentMessaging(tools: tools)
+        let address = try await messaging.findAgent(named: "Agent")
+        _ = try await messaging.send("this must not be filed", to: address)
+
+        let after = (try? Data(contentsOf: real).count) ?? -1
+        XCTAssertEqual(before, after, "the suite wrote a fabricated send into the owner's journal")
+    }
+}

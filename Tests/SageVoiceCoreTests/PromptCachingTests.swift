@@ -76,6 +76,47 @@ final class PromptCachingTests: XCTestCase {
         XCTAssertEqual(once, twice, "the cached prefix does not serialise identically")
     }
 
+    /// **The call surface has the same call site and it was missed.**
+    ///
+    /// `//call` is refused unless `brain.holdsARealtimeCall`, which is false on
+    /// device — so a call is always hosted, and an ungated anchor there was a
+    /// second billed full-context request after every spoken turn. The daemon's
+    /// twin got the guard hours earlier the same day; this one did not. Seventh
+    /// instance in this audit of a fix landing on one of two identical places.
+    func testTheCallSurfaceDoesNotAnchorAHostedBrainEither() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/sage-voiced/main.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(source)
+        let code = scan.text(in: 0..<scan.characters.count)
+
+        XCTAssertTrue(
+            code.contains("onTurnSpoken"),
+            "this test is reading the wrong file — the call's post-turn hook has moved"
+        )
+        XCTAssertTrue(
+            code.contains("guard callLoop.brain.servesOneCacheSlot else { return }"),
+            """
+            the call anchors the prompt cache without a tier guard. Calls are \
+            hosted-only, so this is a paid request after every single spoken \
+            turn for a checkpoint the provider has no slot to hold.
+            """
+        )
+    }
+
+    /// A call cannot be held by the one tier worth anchoring, which is why the
+    /// guard above makes that closure a no-op today. Stated so nobody deletes it
+    /// as dead code without reading why it is dead.
+    func testTheTierThatCanHoldACallIsNotTheTierWorthAnchoring() {
+        XCTAssertTrue(BrainCapabilities.hosted.holdsARealtimeCall)
+        XCTAssertFalse(BrainCapabilities.hosted.servesOneCacheSlot)
+        XCTAssertFalse(BrainCapabilities.onDevice.holdsARealtimeCall)
+        XCTAssertTrue(BrainCapabilities.onDevice.servesOneCacheSlot)
+    }
+
     // MARK: The warm-up that must not run
 
     /// **A hosted brain has no slot to protect, and was being charged to have

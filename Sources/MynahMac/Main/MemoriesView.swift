@@ -882,8 +882,36 @@ final class MemoriesModel {
     /// Narrowed here rather than at the node: `kind` is derived from the stored
     /// text (`Memory.kind`), so there is no domain or query that means "tasks"
     /// and asking for one would return a different, wrong set.
+    /// **The Files shelf shows no memories, and saying so here is what makes the
+    /// destructive control safe.**
+    ///
+    /// This was `shelf == .tasks ? tasks : memories`, so `.files` fell through to
+    /// *every* memory. Three things then lined up into the worst bug this screen
+    /// has had:
+    ///
+    ///  - `mynahOwned` filters `shown`, so it was every memory Mynah owns —
+    ///    including the whole task list;
+    ///  - the Forget-all button renders whenever that is non-empty, so it was on
+    ///    screen on a tab that lists photos;
+    ///  - `isFiltered` is true on any shelf but All, which *suppresses the second
+    ///    confirmation* and switches the dialog to the scoped wording.
+    ///
+    /// So: open Memories to delete one photo, press a button offering to tidy up,
+    /// answer a dialog that says "Forget the ones shown?" — and lose every task,
+    /// appointment and preference the appliance has. One click, one confirmation,
+    /// and the sentence on the dialog was the opposite of what happened.
+    ///
+    /// Fixed here rather than by hiding the button, deliberately. A second guard
+    /// at the control would leave `mynahOwned` still lying about what is on
+    /// screen, and this file has been bitten repeatedly by a fix landing at one
+    /// of two sites. An empty list is the truth — there are no memories on the
+    /// Files shelf — and every consumer becomes correct at once.
     var shown: [Memory] {
-        shelf == .tasks ? memories.filter { $0.kind == .task } : memories
+        switch shelf {
+        case .all: return memories
+        case .tasks: return memories.filter { $0.kind == .task }
+        case .files: return []
+        }
     }
 
     /// The one number on this screen, and it counts rows the owner can see —
