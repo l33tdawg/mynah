@@ -912,6 +912,25 @@ public actor CallTurnServer {
                 log("[call] \(overrun); saying so rather than holding the line")
                 fullReply = CallTurnServer.tookTooLong
             }
+            // **The moment the waiting is over, stop saying so.**
+            //
+            // The `defer` above is a backstop and must stay: it is what covers
+            // the paths that never reach this line — a throw out of the
+            // synthesiser, a cancellation, the `callEnded` return. But a defer
+            // fires at *scope exit*, which here is after the whole
+            // synthesise-and-send loop, after `replyEnd`, and after
+            // `afterSpeaking()`. Left to it alone, the filler stayed alive for
+            // the entire time the answer was being spoken and went on waking on
+            // its cadence — so the caller got "Nearly there." spliced between
+            // two sentences of the answer he had already started hearing, or
+            // spoken as an orphan a beat after it finished.
+            //
+            // That is a regression I introduced moving this into the defer: the
+            // old code cancelled here and covered only the success path, so
+            // widening the cover silently delayed it. Both, not either.
+            // `Task.cancel()` is idempotent.
+            waiting.cancel()
+
             let thought = Date()
             guard !Task.isCancelled else { return }
             log("[call] replying: \(fullReply)")
