@@ -102,10 +102,21 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      1915
-#   without Kokoro  1877   (1915 - 38)
-#   floor           1890   (25 under measured, 13 above the failure it must catch)
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1890}"
+#   measured      1928
+#   without Kokoro  1890   (1928 - 38)
+#   floor           1916   (12 under measured, 26 above the failure it must catch)
+#
+# **The check caught its own author within the hour.** 1890 was set from a run of
+# 1915, on the "25 under" rule — and 25 under is wrong, because the check fires
+# at floor + 38. This release then added thirteen more tests and the gate went
+# red on a green suite, which is exactly the behaviour asked of it. See
+# FLOOR_SITS_UNDER for the arithmetic that replaced the rule of thumb.
+#
+# The runner's number is NOT this one and lives in .github/workflows/release.yml:
+# CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
+# graph and its measured count is 38 lower. Two environments, two floors, both to
+# be maintained — raising this one alone is what turned CI red the first time.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1916}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
@@ -115,6 +126,21 @@ MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1890}"
 # than failing anything. A floor that cannot see a 38-test hole cannot see any
 # target loss at all.
 SMALLEST_TEST_TARGET="${MYNAH_SMALLEST_TEST_TARGET:-38}"
+
+# How far under the measured count a freshly-set floor sits.
+#
+# **Not 25, and the difference is the whole reason this is a named constant.**
+# The obvious choice is "25 under, so there is room for 25 more tests", and it is
+# wrong by construction: the rot check fires at MIN_EXECUTED + 38, so a floor set
+# 25 under a count of N fires once the suite reaches N + 13. It buys 13 tests of
+# room while telling you it bought 25 — and the first remediation message this
+# script ever printed said exactly that, in a release that had already added
+# enough tests to spend it.
+#
+# The arithmetic that actually holds: a floor set K under the measured count
+# fires after (SMALLEST_TEST_TARGET - K) further tests. So K is chosen from the
+# room wanted, not the other way round. 12 under 38 leaves 26.
+FLOOR_SITS_UNDER="${MYNAH_FLOOR_SITS_UNDER:-12}"
 # The ceiling has to sit above the 21 that skip on a healthy build Mac and below
 # the smallest number a missing document tool produces. **26 was set against
 # pandoc's +12 and was blind to the tool this change was actually added to
@@ -242,13 +268,21 @@ smallest test target ($SMALLEST_TEST_TARGET tests, KokoroEngineTests) would leav
 $(( EXECUTED - SMALLEST_TEST_TARGET )), which still clears $MIN_EXECUTED — so the
 one failure this floor exists to catch would pass it.
 
-Raise it in this commit, in scripts/assert-test-run.sh:
-  MIN_EXECUTED=\"\${MYNAH_MIN_EXECUTED_TESTS:-$(( EXECUTED - 25 ))}\"
+Raise it to $(( EXECUTED - FLOOR_SITS_UNDER )) in this commit.
 
-That is 25 under today's count and $(( SMALLEST_TEST_TARGET - 25 )) above the
-failure it must catch, which leaves room for 25 more tests before this fires
-again. Update the measured/without-Kokoro/floor block above it in the same edit,
-so the next person reads numbers rather than history."
+If this run was on the build Mac, that means editing scripts/assert-test-run.sh:
+  MIN_EXECUTED=\"\${MYNAH_MIN_EXECUTED_TESTS:-$(( EXECUTED - FLOOR_SITS_UNDER ))}\"
+If it was CI, the number lives in .github/workflows/release.yml instead, in the
+env block of the step that just failed. The two graphs differ — the runner does
+not stage vendor/onnxruntime, so it has 38 fewer tests — so they hold different
+numbers and both have to be maintained. Setting one and not the other is how
+this check first went red.
+
+$(( EXECUTED - FLOOR_SITS_UNDER )) is $FLOOR_SITS_UNDER under today's count and
+$(( SMALLEST_TEST_TARGET - FLOOR_SITS_UNDER )) above the failure it must catch,
+which leaves room for $(( SMALLEST_TEST_TARGET - FLOOR_SITS_UNDER )) more tests
+before this fires again. Update the measured/without-Kokoro/floor block above it
+in the same edit, so the next person reads numbers rather than history."
 fi
 
 if (( SKIPPED > MAX_SKIPPED )); then

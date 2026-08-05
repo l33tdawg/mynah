@@ -939,7 +939,12 @@ public actor CallTurnServer {
                 if let audio = try? await synthesizer.synthesize(
                     SpeechRequest(text: opener.line, voice: configuration.voice, speed: configuration.speed)
                 ) {
-                    guard !Task.isCancelled else { return }
+                    // The guard that was missed when the outcomes were added.
+                    // Without it this exit reported "stopped before it began"
+                    // about a turn that had already been heard, transcribed and
+                    // had an opener synthesised for it — which is the precise
+                    // kind of mislabelling the outcome strings exist to end.
+                    guard !Task.isCancelled else { outcome = "barged in on during the opener"; return }
                     try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
                     log("[call] said \"\(opener.line)\" after \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
                 }
@@ -985,8 +990,10 @@ public actor CallTurnServer {
                     }
                     previous = line
                     position += 1
-                    fillers.fired()
-                    await self.sayFiller(line, over: writer)
+                    // Counted on the way out, not on the way in: `position` and
+                    // `previous` govern the ladder and are about what was
+                    // chosen; the tally is about what was heard.
+                    if await self.sayFiller(line, over: writer) { fillers.fired() }
                 }
             }
             defer { waiting.cancel() }
@@ -1325,14 +1332,24 @@ public actor CallTurnServer {
     /// synthesis takes a few hundred milliseconds and the answer may land
     /// inside them — filler arriving *after* the reply has started is worse
     /// than the silence it was meant to cover.
-    private func sayFiller(_ line: String, over writer: CallFrameWriter) async {
-        guard !Task.isCancelled else { return }
+    /// - Returns: whether the caller actually heard it.
+    ///
+    /// Three of the four exits here speak nothing — two cancellations and a
+    /// synthesiser failure — and the count that feeds the turn log has to know
+    /// the difference. Counting at the decision instead would over-report by one
+    /// on precisely the barge-in paths that log was widened to cover: a filler
+    /// chosen and then cancelled by the answer landing is not a filler the
+    /// caller sat through.
+    @discardableResult
+    private func sayFiller(_ line: String, over writer: CallFrameWriter) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard let audio = try? await synthesizer.synthesize(
             SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
-        ) else { return }
-        guard !Task.isCancelled else { return }
+        ) else { return false }
+        guard !Task.isCancelled else { return false }
         try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
         log("[call] said \"\(line)\" while working")
+        return true
     }
 
     private func transcribe(_ wav: Data) async throws -> String {

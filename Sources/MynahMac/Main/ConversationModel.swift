@@ -399,7 +399,15 @@ actor ToolLoopTurnEngine: TurnEngine {
                 CompositeToolSource.Source(
                     label: "web",
                     provider: WebSearchToolSource(
-                        backends: WebSearchToolSource.defaultBackends(browserEngine: browserEngine)
+                        backends: WebSearchToolSource.defaultBackends(browserEngine: browserEngine),
+                        // The daemon has always passed a log sink here and the
+                        // window never did, which mattered little while both ran
+                        // the same providers. It matters now: after the crash
+                        // fix this is the ONLY process that starts a browser
+                        // engine, so a provider falling over — "DuckDuckGo
+                        // (browser) failed: … — trying next provider" — is
+                        // visible nowhere else in the appliance.
+                        log: { conversationLog.info("\($0)") }
                     ),
                     // The owner's phone is a long way from this Mac. "The
                     // internet lookup is down" must not read as "Mynah is down".

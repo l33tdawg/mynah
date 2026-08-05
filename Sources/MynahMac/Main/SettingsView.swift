@@ -796,7 +796,16 @@ final class SettingsModel {
         } else {
             lines.append("Brain not recorded")
         }
-        lines.append("Stored keys \(providersWithKeys.isEmpty ? "none" : providersWithKeys.joined(separator: ", "))")
+        // **Every stored key, not the brain-filtered list.**
+        //
+        // `providersWithKeys` is filtered because the Brain heading above it
+        // would otherwise call a search key a brain. A diagnostics paste has the
+        // opposite job: it is what somebody reads when search is not working,
+        // and the first question is whether a key is stored at all. Reusing the
+        // filtered property here hid `brave-search` from the one place it most
+        // needed to appear — one property, two headings, opposite requirements.
+        let allStoredKeys = KeyStorage.load().keys.sorted()
+        lines.append("Stored keys \(allStoredKeys.isEmpty ? "none" : allStoredKeys.joined(separator: ", "))")
 
         lines.append("Transcriber \(speech.transcriberPath ?? "not found")")
         lines.append("Speech model \(speech.modelPath ?? "not found")")

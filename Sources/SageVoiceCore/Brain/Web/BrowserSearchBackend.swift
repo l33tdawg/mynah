@@ -36,9 +36,25 @@ import WebKit
 /// ## What it costs
 ///
 /// A page load rather than a request: roughly a second, against a turn that
-/// already spends 40–60 s in the model. Bounded by `loadTimeout`, and the plain
-/// HTTP backend stays behind it in the chain, so a Mac where WebKit will not
-/// start is no worse off than before.
+/// already spends 40–60 s in the model. Bounded by `loadTimeout`.
+///
+/// ## What this cost, and the sentence that used to be here
+///
+/// This paragraph ended: *"and the plain HTTP backend stays behind it in the
+/// chain, so a Mac where WebKit will not start is no worse off than before."*
+///
+/// That was wrong in the way that matters. **WebKit2 does not decline to start
+/// outside an application — it traps the process.** So nothing behind it in the
+/// chain is a fallback, because nothing behind it runs: on 5 August 2026 the
+/// daemon died with `EXC_BREAKPOINT` inside `WebKit::InitializeWebKit2()`, three
+/// seconds after telling the owner it was on it, and launchd restarted it while
+/// he waited for an answer that no longer had a process to arrive from. A Mac
+/// where WebKit would not start was not no-worse-off. It was dead.
+///
+/// This type is therefore reachable **only** from a process holding a live
+/// `NSApplication`, which today means the window app alone. See
+/// `BrowserEngineAvailability` for the gate and
+/// `NoBrowserEngineOutsideTheAppTests` for what keeps it there.
 @MainActor
 public final class BrowserSearchBackend: NSObject, WebSearchBackend {
 

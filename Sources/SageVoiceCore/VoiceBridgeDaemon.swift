@@ -300,6 +300,18 @@ public actor VoiceBridgeDaemon {
     private func beginQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) {
         quietPeriod?.cancel()
         workingLines.beginTurn()
+        // **A promise belongs to the turn that made it, and dies with it.**
+        //
+        // Without this, `madeThisRun` outlives its turn — and a promise whose
+        // answer never reached Signal would then be discharged by the *next*
+        // turn's answer. Concretely: he asks A, is told "I'm on it", the answer
+        // to A fails to send, he asks B, B answers fine — and A's promise is
+        // deleted on B's way out. He is owed an answer to A, the record that
+        // said so is gone, and no apology is ever made.
+        //
+        // Clearing it here rather than at the end of a turn because the end of a
+        // turn is exactly what an abandoned one never reaches.
+        madeThisRun = nil
         quietPeriod = Task { [weak self] in
             try? await Task.sleep(
                 for: .seconds(VoiceBridgeDaemon.quietBeforeWorkingLine)
@@ -1618,11 +1630,18 @@ public actor VoiceBridgeDaemon {
         let deadline = Date().addingTimeInterval(Self.longestWaitForSignalBeforeApologising)
         while await !signal.isConnected {
             guard Date() < deadline else {
-                // Deliberately leaves the record in place. A boot that never
-                // reached Signal has not spent the apology, and the next boot
-                // should still try — this is the one path where doing nothing is
-                // better than clearing.
-                log("[daemon] could not reach Signal to apologise for the unkept promise; leaving it for the next start")
+                // Deliberately clears nothing. A boot that never reached Signal
+                // has not spent the apology, so the next start should try again.
+                //
+                // It is not a guarantee, and saying otherwise here would be a
+                // comment the code does not honour: a turn that begins while
+                // this is still connecting writes its own promise over the file,
+                // and the inherited one is then gone. One record holds one
+                // promise by design, and the newer one is the better thing to
+                // keep — but the older apology is lost, so it is logged rather
+                // than left to be inferred.
+                log("[daemon] could not reach Signal to apologise for the unkept promise; "
+                    + "leaving it for the next start unless a newer promise replaces it")
                 return
             }
             try? await Task.sleep(for: .milliseconds(500))

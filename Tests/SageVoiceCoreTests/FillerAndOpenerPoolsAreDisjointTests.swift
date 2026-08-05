@@ -5,60 +5,111 @@ import XCTest
 ///
 /// ## Why this is worth a test of its own
 ///
-/// It is not a tidiness rule. `"One moment."` and `"Bear with me."` are in the
-/// call's filler ladder *and* in `WaitingPhrases`, and the collision was live on
-/// the owner's Mac: `bridge.log` shows the call **opener** saying "One moment."
-/// four times, in the opener's own log format.
+/// The opener is what the caller hears the instant they stop speaking; the
+/// ladder covers the wait after it. Drawing the same words for both means a
+/// caller hears a line and then, six seconds later, the same line — a stutter
+/// that reads as a stuck machine, which is exactly the impression the ladder
+/// exists to prevent.
 ///
-/// Two things break, and the second is worse than the first.
+/// The second failure is worse, because it is how the first would stay broken.
+/// The only way this suite can tell a ladder line from an opener is pool
+/// membership — `CallFiller.isAFillerLine`, which is
+/// `Set(pools.flatMap { $0 }).contains`. `FillerStopsWhenTheAnswerLandsTests`
+/// protects itself against a vacuous pass with `XCTAssertFalse(fillers.isEmpty)`,
+/// and a colliding string satisfies that guard **with an opener**, having never
+/// run the ladder at all. So a collision disables the check that exists to stop
+/// this suite passing against the defect.
 ///
-/// **On the phone.** The opener is what the caller hears the instant they finish
-/// speaking; the ladder is what covers the wait afterwards. Drawing the same
-/// three words for both means a caller can hear "One moment." and then, six
-/// seconds later, "One moment." — a stutter that reads as a stuck machine, which
-/// is the exact impression the ladder exists to prevent.
+/// ## Which pool, and the mistake this file was written with
 ///
-/// **In the test suite, which is how it would stay broken.** The only way the
-/// suite can tell a ladder line from an opener is pool membership —
-/// `CallFiller.isAFillerLine`, which is `Set(pools.flatMap { $0 }).contains`.
-/// `FillerStopsWhenTheAnswerLandsTests` guards against a vacuous pass with
-/// `XCTAssertFalse(fillers.isEmpty)`, and a colliding string satisfies that
-/// guard **with an opener**, having never run the ladder at all. So the
-/// collision disables the non-vacuity check that exists to stop this suite
-/// passing against the defect.
+/// The first version of this compared the ladder against `WaitingPhrases`, and
+/// **the call never speaks a `WaitingPhrases` line.** That pool has exactly one
+/// call site in the whole tree — `VoiceBridgeDaemon`'s thinking
+/// acknowledgement, on Signal, behind a flag that defaults off. The call's
+/// opener comes from `WorkingReply.opening` / `interruptedOpening`.
 ///
-/// Which makes this the guard that protects the other guard, and the reason it
-/// asserts a property of the data rather than a behaviour.
+/// So the guard was watching a pool that could not produce the failure it
+/// describes: it would have gone green forever while the real collision sat
+/// unwatched. Caught by the 1.7.3 review, and it is the same defect this
+/// codebase keeps making — a rule enforced against one surface while the
+/// identical one goes unexamined — committed inside the test written to catch
+/// that defect.
+///
+/// It now checks both pools, and `WorkingReply` is the load-bearing one.
 final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
 
-    func testNoFillerLineIsAlsoAWaitingPhrase() {
+    /// Everything the call can say as an opener.
+    ///
+    /// `opening` returns either a per-tool line, an instant line, or a
+    /// catch-all, and `interruptedOpening` prefixes a specific one or falls back
+    /// to its own sentence. Enumerated rather than sampled, because `opening`
+    /// chooses at random within a pool and one draw proves nothing about the
+    /// other two — the mistake `CallFiller.isAFillerLine` documents.
+    private var everyOpenerTheCallCanSpeak: Set<String> {
+        var lines = Set(WorkingReply.catchAllOptions)
+        for tools in [["web_search"], ["sage_recall"], ["sage_task"], ["sage_remember"], ["notes_write"]] {
+            lines.formUnion(WorkingReply.lines(forTools: tools) ?? [])
+        }
+        for request in ["what's the weather", "remind me to call him", "hello", "what did I say yesterday"] {
+            lines.formUnion(WorkingReply.instantOptions(forRequest: request) ?? [])
+        }
+        // The interrupted fallback, which is a literal rather than a pool.
+        lines.insert("Right — let me get that instead.")
+        return lines
+    }
+
+    /// **The one that matters: the ladder against what the call actually says.**
+    func testNoFillerLineIsAlsoSomethingTheCallSaysAsAnOpener() {
         let ladder = Set(CallFiller.pools.flatMap { $0 })
-        let openers = Set(WaitingPhrases.all)
-        let shared = ladder.intersection(openers).sorted()
+        let shared = ladder.intersection(everyOpenerTheCallCanSpeak).sorted()
 
         XCTAssertEqual(
             shared, [],
             """
-            these lines are in both the call's filler ladder and the opener pool: \
-            \(shared.joined(separator: ", ")). A caller can be told the same three \
-            words twice six seconds apart, and — worse — the suite's only way to \
-            recognise a filler is pool membership, so an opener now counts as \
-            "a filler fired" and the non-vacuity guard in \
-            FillerStopsWhenTheAnswerLandsTests can be satisfied without the ladder \
-            ever running.
+            these lines are in both the call's filler ladder and its opener pool: \
+            \(shared.joined(separator: ", ")). A caller can be told the same words \
+            twice six seconds apart, and the suite's only way to recognise a filler \
+            is pool membership — so an opener would count as "a filler fired" and \
+            the non-vacuity guard in FillerStopsWhenTheAnswerLandsTests could be \
+            satisfied without the ladder ever running.
             """
         )
     }
 
-    /// Both pools are non-empty, so an emptied one cannot make this pass.
-    func testBothPoolsActuallyHaveLinesInThem() {
+    /// And against the Signal-side pool too, which is where the historical
+    /// collision actually was.
+    func testNoFillerLineIsAlsoAWaitingPhrase() {
+        let ladder = Set(CallFiller.pools.flatMap { $0 })
+        let shared = ladder.intersection(Set(WaitingPhrases.all)).sorted()
+
+        XCTAssertEqual(
+            shared, [],
+            "the filler ladder shares lines with WaitingPhrases: \(shared.joined(separator: ", "))"
+        )
+    }
+
+    /// Every pool is non-empty, so an emptied one cannot make the above pass.
+    ///
+    /// The sentinel matters more here than usual: `lines(forTools:)` and
+    /// `instantOptions(forRequest:)` both return `Optional`, and a `?? []` on a
+    /// nil is indistinguishable from a pool with nothing in it.
+    func testEveryPoolActuallyHasLinesInIt() {
         XCTAssertFalse(
             CallFiller.pools.flatMap { $0 }.isEmpty,
             "the filler ladder has no lines, so the disjointness above is vacuously true"
         )
         XCTAssertFalse(
             WaitingPhrases.all.isEmpty,
-            "the opener pool has no lines, so the disjointness above is vacuously true"
+            "WaitingPhrases has no lines, so the disjointness above is vacuously true"
+        )
+        XCTAssertGreaterThan(
+            everyOpenerTheCallCanSpeak.count, 10,
+            """
+            only \(everyOpenerTheCallCanSpeak.count) opener lines were collected, which \
+            is too few to be the real pool — lines(forTools:) or instantOptions(forRequest:) \
+            is returning nil for the probes above, so the intersection is comparing \
+            against almost nothing and cannot fail.
+            """
         )
     }
 

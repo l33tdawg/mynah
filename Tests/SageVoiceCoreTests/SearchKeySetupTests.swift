@@ -127,26 +127,56 @@ final class SearchKeySetupTests: XCTestCase {
     /// is the one statement on that screen the owner has to take on trust. Left
     /// unfiltered, connecting search on a Mac with no brain would produce a
     /// Brain group announcing he had one.
-    @MainActor
+    ///
+    /// **Read as a source scan, not as a re-implementation.** The first version
+    /// of this test wrote out the filter expression again — `stored.keys.filter
+    /// { APIKeyOnboarding.instructions(forProvider: $0) != nil }` — and asserted
+    /// on *that*. It passed with the production filter deleted, because it never
+    /// touched the production filter: it proved only that the expression the
+    /// test itself had just written did what the test said. Found by the 1.7.3
+    /// review. A guard that cannot fail is worse than no guard, because it is
+    /// read as coverage.
+    ///
+    /// `SettingsModel.providersWithKeys` cannot be called directly — it reads
+    /// `KeyStorage.load()` from a fixed path with nothing injectable — so what
+    /// is checkable is that the filter is still *in* it. Both halves are
+    /// asserted: the production property still filters, and the filter's
+    /// predicate really does exclude the search key.
     func testAStoredSearchKeyIsNotShownAsABrain() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mynah-settings-keys-\(UUID().uuidString)", isDirectory: true)
-        let url = directory.appendingPathComponent("provider-keys.json")
-        try OwnerOnlyFileSecurity.prepareDirectory(directory)
-        try Data(#"{"brave-search":"tok-123","deepseek":"sk-1"}"#.utf8).write(to: url)
+        // Half one: the predicate genuinely separates them. Not a
+        // re-implementation of the filter — this is the fact the filter relies
+        // on, stated against the two real identifiers.
+        XCTAssertNil(
+            APIKeyOnboarding.instructions(forProvider: ProviderKeyStore.searchProvider),
+            "the search provider now has brain instructions, so filtering by them would no longer exclude it"
+        )
+        XCTAssertNotNil(
+            APIKeyOnboarding.instructions(forProvider: "deepseek"),
+            "a real brain has no instructions, so the filter would hide brains the owner does have"
+        )
 
-        let stored = ProviderKeyStore(url: url).load()
-        let shownAsBrains = stored.keys
-            .filter { APIKeyOnboarding.instructions(forProvider: $0) != nil }
-            .sorted()
+        // Half two: the production property still applies it. This is the part
+        // the earlier version could not fail on.
+        let settings = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/MynahMac/Main/SettingsView.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(settings)
+        let declaration = try XCTUnwrap(
+            scan.indices(of: "var providersWithKeys: [String] {").first,
+            "providersWithKeys is gone from SettingsView, so this guard is reading for something that no longer exists"
+        )
+        let body = scan.text(in: declaration..<min(declaration + 260, scan.characters.count))
 
-        XCTAssertEqual(
-            shownAsBrains, ["deepseek"],
+        XCTAssertTrue(
+            body.contains("APIKeyOnboarding.instructions(forProvider:"),
             """
-            the Brain group would list \(shownAsBrains) as brains with keys. \
-            A search provider shown there tells an owner with no brain that he \
-            has one, on the row that exists because nothing else on the screen \
-            knows.
+            SettingsView.providersWithKeys no longer filters by brain instructions, so \
+            the Brain group will list every stored key as a brain — telling an owner who \
+            connected only web search that he has a brain called Brave Search, on the row \
+            that exists because nothing else on that screen knows what the brain is.
             """
         )
     }

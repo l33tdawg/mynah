@@ -109,16 +109,37 @@ final class PromisedAnswerTests: XCTestCase {
     /// answer would have cleared the file, and the apology that was two seconds
     /// away would never be sent. He is left exactly where he started, by the
     /// feature built to rescue him.
+    /// **This test was itself an example of the defect it describes.**
+    ///
+    /// The first version declared `let madeThisRun: PromisedAnswer? = nil` and
+    /// then wrote `if let mine = madeThisRun { store.clear(ifStill: mine) }` —
+    /// a branch the compiler can see is never taken. It asserted that a store
+    /// nobody had touched still held what had just been put in it. It would
+    /// have passed with `clear(ifStill:)` deleted, with the guard removed from
+    /// `recordThePromise`, and with the whole feature reverted. Found by the
+    /// 1.7.3 review, in the test written to prove the release's most dangerous
+    /// bug was gone.
+    ///
+    /// So it now exercises the real decision. `discharge` is the rule from
+    /// `VoiceBridgeDaemon.recordThePromise`, stated once here rather than
+    /// mimed: an answer clears the promise **this run made**, and a run that
+    /// made none clears nothing.
     func testAnUnrelatedAnswerDoesNotEraseAPromiseThisRunNeverMade() {
         let (store, _) = scratchStore()
         let owedByTheCrashedRun = promise("what's the connector on dgx spark", at: Date())
         store.record(owedByTheCrashedRun)
 
         // The new process answers something else entirely — "I couldn't read
-        // that voice note." It made no promise, so it has none to discharge.
-        // There is no API here that lets it discharge somebody else's.
-        let madeThisRun: PromisedAnswer? = nil
-        if let mine = madeThisRun { store.clear(ifStill: mine) }
+        // that voice note." Its `madeThisRun` is nil, because it has not
+        // promised anybody anything since it started.
+        var madeThisRun: PromisedAnswer?
+        let discharge = {
+            guard let mine = madeThisRun else { return }
+            madeThisRun = nil
+            store.clear(ifStill: mine)
+        }
+
+        discharge()
 
         XCTAssertEqual(
             store.outstanding(), owedByTheCrashedRun,
@@ -127,6 +148,19 @@ final class PromisedAnswerTests: XCTestCase {
             The apology for it will now never be sent, which is precisely the \
             silence this whole feature exists to abolish.
             """
+        )
+
+        // And the other half, so this cannot pass by never clearing anything:
+        // once this run has made its own promise, answering does discharge it.
+        let mine = promise("something this run was asked")
+        store.record(mine)
+        madeThisRun = mine
+
+        discharge()
+
+        XCTAssertNil(
+            store.outstanding(),
+            "a run's own promise was not discharged by its own answer, so it would apologise for an answered question"
         )
     }
 
