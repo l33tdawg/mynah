@@ -42,6 +42,7 @@ func usage() -> Never {
       sage-voiced verify-sage <path/to/SAGE.app>
       sage-voiced search "<query>"
       sage-voiced key [--provider gemini] [--key <key>]   instructions, then verify
+      sage-voiced key --provider brave-search --key <token> --save   connect web search
       sage-voiced google [--provision] [--sign-out]        sign in with Google
       sage-voiced daemon --allow <your-number> [--account N] [--sage PATH]
                          [--reply-prefix "MYNAH >> "] [--acknowledge]
@@ -49,7 +50,10 @@ func usage() -> Never {
       sage-voiced calendar [--plan|--undo] [--sage PATH]  mirror dated tasks into iCal
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
-    Web search uses Brave when BRAVE_SEARCH_API_KEY is set, DuckDuckGo otherwise.
+    Web search uses Brave when a key is stored (or BRAVE_SEARCH_API_KEY is set),
+    and a keyless scrape otherwise — which gets challenge pages after a few
+    questions, so connect a key if search matters. The daemon reads it at start,
+    so restart it after saving one.
 
     brain providers:
       ollama (default, local)   openai     deepseek   moonshot
@@ -564,8 +568,25 @@ func runSearch(_ arguments: [String]) -> Never {
 func runKey(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
     let providerID = flags["provider"] ?? "gemini"
+
+    // The search provider, before the brain vocabulary gets a look at it.
+    //
+    // Everything below this point is brain-shaped — `instructions` names a
+    // model, `shapeProblem` knows what a brain key looks like, `makeBackend`
+    // builds one — and Brave Search is none of those things. It had no door at
+    // all until now: the guard below refuses the identifier, and `makeBackend`
+    // would refuse it again if it got past.
+    if SearchKeySetup.resolvesToSearchProvider(providerID) {
+        runSearchKey(arguments, flags: flags)
+    }
+
     guard let instructions = APIKeyOnboarding.instructions(forProvider: providerID) else {
-        exit(fail("no key instructions for provider '\(providerID)'"))
+        exit(fail("""
+        no key instructions for provider '\(providerID)'.
+
+        Brains: \(APIKeyOnboarding.keyedProviders.joined(separator: ", "))
+        Search: brave-search — sage-voiced key --provider brave-search --key <token> --save
+        """))
     }
 
     guard let raw = flags["key"] ?? ProcessInfo.processInfo.environment[
@@ -618,6 +639,67 @@ func runKey(_ arguments: [String]) -> Never {
             print("rerun with --save to keep it")
         }
         return 0
+    }
+}
+
+/// Connects the search provider. Reached from `runKey`, never called directly.
+///
+/// Separate from the brain path rather than folded into it: the two share the
+/// word "key" and nothing else. This one has no model to pick, no shape to
+/// validate, and its check is a real search rather than a completion.
+func runSearchKey(_ arguments: [String], flags: [String: String]) -> Never {
+    let instructions = SearchKeySetup.instructions
+
+    guard let raw = flags["key"]
+        ?? ProcessInfo.processInfo.environment["BRAVE_SEARCH_API_KEY"] else {
+        print("""
+
+        Connect \(instructions.providerName)
+
+        \(instructions.steps.enumerated().map { "  \($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+
+          \(instructions.keyPageURL.absoluteString)
+
+        \(instructions.looksLikeHint)
+        \(instructions.costNote ?? "")
+
+        Then: sage-voiced key --provider brave-search --key <your token> --save
+
+        Without one, web search falls back to a keyless scrape, which is what
+        gets handed a challenge page when you ask more than a few questions.
+
+        """)
+        exit(0)
+    }
+
+    runAndExit {
+        print("checking the token against \(instructions.providerName)…")
+        let outcome = await SearchKeySetup.connect(
+            raw,
+            into: ProviderKeyStore(),
+            save: arguments.contains("--save"),
+            // A real query is the check. There is no shape to test — the token
+            // is opaque — so the only question worth asking is whether Brave
+            // accepts it.
+            verify: { key in
+                _ = try await BraveSearchBackend(apiKey: key).search(query: "mynah key check", count: 1)
+            }
+        )
+
+        switch outcome {
+        case .saved:
+            print("saved — the daemon will use it on its next start")
+            return 0
+        case .verifiedButNotSaved:
+            print("that token works — rerun with --save to keep it")
+            return 0
+        case .empty:
+            return fail("no token was given")
+        case .rejected(let why):
+            return fail("\(instructions.providerName) did not accept that token: \(why)")
+        case .couldNotSave(let why):
+            return fail("could not save the token: \(why)")
+        }
     }
 }
 

@@ -496,11 +496,22 @@ final class SettingsModel {
         BrainSelectionStore.current(defaults)
     }
 
-    /// Providers with a key stored on this Mac. Real, persisted fact — shown
-    /// when the brain choice itself was never recorded, so the screen still has
-    /// something true to say.
+    /// *Brain* providers with a key stored on this Mac. Real, persisted fact —
+    /// shown when the brain choice itself was never recorded, so the screen
+    /// still has something true to say.
+    ///
+    /// **Filtered, because the key file is no longer brains only.** It is read
+    /// whole and rendered under the Brain heading as "Keys saved on this Mac",
+    /// and it now also holds `brave-search` — a search provider, which has never
+    /// been a brain. Unfiltered, an owner who connected search and no brain
+    /// would be shown a Brain group announcing that he had one. Worse than a
+    /// cosmetic slip: this row exists precisely for the case where nothing else
+    /// on the screen knows what the brain is, so it is the one statement he has
+    /// to take on trust.
     var providersWithKeys: [String] {
-        KeyStorage.load().keys.sorted()
+        KeyStorage.load().keys
+            .filter { APIKeyOnboarding.instructions(forProvider: $0) != nil }
+            .sorted()
     }
 
     func refresh() {
