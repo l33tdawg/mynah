@@ -5,14 +5,33 @@ import XCTest
 ///
 /// This is the seam every SAGE answer enters the product through, and it was
 /// wrong in three places at once. The node writes for an AI agent, not for this
-/// app: it prepends a banner on the first call of a session and appends a
-/// `[SAGE] Reminder: …` every few calls after that. Trailing bytes fail
-/// `JSONSerialization` outright, and every reader here treated that failure as
-/// *empty* — so the appliance reported no tasks and no waiting messages while
+/// app: it prepends a banner on the first call of a session and — at the time —
+/// appended a `[SAGE] Reminder: …` every few calls after that. Trailing bytes
+/// fail `JSONSerialization` outright, and every reader here treated that failure
+/// as *empty* — so the appliance reported no tasks and no waiting messages while
 /// the node was answering with three of one.
 ///
 /// Measured against the real thing on 2 August: 1,709 characters, of which the
 /// last 121 were the reminder.
+///
+/// ## Half of that is no longer true of the node, and the parser stays anyway
+///
+/// **The trailing nudge has not existed since 11.16.1.** 11.17.x states the
+/// position in the source: *"Session state is advisory only. MCP operations must
+/// never be blocked or padded"* (`internal/mcp/server.go:412-413`). So the
+/// fixtures below carry a suffix the appliance will not meet again.
+///
+/// The **leading** banner is still real — server.go:417-422 prepends it with a
+/// `\n\n---\n\n` separator on the first tool call of a session — which is what
+/// keeps this parser load-bearing rather than legacy. It scans braces rather
+/// than trusting the whole reply to be JSON, and that is required for the
+/// prefix whether or not anything follows.
+///
+/// The trailing cases are kept deliberately rather than deleted. A parser that
+/// tolerates bytes on both sides costs nothing, an installed node may be older
+/// than the appliance (`SageNodeChoice` runs whichever SAGE is on the Mac), and
+/// deleting a passing test to make a comment true is how a defence disappears
+/// while everyone believes it is there.
 final class SageReplyTests: XCTestCase {
 
     private let real = """
@@ -117,10 +136,14 @@ final class SageReplyCallersTests: XCTestCase {
     func testTheAgentInboxReadsThroughAReminder() {
         // The quiet one. An inbox that cannot be parsed reports as clear, so
         // this failed by telling the owner nobody had written to them.
+        // An **inbox** item, so the keys are the inbox's: `from` and
+        // `requires_reply`. Not the outbox shape `PipeReplyTests` uses — the two
+        // are different folders of one tool and conflating them is how `payload`
+        // nearly got read as somebody else's answer.
         let reply = withReminder("""
         {"count":1,"items":[
-          {"message_id":"p1","completed_at":"2026-08-05T09:15:00Z","counterparty":"Cerebrum","payload":"The quote came back.",
-           "trust":"agent_untrusted","requires_result":false}]}
+          {"message_id":"p1","from":"Cerebrum","payload":"The quote came back.",
+           "trust":"agent_untrusted","requires_reply":false}]}
         """)
 
         let root = SageAgentMessaging.object(in: reply)
@@ -151,13 +174,20 @@ final class SageReplyCallersTests: XCTestCase {
 /// The owner had Mynah send a test note to another agent. It was delivered and
 /// acknowledged within seconds. He then asked *"anything in the inbox?"* and
 /// Mynah answered *"Inbox is clear."* — truthfully, because it had checked the
-/// one place the answer could not be. `sage_inbox` says so itself: *"This does
-/// not return results for pipes you sent; completed results arrive separately
-/// in sage_turn.pipe_results, so a clean inbox is not evidence that no reply
-/// exists."*
+/// one place the answer could not be. `sage_inbox` says so itself: a clean inbox
+/// is not evidence that no reply exists, because a reply to work *you* sent
+/// never lands there.
 ///
-/// `SageRitual` is the only place this appliance calls `sage_turn`, and it
+/// `SageRitual` was the only place this appliance called `sage_turn`, and it
 /// discarded the answer. So every reply any agent ever sent back was dropped.
+///
+/// **Then the fix rotted.** `sage_turn.pipe_results`, which the inbox's own
+/// documentation named as the channel, was renamed at 11.17.4 and removed at
+/// 11.17.9 — and .9 made `sage_turn` payload-free besides. The answer now comes
+/// from `sage_message_history(folder: "outbox")`, a passive read of this
+/// appliance's own sends. See `SageRitual.noteResults`, and
+/// `Tests/Fixtures/sage_message_history-outbox-11.17.10.json` for the captured
+/// shape.
 final class PipeReplyTests: XCTestCase {
 
     private var said: URL!

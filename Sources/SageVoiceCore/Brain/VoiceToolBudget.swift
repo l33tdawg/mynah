@@ -7,15 +7,32 @@ import Foundation
 /// (`scripts/measure-tool-routing.py`). That is ~0.36 ms per byte the model has
 /// to read before it can begin speaking.
 ///
-/// `sage_status` returns **31,321 bytes** on the owner's node — 851
-/// `"subject": count` pairs, 93% of the payload. At the rate above that is
-/// roughly eleven seconds of prefill, and it matches what his log shows: his
-/// `sage_status` turns take 32.9 s and 41.7 s against 17.2 s for a turn with no
-/// tool, while `sage_status` **itself returns in 0.37 s**. The tool is fast. The
-/// reading is what costs him.
+/// The measurement that motivated this: `sage_status` returned **31,321 bytes**
+/// on the owner's node — 851 `"subject": count` pairs under `by_domain`, 93% of
+/// the payload. At the rate above that is roughly eleven seconds of prefill, and
+/// it matched his log: `sage_status` turns took 32.9 s and 41.7 s against 17.2 s
+/// for a turn with no tool, while `sage_status` **itself returned in 0.37 s**.
+/// The tool was fast; the reading was what cost him.
+///
+/// ## That payload no longer exists, and the budget is still right
+///
+/// On app-v23 and later `sage_status` returns `callerBoundedStatus`, which has
+/// no `by_domain` at all — SAGE's own route-security test asserts the key is
+/// *forbidden* in a caller-scoped reply. Measured from a capture signed as the
+/// appliance at 11.17.9 and kept as
+/// `Tests/Fixtures/sage_status-11.17.9-appv26-appliance.json`: **1,055 bytes**
+/// compact. A twenty-ninth of what this was written for, and comfortably inside
+/// the directory allowance, so `sage_status` is not trimmed on a current node
+/// any more.
+///
+/// Left standing rather than deleted, and the reason is not sentiment.
+/// `SageNodeChoice` runs whichever SAGE is *installed* on the Mac, which may
+/// predate app-v23 — and every other directory-shaped tool is unaffected by the
+/// caller-bounding change. The number this file exists to defend against was
+/// real; what changed is which payloads reach it.
 ///
 /// A voice appliance cannot speak 851 subject names. Every byte past what it
-/// could say aloud is pure latency, so this is the cheapest second in the
+/// could say aloud is pure latency, so this remains the cheapest second in the
 /// product to buy back.
 ///
 /// ## Two levers, and the boundary between them
@@ -173,8 +190,15 @@ public enum VoiceToolBudget {
             + "left \(dropped) unread, to answer sooner. Say so if the answer looks incomplete.]"
     }
 
-    /// The subject breakdown, which is what actually blows the budget here —
-    /// `by_domain` is 93% of `sage_status` on the owner's node.
+    /// The subject breakdown, which is what used to blow the budget here —
+    /// `by_domain` was 93% of `sage_status` on the owner's node.
+    ///
+    /// **Inert against an app-v23 or later node**, which no longer emits
+    /// `by_domain` to a caller-scoped `sage_status` at all; the guard below
+    /// requires twenty entries and finds none, and the generic head-and-tell
+    /// path handles anything oversized instead. Still reached on an older
+    /// installed node — see the note at the top of this file on why that is not
+    /// the same as dead.
     ///
     /// **This function's first draft shipped a lie, and the shape of that
     /// mistake is worth keeping.** It matched every `"name": count` line and

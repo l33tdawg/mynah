@@ -382,9 +382,24 @@ final class CallRefusalTests: XCTestCase {
 
 // MARK: - Tool result budget
 
-/// `sage_status` returns 31,321 bytes on the owner's node — 851 `"name": count`
-/// pairs. His log shows those turns taking 32.9 s and 41.7 s while the tool
-/// itself returns in 0.37 s: the reading is the cost, not the call.
+/// `sage_status` **returned** 31,321 bytes on the owner's node — 851
+/// `"name": count` pairs under `by_domain`. His log showed those turns taking
+/// 32.9 s and 41.7 s while the tool itself returned in 0.37 s: the reading was
+/// the cost, not the call.
+///
+/// **That reply is now 1,055 bytes.** app-v23 made the caller-scoped status drop
+/// `by_domain` entirely, which was 93% of it — measured from
+/// `Tests/Fixtures/sage_status-11.17.9-appv26-appliance.json`, a capture signed
+/// as the appliance. So `sage_status` no longer reaches the ceiling and the
+/// entry-summarising branch these tests exercise is inert against a current
+/// node.
+///
+/// They keep testing it because the branch is still reachable from an older
+/// *installed* node, and because the false total it once produced —
+/// "244,215,560 memories", read out loud to the owner — is the kind of mistake
+/// worth keeping a guard against wherever the payload comes from. The payloads
+/// below are constructed rather than captured, and are labelled as such: they
+/// stand for a shape a current node does not send.
 ///
 /// The first version of this trimmer **shipped a false number** and these tests
 /// exist mostly to stop that returning.

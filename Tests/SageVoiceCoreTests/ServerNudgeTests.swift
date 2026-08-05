@@ -3,10 +3,22 @@ import XCTest
 
 /// SAGE's turn-discipline nudge, kept away from a model that cannot act on it.
 ///
-/// The node appends `[SAGE] ⚠️ You have not called sage_turn in N tool calls
-/// (Mmin)…` to any tool result once five calls or five minutes have passed
-/// without one (internal/mcp/server.go:427, :440-442). That is aimed at a coding
-/// agent driving its own turn discipline.
+/// The node **used to** append `[SAGE] ⚠️ You have not called sage_turn in N
+/// tool calls (Mmin)…` to any tool result once five calls or five minutes had
+/// passed without one. That was aimed at a coding agent driving its own turn
+/// discipline.
+///
+/// **SAGE removed it at 11.16.1**, and 11.17.x says why in the source:
+/// *"Session state is advisory only. MCP operations must never be blocked or
+/// padded"* (`internal/mcp/server.go:412-413`). The appliance vendors 11.17.10
+/// and will not see this suffix from a current node.
+///
+/// These stay green on purpose. `SageNodeChoice` runs whichever SAGE is
+/// *installed* on the Mac rather than the vendored copy, so a machine sitting on
+/// an older node still produces it — and the cost of tolerating a suffix that
+/// never arrives is nothing, while the cost of a model reading an instruction it
+/// cannot act on was measured. What is corrected here is the tense: this
+/// describes a node behaviour that has been retired, not one to expect.
 ///
 /// This appliance does not work that way: `SageRitual.recordTurn` calls
 /// `sage_turn` from the daemon after every turn, precisely so the model never

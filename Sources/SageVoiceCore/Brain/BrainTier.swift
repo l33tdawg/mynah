@@ -90,9 +90,13 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// The most a *directory-shaped* tool result may contribute.
     ///
     /// 2,000 bytes on device is about 0.7 s of prefill at the measured rate
-    /// (0.36 ms per byte on qwen3.5:4b, this Mac, 2026-07-29), where
-    /// `sage_status`'s real 31,321 bytes is ~11 s of silence before the
-    /// appliance can speak. Against a hosted model that arithmetic does not hold
+    /// (0.36 ms per byte on qwen3.5:4b, this Mac, 2026-07-29), where the 31,321
+    /// bytes `sage_status` returned at the time was ~11 s of silence before the
+    /// appliance could speak. **That reply is now 1,055 bytes** — app-v23 made
+    /// the caller-scoped status drop `by_domain`, which was 93% of it — so
+    /// `sage_status` no longer reaches this ceiling; other directory-shaped
+    /// tools still do. See `VoiceToolBudget`. Against a hosted model that
+    /// arithmetic does not hold
     /// — the prefill happens on somebody else's hardware, in parallel — so the
     /// ceiling is eight times larger and still cheap.
     public let directoryResultBytes: Int
