@@ -133,8 +133,66 @@ final class MemoryClearScopeTests: XCTestCase {
         )
     }
 
-    private static func memory(_ id: String, domain: String) -> Memory {
-        Memory(id: id, text: "something \(id)", domain: domain, learned: Date())
+    // MARK: The shelf
+
+    /// **Tasks only shows tasks.** The owner, with a screenshot: *"we should
+    /// have a filter on this page -> all / tasks only"*.
+    func testTheTasksShelfShowsOnlyTasks() async {
+        let model = MemoriesModel(store: StubMemoryStore(
+            owns: ["mynah-home"],
+            holding: [
+                Self.memory("a-task", domain: "mynah-home", text: "[TASK] Book the hotel"),
+                Self.memory("a-memory", domain: "mynah-home", text: "He prefers the aisle seat"),
+            ]
+        ))
+        await model.load()
+
+        XCTAssertEqual(Set(model.shown.map(\.id)), ["a-task", "a-memory"], "All is not showing everything")
+
+        model.shelf = .tasks
+        XCTAssertEqual(
+            model.shown.map(\.id), ["a-task"],
+            "the Tasks shelf is showing things that are not tasks: \(model.shown.map(\.id))"
+        )
+        XCTAssertEqual(model.visibleCount, 1, "the count still describes the unfiltered list")
+    }
+
+    /// And narrowing to Tasks scopes the bulk clear, exactly as a subject does.
+    ///
+    /// The owner's rule for this page, stated when the subject filter arrived:
+    /// *"when its filtered, and i click clear all, it clears the ones filtered
+    /// ONLY and not everything"*. A shelf is a filter.
+    func testForgetAllOnTheTasksShelfLeavesPlainMemoriesAlone() async {
+        let model = MemoriesModel(store: StubMemoryStore(
+            owns: ["mynah-home"],
+            holding: [
+                Self.memory("a-task", domain: "mynah-home", text: "[TASK] Book the hotel"),
+                Self.memory("a-memory", domain: "mynah-home", text: "He prefers the aisle seat"),
+            ]
+        ))
+        await model.load()
+        model.shelf = .tasks
+
+        XCTAssertTrue(model.isFiltered, "a shelf that narrows the list did not count as filtered")
+        XCTAssertFalse(
+            model.clearingNeedsSecondConfirmation,
+            "narrowing to tasks and clearing is a scoped act, not the everything-goes one"
+        )
+        XCTAssertEqual(
+            model.mynahOwned.map(\.id), ["a-task"],
+            """
+            Forget all on the Tasks shelf would have taken plain memories with \
+            it: \(model.mynahOwned.map(\.id))
+            """
+        )
+    }
+
+    private static func memory(
+        _ id: String,
+        domain: String,
+        text: String = "something"
+    ) -> Memory {
+        Memory(id: id, text: "\(text) (\(id))", domain: domain, learned: Date())
     }
 }
 

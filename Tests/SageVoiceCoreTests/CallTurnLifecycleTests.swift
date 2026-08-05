@@ -174,7 +174,25 @@ final class CallTurnLifecycleTests: XCTestCase {
         // rather than waiting out the real 60-second check-in: the property is
         // that it still knows the line is quiet, and a minute of wall clock in
         // the suite buys nothing extra.
-        let quiet = await server.quietForTesting()
+        //
+        // **Polled, because the synthesiser being called is not the turn being
+        // over.** `waitFor` above returns when `RecordingVoice` is handed a
+        // sentence; the turn still has to write the audio and `replyEnd` and
+        // then retire itself. Those writes go off the actor now, so this read
+        // could land in the gap — which it did, in the full suite but never
+        // alone, exactly the shape of a test that was passing by timing.
+        //
+        // Bounded, so the defect this exists for still fails it: that bug made
+        // `quietFor` return nil for the rest of the process, and no amount of
+        // waiting turns that into an answer.
+        var quiet: TimeInterval?
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            quiet = await server.quietForTesting()
+            if quiet != nil { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
         XCTAssertNotNil(
             quiet,
             """

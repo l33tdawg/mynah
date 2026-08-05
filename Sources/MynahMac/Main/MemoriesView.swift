@@ -842,9 +842,53 @@ final class MemoriesModel {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Which shelf of this page the owner is looking at.
+    ///
+    /// The owner: *"we should have a filter on this page -> all / tasks only"*,
+    /// and then *"we can't view or remove files - should be in this what mynah
+    /// remembers section - a sub tab where you have filter by all / tasks - put
+    /// a files box"*.
+    ///
+    /// Files sit here rather than on a page of their own because they are the
+    /// same question — what has this appliance kept — and because there was no
+    /// answer to it anywhere: three directories have been accumulating notes,
+    /// converted documents and every photo ever sent, and nothing listed them.
+    enum Shelf: String, CaseIterable, Identifiable, Sendable {
+        case all
+        case tasks
+        case files
+
+        var id: String { rawValue }
+
+        var word: String {
+            switch self {
+            case .all: return "All"
+            case .tasks: return "Tasks"
+            case .files: return "Files"
+            }
+        }
+    }
+
+    var shelf: Shelf = .all {
+        didSet {
+            guard shelf != oldValue else { return }
+            selection = nil
+            if shelf == .files { Task { await loadFiles() } }
+        }
+    }
+
+    /// The memories actually on screen.
+    ///
+    /// Narrowed here rather than at the node: `kind` is derived from the stored
+    /// text (`Memory.kind`), so there is no domain or query that means "tasks"
+    /// and asking for one would return a different, wrong set.
+    var shown: [Memory] {
+        shelf == .tasks ? memories.filter { $0.kind == .task } : memories
+    }
+
     /// The one number on this screen, and it counts rows the owner can see —
     /// not the node's total, which includes things filtered out on the way here.
-    var visibleCount: Int { memories.count }
+    var visibleCount: Int { shelf == .files ? files.count : shown.count }
 
     /// A search or a subject is narrowing the list.
     ///
@@ -859,7 +903,9 @@ final class MemoriesModel {
     /// was missing is that nothing on screen said so, and a destructive button
     /// whose blast radius you have to infer from the implementation is one
     /// nobody should press.
-    var isFiltered: Bool { isSearching || topic != nil }
+    /// Narrowing to Tasks counts, for the same reason a subject does: "Forget
+    /// all" must clear what is on screen and nothing else.
+    var isFiltered: Bool { isSearching || topic != nil || shelf != .all }
 
     /// Whether clearing needs a second question.
     ///
@@ -1108,6 +1154,52 @@ final class MemoriesModel {
         MemorySubjectName.display(raw, applianceAgentID: SageAgentIdentity.applianceAgentID())
     }
 
+    // MARK: Files
+
+    /// What is on disk, newest first. Empty until the Files shelf is opened.
+    private(set) var files: [SavedFile] = []
+    private(set) var isLoadingFiles = false
+    private(set) var fileTrouble: String?
+    var pendingFileRemoval: SavedFile?
+
+    private let savedFiles = SavedFilesStore()
+
+    /// Read fresh every time the shelf is opened.
+    ///
+    /// Not cached and not watched: files arrive from a different process — the
+    /// daemon writes documents and keeps attachments — so anything this window
+    /// remembered would be wrong by the time it was read. Listing three
+    /// directories is cheap enough to simply do again.
+    func loadFiles() async {
+        isLoadingFiles = true
+        fileTrouble = nil
+        defer { isLoadingFiles = false }
+        let store = savedFiles
+        files = await Task.detached { store.all() }.value
+    }
+
+    func confirmRemove(_ file: SavedFile) {
+        pendingFileRemoval = file
+    }
+
+    /// Deletes one file and takes it off the list.
+    ///
+    /// Removed from `files` only after the store says it went, so a failed
+    /// delete leaves the row where it is rather than hiding a file that is still
+    /// on disk — which is the version of this bug the owner would find months
+    /// later, looking for the thing he thought he had removed.
+    func remove(_ file: SavedFile) async {
+        fileTrouble = nil
+        do {
+            let store = savedFiles
+            try await Task.detached { try store.remove(file) }.value
+            files.removeAll { $0.id == file.id }
+        } catch {
+            log.error("could not remove \(file.name): \(String(describing: error))")
+            fileTrouble = "Mynah couldn’t remove \(file.name)."
+        }
+    }
+
     // MARK: Forgetting
 
     func confirmForget(_ memory: Memory) {
@@ -1129,7 +1221,11 @@ final class MemoriesModel {
     /// `isOwnHome` compares the domain against this appliance's own agent id,
     /// which is the node's own definition of ownership rather than a guess from
     /// the text.
-    var mynahOwned: [Memory] { memories.filter(isMynahs) }
+    /// **`shown`, not `memories`.** The bulk clear has always been scoped to
+    /// what the filter loaded, and the shelf is a filter — so narrowing to Tasks
+    /// and pressing Forget all clears tasks, exactly as narrowing to a subject
+    /// clears that subject.
+    var mynahOwned: [Memory] { shown.filter(isMynahs) }
 
     /// Whether this one is Mynah's to act on.
     ///
@@ -1427,12 +1523,28 @@ struct MemoriesView: View {
     // MARK: Controls
 
     private var controls: some View {
-        HStack(spacing: s4) {
-            MemorySearchField(text: Binding(
-                get: { model.searchText },
-                set: { model.searchText = $0 }
-            ))
-            if model.topics.count > 1 { topicPicker }
+        VStack(alignment: .leading, spacing: s4) {
+            // The foundation's own tab strip rather than a new control. The
+            // owner asked for "a sub tab", and this is the thing this app
+            // already uses to divide a pane.
+            MynahTabBar(
+                tabs: MemoriesModel.Shelf.allCases,
+                selection: Binding(get: { model.shelf }, set: { model.shelf = $0 }),
+                title: \.word
+            )
+
+            // Searching and subjects are questions about remembered things, so
+            // they go when the owner is looking at files — a subject filter over
+            // a list of PDFs would be a control that does nothing.
+            if model.shelf != .files {
+                HStack(spacing: s4) {
+                    MemorySearchField(text: Binding(
+                        get: { model.searchText },
+                        set: { model.searchText = $0 }
+                    ))
+                    if model.topics.count > 1 { topicPicker }
+                }
+            }
         }
     }
 
@@ -1480,6 +1592,17 @@ struct MemoriesView: View {
 
     @ViewBuilder
     private var content: some View {
+        // Files come off this Mac's disk, not off the node, so none of the
+        // phases below — which describe a node round trip — apply to them.
+        if model.shelf == .files {
+            FilesBox(model: model)
+        } else {
+            memoriesContent
+        }
+    }
+
+    @ViewBuilder
+    private var memoriesContent: some View {
         switch model.phase {
         case .loading:
             HStack(spacing: s4) {
@@ -1601,7 +1724,7 @@ struct MemoriesView: View {
                     .padding(.bottom, s5)
                 }
 
-                ForEach(model.memories) { memory in
+                ForEach(model.shown) { memory in
                     MemoryEntry(
                         memory: memory,
                         isSelected: model.selection == memory.id,
@@ -1711,14 +1834,34 @@ private struct MemoryEntry: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // A task sits on a slightly recessed card, so the two kinds are
-        // separable down the length of a scrolling list without reading a word
-        // of either. Sunken rather than a tint: the sentence stays the brightest
-        // thing on the card.
-        .background(
-            memory.kind == .task ? Palette.surface.sunken : Palette.surface.raised,
-            in: RoundedRectangle.mynah(r.card)
-        )
+        // **Every card is raised. A task is marked, not dimmed.**
+        //
+        // Tasks used to sit on `surface.sunken` — recessed, so the two kinds
+        // were separable down a scrolling list without reading either. They
+        // were, and the separation said the wrong thing. The owner, looking at
+        // his own screen: *"a bit unclear which is which - the grey cards for
+        // tasks look like they're just deactivated or something"*.
+        //
+        // He is right, and it is the ordinary meaning of the treatment: a
+        // recessed grey panel is what every other interface on this Mac uses for
+        // something switched off. A task is the *most* live thing on this page —
+        // it is the only kind with a date that can pass — so the one thing it
+        // must not read as is disabled.
+        //
+        // So distinction by presence: same surface, and a stripe down the
+        // leading edge. Monochrome because the palette is (see `Palette.status`
+        // for why there is no third colour to reach for), which also means the
+        // mark cannot be mistaken for a state — it is ink, and ink is what
+        // everything on this screen is made of.
+        .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
+        .overlay(alignment: .leading) {
+            if memory.kind == .task {
+                Rectangle()
+                    .fill(Palette.accent.fill)
+                    .frame(width: 3)
+                    .accessibilityHidden(true)
+            }
+        }
         // The border carries the state, not a fill. A tinted card body competes
         // with the sentence inside it, which is the one thing on this screen
         // the owner came to read.
@@ -1897,6 +2040,138 @@ private struct MemoryEntry: View {
 
 /// The app's search input.
 ///
+/// Everything the appliance has on disk, and the only place it can be removed.
+///
+/// Three directories have been filling up for the life of the appliance with
+/// nothing listing them: notes Mynah wrote, documents converted from them, and
+/// every photo or PDF the owner has ever sent over Signal. The owner: *"we can't
+/// view or remove files"*, and *"there's no way to clean that up"*.
+///
+/// Opening a file is `NSWorkspace`, not a viewer built here. Whatever the owner
+/// already uses for a PDF is better than anything this window would draw, and a
+/// half-built preview is how a file screen becomes a file manager.
+private struct FilesBox: View {
+    @Bindable var model: MemoriesModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: s4) {
+            if let trouble = model.fileTrouble {
+                InlineBanner(
+                    tone: .critical,
+                    headline: trouble,
+                    explanation: "It is still on this Mac. Try again, or remove it in Finder."
+                )
+            }
+
+            if model.isLoadingFiles && model.files.isEmpty {
+                HStack(spacing: s4) {
+                    ThinkingIndicator()
+                    Text("Looking through what Mynah has kept…")
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.ink.secondary)
+                }
+                .padding(.vertical, s6)
+            } else if model.files.isEmpty {
+                // Not a failure, and worded so it does not read as one.
+                Text("Nothing kept yet. Documents Mynah writes and files you send it will show up here.")
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .padding(.vertical, s6)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: s3) {
+                        ForEach(model.files) { file in
+                            SavedFileRow(
+                                file: file,
+                                onOpen: { NSWorkspace.shared.open(file.url) },
+                                onReveal: {
+                                    NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                                },
+                                onRemove: { model.confirmRemove(file) }
+                            )
+                        }
+                    }
+                    .padding(.bottom, s6)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task { await model.loadFiles() }
+        .confirmationDialog(
+            model.pendingFileRemoval.map { "Delete \($0.name)?" } ?? "Delete this file?",
+            isPresented: Binding(
+                get: { model.pendingFileRemoval != nil },
+                set: { if !$0 { model.pendingFileRemoval = nil } }
+            )
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let file = model.pendingFileRemoval else { return }
+                model.pendingFileRemoval = nil
+                Task { await model.remove(file) }
+            }
+            Button("Keep it", role: .cancel) { model.pendingFileRemoval = nil }
+        } message: {
+            // Named plainly, because one of these three kinds is the owner's own
+            // file and may have no other copy anywhere.
+            Text(
+                model.pendingFileRemoval?.kind == .attachment
+                    ? "This is a file you sent Mynah. Deleting it here removes it from this Mac."
+                    : "This removes it from this Mac. Mynah can write another if you ask."
+            )
+        }
+    }
+}
+
+/// One file: what it is, how big, when, and the three things you can do with it.
+private struct SavedFileRow: View {
+    let file: SavedFile
+    let onOpen: () -> Void
+    let onReveal: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: s4) {
+            VStack(alignment: .leading, spacing: s2) {
+                Text(file.name)
+                    .mynahFont(.body)
+                    .foregroundStyle(Palette.ink.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: s2) {
+                    Text(file.saved.formatted(.relative(presentation: .named)))
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                    Text("·").mynahFont(.label).foregroundStyle(Palette.ink.quaternary)
+                    Text(file.readableSize)
+                        .mynahFont(.label)
+                        .foregroundStyle(Palette.ink.secondary)
+                    SubjectChip(subject: file.kind.word)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // On hover, like the Forget cross on a memory card and for the same
+            // reason: a row of buttons on every line turns a list of what the
+            // appliance has into a list of things to delete.
+            if isHovering {
+                MynahButton("Open", kind: .quiet, action: onOpen)
+                MynahButton("Show", kind: .quiet, action: onReveal)
+                MynahButton("Delete", kind: .quiet, action: onRemove)
+            }
+        }
+        .padding(.horizontal, s4)
+        .padding(.vertical, s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.surface.raised, in: RoundedRectangle.mynah(r.card))
+        .mynahBorder(r.card, Palette.line.hairline)
+        .onHover { isHovering = $0 }
+        .mynahAnimation(Motion.fade, value: isHovering)
+    }
+}
+
 /// Not `.searchable()`: that hangs the field off the window toolbar, which
 /// already carries the one control this shell allows, and it would disappear
 /// the moment the toolbar collapses. This sits where the owner is looking.
