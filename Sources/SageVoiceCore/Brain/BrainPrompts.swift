@@ -317,12 +317,32 @@ public enum BrainPrompts {
         "sage_recall",
         "sage_remember",
         "sage_forget",
-        "sage_list",
+        // **`sage_list` is gone, and the measurement above named it.**
+        //
+        // "High-generality tools (`sage_turn`, `sage_inception`, `sage_list`)
+        // act as attractors — a tool plausible for *any* input wins whenever
+        // nothing else is a strong match." Two of those three were excluded for
+        // exactly that; the third stayed in, because the finding was written
+        // about the tools that were already out rather than applied to the list
+        // it was sitting in.
+        //
+        // `sage_recall` answers the same question better for a spoken one: it
+        // ranks by meaning, and browsing a domain is not a thing anybody asks
+        // for out loud. The Memories page still calls `sage_list` — this filter
+        // is what the *model* sees, and that screen talks to the node directly.
         "sage_task",
         "sage_backlog",
         "sage_timeline",
         "sage_status",
-        "sage_reflect",
+        // **`sage_reflect` is gone for the reason `sage_turn` is.**
+        //
+        // `SageRitual` already calls it, by itself, every ten turns
+        // (`reflectEveryTurns`). Offering it to the model buys a duplicate write
+        // to a consensus ledger — word for word the argument that keeps
+        // `sage_turn` out, applied to the other half of the same ritual.
+        //
+        // It is also the shape the 26B run punished: a tool plausible after
+        // any turn at all.
         "sage_inbox",
         // **Swapped for `sage_find_agent` in 11.16.4, not added alongside it.**
         //

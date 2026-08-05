@@ -265,10 +265,57 @@ final class SageRitualTests: XCTestCase {
         }
     }
 
-    /// `sage_reflect` is deliberately the exception. "Save a lesson from that"
-    /// is a thing the owner actually says, so the model keeps it — the daemon's
-    /// cadence reflection is additional housekeeping, not a replacement.
-    func testReflectStaysReachableByTheModel() {
-        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains(SageRitual.Tool.reflect))
+    /// **`sage_reflect` used to be the exception, and the owner reversed it on
+    /// 5 August 2026.**
+    ///
+    /// The previous reasoning is worth keeping because it is not wrong: *"'Save
+    /// a lesson from that' is a thing the owner actually says, so the model
+    /// keeps it — the daemon's cadence reflection is additional housekeeping,
+    /// not a replacement."* Those really are different writes. The ritual
+    /// reflects every ten turns on whatever has happened; a model-invoked
+    /// reflect files the specific lesson somebody just asked to save.
+    ///
+    /// It went anyway, as part of trimming the catalogue back under the routing
+    /// ceiling. Two reasons, and the second is the one that decided it:
+    ///
+    /// 1. It is a tool plausible after *any* turn, which is the exact shape the
+    ///    26B run punished — `sage_turn` and `sage_inception` were excluded for
+    ///    being attractors and this is the same silhouette.
+    /// 2. **The capability does not actually disappear.** `sage_remember` is
+    ///    still in the catalogue and "remember that X worked" lands there. What
+    ///    is lost is the *type*: it is filed as an ordinary memory rather than
+    ///    as a dos/don'ts reflection, so it no longer feeds the reflection
+    ///    channel specifically.
+    ///
+    /// That is the whole cost, stated so a future reader can reverse it back
+    /// with their eyes open rather than rediscovering the argument.
+    func testReflectIsNoLongerOfferedToTheModel() {
+        XCTAssertFalse(
+            BrainPrompts.voiceToolAllowlist.contains(SageRitual.Tool.reflect),
+            "sage_reflect is back in the model's catalogue — see this test's note for what that trades"
+        )
+        // The half that must keep working: the daemon still reflects on its own
+        // cadence, so nothing stops being written down.
+        XCTAssertEqual(SageRitual.reflectEveryTurns, 10)
+    }
+
+    /// And the browse-shaped memory tool went with it, for the reason the
+    /// routing measurement in `BrainPrompts` names: `sage_list` is one of the
+    /// three high-generality attractors it identifies, and the other two were
+    /// already excluded for exactly that.
+    ///
+    /// `sage_recall` is what a spoken question wants anyway — it ranks by
+    /// meaning, where `sage_list` browses a domain. The Memories page is
+    /// unaffected: it calls the node directly, and this list only filters what
+    /// the model is shown.
+    func testTheBrowseShapedMemoryToolIsNotOfferedEither() {
+        XCTAssertFalse(
+            BrainPrompts.voiceToolAllowlist.contains("sage_list"),
+            "sage_list is an attractor by this repository's own measurement"
+        )
+        XCTAssertTrue(
+            BrainPrompts.voiceToolAllowlist.contains("sage_recall"),
+            "the tool that answers the question sage_list was reached for is gone too"
+        )
     }
 }
