@@ -371,7 +371,7 @@ actor ToolLoopTurnEngine: TurnEngine {
                 // refuses the unscoped form outright. The ritual below keeps
                 // the raw client — it calls tools the model never sees, and one
                 // of them is what discovers the scope.
-                provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: mcp)),
+                provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
                 isRequired: true,
                 // Fails closed if the node ever renames its tools. Web search
                 // always matches the allowlist, so without this expectation a

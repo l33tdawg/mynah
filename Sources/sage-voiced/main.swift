@@ -378,7 +378,7 @@ func makeToolSource(
             // one rewrites `sage_task` arguments, the other fills in
             // `sage_recall`'s domain. Both exist because a rule in the prompt is
             // followed most of the time, and "most of the time" fails silently.
-            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: mcp)),
+            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])

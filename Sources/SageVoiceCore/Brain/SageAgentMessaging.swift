@@ -191,11 +191,19 @@ public struct SageAgentMessaging: AgentMessaging {
             // a key that vanishes reads as `false`, `false` is a legal value,
             // and nothing anywhere fails.
             //
-            // The old name is still read as a fallback. Not defensiveness — a
-            // Mac that has not updated SAGE is running 11.16.x or earlier, where
-            // `requires_result` is the *only* spelling, and this appliance
-            // ships a vendored node but does not force it on a machine that
-            // already has one. See `SageNodeChoice`.
+            // The old name is still read as a fallback, and it is not merely
+            // defensive. Two reasons, one of them measured:
+            //
+            // 1. A Mac that has not updated SAGE runs 11.16.x or earlier, where
+            //    `requires_result` is the only spelling — and this appliance
+            //    ships a vendored node without forcing it on a machine that
+            //    already has one. See `SageNodeChoice`.
+            // 2. **The rename was not global.** A live `sage_turn` on 11.17.10,
+            //    6 August 2026, returns `task_assignments` entries carrying
+            //    `requires_result: false`. So the two spellings coexist in one
+            //    node's vocabulary today, on different notification kinds.
+            //    Reading only the new one would be the identical mistake in the
+            //    opposite direction.
             expectsAResult: (raw["requires_reply"] as? Bool)
                 ?? (raw["requires_result"] as? Bool)
                 ?? false
