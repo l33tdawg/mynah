@@ -17,8 +17,6 @@ final class SearchKeySetupTests: XCTestCase {
             .appendingPathComponent("provider-keys.json"))
     }
 
-    private struct Refused: Error {}
-
     // MARK: Connecting
 
     func testAWorkingTokenIsVerifiedAndSaved() async {
@@ -42,12 +40,16 @@ final class SearchKeySetupTests: XCTestCase {
     /// then spends its first provider on a guaranteed failure before falling
     /// through to the scrape it would have used anyway.
     ///
-    /// **Throws the real refusal.** This used to throw a private `Refused`
-    /// struct, which is a fine stand-in for "something went wrong" and a useless
-    /// one here: it bridges to a non-URL domain, so it took the reject branch
+    /// **Throws a real refusal.** This used to throw an anonymous stub error,
+    /// which is a fine stand-in for "something went wrong" and a useless one
+    /// here: it bridges to a non-URL domain, so it took the reject branch
     /// whether the transport classifier existed or not. That is how the dead
-    /// classifier shipped. `httpStatus(401)` is what Brave actually sends for a
-    /// bad token (BraveSearchBackend.swift:76).
+    /// classifier shipped.
+    ///
+    /// 401 rather than 422 on purpose, so the two are covered separately —
+    /// `testARefusedTokenIsNotMistakenForANetworkProblem` carries 422, which is
+    /// the status Brave really sends and the one a later round found on the
+    /// wrong side of the classifier.
     func testARejectedTokenIsNotSaved() async {
         let store = scratchStore()
         let outcome = await SearchKeySetup.connect("nope", into: store, save: true) { _ in
@@ -74,9 +76,9 @@ final class SearchKeySetupTests: XCTestCase {
     /// shipped binary can produce: the branch was dead, the key was still
     /// thrown away, and nothing failed.
     ///
-    /// Nothing failed because nothing tested it. The rejection test below it
-    /// throws a private `Refused` struct, which bridges to a non-URL domain and
-    /// so passes identically with the classifier present or deleted.
+    /// Nothing failed because nothing tested it. The rejection test used to
+    /// throw an anonymous stub error, which bridges to a non-URL domain and so
+    /// passed identically with the classifier present or deleted.
     ///
     /// These use the real cases from the real backend, taken from the seven
     /// `throw WebSearchError...` sites in BraveSearchBackend.swift.
@@ -104,13 +106,49 @@ final class SearchKeySetupTests: XCTestCase {
         XCTAssertTrue(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(503)))
     }
 
-    /// And the one answer that IS about the token.
+    /// And the answers that ARE about the token.
+    ///
+    /// **422 first, because it is the one Brave actually sends.** Brave's Web
+    /// Search endpoint documents 200, 404, 422 and 429 — no 401, no 403 — and a
+    /// wrong or wrong-endpoint subscription token comes back
+    /// `422 SUBSCRIPTION_TOKEN_INVALID`, which Brave's own payload tags
+    /// `"component": "authentication"`. A classifier that recognised only
+    /// 401/403 as refusals therefore stored the bad token and told the owner the
+    /// service was unreachable. Found by the fourth review round, which checked
+    /// Brave's documentation rather than assuming the usual statuses.
     func testARefusedTokenIsNotMistakenForANetworkProblem() {
+        XCTAssertFalse(
+            SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(422)),
+            """
+            422 is what Brave sends for an invalid subscription token, and it is \
+            being read as a network problem — so a mistyped token is stored, \
+            announced as an outage, and put at the head of the daemon's search \
+            chain where it costs a doomed request on every later search.
+            """
+        )
         XCTAssertFalse(
             SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(401)),
             "a token the service rejected is being kept and called a network problem"
         )
         XCTAssertFalse(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(403)))
+        // Anything else a service says to refuse a request is about the request,
+        // not the wire. Only "not now" is the wire.
+        XCTAssertFalse(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(400)))
+        XCTAssertFalse(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(404)))
+    }
+
+    /// And end to end, because the classifier being right is not the property
+    /// that matters — the bad key not being stored is.
+    func testAnInvalidTokenIsNotStored() async {
+        let store = scratchStore()
+        let outcome = await SearchKeySetup.connect("mistyped", into: store, save: true) { _ in
+            throw WebSearchError.httpStatus(422)
+        }
+
+        guard case .rejected = outcome else {
+            return XCTFail("an invalid token reported \(outcome), so a dead key is now first in the search chain")
+        }
+        XCTAssertNil(store.key(forProvider: ProviderKeyStore.searchProvider, environment: [:]))
     }
 
     /// End to end: the outcome the owner actually gets, on the real error.

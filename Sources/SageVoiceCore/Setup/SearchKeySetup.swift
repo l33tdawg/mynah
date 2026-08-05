@@ -110,10 +110,28 @@ public enum SearchKeySetup {
                 // Neither says anything about the token.
                 return true
             case .httpStatus(let code):
-                // 401 and 403 are the service saying the token is wrong; that is
-                // the one answer worth discarding a key for. 429 and 5xx are the
-                // service saying "not now", which is not about the token either.
-                return code != 401 && code != 403
+                // **Only "not now" counts as the network. Every other refusal is
+                // about the token.**
+                //
+                // The first version of this said `code != 401 && code != 403`,
+                // on the reasoning that those two are how a service rejects a
+                // credential. Brave does not use them: its Web Search endpoint
+                // documents 200, 404, 422 and 429, and a wrong or wrong-endpoint
+                // subscription token comes back
+                // `422 SUBSCRIPTION_TOKEN_INVALID` — tagged, in Brave's own
+                // payload, `"component": "authentication"`. So the one answer
+                // this exists to catch fell on the wrong side of it: a mistyped
+                // token was stored, announced as an outage, and installed at the
+                // head of the daemon's chain, where it costs a doomed request
+                // and a 1.5s pacing slot on every search thereafter. Round two's
+                // broken classifier got this right by accident, because it sent
+                // everything to `rejected`.
+                //
+                // Inverted, so an unrecognised refusal discards the key. That
+                // matches the asymmetry this file argues elsewhere: a wrongly
+                // kept bad key costs every later search, a wrongly discarded
+                // good one costs one re-paste.
+                return code == 429 || (500...599).contains(code)
             case .emptyQuery, .missingCredential:
                 // Neither can occur here — `connect` rejects an empty key before
                 // verifying, and the key is passed explicitly — but if one did,
