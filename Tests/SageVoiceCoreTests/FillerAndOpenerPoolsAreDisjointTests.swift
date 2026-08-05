@@ -38,30 +38,64 @@ import XCTest
 /// It now checks both pools, and `WorkingReply` is the load-bearing one.
 final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
 
-    /// Everything the call can say as an opener.
+    /// Every sentence written down in `WorkingReply`, taken from the file.
     ///
-    /// `opening` returns either a per-tool line, an instant line, or a
-    /// catch-all, and `interruptedOpening` prefixes a specific one or falls back
-    /// to its own sentence. Enumerated rather than sampled, because `opening`
-    /// chooses at random within a pool and one draw proves nothing about the
-    /// other two — the mistake `CallFiller.isAFillerLine` documents.
-    private var everyOpenerTheCallCanSpeak: Set<String> {
-        var lines = Set(WorkingReply.catchAllOptions)
-        for tools in [["web_search"], ["sage_recall"], ["sage_task"], ["sage_remember"], ["notes_write"]] {
-            lines.formUnion(WorkingReply.lines(forTools: tools) ?? [])
+    /// ## Why this reads the source instead of calling the functions
+    ///
+    /// Because calling the functions is what got this wrong twice. The first
+    /// version compared against `WaitingPhrases`, which the call never speaks.
+    /// The second called `lines(forTools:)` and `instantOptions(forRequest:)`
+    /// with a handful of probe values I picked by reading a `switch` — and
+    /// missed ten of the sixteen pools, because a probe list written by hand is
+    /// a guess about a function's branches that goes stale the moment somebody
+    /// adds a `case`. Its own non-vacuity sentinel passed, because I had
+    /// calibrated the sentinel to what my probes happened to collect.
+    ///
+    /// Reading the literals cannot drift. A new pool, a new `case`, a new
+    /// fallback sentence — all of them are string literals in this file, so all
+    /// of them are here the moment they are written, with nobody having to
+    /// remember to add a probe.
+    ///
+    /// It is deliberately over-broad: it also collects keyword literals like
+    /// `"add a note"` that are matched against rather than spoken. That is the
+    /// safe direction. It means a filler line may not collide with anything
+    /// written in `WorkingReply`, which is stronger than what is needed and
+    /// costs nothing — none of the ladder's lines is a keyword.
+    private func everySentenceWrittenInWorkingReply() throws -> Set<String> {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/SageVoiceCore/Brain/WorkingReply.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(source)
+        let code = Array(scan.text(in: 0..<scan.characters.count))
+
+        var literals: Set<String> = []
+        var index = 0
+        while index < code.count {
+            guard code[index] == "\"" else { index += 1; continue }
+            var end = index + 1
+            var body = ""
+            while end < code.count, code[end] != "\"" {
+                // A backslash escape cannot end the literal.
+                if code[end] == "\\", end + 1 < code.count {
+                    end += 2
+                    continue
+                }
+                body.append(code[end])
+                end += 1
+            }
+            if end < code.count { literals.insert(body) }
+            index = end + 1
         }
-        for request in ["what's the weather", "remind me to call him", "hello", "what did I say yesterday"] {
-            lines.formUnion(WorkingReply.instantOptions(forRequest: request) ?? [])
-        }
-        // The interrupted fallback, which is a literal rather than a pool.
-        lines.insert("Right — let me get that instead.")
-        return lines
+        return literals
     }
 
     /// **The one that matters: the ladder against what the call actually says.**
-    func testNoFillerLineIsAlsoSomethingTheCallSaysAsAnOpener() {
+    func testNoFillerLineIsAlsoSomethingTheCallSaysAsAnOpener() throws {
         let ladder = Set(CallFiller.pools.flatMap { $0 })
-        let shared = ladder.intersection(everyOpenerTheCallCanSpeak).sorted()
+        let shared = ladder.intersection(try everySentenceWrittenInWorkingReply()).sorted()
 
         XCTAssertEqual(
             shared, [],
@@ -88,12 +122,16 @@ final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
         )
     }
 
-    /// Every pool is non-empty, so an emptied one cannot make the above pass.
+    /// Every pool is non-empty, and the extractor really extracted.
     ///
-    /// The sentinel matters more here than usual: `lines(forTools:)` and
-    /// `instantOptions(forRequest:)` both return `Optional`, and a `?? []` on a
-    /// nil is indistinguishable from a pool with nothing in it.
-    func testEveryPoolActuallyHasLinesInIt() {
+    /// **The sentinel is calibrated against the real pools, not against what the
+    /// collector happened to return.** The previous version asserted "more than
+    /// 10" while collecting 6 pools of 16 — a number chosen after seeing the
+    /// result, which is how a sentinel becomes decoration. These are anchored to
+    /// facts about the file instead: every catch-all option must be present, and
+    /// so must a line from a per-tool pool that no probe list of mine ever
+    /// reached.
+    func testTheOpenerPoolWasReallyCollected() throws {
         XCTAssertFalse(
             CallFiller.pools.flatMap { $0 }.isEmpty,
             "the filler ladder has no lines, so the disjointness above is vacuously true"
@@ -102,14 +140,25 @@ final class FillerAndOpenerPoolsAreDisjointTests: XCTestCase {
             WaitingPhrases.all.isEmpty,
             "WaitingPhrases has no lines, so the disjointness above is vacuously true"
         )
+
+        let collected = try everySentenceWrittenInWorkingReply()
+
+        for option in WorkingReply.catchAllOptions {
+            XCTAssertTrue(
+                collected.contains(option),
+                "the extractor missed a catch-all option, so it is not reading WorkingReply properly: \(option)"
+            )
+        }
+        // A per-tool line, reached through a `case` in a switch. Nothing about
+        // this one is special except that it is the kind of line a hand-written
+        // probe list forgets, which is the failure this replaces.
+        XCTAssertTrue(
+            collected.contains("Searching for that now."),
+            "the extractor missed the per-tool pools, which is exactly what the previous version of this test did"
+        )
         XCTAssertGreaterThan(
-            everyOpenerTheCallCanSpeak.count, 10,
-            """
-            only \(everyOpenerTheCallCanSpeak.count) opener lines were collected, which \
-            is too few to be the real pool — lines(forTools:) or instantOptions(forRequest:) \
-            is returning nil for the probes above, so the intersection is comparing \
-            against almost nothing and cannot fail.
-            """
+            collected.count, 40,
+            "only \(collected.count) sentences were collected from WorkingReply; the extractor is not working"
         )
     }
 

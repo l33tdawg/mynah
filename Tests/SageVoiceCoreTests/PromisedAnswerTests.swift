@@ -109,37 +109,33 @@ final class PromisedAnswerTests: XCTestCase {
     /// answer would have cleared the file, and the apology that was two seconds
     /// away would never be sent. He is left exactly where he started, by the
     /// feature built to rescue him.
-    /// **This test was itself an example of the defect it describes.**
+    /// **This test has been wrong twice, and both times it passed.**
     ///
-    /// The first version declared `let madeThisRun: PromisedAnswer? = nil` and
-    /// then wrote `if let mine = madeThisRun { store.clear(ifStill: mine) }` —
-    /// a branch the compiler can see is never taken. It asserted that a store
-    /// nobody had touched still held what had just been put in it. It would
-    /// have passed with `clear(ifStill:)` deleted, with the guard removed from
-    /// `recordThePromise`, and with the whole feature reverted. Found by the
-    /// 1.7.3 review, in the test written to prove the release's most dangerous
-    /// bug was gone.
+    /// Version one declared `let madeThisRun: PromisedAnswer? = nil` and then
+    /// `if let mine = madeThisRun { ... }` — a branch the compiler can see is
+    /// never taken. It asserted that a store nobody had touched still held what
+    /// had just been put in it, and would have passed with the whole feature
+    /// reverted.
     ///
-    /// So it now exercises the real decision. `discharge` is the rule from
-    /// `VoiceBridgeDaemon.recordThePromise`, stated once here rather than
-    /// mimed: an answer clears the promise **this run made**, and a run that
-    /// made none clears nothing.
+    /// Version two replaced that with a local closure that *mimed* the daemon's
+    /// rule. Better, and still not a test of anything: the rule it exercised was
+    /// the one written three lines above it in the test file, so the production
+    /// rule could be deleted and this stayed green. The second review round said
+    /// so, and it was right.
+    ///
+    /// The rule now lives in `PromiseLedger`, and this calls it.
     func testAnUnrelatedAnswerDoesNotEraseAPromiseThisRunNeverMade() {
         let (store, _) = scratchStore()
         let owedByTheCrashedRun = promise("what's the connector on dgx spark", at: Date())
         store.record(owedByTheCrashedRun)
 
-        // The new process answers something else entirely — "I couldn't read
-        // that voice note." Its `madeThisRun` is nil, because it has not
-        // promised anybody anything since it started.
-        var madeThisRun: PromisedAnswer?
-        let discharge = {
-            guard let mine = madeThisRun else { return }
-            madeThisRun = nil
-            store.clear(ifStill: mine)
-        }
+        // A fresh run: it has promised nobody anything.
+        var ledger = PromiseLedger()
+        ledger.beginExchange()
 
-        discharge()
+        // It answers something else entirely — "I couldn't read that voice
+        // note." The ledger owes nothing, so nothing is discharged.
+        if let discharged = ledger.answered() { store.clear(ifStill: discharged) }
 
         XCTAssertEqual(
             store.outstanding(), owedByTheCrashedRun,
@@ -150,18 +146,99 @@ final class PromisedAnswerTests: XCTestCase {
             """
         )
 
-        // And the other half, so this cannot pass by never clearing anything:
-        // once this run has made its own promise, answering does discharge it.
-        let mine = promise("something this run was asked")
-        store.record(mine)
-        madeThisRun = mine
-
-        discharge()
+        // And the other half, so this cannot pass by never clearing anything.
+        ledger.beginExchange()
+        if let made = ledger.promised(to: "+60111222333", question: "something asked now", at: Date()) {
+            store.record(made)
+        }
+        if let discharged = ledger.answered() { store.clear(ifStill: discharged) }
 
         XCTAssertNil(
             store.outstanding(),
             "a run's own promise was not discharged by its own answer, so it would apologise for an answered question"
         )
+    }
+
+    // MARK: The ledger, which is where both defects actually lived
+
+    /// **The one the second review round found, stated as the appliance sees it.**
+    ///
+    /// The owner asks something. The working line goes out and the promise is
+    /// recorded. The answer fails to send — signal-cli hiccups, the reply is
+    /// logged and dropped — so the promise is still owed and still on disk.
+    ///
+    /// He then sends a voice note that will not transcribe. The daemon replies
+    /// "I couldn't read that voice note.", which is classified `.answer` like
+    /// every other refusal. If that discharges the outstanding promise, the
+    /// record saying he is owed an answer is deleted, and no apology is made on
+    /// this boot or any later one.
+    ///
+    /// Nine replies have this shape and all of them run before a turn begins,
+    /// which is why the boundary is the incoming batch and not the turn.
+    func testARefusalOnTheNextMessageDoesNotDischargeAnUndeliveredPromise() {
+        var ledger = PromiseLedger()
+
+        ledger.beginExchange()
+        let owed = ledger.promised(to: "+60111222333", question: "what's the connector", at: Date())
+        XCTAssertNotNil(owed)
+        // The answer never reaches Signal, so nothing discharges it here.
+
+        // Next message: an unreadable voice note, refused before any turn starts.
+        ledger.beginExchange()
+        let dischargedByTheRefusal = ledger.answered()
+
+        XCTAssertNil(
+            dischargedByTheRefusal,
+            """
+            a refusal discharged a promise the appliance had not kept. He is owed \
+            an answer, the record that said so has been deleted, and the apology \
+            will never be sent.
+            """
+        )
+    }
+
+    /// The ordinary case still works: a promise made and kept in one exchange.
+    func testAPromiseMadeAndAnsweredInOneExchangeIsDischarged() {
+        var ledger = PromiseLedger()
+        ledger.beginExchange()
+
+        let made = ledger.promised(to: "+60111222333", question: "what's the connector", at: Date())
+        XCTAssertNotNil(made)
+        XCTAssertEqual(ledger.outstanding, made)
+
+        XCTAssertEqual(
+            ledger.answered(), made,
+            "the answer did not discharge its own promise, so the next boot would apologise for a question already answered"
+        )
+        XCTAssertNil(ledger.outstanding)
+        XCTAssertNil(ledger.answered(), "discharging twice returned a promise the second time")
+    }
+
+    /// Nothing is promised when there is nothing to name.
+    func testAnEmptyQuestionPromisesNothing() {
+        var ledger = PromiseLedger()
+        ledger.beginExchange()
+
+        XCTAssertNil(ledger.promised(to: "+60111222333", question: "   ", at: Date()))
+        XCTAssertNil(
+            ledger.outstanding,
+            "a promise was recorded with no question in it, so its apology could not say what was asked"
+        )
+    }
+
+    /// A second working line in one exchange replaces rather than accumulates.
+    ///
+    /// One promise, because the appliance can owe at most one answer at a time —
+    /// a ledger that could hold two would be modelling a state that cannot occur.
+    func testASecondWorkingLineReplacesThePromise() {
+        var ledger = PromiseLedger()
+        ledger.beginExchange()
+
+        _ = ledger.promised(to: "+60111222333", question: "first", at: Date(timeIntervalSince1970: 1))
+        let second = ledger.promised(to: "+60111222333", question: "second", at: Date(timeIntervalSince1970: 2))
+
+        XCTAssertEqual(ledger.outstanding, second)
+        XCTAssertEqual(ledger.answered(), second)
     }
 
     /// And the mirror image: recovery must not delete a *newer* promise.

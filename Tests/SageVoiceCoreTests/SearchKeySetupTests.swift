@@ -168,7 +168,19 @@ final class SearchKeySetupTests: XCTestCase {
             scan.indices(of: "var providersWithKeys: [String] {").first,
             "providersWithKeys is gone from SettingsView, so this guard is reading for something that no longer exists"
         )
-        let body = scan.text(in: declaration..<min(declaration + 260, scan.characters.count))
+        // **The property's real body, by brace matching.**
+        //
+        // This read a fixed 260 characters from the declaration, which is the
+        // distance-guessing `SwiftSourceScan` exists to abolish: measured
+        // against today's formatting, it overshot the body by about ninety
+        // characters, so a filter written in whatever happens to follow would
+        // have satisfied it. `block(from:)` balances braces and knows where the
+        // property actually ends.
+        let bodyRange = try XCTUnwrap(
+            scan.block(from: declaration),
+            "could not find the body of providersWithKeys, so this guard cannot say what is in it"
+        )
+        let body = scan.text(in: bodyRange)
 
         XCTAssertTrue(
             body.contains("APIKeyOnboarding.instructions(forProvider:"),

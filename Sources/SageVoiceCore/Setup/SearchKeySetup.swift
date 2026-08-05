@@ -55,16 +55,40 @@ public enum SearchKeySetup {
     public enum Outcome: Equatable, Sendable {
         case saved
         case verifiedButNotSaved
+        /// Saved without a successful check, because the check could not be
+        /// made. See `couldNotCheck`.
+        case savedUnchecked(String)
         case empty
         case rejected(String)
+        case couldNotCheck(String)
         case couldNotSave(String)
 
         public var isUsable: Bool {
             switch self {
-            case .saved, .verifiedButNotSaved: return true
-            case .empty, .rejected, .couldNotSave: return false
+            case .saved, .verifiedButNotSaved, .savedUnchecked: return true
+            case .empty, .rejected, .couldNotCheck, .couldNotSave: return false
             }
         }
+    }
+
+    /// Whether a failure means "your token is wrong" or "I could not ask".
+    ///
+    /// **The difference reaches the owner, and getting it wrong throws his key
+    /// away.** Every failure used to be reported as `rejected` — *"Brave Search
+    /// did not accept that token"* — and refused to save. So connecting a
+    /// perfectly good key on a flaky connection, on a plane, or while Brave was
+    /// having an outage told him his token was bad and discarded it. He would
+    /// then go and generate another one, which would also be "refused".
+    ///
+    /// A transport failure is not evidence about the token. It is evidence about
+    /// the network, and the honest thing is to say so and keep the key.
+    static func looksLikeTheNetworkRatherThanTheToken(_ error: Error) -> Bool {
+        let failure = error as NSError
+        guard failure.domain == NSURLErrorDomain else { return false }
+        // Anything URLSession itself raised: no connection, DNS, timeout, TLS.
+        // An HTTP 401/403 does not arrive this way — `BraveSearchBackend` turns
+        // those into its own error, which is a real rejection.
+        return true
     }
 
     /// Checks a token against the real service, then stores it.
@@ -84,17 +108,25 @@ public enum SearchKeySetup {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return .empty }
 
+        var unchecked: String?
         do {
             try await verify(key)
         } catch {
-            return .rejected("\(error)")
+            // A token the service refused is a token to throw away. A token we
+            // could not ask about is not — see
+            // `looksLikeTheNetworkRatherThanTheToken`.
+            guard Self.looksLikeTheNetworkRatherThanTheToken(error) else {
+                return .rejected("\(error)")
+            }
+            guard save else { return .couldNotCheck("\(error)") }
+            unchecked = "\(error)"
         }
 
         guard save else { return .verifiedButNotSaved }
 
         do {
             try store.save(key, forProvider: ProviderKeyStore.searchProvider)
-            return .saved
+            return unchecked.map { .savedUnchecked($0) } ?? .saved
         } catch {
             return .couldNotSave("\(error)")
         }

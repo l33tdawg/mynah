@@ -71,9 +71,27 @@ func usage() -> Never {
 func parseFlags(_ arguments: [String]) -> [String: String] {
     var flags: [String: String] = [:]
     var index = 0
-    while index + 1 < arguments.count {
-        if arguments[index].hasPrefix("--") {
-            flags[String(arguments[index].dropFirst(2))] = arguments[index + 1]
+    while index < arguments.count {
+        guard arguments[index].hasPrefix("--") else {
+            index += 1
+            continue
+        }
+        // **A flag is never another flag's value.**
+        //
+        // This took whatever came next unconditionally, so a switch written
+        // before a valued flag ate it: `key --provider brave --save --key TOKEN`
+        // parsed as `save = "--key"` and left `key` unset — the command then
+        // printed its setup instructions and exited 0, having silently
+        // discarded the token the owner had just pasted. Exit 0 is the part that
+        // makes it cruel: nothing said anything was wrong.
+        //
+        // A flag with nothing to take is left out of the map rather than stored
+        // empty, which is what it did before and what every `flags["x"] ??
+        // default` below depends on. Boolean flags are read with
+        // `arguments.contains("--save")` and never come through here.
+        let name = String(arguments[index].dropFirst(2))
+        if index + 1 < arguments.count, !arguments[index + 1].hasPrefix("--") {
+            flags[name] = arguments[index + 1]
             index += 2
         } else {
             index += 1
@@ -693,10 +711,34 @@ func runSearchKey(_ arguments: [String], flags: [String: String]) -> Never {
         case .verifiedButNotSaved:
             print("that token works — rerun with --save to keep it")
             return 0
+        case .savedUnchecked(let why):
+            // Kept, not discarded. The check failed for a reason that says
+            // nothing about the token, and telling him it was refused would send
+            // him off to generate another one that would be "refused" too.
+            print("""
+            saved, but not checked — could not reach \(instructions.providerName): \(why)
+
+            The token is stored and the daemon will use it on its next start. To
+            confirm it works once you are back online:
+              sage-voiced search "test"
+            """)
+            return 0
         case .empty:
             return fail("no token was given")
         case .rejected(let why):
-            return fail("\(instructions.providerName) did not accept that token: \(why)")
+            return fail("""
+            \(instructions.providerName) did not accept that token: \(why)
+
+            Check you copied the whole subscription token from
+            \(instructions.keyPageURL.absoluteString), then try again.
+            """)
+        case .couldNotCheck(let why):
+            return fail("""
+            could not reach \(instructions.providerName) to check the token: \(why)
+
+            This says nothing about the token itself. Rerun with --save to store
+            it anyway, or try again when the connection is back.
+            """)
         case .couldNotSave(let why):
             return fail("could not save the token: \(why)")
         }

@@ -281,13 +281,10 @@ public actor VoiceBridgeDaemon {
     /// Cancelled when the answer beats it.
     private var quietPeriod: Task<Void, Never>?
 
-    /// The promise *this* run of the daemon wrote down, if any.
-    ///
-    /// Held so an answer can discharge its own promise and only its own. A
-    /// promise found on disk that this run did not make belongs to a previous,
-    /// crashed run and is the recovery path's to settle — see
-    /// `PromisedAnswerStore.clear(ifStill:)`.
-    private var madeThisRun: PromisedAnswer?
+    /// Which promise this exchange owes. The rule is in `PromiseLedger`, where a
+    /// test can reach it — twice now it has been wrong inside this actor, where
+    /// nothing could.
+    private var ledger = PromiseLedger()
 
     /// Whether this turn already said something specific when the message
     /// arrived. Stops the tool-decision line repeating news the opener gave.
@@ -300,18 +297,10 @@ public actor VoiceBridgeDaemon {
     private func beginQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) {
         quietPeriod?.cancel()
         workingLines.beginTurn()
-        // **A promise belongs to the turn that made it, and dies with it.**
-        //
-        // Without this, `madeThisRun` outlives its turn — and a promise whose
-        // answer never reached Signal would then be discharged by the *next*
-        // turn's answer. Concretely: he asks A, is told "I'm on it", the answer
-        // to A fails to send, he asks B, B answers fine — and A's promise is
-        // deleted on B's way out. He is owed an answer to A, the record that
-        // said so is gone, and no apology is ever made.
-        //
-        // Clearing it here rather than at the end of a turn because the end of a
-        // turn is exactly what an abandoned one never reaches.
-        madeThisRun = nil
+        // The promise ledger is NOT reset here. It looks like the right place —
+        // this is where a turn begins — and it is not, because nine replies
+        // answer the owner without ever reaching it. See `ledger.beginExchange()`
+        // at the top of `handle(_ batch:)`.
         quietPeriod = Task { [weak self] in
             try? await Task.sleep(
                 for: .seconds(VoiceBridgeDaemon.quietBeforeWorkingLine)
@@ -686,6 +675,28 @@ public actor VoiceBridgeDaemon {
     /// turn. See `MessageCoalescer`.
     public func handle(_ batch: [SignalIncomingMessage]) async -> Outcome {
         let started = Date()
+
+        // **The exchange boundary, and it is here rather than at the turn.**
+        //
+        // Nine replies below this point answer the owner without a turn ever
+        // starting — an unreadable voice note, the second-bridge warning,
+        // `//help`, a message while paused, one too long, and four call-request
+        // replies. Every one defaults to `.answer`, and an `.answer` discharges
+        // whatever promise the ledger is holding.
+        //
+        // Placed at `beginQuietPeriod` — where a turn actually begins — those
+        // nine all ran *before* it, so a refusal could discharge a promise made
+        // by the previous message and never delivered. The owner asks something,
+        // the working line goes out, the answer fails to send, he sends a voice
+        // note that will not transcribe, and "I couldn't read that voice note."
+        // deletes the record that said he was still owed an answer. No apology,
+        // this boot or any later one.
+        //
+        // Found by the second review round, in the repair the first round asked
+        // for. The eighth time in this codebase that a fix landed at one call
+        // site while identical ones went unwatched, and the first where the fix
+        // being repaired was itself an instance.
+        ledger.beginExchange()
 
         guard let message = batch.first else { return .ignoredEmpty }
         guard let recipient = message.replyRecipient else {
@@ -1690,23 +1701,19 @@ public actor VoiceBridgeDaemon {
     ) {
         switch utterance {
         case .workingLine:
-            // Nothing was promised if we cannot say what was asked. Better no
-            // record than a record whose apology has to be vague.
-            guard let question, !question.isEmpty else { return }
-            let promise = PromisedAnswer(
-                account: recipient.description,
-                question: question,
-                promisedAt: Date()
-            )
-            madeThisRun = promise
+            guard let question,
+                  let promise = ledger.promised(
+                      to: recipient.description,
+                      question: question,
+                      at: Date()
+                  ) else { return }
             promises.record(promise)
         case .answer:
-            // **Only the promise this run made, and only if it made one.**
+            // **Only the promise this exchange owes, and only if it owes one.**
             // A blind clear here deletes a previous run's promise before the
             // apology for it has been sent — see `clear(ifStill:)`, where the
             // nine reply sites that would do it are named.
-            guard let promise = madeThisRun else { return }
-            madeThisRun = nil
+            guard let promise = ledger.answered() else { return }
             promises.clear(ifStill: promise)
         case .unprompted:
             // An announcement is not the answer. The proactive watch fires on a

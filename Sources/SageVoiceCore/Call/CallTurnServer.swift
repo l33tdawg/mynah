@@ -898,13 +898,23 @@ public actor CallTurnServer {
                 String(format: "%.1f", to.timeIntervalSince(from))
             }
             let now = Date()
-            let heardIn = recognised.map { seconds(started, $0) } ?? "?"
-            let thoughtIn = (recognised.map { r in seconds(r, thought ?? now) }) ?? "?"
-            let spokeIn = (thought.map { t in seconds(t, firstSpoken ?? now) }) ?? "?"
-            let talkingAfter = firstSpoken.map { seconds(started, $0) } ?? "never"
-            log("[call] \(outcome): heard in \(heardIn)s, thought in \(thoughtIn)s, "
-                + "spoke in \(spokeIn)s — talking after \(talkingAfter)"
-                + (firstSpoken == nil ? "" : "s")
+            // **A stage that did not finish is reported as unfinished, not as a
+            // duration.** Printing "thought in 12.4s" for a turn that was barged
+            // in on while thinking states a completed measurement that never
+            // completed — and this log's whole purpose is to be the dataset the
+            // filler budget is decided from, so a number that means "elapsed so
+            // far" sitting in a column that means "took" is worse than a blank.
+            // The suffix marks it: `12.4s+` reads as at-least.
+            let heardIn = recognised.map { "\(seconds(started, $0))s" } ?? "?"
+            let thoughtIn = recognised.map { r in
+                thought.map { "\(seconds(r, $0))s" } ?? "\(seconds(r, now))s+"
+            } ?? "?"
+            let spokeIn = thought.map { t in
+                firstSpoken.map { "\(seconds(t, $0))s" } ?? "\(seconds(t, now))s+"
+            } ?? "?"
+            let talkingAfter = firstSpoken.map { "\(seconds(started, $0))s" } ?? "never"
+            log("[call] \(outcome): heard in \(heardIn), thought in \(thoughtIn), "
+                + "spoke in \(spokeIn) — talking after \(talkingAfter)"
                 + ", \(fillers.spoken) filler(s)")
         }
 
@@ -1347,7 +1357,18 @@ public actor CallTurnServer {
             SpeechRequest(text: line, voice: configuration.voice, speed: configuration.speed)
         ) else { return false }
         guard !Task.isCancelled else { return false }
-        try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
+        // **`try?` swallows a failed write, so the send has to be checked.**
+        //
+        // Reporting `true` after it threw would log "said …" about audio that
+        // never left the Mac, and count a filler the caller did not hear — which
+        // is the same over-count this return value was added to remove, arriving
+        // one line further down. The likeliest thrower is `callEnded`: the
+        // caller hung up mid-filler.
+        do {
+            try await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
+        } catch {
+            return false
+        }
         log("[call] said \"\(line)\" while working")
         return true
     }

@@ -49,7 +49,18 @@ final class NoBrowserEngineOutsideTheAppTests: XCTestCase {
         for file in try sourceFiles(under: "Sources") {
             guard let source = try? String(contentsOf: file, encoding: .utf8) else { continue }
             let scan = SwiftSourceScan(source)
-            for index in scan.indices(of: "BrowserSearchBackend()") {
+            // **`BrowserSearchBackend(`, not `BrowserSearchBackend()`.**
+            //
+            // The first version matched the zero-argument spelling only, and the
+            // type has a second initialiser — `init(endpoint:)`, which the tests
+            // use. So `BrowserSearchBackend(endpoint: someURL)` would have put a
+            // WKWebView back in the daemon with all four of these tests green.
+            // Matching the open paren catches every spelling there can be.
+            for index in scan.indices(of: "BrowserSearchBackend(") {
+                // The declaration is not a construction.
+                let statement = scan.statement(at: index)
+                guard !statement.contains("class BrowserSearchBackend"),
+                      !statement.contains("extension BrowserSearchBackend") else { continue }
                 sites.append("\(file.lastPathComponent):\(scan.line(of: index))")
                 // The 200 characters in front of the construction. The gate is
                 // an `if` immediately above it, so anything further away is not

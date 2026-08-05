@@ -65,6 +65,85 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
     }
 }
 
+/// Which promise this run currently owes, and when it stops owing it.
+///
+/// ## Why this is a value and not three lines inside the actor
+///
+/// Because it was three lines inside the actor, and both review rounds found a
+/// defect in them — the second one *in the repair for the first*.
+///
+/// Round one: the field outlived its turn, so a promise whose answer never
+/// reached Signal was discharged by the next turn's answer. The repair cleared
+/// it in `beginQuietPeriod`. Round two: `beginQuietPeriod` is not where a turn
+/// begins for this purpose — nine `.answer` replies run before it, every one of
+/// them a refusal that answers nothing (an unreadable voice note, `//help`, a
+/// message while paused, one too long, four call-request replies) — so the
+/// repair covered only messages that reach the model, and a refusal still ate a
+/// promise that was still owed.
+///
+/// Neither could be caught by a test, because nothing in the suite can build a
+/// `VoiceBridgeDaemon` — it needs a live `SignalClient`. So the tests written for
+/// it mimed the rule with a local closure and passed against both defects. That
+/// is the shape `WorkingLineGate` was extracted for, in its own words: *"a value
+/// type with no clock and no socket in it, because the alternative is a rule
+/// that only exists inside an actor that needs a Signal connection to build"*.
+///
+/// So the rule lives here, where a test can reach it.
+public struct PromiseLedger: Sendable, Equatable {
+
+    private var owed: PromisedAnswer?
+
+    public init() {}
+
+    /// What this run currently owes, if anything.
+    public var outstanding: PromisedAnswer? { owed }
+
+    /// A new exchange begins.
+    ///
+    /// **Called once per incoming batch, before anything can be said back —
+    /// including a refusal.** That is the boundary the second review round
+    /// established: anything earlier and a turn discharges its own promise
+    /// before making it; anything later and a refusal discharges the *previous*
+    /// turn's, which is the bug.
+    ///
+    /// Dropping the promise rather than keeping it is deliberate. If the last
+    /// turn promised and never delivered, that promise is still on disk and
+    /// still owed — it is simply no longer this run's to discharge, because
+    /// nothing this run is about to say answers it. It will be apologised for at
+    /// the next start.
+    public mutating func beginExchange() {
+        owed = nil
+    }
+
+    /// A working line reached Signal. Returns the promise to write down.
+    ///
+    /// `nil` when there is nothing to promise about: no record is better than a
+    /// record whose apology cannot name what was asked.
+    public mutating func promised(
+        to account: String,
+        question: String,
+        at moment: Date
+    ) -> PromisedAnswer? {
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let promise = PromisedAnswer(account: account, question: question, promisedAt: moment)
+        owed = promise
+        return promise
+    }
+
+    /// An answer reached Signal. Returns the promise it discharges, if any.
+    ///
+    /// `nil` when this run owes nothing — which is the case that matters, and
+    /// the one both defects got wrong. A run that has promised nobody anything
+    /// must not be able to discharge a promise it found on disk, because that
+    /// promise belongs to a previous, crashed run and its apology has not been
+    /// sent yet.
+    public mutating func answered() -> PromisedAnswer? {
+        guard let promise = owed else { return nil }
+        owed = nil
+        return promise
+    }
+}
+
 /// Where the outstanding promise lives between two runs of the daemon.
 ///
 /// One promise, not a queue. Turns are serialised, so the appliance can owe at
