@@ -90,7 +90,31 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 #   measured      1892
 #   without Kokoro  1854   (1892 - 38)
 #   floor           1867   (25 under measured, 13 above the failure it must catch)
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1867}"
+#
+# **And it rotted a third time, which is when the rule stopped being written down
+# and started being checked.** Restating the arithmetic in a comment fixed the
+# number and not the mechanism: by 5 August the suite was 1915 and the floor was
+# still 1867, so losing KokoroEngine would have left 1877 — comfortably over.
+# Twice caught by a person doing arithmetic, and a gate that depends on somebody
+# remembering to redo a calculation is not a gate.
+#
+# So the rule is now an assertion this script makes about itself, below. Rot
+# arrives as a build failure carrying the new number rather than as a silent
+# hole. See the check on SMALLEST_TEST_TARGET.
+#
+#   measured      1915
+#   without Kokoro  1877   (1915 - 38)
+#   floor           1890   (25 under measured, 13 above the failure it must catch)
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1890}"
+
+# The smallest thing whose disappearance this gate has to notice.
+#
+# KokoroEngineTests, at 38 tests: Package.swift decides whether that target
+# exists by looking for vendor/onnxruntime/lib/libonnxruntime.dylib as the
+# manifest is read, so an unstaged dylib removes the target from the graph rather
+# than failing anything. A floor that cannot see a 38-test hole cannot see any
+# target loss at all.
+SMALLEST_TEST_TARGET="${MYNAH_SMALLEST_TEST_TARGET:-38}"
 # The ceiling has to sit above the 21 that skip on a healthy build Mac and below
 # the smallest number a missing document tool produces. **26 was set against
 # pandoc's +12 and was blind to the tool this change was actually added to
@@ -192,6 +216,39 @@ Worth checking in this order:
   3. tests really were deleted on purpose, in which case lower
      MYNAH_MIN_EXECUTED_TESTS in the same commit that deleted them, so the new
      floor is reviewed alongside the removal."
+fi
+
+# **The floor checking that it is still a floor.**
+#
+# A floor only catches a loss of N tests while the suite has fewer than N tests
+# of headroom above it — once EXECUTED reaches MIN_EXECUTED + N, losing a whole
+# target still clears the bar and the gate waves it through. That is not a
+# hypothetical: it happened three times, twice discovered by hand and once by
+# arithmetic during an audit, each time months after the gate had quietly stopped
+# working.
+#
+# Writing the rule in a comment did not hold, because following it was left to
+# memory. This is the same rule as an assertion, so the failure arrives at the
+# moment it starts being true, with the new number already worked out.
+#
+# It fires on a *healthy* run — nothing is wrong with the suite, the gate has
+# simply outgrown its own setting — so the message says that plainly rather than
+# sending anyone looking for a broken test.
+if (( EXECUTED >= MIN_EXECUTED + SMALLEST_TEST_TARGET )); then
+  die "the suite has grown to $EXECUTED and the floor of $MIN_EXECUTED can no longer do its job.
+
+Nothing is wrong with this run. The gate is what needs attention: losing the
+smallest test target ($SMALLEST_TEST_TARGET tests, KokoroEngineTests) would leave
+$(( EXECUTED - SMALLEST_TEST_TARGET )), which still clears $MIN_EXECUTED — so the
+one failure this floor exists to catch would pass it.
+
+Raise it in this commit, in scripts/assert-test-run.sh:
+  MIN_EXECUTED=\"\${MYNAH_MIN_EXECUTED_TESTS:-$(( EXECUTED - 25 ))}\"
+
+That is 25 under today's count and $(( SMALLEST_TEST_TARGET - 25 )) above the
+failure it must catch, which leaves room for 25 more tests before this fires
+again. Update the measured/without-Kokoro/floor block above it in the same edit,
+so the next person reads numbers rather than history."
 fi
 
 if (( SKIPPED > MAX_SKIPPED )); then
