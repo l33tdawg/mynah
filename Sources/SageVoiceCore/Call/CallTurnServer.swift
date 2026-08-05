@@ -867,9 +867,50 @@ public actor CallTurnServer {
         over writer: CallFrameWriter
     ) async {
         let started = Date().addingTimeInterval(-recognition)
+
+        // **Every turn reports, including the ones that do not finish.**
+        //
+        // This log used to be the last statement of the success path, which made
+        // it a record of turns that went well rather than a record of turns.
+        // Measured on this Mac: 20 turns reached `heard:`, and 12 produced a
+        // timing line. The eight missing ones left by a `guard
+        // !Task.isCancelled` or a `catch` — barged in on, hung up on, failed —
+        // and they are the *slow* ones, because a turn is only barged in on when
+        // the caller got bored waiting.
+        //
+        // So the two slowest thinks on this machine, at roughly 15s and 9s, are
+        // invisible in the very dataset used to argue that the filler ladder
+        // never gets past its first rung. A measurement that discards its own
+        // tail cannot answer a question about the tail. `defer`, therefore, and
+        // the exit is named.
+        var recognised: Date?
+        var thought: Date?
+        var firstSpoken: Date?
+        var outcome = "stopped before it began"
+        // Per turn, and deliberately not an actor field. The filler task is
+        // unstructured and can outlive its own turn — that is the orphan
+        // documented below — so a shared counter would credit this turn's
+        // fillers to the next one. A box created here is incremented only by the
+        // task that captured it and read only by this turn's log.
+        let fillers = FillerTally()
+        defer {
+            let seconds = { (from: Date, to: Date) in
+                String(format: "%.1f", to.timeIntervalSince(from))
+            }
+            let now = Date()
+            let heardIn = recognised.map { seconds(started, $0) } ?? "?"
+            let thoughtIn = (recognised.map { r in seconds(r, thought ?? now) }) ?? "?"
+            let spokeIn = (thought.map { t in seconds(t, firstSpoken ?? now) }) ?? "?"
+            let talkingAfter = firstSpoken.map { seconds(started, $0) } ?? "never"
+            log("[call] \(outcome): heard in \(heardIn)s, thought in \(thoughtIn)s, "
+                + "spoke in \(spokeIn)s — talking after \(talkingAfter)"
+                + (firstSpoken == nil ? "" : "s")
+                + ", \(fillers.spoken) filler(s)")
+        }
+
         do {
-            let recognised = Date()
-            guard !Task.isCancelled else { return }
+            recognised = Date()
+            guard !Task.isCancelled else { outcome = "cancelled before answering"; return }
             log("[call] heard: \(heard)")
         lastHeard = Date()
         transcript.heard(heard)
@@ -944,6 +985,7 @@ public actor CallTurnServer {
                     }
                     previous = line
                     position += 1
+                    fillers.fired()
                     await self.sayFiller(line, over: writer)
                 }
             }
@@ -1000,8 +1042,8 @@ public actor CallTurnServer {
             // `Task.cancel()` is idempotent.
             waiting.cancel()
 
-            let thought = Date()
-            guard !Task.isCancelled else { return }
+            thought = Date()
+            guard !Task.isCancelled else { outcome = "barged in on while thinking"; return }
             log("[call] replying: \(fullReply)")
 
             // A link read aloud is useless: nobody writes down a maps URL while
@@ -1022,32 +1064,25 @@ public actor CallTurnServer {
             // have nothing in common except that the caller waits through all of
             // them. Only the first-sentence figure is what they actually
             // experience; the rest is spoken while they are already listening.
-            var firstSpoken: Date?
             for sentence in CallTurnServer.sentences(in: reply) {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { outcome = "barged in on mid-answer"; return }
                 let speech = try await synthesizer.synthesize(
                     SpeechRequest(text: sentence, voice: configuration.voice, speed: configuration.speed)
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { outcome = "barged in on mid-answer"; return }
                 var audio = CallTurnServer.samples(fromWAV: speech.wav)
                 audio.append(CallTurnServer.pause(after: sentence))
                 try await send(.replyAudio(audio), over: writer)
                 if firstSpoken == nil { firstSpoken = Date() }
             }
             try await send(.replyEnd, over: writer)
-
-            let seconds = { (from: Date, to: Date) in
-                String(format: "%.1f", to.timeIntervalSince(from))
-            }
-            log("[call] heard in \(seconds(started, recognised))s, "
-                + "thought in \(seconds(recognised, thought))s, "
-                + "spoke in \(seconds(thought, firstSpoken ?? thought))s "
-                + "— talking after \(seconds(started, firstSpoken ?? thought))s")
+            outcome = "answered"
 
             // The answer is on its way to the caller's ear; the appliance is
             // free until they speak again. See `onTurnSpoken`.
             await afterSpeaking()
         } catch is CancellationError {
+            outcome = "cancelled"
             return
         } catch CallFrameWriter.Failure.callEnded {
             // The caller hung up while this answer was being prepared.
@@ -1057,10 +1092,37 @@ public actor CallTurnServer {
             // matters is that it stops here rather than writing into a
             // descriptor the kernel may already have handed to the next call.
             // See `CallConnection`.
+            outcome = "hung up on before the answer"
             log("[call] the call ended before the answer did; leaving it unsaid")
         } catch {
+            outcome = "failed"
             log("[call] could not answer: \(error)")
             try? await send(.turnFailed("\(error)"), over: writer)
+        }
+    }
+
+    /// How many filler lines one turn actually spoke.
+    ///
+    /// A box rather than a field on the actor, because the filler task is
+    /// unstructured: cancellation is best-effort, and an orphan can speak — and
+    /// count — after its own turn has returned. A shared counter would report
+    /// that filler against whichever turn happens to be running, which is
+    /// precisely backwards for a measurement meant to decide how many fillers a
+    /// turn needs.
+    private final class FillerTally: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func fired() {
+            lock.lock()
+            count += 1
+            lock.unlock()
+        }
+
+        var spoken: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return count
         }
     }
 

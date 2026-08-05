@@ -54,9 +54,24 @@ struct CallFiller {
     /// nothing in a later pool appears in an earlier one — hearing "nearly
     /// there" as the *first* thing after a question would be a claim the
     /// appliance cannot make yet.
+    ///
+    /// **And nothing here may appear in `WaitingPhrases` either.** Rung one used
+    /// to hold "Bear with me." and "One moment.", both of which are openers —
+    /// and `bridge.log` shows the call opener really did say "One moment." on
+    /// this Mac, four times. A caller could hear the same three words as the
+    /// greeting and again six seconds later, which is a stutter that reads as a
+    /// stuck machine: the impression this whole ladder exists to prevent.
+    ///
+    /// The register is the tell. An opener says *I am beginning*; a line at six
+    /// seconds has to say *I am still here*, and the two are not interchangeable
+    /// even when the words could be. Guarded by
+    /// `FillerAndOpenerPoolsAreDisjointTests`, which matters for a second reason
+    /// — pool membership is the only way the suite can tell a filler from an
+    /// opener, so a collision lets an opener satisfy the check that exists to
+    /// prove the ladder ran.
     static let pools: [[String]] = [
         ["Mm.", "Right.", "Okay…"],
-        ["Bear with me.", "One moment.", "Hmm…"],
+        ["Hmm…", "Let me think.", "Just a moment more."],
         ["Still going.", "Nearly there.", "Almost."],
         ["Sorry — this one's slow.", "Still on it, nearly done."]
     ]
