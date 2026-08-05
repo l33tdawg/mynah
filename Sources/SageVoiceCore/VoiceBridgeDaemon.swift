@@ -281,11 +281,23 @@ public actor VoiceBridgeDaemon {
     /// Cancelled when the answer beats it.
     private var quietPeriod: Task<Void, Never>?
 
+    /// The promise *this* run of the daemon wrote down, if any.
+    ///
+    /// Held so an answer can discharge its own promise and only its own. A
+    /// promise found on disk that this run did not make belongs to a previous,
+    /// crashed run and is the recovery path's to settle — see
+    /// `PromisedAnswerStore.clear(ifStill:)`.
+    private var madeThisRun: PromisedAnswer?
+
     /// Whether this turn already said something specific when the message
     /// arrived. Stops the tool-decision line repeating news the opener gave.
     private var spokeOnArrival: Bool { workingLines.saidArrivalOpener }
 
-    private func beginQuietPeriod(to recipient: SignalRecipient, thread: String) {
+    /// - Parameter question: what the owner asked, carried along so that if this
+    ///   turn ends up promising to come back, the promise can name it. Captured
+    ///   per turn rather than stored, so an abandoned turn cannot pair its own
+    ///   recipient with a later turn's question.
+    private func beginQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) {
         quietPeriod?.cancel()
         workingLines.beginTurn()
         quietPeriod = Task { [weak self] in
@@ -293,15 +305,15 @@ public actor VoiceBridgeDaemon {
                 for: .seconds(VoiceBridgeDaemon.quietBeforeWorkingLine)
             )
             guard !Task.isCancelled else { return }
-            await self?.endQuietPeriod(to: recipient, thread: thread)
+            await self?.endQuietPeriod(to: recipient, thread: thread, question: question)
         }
     }
 
     /// The turn is taking a while after all. Say whatever was held.
-    private func endQuietPeriod(to recipient: SignalRecipient, thread: String) async {
+    private func endQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) async {
         guard let line = workingLines.quietPeriodEnded() else { return }
         lastWorkingLines[thread] = line
-        await reply(line, to: recipient, as: .workingLine)
+        await reply(line, to: recipient, as: .workingLine, promising: question)
     }
 
     /// Offers a "still working" line. It goes out, waits, or is dropped.
@@ -309,7 +321,8 @@ public actor VoiceBridgeDaemon {
         _ line: String,
         isArrivalOpener: Bool = false,
         thread: String,
-        to recipient: SignalRecipient
+        to recipient: SignalRecipient,
+        question: String
     ) async {
         let decision = workingLines.offer(
             line,
@@ -318,7 +331,7 @@ public actor VoiceBridgeDaemon {
         )
         guard decision == .say else { return }
         lastWorkingLines[thread] = line
-        await reply(line, to: recipient, as: .workingLine)
+        await reply(line, to: recipient, as: .workingLine, promising: question)
     }
 
     /// Whether this thread has already been told the appliance is paused.
@@ -393,6 +406,16 @@ public actor VoiceBridgeDaemon {
     /// `nil` disables persistence entirely, which is what the tests use.
     private let conversations: ConversationStore?
 
+    /// Where a promise to come back survives a crash.
+    ///
+    /// **Not optional, unlike `conversations` above it.** An optional defaulting
+    /// to `nil` means a future construction that forgets it silently gets the
+    /// behaviour this exists to abolish — promising an answer and then going
+    /// quiet forever. The store guards its own writes when running under XCTest,
+    /// so a test that constructs a daemon neither writes to nor deletes the
+    /// owner's real file. See `PromisedAnswerStore.mayTouch`.
+    private let promises: PromisedAnswerStore
+
     /// Turns the answer into audio. `nil` disables speaking regardless of the
     /// configuration, which is what every test wants and what a machine with no
     /// working synthesizer gets.
@@ -409,6 +432,7 @@ public actor VoiceBridgeDaemon {
         ritual: SageRitual? = nil,
         notes: NotesToolSource? = nil,
         conversations: ConversationStore? = nil,
+        promises: PromisedAnswerStore = PromisedAnswerStore(),
         synthesizer: SpeechSynthesizing? = nil,
         calls: CallHost? = nil,
         callRefusal: CallInvitation.Refusal? = nil,
@@ -434,6 +458,7 @@ public actor VoiceBridgeDaemon {
         self.ritual = ritual
         self.notes = notes
         self.conversations = conversations
+        self.promises = promises
         self.synthesizer = synthesizer
         self.calls = calls
         self.callRefusal = callRefusal
@@ -491,6 +516,18 @@ public actor VoiceBridgeDaemon {
             if warmed {
                 startKeepWarm(tools: tools)
             }
+        }
+
+        // A promise the previous run of this process never kept.
+        //
+        // Read here — synchronously, before the message loop below can start a
+        // turn — rather than inside the task that sends the apology. The read is
+        // what takes ownership: once this run holds the value, a new turn may
+        // overwrite the file freely and the apology still goes to the right
+        // person about the right question.
+        let inherited = promises.outstanding()
+        if let inherited {
+            Task { [weak self] in await self?.keepTheBrokenPromise(inherited) }
         }
 
         log("[daemon] listening for Signal messages")
@@ -757,7 +794,7 @@ public actor VoiceBridgeDaemon {
         // Held rather than sent, because on a fast brain the answer beats it and
         // "On it." a second before the answer is noise. See `working`.
         let threadKey = recipient.description
-        beginQuietPeriod(to: recipient, thread: threadKey)
+        beginQuietPeriod(to: recipient, thread: threadKey, question: transcript)
         if let opener = WorkingReply.opening(
             forRequest: transcript,
             previous: lastWorkingLines[threadKey]
@@ -775,7 +812,8 @@ public actor VoiceBridgeDaemon {
                 opener.line,
                 isArrivalOpener: opener.isSpecific,
                 thread: threadKey,
-                to: recipient
+                to: recipient,
+                question: transcript
             )
         }
 
@@ -808,7 +846,8 @@ public actor VoiceBridgeDaemon {
             await working(
                 WaitingPhrases.acknowledgement(estimatedSeconds: estimator.typicalSeconds),
                 thread: threadKey,
-                to: recipient
+                to: recipient,
+                question: transcript
             )
         }
 
@@ -843,7 +882,13 @@ public actor VoiceBridgeDaemon {
                     // If it is still held when this one lands, it replaces the
                     // opener — "Looking that up online" is better news than
                     // "On it", and there is no reason to say both.
-                    await self.working(line, thread: key, to: recipient)
+                    //
+                    // `transcript` is captured by this closure, so it belongs to
+                    // *this* turn. That is the point: `withDeadline` can walk
+                    // away and leave this running, and an orphan reaching here
+                    // after the next turn has begun must promise against the
+                    // question it was actually given, not whatever is current.
+                    await self.working(line, thread: key, to: recipient, question: transcript)
             }
 
             // **One message, then quiet.** `onProgress` below is deliberately
@@ -1311,11 +1356,19 @@ public actor VoiceBridgeDaemon {
     ///   framed, because the two have different failure modes: a caution the
     ///   owner does not need on his phone is noise, and a caution the model does
     ///   not get is an instruction it obeys.
+    /// - Returns: whether it reached Signal. Almost every caller ignores this —
+    ///   a proactive announcement that does not land is a log line, not an
+    ///   emergency. The one caller that must not ignore it is the broken-promise
+    ///   apology, which may only discharge the durable record once the words
+    ///   have actually gone out. Clearing on *attempt* rather than on delivery
+    ///   is the single failure that would put the appliance back where it
+    ///   started: silent, with the evidence deleted.
+    @discardableResult
     public func announce(
         _ text: String,
         to recipient: SignalRecipient,
         quotingAnotherAgent: Bool = false
-    ) async {
+    ) async -> Bool {
         let key = recipient.description
         histories[key] = Self.trimmed(
             (histories[key] ?? []) + [BrainMessage(
@@ -1325,7 +1378,7 @@ public actor VoiceBridgeDaemon {
             keepingLastTurns: configuration.historyTurnLimit
         )
         persistConversations()
-        await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
+        return await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
     }
 
     /// How a relayed message is written down, as distinct from how it is said.
@@ -1438,13 +1491,21 @@ public actor VoiceBridgeDaemon {
         case unprompted
     }
 
+    /// - Parameter promising: what the owner asked, when this is a working line.
+    ///   Carried in rather than read from a field, and that is deliberate — see
+    ///   `recordThePromise`.
+    /// - Returns: whether the words reached Signal. Callers that do not care may
+    ///   ignore it; the promise bookkeeping cannot, because "sent" and
+    ///   "composed" differ by exactly the window this feature exists for.
+    @discardableResult
     private func reply(
         _ text: String,
         to recipient: SignalRecipient,
         attaching attachments: [URL] = [],
         allowSpeaking: Bool = true,
-        as utterance: Utterance = .answer
-    ) async {
+        as utterance: Utterance = .answer,
+        promising question: String? = nil
+    ) async -> Bool {
         if case .answer = utterance {
             workingLines.answered()
             quietPeriod?.cancel()
@@ -1487,6 +1548,14 @@ public actor VoiceBridgeDaemon {
                 textStyles: styles,
                 to: recipient
             )
+            // **After the wire call returned, and nowhere else.**
+            //
+            // The in-memory gate is closed at the top of this method, before the
+            // send, for its own good reasons. The durable record must not copy
+            // that placement: the whole failure being fixed here happened in the
+            // window between "we decided to speak" and "the words left the Mac".
+            recordThePromise(utterance, to: recipient, question: question)
+            return true
         } catch {
             // The words matter more than the file. signal-cli rejects the whole
             // send if it cannot read one attachment, so a note with a name it
@@ -1496,12 +1565,136 @@ public actor VoiceBridgeDaemon {
                 // Nowhere left to report to — the reply channel is what failed.
                 log("[daemon] could not send reply to "
                     + "\(SignalSenderAllowlist.redact(recipient.description)): \(error)")
-                return
+                return false
             }
             log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")
             // Do not synthesize the same attachment again: the point of this
             // retry is an unconditionally plain-text path.
-            await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
+            //
+            // **`as: utterance`, not `as: .unprompted`.** The retry used to
+            // reclassify the message, so an answer whose attachment send failed
+            // arrived as though nobody had asked for it — which under the
+            // bookkeeping below would leave the promise standing and re-apologise
+            // on every boot from then on. It terminates: this pass carries no
+            // attachments, so a second failure hits the guard above and returns.
+            return await reply(
+                text,
+                to: recipient,
+                allowSpeaking: false,
+                as: utterance,
+                promising: question
+            )
+        }
+    }
+
+    /// How long to keep trying to reach Signal before giving up on an apology.
+    ///
+    /// The restart at 10:08 in `bridge.log` needed four reconnect attempts, so
+    /// "the socket is not up yet" is the normal case here rather than an
+    /// unusual one.
+    static let longestWaitForSignalBeforeApologising: TimeInterval = 60
+
+    /// Says sorry for a promise a previous run of this process never kept.
+    ///
+    /// The whole point of the feature, and the only code path that can reach the
+    /// owner after the process that owed him an answer has died.
+    private func keepTheBrokenPromise(_ promise: PromisedAnswer) async {
+        // Older than the conversation it belonged to. Apologising at nine in the
+        // morning for a turn abandoned at two is not a kindness, it is a
+        // notification about something he has stopped thinking about — and six
+        // hours is already this product's number for "no longer the conversation
+        // you are in".
+        guard Date().timeIntervalSince(promise.promisedAt) <= ConversationStore.maximumAge else {
+            log("[daemon] discarding an unkept promise from \(promise.promisedAt) — too old to be worth raising")
+            promises.clear(ifStill: promise)
+            return
+        }
+
+        log("[daemon] a previous run promised an answer at \(promise.promisedAt) and never sent it")
+
+        // Wait for the socket rather than assume it. `run()` has called
+        // `signal.start()`, but connecting is asynchronous and a send into a nil
+        // socket throws rather than queues.
+        let deadline = Date().addingTimeInterval(Self.longestWaitForSignalBeforeApologising)
+        while await !signal.isConnected {
+            guard Date() < deadline else {
+                // Deliberately leaves the record in place. A boot that never
+                // reached Signal has not spent the apology, and the next boot
+                // should still try — this is the one path where doing nothing is
+                // better than clearing.
+                log("[daemon] could not reach Signal to apologise for the unkept promise; leaving it for the next start")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+
+        // `announce` rather than a bare `reply`: it also writes the sentence into
+        // the conversation, so the model knows what it said, and `.unprompted` is
+        // the truthful classification — nobody asked for this message.
+        let delivered = await announce(
+            "Sorry — I said I'd come back to you on that and then I fell over before I could. "
+                + "I'm back now. You asked: \"\(promise.question)\" — send it again and I'll have another go.",
+            to: .account(promise.account)
+        )
+
+        // **Only after it was actually delivered, and only if this is still the
+        // promise on disk.** A turn that started while the socket was connecting
+        // may have written a newer one, and deleting that would be this feature
+        // causing the silence it exists to prevent.
+        //
+        // The residual is one statement wide: a crash between the delivered
+        // apology and this line costs exactly one duplicate apology on the next
+        // boot. That is the right side to fail on — the alternative trade is a
+        // duplicate avoided at the price of permanent silence.
+        if delivered {
+            promises.clear(ifStill: promise)
+        }
+    }
+
+    /// Writes down a promise, or discharges one — once the words are actually on
+    /// their way.
+    ///
+    /// ## Why the question is a parameter and not a field
+    ///
+    /// Because a single in-flight field is wrong, and it is wrong in the one
+    /// case this feature is for. Turns are serialised; *abandoned* turns are not.
+    /// When `withDeadline` gives up, the work carries on in an unstructured task
+    /// with the old turn's recipient captured — the file says so in terms — and
+    /// that orphan can still reach the working-line path after the next turn has
+    /// begun. A shared field would pair the orphan's recipient with the live
+    /// turn's question, and the owner would be apologised to for something he
+    /// never asked that person.
+    private func recordThePromise(
+        _ utterance: Utterance,
+        to recipient: SignalRecipient,
+        question: String?
+    ) {
+        switch utterance {
+        case .workingLine:
+            // Nothing was promised if we cannot say what was asked. Better no
+            // record than a record whose apology has to be vague.
+            guard let question, !question.isEmpty else { return }
+            let promise = PromisedAnswer(
+                account: recipient.description,
+                question: question,
+                promisedAt: Date()
+            )
+            madeThisRun = promise
+            promises.record(promise)
+        case .answer:
+            // **Only the promise this run made, and only if it made one.**
+            // A blind clear here deletes a previous run's promise before the
+            // apology for it has been sent — see `clear(ifStill:)`, where the
+            // nine reply sites that would do it are named.
+            guard let promise = madeThisRun else { return }
+            madeThisRun = nil
+            promises.clear(ifStill: promise)
+        case .unprompted:
+            // An announcement is not the answer. The proactive watch fires on a
+            // sixty-second tick inside turns that can run six minutes, and
+            // letting it discharge a promise is the same bug `Utterance` was
+            // introduced to fix.
+            break
         }
     }
 
