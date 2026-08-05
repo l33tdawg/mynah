@@ -335,24 +335,26 @@ final class ApplianceIdempotenceTests: XCTestCase {
         let scratch = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: scratch) }
         let configuration = try configuration(in: scratch)
-        let runner = LoadedLaunchctl()
+        let runner = FakeLaunchd()
         let manager = SignalBackgroundServiceManager(
             runner: runner, homeDirectory: scratch, userID: 501
         )
 
         try await manager.enable(configuration)
-        let firstPass = await runner.counts
-        XCTAssertEqual(firstPass.bootstraps, 2, "the first install did not start both jobs")
+        let firstBootstraps = await runner.bootstraps
+        let firstBootouts = await runner.bootouts
+        XCTAssertEqual(firstBootstraps, 2, "the first install did not start both jobs")
 
         try await manager.enable(configuration)
 
-        let secondPass = await runner.counts
+        let secondBootouts = await runner.bootouts
+        let secondBootstraps = await runner.bootstraps
         XCTAssertEqual(
-            secondPass.bootouts, firstPass.bootouts,
+            secondBootouts, firstBootouts,
             "reconciling an unchanged appliance stopped signal-cli, which loses "
                 + "every message sent while it restarts"
         )
-        XCTAssertEqual(secondPass.bootstraps, firstPass.bootstraps)
+        XCTAssertEqual(secondBootstraps, firstBootstraps)
     }
 
     /// The other half, and the reason the check above cannot simply be "have I
@@ -362,13 +364,13 @@ final class ApplianceIdempotenceTests: XCTestCase {
         let scratch = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: scratch) }
         let original = try configuration(in: scratch)
-        let runner = LoadedLaunchctl()
+        let runner = FakeLaunchd()
         let manager = SignalBackgroundServiceManager(
             runner: runner, homeDirectory: scratch, userID: 501
         )
 
         try await manager.enable(original)
-        let before = await runner.counts
+        let before = await runner.bootstraps
 
         try await manager.enable(
             SignalServiceConfiguration(
@@ -382,9 +384,9 @@ final class ApplianceIdempotenceTests: XCTestCase {
             )
         )
 
-        let after = await runner.counts
+        let after = await runner.bootstraps
         XCTAssertGreaterThan(
-            after.bootstraps, before.bootstraps,
+            after, before,
             "the appliance kept running the model the owner replaced"
         )
     }
@@ -420,7 +422,7 @@ final class ApplianceIdempotenceTests: XCTestCase {
     /// machine it fails on.
     func testATestRunCannotReachTheRealLaunchd() async throws {
         let manager = SignalBackgroundServiceManager(
-            runner: LoadedLaunchctl(),
+            runner: FakeLaunchd(),
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser
         )
         try await manager.enable(.fixture)
@@ -497,35 +499,6 @@ private actor RecordingServices: SignalBackgroundServicing {
 
     func state() async -> BackgroundHelperState {
         enabled.isEmpty ? .absent : .running
-    }
-}
-
-/// A launchctl that reports both jobs loaded, which is the state the skip has to
-/// recognise. `bootout` answers non-zero the way the real one does when there
-/// was nothing to stop.
-private actor LoadedLaunchctl: ProbeCommandRunning {
-    struct Counts: Sendable {
-        var bootouts = 0
-        var bootstraps = 0
-    }
-
-    private(set) var counts = Counts()
-
-    func run(
-        executable: URL,
-        arguments: [String],
-        timeout: TimeInterval
-    ) async -> ProbeCommandResult? {
-        switch arguments.first {
-        case "bootout":
-            counts.bootouts += 1
-            return ProbeCommandResult(exitCode: 3, standardOutput: "", standardError: "")
-        case "bootstrap":
-            counts.bootstraps += 1
-            return ProbeCommandResult(exitCode: 0, standardOutput: "", standardError: "")
-        default:
-            return ProbeCommandResult(exitCode: 0, standardOutput: "", standardError: "")
-        }
     }
 }
 

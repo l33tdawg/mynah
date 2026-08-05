@@ -99,7 +99,7 @@ final class SignalBackgroundServicesTests: XCTestCase {
             socketPath: scratch.appendingPathComponent("daemon.socket").path
         )
         let manager = SignalBackgroundServiceManager(
-            runner: RecordingLaunchctlRunner(),
+            runner: FakeLaunchd(),
             homeDirectory: scratch,
             userID: 501
         )
@@ -138,7 +138,7 @@ final class SignalBackgroundServicesTests: XCTestCase {
             model: "qwen3.5:4b",
             socketPath: scratch.appendingPathComponent("daemon.socket").path
         )
-        let runner = RecordingLaunchctlRunner()
+        let runner = FakeLaunchd()
         let manager = SignalBackgroundServiceManager(
             runner: runner,
             homeDirectory: scratch,
@@ -265,27 +265,4 @@ private actor RecordingBackgroundServices: SignalBackgroundServicing {
     func state() async -> BackgroundHelperState { reportedState }
 
     func setReportedState(_ state: BackgroundHelperState) { reportedState = state }
-}
-
-private actor RecordingLaunchctlRunner: ProbeCommandRunning {
-    struct Call: Sendable {
-        let executable: URL
-        let arguments: [String]
-    }
-
-    private(set) var calls: [Call] = []
-
-    func run(
-        executable: URL,
-        arguments: [String],
-        timeout: TimeInterval
-    ) async -> ProbeCommandResult? {
-        calls.append(Call(executable: executable, arguments: arguments))
-        let isBootout = arguments.first == "bootout"
-        return ProbeCommandResult(
-            exitCode: isBootout ? 3 : 0,
-            standardOutput: "",
-            standardError: ""
-        )
-    }
 }

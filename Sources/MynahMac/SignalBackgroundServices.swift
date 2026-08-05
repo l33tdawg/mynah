@@ -98,6 +98,20 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     private let homeDirectory: URL
     private let userID: UInt32
 
+    /// The two executables a reconcile is trying to get launchd to run.
+    ///
+    /// A pair rather than one value because they fail independently: on 5 August
+    /// the bridge was replaced by a crash and picked up the new binary, while
+    /// signal-cli kept running the old bundle for hours. Either one being stale
+    /// means the update has not finished.
+    struct InstalledBuild: Hashable, Sendable {
+        let signal: String
+        let bridge: String
+    }
+
+    /// Builds this process has already failed to start. See `enable`.
+    private var failedToApply: Set<InstalledBuild> = []
+
     init(
         runner: ProbeCommandRunning = ProbeCommandRunner(),
         fileManager: FileManager = .default,
@@ -183,27 +197,76 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // dangerous in either direction: a false "no" is exactly today's
         // behaviour, and a false "yes" needs launchd to have reported a job
         // loaded that is not.
+        let installed = InstalledBuild(
+            signal: Self.executableStamp(configuration.signalCLI),
+            bridge: Self.executableStamp(configuration.bridge)
+        )
+
         if await isAlreadyReconciled(
             signal: signalData, at: signalURL,
-            bridge: bridgeData, at: bridgeURL
+            bridge: bridgeData, at: bridgeURL,
+            running: installed
         ) {
+            return
+        }
+
+        // **A build that has already refused to start is not retried by every
+        // caller.** Without this the repair below would reintroduce the churn
+        // the reconcile check exists to prevent: a launchctl that says no once
+        // would be asked again by the model picker, the reply-style switch and
+        // the phone-link sheet, dropping the signal socket each time.
+        //
+        // Deliberately per-process rather than persisted. The next launch does
+        // try again, which is the whole point — the failure this file is being
+        // repaired for was transient in principle and permanent only because
+        // nothing ever asked a second time.
+        guard !failedToApply.contains(installed) else {
+            Self.log.error(
+                "not running the installed build, and this build already failed to start; leaving it until the next launch"
+            )
             return
         }
 
         try signalData.write(to: signalURL, options: .atomic)
         try bridgeData.write(to: bridgeURL, options: .atomic)
 
-        Self.log.notice("restarting the phone bridge to apply a changed configuration")
-
         // bootout returns non-zero on a first install; that only means there
-        // was nothing stale to stop.
+        // was nothing stale to stop. The bridge goes first and the socket is
+        // removed only if the helper really stopped: the socket belongs to a
+        // running signal-cli, and deleting it under a live one is how the
+        // bridge loses its connection.
         _ = await bootout(Self.bridgeLabel)
-        let stoppedManagedSignal = await bootout(Self.signalLabel)
-        if stoppedManagedSignal {
+        if await bootout(Self.signalLabel) {
             try? fileManager.removeItem(atPath: configuration.socketPath)
         }
-        try await bootstrap(signalURL, label: Self.signalLabel)
-        try await bootstrap(bridgeURL, label: Self.bridgeLabel)
+
+        // **Both are attempted, and neither can now prevent the other.** This
+        // was `try await bootstrap(signal…)` then `try await bootstrap(bridge…)`,
+        // so a signal helper that refused to start meant the bridge — the job
+        // that actually answers the phone — was never even asked. On 5 August
+        // that is what happened: 1.7.3 installed at 19:49, both bootouts failed
+        // at 19:52, the first bootstrap threw, and the daemon went on serving
+        // Signal from the 1.7.2 bundle until it crashed at 20:07.
+        let signalStarted = await bootstrap(signalURL, label: Self.signalLabel)
+        let bridgeStarted = await bootstrap(bridgeURL, label: Self.bridgeLabel)
+
+        // **Said afterwards, and only when it is true.** The notice this
+        // replaces was printed before any of the work above, so `mynah.log`
+        // recorded "restarting the phone bridge to apply a changed
+        // configuration" for a reconcile that restarted nothing whatsoever. A
+        // log line that cannot fail is not evidence, and this one was the only
+        // account anybody had of an update finishing.
+        guard await isRunningTheInstalledBuild(installed) else {
+            failedToApply.insert(installed)
+            Self.log.error("""
+                the phone bridge is still not running the installed build \
+                (signal \(signalStarted ? "started" : "did not start"), \
+                bridge \(bridgeStarted ? "started" : "did not start")). \
+                Quit Mynah and open it again to apply it.
+                """)
+            throw Failure.launchFailed(Self.bridgeLabel)
+        }
+        Self.log.notice("the phone bridge is now running the installed build")
     }
 
     /// Makes the daemon's logs owner-only, every time this runs.
@@ -297,23 +360,50 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// their model.
     private func isAlreadyReconciled(
         signal: Data, at signalURL: URL,
-        bridge: Data, at bridgeURL: URL
+        bridge: Data, at bridgeURL: URL,
+        running installed: InstalledBuild
     ) async -> Bool {
+        // **The disk check alone is what made a failed restart permanent.**
+        //
+        // These two questions — does the file on disk match what I would write,
+        // and does launchd hold both jobs — are both satisfied by a reconcile
+        // that wrote the plists and then failed to restart anything. The old
+        // processes are still loaded, and the file matches by construction
+        // because we are the ones who just wrote it. So the write that exists
+        // to *trigger* the restart is what convinces the next attempt there is
+        // nothing left to do, and the appliance runs the previous build until
+        // something kills it.
+        //
+        // Measured on the owner's Mac at 20:30 on 5 August, three ways:
+        //
+        //     loaded in launchd        plist on disk           installed binary
+        //     6321952-…-608061383    6415200-…-608598496    6415200-…-608598496
+        //   120556208-…-608061383  120556208-…-608598502  120556208-…-608598502
+        //
+        // signal-cli was still executing out of
+        // Backups/Mynah-20260805-194946.app four and a half hours after 1.7.3
+        // installed, and nothing was ever going to restart it.
+        //
+        // So the authoritative question is the third one, and it is the only
+        // one a failed restart cannot answer falsely.
         guard (try? Data(contentsOf: signalURL)) == signal,
               (try? Data(contentsOf: bridgeURL)) == bridge else {
             return false
         }
-        // `true` specifically, not "not false". `isLoaded` returns nil when
-        // launchctl could not be asked at all, and an unanswered question is
-        // not a yes — here the safe reading is to go on and install, because
-        // the owner has asked for this to be running and bootstrapping
-        // something already bootstrapped is recoverable. That is the opposite
-        // reading to `disable`, and deliberately: uncertainty may rebuild, but
-        // uncertainty must never destroy.
-        // Sequential rather than `&&`: the short-circuit operators take an
-        // autoclosure, which cannot be `await`ed.
-        guard await isLoaded(Self.signalLabel) == true else { return false }
-        return await isLoaded(Self.bridgeLabel) == true
+        // **This replaces a pair of `isLoaded` calls, and subsumes them.** A
+        // stamp can only be read out of a `launchctl print` that succeeded, so
+        // "running the installed build" already answers "does launchd hold this
+        // job" — keeping both would have meant four launchctl calls to learn
+        // what two can say, and a redundant probe is a place for the two answers
+        // to disagree.
+        //
+        // The unanswered-question reading is unchanged and still deliberate:
+        // `loadedStamp` returns nil when launchctl could not be asked, and nil
+        // is read here as "not reconciled", so uncertainty makes this go on and
+        // install. That is the opposite of `disable`'s reading, and for the same
+        // reason it always was — uncertainty may rebuild, but uncertainty must
+        // never destroy.
+        return await isRunningTheInstalledBuild(installed)
     }
 
     func disable(because reason: String) async {
@@ -416,14 +506,98 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         return result?.succeeded == true
     }
 
-    private func bootstrap(_ plist: URL, label: String) async throws {
-        guard let result = await runner.run(
+    /// - Returns: whether launchd took the job. Failure is reported rather than
+    ///   thrown so the caller can attempt the other job regardless — see
+    ///   `enable`, where throwing here once left the phone bridge unasked.
+    @discardableResult
+    private func bootstrap(_ plist: URL, label: String) async -> Bool {
+        let result = await runner.run(
             executable: URL(fileURLWithPath: "/bin/launchctl"),
             arguments: ["bootstrap", domain, plist.path],
             timeout: 30
-        ), result.succeeded else {
-            throw Failure.launchFailed(label)
+        )
+        guard let result, result.succeeded else {
+            // launchctl's own words. "Bootstrap failed: 37: Operation already
+            // in progress" and "5: Input/output error" mean quite different
+            // things to whoever reads this afterwards, and the diagnosis of the
+            // 5 August failure was slowed by having neither.
+            let reason = Self.firstLine(
+                of: result?.standardError, or: result?.standardOutput
+            ) ?? (result == nil ? "launchctl could not be run" : "no output")
+            Self.log.error("launchctl bootstrap \(label) failed: \(reason)")
+            return false
         }
+        return true
+    }
+
+    /// Whether launchd is running the executables that are installed right now.
+    ///
+    /// Asks launchd what it *loaded*, which is the question `isAlreadyReconciled`
+    /// needed and did not have. `launchctl print` reports the in-memory service
+    /// definition, so a plist rewritten on disk without a successful
+    /// bootout/bootstrap still shows the previous `MYNAH_BUILD_STAMP` — exactly
+    /// the discrepancy that proves the restart did not take.
+    ///
+    /// `nil` from `loadedStamp` — launchctl unavailable, or the job absent — is
+    /// read as "not running the installed build". That is the safe direction
+    /// here and the opposite of `isLoaded`'s: an unanswered question must not
+    /// let a reconcile declare itself finished, and the cost of being wrong is
+    /// one restart rather than an appliance stuck on an old build.
+    private func isRunningTheInstalledBuild(_ installed: InstalledBuild) async -> Bool {
+        guard await loadedStamp(Self.signalLabel) == installed.signal else { return false }
+        return await loadedStamp(Self.bridgeLabel) == installed.bridge
+    }
+
+    private func loadedStamp(_ label: String) async -> String? {
+        guard let result = await runner.run(
+            executable: URL(fileURLWithPath: "/bin/launchctl"),
+            arguments: ["print", "\(domain)/\(label)"],
+            timeout: 10
+        ), result.succeeded else { return nil }
+        return Self.stamp(inLaunchctlPrint: result.standardOutput)
+    }
+
+    /// Pulls `MYNAH_BUILD_STAMP => <value>` out of `launchctl print`.
+    ///
+    /// Parsed rather than asked for structurally because launchctl has no
+    /// machine-readable output, and a job's environment is the only place the
+    /// build it was started from survives. The variable exists for this: it is
+    /// otherwise unread by anything, and its only job is to make two builds of
+    /// the same path at the same location distinguishable.
+    /// **Scoped to the job's own `environment` block, not the first match.**
+    /// `launchctl print` emits three of them in order — `inherited environment`,
+    /// `default environment`, then `environment` — and only the last is what
+    /// launchd loaded from our plist. A parser taking the first
+    /// `MYNAH_BUILD_STAMP` it saw would read a value inherited from whatever
+    /// launched Mynah, and reading a stale restart as a finished one is the
+    /// precise failure this whole change exists to end. So it fails closed:
+    /// anything it cannot place inside `environment = {` is `nil`, and `nil`
+    /// means "restart it".
+    static func stamp(inLaunchctlPrint output: String) -> String? {
+        var insideJobEnvironment = false
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "environment = {" {
+                insideJobEnvironment = true
+                continue
+            }
+            guard insideJobEnvironment else { continue }
+            if trimmed == "}" { return nil }
+            guard trimmed.hasPrefix("MYNAH_BUILD_STAMP") ,
+                  let value = trimmed.components(separatedBy: "=>").last else { continue }
+            let stamp = value.trimmingCharacters(in: .whitespaces)
+            return stamp.isEmpty ? nil : stamp
+        }
+        return nil
+    }
+
+    private static func firstLine(of primary: String?, or fallback: String?) -> String? {
+        for candidate in [primary, fallback] {
+            guard let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { continue }
+            return text.split(separator: "\n").first.map(String.init)
+        }
+        return nil
     }
 
     private var domain: String { "gui/\(userID)" }
