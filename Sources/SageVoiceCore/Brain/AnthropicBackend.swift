@@ -127,6 +127,26 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
 
     // MARK: Completion
 
+    /// The system prompt in Anthropic's structured form, carrying the cache
+    /// breakpoint.
+    ///
+    /// A `static` so it can be tested: `complete` needs a live URLSession and a
+    /// credential, so the only other way to check the field exists is to read
+    /// the source and hope.
+    ///
+    /// One block, one breakpoint. Anthropic allows four; more than one would
+    /// only help if there were a second stable segment worth its own prefix,
+    /// and there is not — everything after this is the conversation, which
+    /// changes every turn by design.
+    static func cachedSystemBlocks(_ text: String) -> [[String: Any]] {
+        [[
+            "type": "text",
+            "text": text,
+            "cache_control": ["type": "ephemeral"]
+        ]]
+    }
+
+
     public func complete(_ request: BrainRequest) async throws -> BrainReply {
         // A deliberate 1-token probe must stay a 1-token probe; the floor
         // exists to stop a local model's budget starving a reasoning model, not
@@ -147,12 +167,44 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
             .map(\.content)
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
-        if !systemText.isEmpty {
-            body["system"] = systemText
-        }
-
         if !request.tools.isEmpty {
             body["tools"] = request.tools.map(\.anthropicWireObject)
+        }
+
+        if !systemText.isEmpty {
+            // **The prompt cache, finally switched on.**
+            //
+            // Two comments in this repository already asserted that Anthropic
+            // caching worked — `PromptStableJSON`'s whole reason for sorting
+            // keys, and the note further down this file — while `cache_control`
+            // appeared nowhere in `Sources/`. The byte-stability work those
+            // comments describe was real and was a prerequisite; the field that
+            // uses it was never sent.
+            //
+            // **The breakpoint goes here, not on the tools, and the order is
+            // load-bearing.** Anthropic's cached prefix is tools → system →
+            // messages, and a breakpoint caches everything up to and including
+            // its own block. `claude-haiku-4-5` will not cache a prefix under
+            // 4,096 tokens; this system prompt is ~1,900, so on its own it
+            // would silently never cache. With the eighteen tool schemas ahead
+            // of it the prefix clears the minimum comfortably — which is why
+            // `body["tools"]` is now assigned *above* this rather than below.
+            // It made no difference to the JSON, which `PromptStableJSON` sorts
+            // anyway, and every difference to reading this.
+            //
+            // Nothing here moves turn to turn. `WhereWeAre.rightNow` puts the
+            // clock on the owner's own message specifically so the cached
+            // prefix stays still — see its second numbered note.
+            //
+            // **What it costs when it misses.** A write is charged at 1.25x and
+            // a read at 0.1x, so this pays for itself the moment two requests
+            // share the prefix inside the five-minute TTL. An ordinary turn
+            // makes at least two — the model asks for a tool, then answers with
+            // the result — so tool-using turns win outright. A bare
+            // acknowledgement that calls nothing is one request, and pays a 25%
+            // surcharge on the prefix for a cache nobody reads. That is the
+            // honest trade, and it is the right side of it for this appliance.
+            body["system"] = Self.cachedSystemBlocks(systemText)
         }
 
         switch request.reasoning {

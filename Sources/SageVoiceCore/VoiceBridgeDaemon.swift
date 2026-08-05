@@ -940,8 +940,27 @@ public actor VoiceBridgeDaemon {
             // no longer waiting. Ollama serves one slot at a time, so this does
             // occupy the model briefly — acceptable only because it is short and
             // nobody is blocked on it.
+            // Set whatever the brain is: this field is "the thread spoken to
+            // last", which is what `recentMessagesForCall` reads it for. Only
+            // the anchoring below is local-only.
             lastAnchoredKey = key
-            await loop.anchorPromptCache(history: histories[key] ?? [], tools: tools)
+
+            // **Local brains only, and every word above says why.**
+            //
+            // llama.cpp checkpoints, KV rewinds, one slot at a time — none of
+            // that describes a hosted provider. Its cache is server-side and
+            // prefix-keyed: there is no slot for our timer to protect and
+            // nothing a replay can plant. So on a hosted key this was a second
+            // paid request on *every turn*, buying nothing.
+            //
+            // `BrainCapabilities.servesOneCacheSlot` exists for exactly this
+            // question and already gates the keep-warm timer and the window's
+            // copy. This call site was simply never given the same line — the
+            // sixth instance in this audit of a fix landing on one of two
+            // identical places.
+            if loop.brain.servesOneCacheSlot {
+                await loop.anchorPromptCache(history: histories[key] ?? [], tools: tools)
+            }
 
             // After the reply, never before. SAGE's turn discipline is the
             // appliance's own housekeeping and the owner must not wait on it —
