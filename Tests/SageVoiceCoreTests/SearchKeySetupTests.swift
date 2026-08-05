@@ -41,10 +41,17 @@ final class SearchKeySetupTests: XCTestCase {
     /// The important half: a bad key saved is worse than none, because the chain
     /// then spends its first provider on a guaranteed failure before falling
     /// through to the scrape it would have used anyway.
+    ///
+    /// **Throws the real refusal.** This used to throw a private `Refused`
+    /// struct, which is a fine stand-in for "something went wrong" and a useless
+    /// one here: it bridges to a non-URL domain, so it took the reject branch
+    /// whether the transport classifier existed or not. That is how the dead
+    /// classifier shipped. `httpStatus(401)` is what Brave actually sends for a
+    /// bad token (BraveSearchBackend.swift:76).
     func testARejectedTokenIsNotSaved() async {
         let store = scratchStore()
         let outcome = await SearchKeySetup.connect("nope", into: store, save: true) { _ in
-            throw Refused()
+            throw WebSearchError.httpStatus(401)
         }
 
         guard case .rejected = outcome else {
@@ -54,6 +61,90 @@ final class SearchKeySetupTests: XCTestCase {
             store.key(forProvider: ProviderKeyStore.searchProvider, environment: [:]),
             "a token the service refused was stored anyway"
         )
+    }
+
+    // MARK: Told apart: a bad token and an unreachable service
+
+    /// **Fed the exact values `BraveSearchBackend` throws, not invented ones.**
+    ///
+    /// The first version of this classifier tested for `NSURLErrorDomain`, which
+    /// is what URLSession raises — and none of those ever reaches it, because
+    /// `BraveSearchBackend` catches every one and rethrows
+    /// `WebSearchError.transport`. So it returned false for every error the
+    /// shipped binary can produce: the branch was dead, the key was still
+    /// thrown away, and nothing failed.
+    ///
+    /// Nothing failed because nothing tested it. The rejection test below it
+    /// throws a private `Refused` struct, which bridges to a non-URL domain and
+    /// so passes identically with the classifier present or deleted.
+    ///
+    /// These use the real cases from the real backend, taken from the seven
+    /// `throw WebSearchError...` sites in BraveSearchBackend.swift.
+    func testAnUnreachableServiceIsNotEvidenceAboutTheToken() {
+        // BraveSearchBackend.swift:72 — every URLSession failure becomes this.
+        XCTAssertTrue(
+            SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(
+                WebSearchError.transport("The Internet connection appears to be offline.")
+            ),
+            """
+            a transport failure is being read as the token being wrong. This is \
+            the exact error the production path produces when the connection is \
+            down, so the owner's good key is discarded and he is told to check \
+            he copied it properly.
+            """
+        )
+        // :87 — a captive portal or a redesigned page.
+        XCTAssertTrue(
+            SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(
+                WebSearchError.unparseableResponse("not JSON")
+            )
+        )
+        // :76 — throttled, or the service having an outage.
+        XCTAssertTrue(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(429)))
+        XCTAssertTrue(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(503)))
+    }
+
+    /// And the one answer that IS about the token.
+    func testARefusedTokenIsNotMistakenForANetworkProblem() {
+        XCTAssertFalse(
+            SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(401)),
+            "a token the service rejected is being kept and called a network problem"
+        )
+        XCTAssertFalse(SearchKeySetup.looksLikeTheNetworkRatherThanTheToken(WebSearchError.httpStatus(403)))
+    }
+
+    /// End to end: the outcome the owner actually gets, on the real error.
+    ///
+    /// The classifier being right is not the property that matters — the
+    /// property that matters is that his key survives. Asserted through
+    /// `connect`, so a correct classifier wired up wrongly still fails.
+    func testAGoodTokenSurvivesAnOutageAndIsSaved() async {
+        let store = scratchStore()
+        let outcome = await SearchKeySetup.connect("tok-123", into: store, save: true) { _ in
+            throw WebSearchError.transport("The Internet connection appears to be offline.")
+        }
+
+        guard case .savedUnchecked = outcome else {
+            return XCTFail("a good token during an outage reported \(outcome), so it was thrown away")
+        }
+        XCTAssertEqual(
+            store.key(forProvider: ProviderKeyStore.searchProvider, environment: [:]),
+            "tok-123",
+            "the key was not saved, so the owner has to find his token again once the connection is back"
+        )
+    }
+
+    /// Without `--save` an outage says so rather than blaming the token.
+    func testAnOutageWithoutSaveSaysItCouldNotCheck() async {
+        let store = scratchStore()
+        let outcome = await SearchKeySetup.connect("tok-123", into: store, save: false) { _ in
+            throw WebSearchError.transport("offline")
+        }
+
+        guard case .couldNotCheck = outcome else {
+            return XCTFail("an outage reported \(outcome) instead of saying it could not check")
+        }
+        XCTAssertFalse(outcome.isUsable)
     }
 
     func testWithoutSaveItIsCheckedAndDiscarded() async {

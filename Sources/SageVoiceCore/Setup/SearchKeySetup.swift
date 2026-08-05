@@ -82,13 +82,48 @@ public enum SearchKeySetup {
     ///
     /// A transport failure is not evidence about the token. It is evidence about
     /// the network, and the honest thing is to say so and keep the key.
+    ///
+    /// ## The first version of this could never return true
+    ///
+    /// It tested `(error as NSError).domain == NSURLErrorDomain`, reasoning that
+    /// URLSession failures arrive that way. They do — and none of them reaches
+    /// here, because `BraveSearchBackend` catches every one and rethrows
+    /// `WebSearchError.transport(error.localizedDescription)`. `WebSearchError`
+    /// is a plain Swift enum, so its bridged domain is the mangled type name and
+    /// never `NSURLErrorDomain`.
+    ///
+    /// So the guard returned false for every error the shipped binary can
+    /// produce: `savedUnchecked` and `couldNotCheck` were unreachable, the key
+    /// was still discarded, and the message was now *more* confident about the
+    /// wrong diagnosis than before the repair. Found by the third review round,
+    /// which compiled the enum standalone to check the bridging rather than
+    /// reasoning about it. A guard that cannot fire, in a fix for a usability
+    /// defect — and no test touched it, which is why it went unnoticed.
+    ///
+    /// It classifies on the error the production path actually throws now.
     static func looksLikeTheNetworkRatherThanTheToken(_ error: Error) -> Bool {
-        let failure = error as NSError
-        guard failure.domain == NSURLErrorDomain else { return false }
-        // Anything URLSession itself raised: no connection, DNS, timeout, TLS.
-        // An HTTP 401/403 does not arrive this way — `BraveSearchBackend` turns
-        // those into its own error, which is a real rejection.
-        return true
+        if let search = error as? WebSearchError {
+            switch search {
+            case .transport, .unparseableResponse:
+                // Could not reach the provider, or reached something that was
+                // not the provider — a captive portal, a proxy error page.
+                // Neither says anything about the token.
+                return true
+            case .httpStatus(let code):
+                // 401 and 403 are the service saying the token is wrong; that is
+                // the one answer worth discarding a key for. 429 and 5xx are the
+                // service saying "not now", which is not about the token either.
+                return code != 401 && code != 403
+            case .emptyQuery, .missingCredential:
+                // Neither can occur here — `connect` rejects an empty key before
+                // verifying, and the key is passed explicitly — but if one did,
+                // it is our bug rather than the network's.
+                return false
+            }
+        }
+        // Kept for any caller that verifies without going through
+        // `BraveSearchBackend`, where a raw URLSession error would arrive.
+        return (error as NSError).domain == NSURLErrorDomain
     }
 
     /// Checks a token against the real service, then stores it.
