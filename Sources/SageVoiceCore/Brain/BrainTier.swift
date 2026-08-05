@@ -25,8 +25,20 @@ import Foundation
 /// ## Ceilings, never abilities
 ///
 /// A tier saying a hosted brain may carry an image does not put an image on the
-/// wire. Every capability here is AND-ed with what the backend actually
-/// implements, and only in that direction — see `ToolLoop.backendSeesImages`.
+/// wire.
+///
+/// Every capability here is AND-ed with what the backend actually implements,
+/// and only in that direction — `ToolLoop.backendSeesImages` reads
+/// `BrainBackend.seesImages`, and `VoiceBridgeDaemon` passes that to the
+/// attachment note.
+///
+/// **With one exception, named because the 1.7.2 audit went looking for it:**
+/// `mayCarryImages` is the tier's half of that AND and nothing reads it yet.
+/// The backend half is what decides today, and it defaults to pessimistic — so
+/// the behaviour is correct and the field is inert. It flips in one place when
+/// the two wire encoders land (#36); until then, changing it changes nothing,
+/// and a reader who assumes otherwise will believe they granted vision and will
+/// not have.
 public enum BrainTier: String, Sendable, Equatable, Hashable, Codable, CaseIterable {
 
     /// A model running on this Mac, whether through Ollama or an OpenAI-shaped
@@ -187,7 +199,10 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// **Read by `BrainTierTests` and by nothing at runtime**, and that is
     /// stated rather than left to be discovered: `ToolLoop.Configuration`
     /// applies `BrainPrompts.voiceToolAllowlist` unconditionally, so a hosted
-    /// brain is still offered exactly twenty tools today. The ratchet is the
+    /// brain is offered exactly what a local one is — nineteen after the 5 Aug
+    /// cuts (`sage_list`, `sage_reflect`) and the messages swap (`sage_pipe` out,
+    /// `sage_message_send` and `sage_message_reply` in). One slot of headroom
+    /// under the ceiling, deliberately. The ratchet is the
     /// whole of its current job. How many tools a skill loader may expose is a
     /// tier field, not a global constant — which is what this becomes when that
     /// loader is written.

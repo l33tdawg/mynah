@@ -113,6 +113,20 @@ struct MemoryPage: Sendable {
     /// number the owner sees is the number of rows they can actually see.
     var total: Int
 
+    /// Whether every domain this page claims to cover actually answered.
+    ///
+    /// **A page that cannot testify about every domain must not replace the
+    /// list on screen.** `refresh()` assigns `memories = page.memories` outright
+    /// on the stated ground that a first page "is the whole truth". That was
+    /// sound when `recent()` was one call that either succeeded or threw; once
+    /// it became a per-domain merge that tolerates a refusal, a background
+    /// refresh could silently delete rows the owner was looking at — no spinner,
+    /// no banner, and the count line confidently reporting the smaller number.
+    ///
+    /// Defaults to `true` so every existing construction keeps meaning what it
+    /// said: only the merge knows how to be partial.
+    var isComplete: Bool = true
+
     static let empty = MemoryPage(memories: [], total: 0)
 }
 
@@ -482,6 +496,7 @@ actor SageMemoryStore: MemoryStoring {
         var everything: [Memory] = []
         var total = 0
         var lastError: Error?
+        var incomplete = false
         for domain in domains {
             do {
                 let page = try await page(from: "sage_list", arguments: [
@@ -492,19 +507,38 @@ actor SageMemoryStore: MemoryStoring {
                 ])
                 everything.append(contentsOf: page.memories)
                 total += page.total
+            } catch MemoryTrouble.tooBroad {
+                // **`.tooBroad` is the one error the caller can actually fix,
+                // and swallowing it here defeated the fix.**
+                //
+                // `fetchFirstPage` exists to catch exactly this and re-ask at 20
+                // rows, then 8. Each domain here is asked for `offset + limit` —
+                // 60 on the first page, the size the owner's own node refuses
+                // with "scan budget exceeded". When one domain answered and the
+                // other was refused, this returned *success*, the ladder never
+                // fired, the screen went `.ready`, and an entire class of his
+                // memories — realistically his task list — was simply absent
+                // with no error anywhere.
+                //
+                // The comment below is a real ruling and still holds for every
+                // other error. It is a false dichotomy for this one: the third
+                // option is to ask smaller and get everything, which is what the
+                // ladder above was written to do.
+                throw MemoryTrouble.tooBroad
             } catch {
                 // One unreadable domain must not blank the screen. The owner
                 // seeing half his memories beats him seeing an error where his
                 // memories were.
                 log.error("listing \(domain) failed: \(String(describing: error))")
                 lastError = error
+                incomplete = true
             }
         }
         if everything.isEmpty, let lastError { throw lastError }
 
         let newestFirst = everything.sorted { $0.learned > $1.learned }
         let window = newestFirst.dropFirst(offset).prefix(limit)
-        return MemoryPage(memories: Array(window), total: total)
+        return MemoryPage(memories: Array(window), total: total, isComplete: !incomplete)
     }
 
     /// The domains this appliance actually owns, from the node.
@@ -918,6 +952,11 @@ final class MemoriesModel {
     /// not the node's total, which includes things filtered out on the way here.
     var visibleCount: Int { shelf == .files ? files.count : shown.count }
 
+    /// How many rows have actually been fetched, whatever the shelf shows of
+    /// them. Named in the empty state so "none here" cannot be mistaken for
+    /// "none at all" — see `countSentence`.
+    var loadedCount: Int { memories.count }
+
     /// A search or a subject is narrowing the list.
     ///
     /// **This decides what "clear" means, which is why it is a named property
@@ -989,9 +1028,17 @@ final class MemoriesModel {
         }
         guard !Task.isCancelled else { return }
 
-        if memories.count <= Self.pageSize {
+        if memories.count <= Self.pageSize, page.isComplete {
             // Everything on screen is inside the window this page speaks for, so
             // it is the whole truth: new ones in, forgotten ones out.
+            //
+            // **`page.isComplete` is load-bearing.** "The whole truth" was true
+            // when `recent()` was one call that either succeeded or threw. It is
+            // now a per-domain merge that tolerates a refusal, so a page can
+            // arrive missing an entire domain and still look successful — and
+            // this branch would then delete the owner's task list off the screen
+            // he was reading, with no spinner and no banner. A page that cannot
+            // testify about every domain falls through to the additive branch.
             //
             // Guarded on inequality because assigning an equal array still
             // invalidates the view and redraws every card — which is the flicker
@@ -1544,7 +1591,17 @@ struct MemoriesView: View {
         if model.isSearching {
             return count == 1 ? "1 match" : "\(count) matches"
         }
-        if count == 0 { return "Nothing yet" }
+        // **"Nothing yet" is a claim about the list, and on the Tasks shelf it
+        // was a claim about one page of it.**
+        //
+        // The shelf filters what is already loaded rather than asking the node
+        // for tasks — `kind` is derived from the stored text, so there is no
+        // query that means "tasks". A first page whose sixty rows happen to hold
+        // no task therefore told the owner he had nothing on his list while he
+        // did, with nothing on screen naming a next action.
+        if count == 0 {
+            return model.hasMore ? "None in the newest \(model.loadedCount)" : "Nothing yet"
+        }
         return count == 1 ? "1 thing" : "\(count) things"
     }
 
@@ -2141,11 +2198,34 @@ private struct FilesBox: View {
         } message: {
             // Named plainly, because one of these three kinds is the owner's own
             // file and may have no other copy anywhere.
-            Text(
-                model.pendingFileRemoval?.kind == .attachment
-                    ? "This is a file you sent Mynah. Deleting it here removes it from this Mac."
-                    : "This removes it from this Mac. Mynah can write another if you ask."
-            )
+            // **The reassurance was false for the notes that matter.**
+            //
+            // "Mynah can write another if you ask" is true of a note it wrote
+            // from a conversation. It is not true of the companion note beside a
+            // received file: that note exists to describe *that* attachment, and
+            // once the attachment is gone there is nothing to write it from.
+            // Deleting either half of the pair leaves the other pointing at
+            // nothing — Mynah then insists it still has the file, and sends a
+            // note naming a path that is not there.
+            Text(Self.consequence(of: model.pendingFileRemoval))
+        }
+    }
+}
+
+private extension FilesBox {
+    /// What deleting this one actually costs, said accurately for each kind.
+    static func consequence(of file: SavedFile?) -> String {
+        switch file?.kind {
+        case .attachment:
+            return "This is a file you sent Mynah. Deleting it removes it from this Mac, "
+                + "and the note describing it will point at a file that is no longer there."
+        case .note:
+            return "If this note describes a file you sent, deleting it leaves that file "
+                + "with nothing naming it — Mynah will not find it when you ask."
+        case .document:
+            return "This removes it from this Mac. Mynah can produce it again from the note it came from."
+        case .none:
+            return "This removes it from this Mac."
         }
     }
 }

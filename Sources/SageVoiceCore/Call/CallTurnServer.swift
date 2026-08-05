@@ -609,6 +609,12 @@ public actor CallTurnServer {
         // to be handed this same number, as POSIX will.
         let live = CallConnection(descriptor: connection)
         defer {
+            // **One site, so every exit is covered.** Patching the two `return`
+            // paths worked and was fragile: a third way out of this function —
+            // a throw, a future early return — would silently not stop the turn
+            // again. The defer is where `retire()` already lives for the same
+            // reason.
+            endTheCurrentTurn()
             live.retire()
             close(connection)
         }
@@ -685,6 +691,40 @@ public actor CallTurnServer {
                 break // Ours to send, not to receive.
             }
         }
+    }
+
+    /// Ends the turn along with the call it belongs to.
+    ///
+    /// **`CallConnection`'s doc said this already happened, and nothing did it.**
+    /// Four findings of the 1.7.2 re-audit were this one omission, each surviving
+    /// three independent skeptics:
+    ///
+    ///  - an abandoned turn reached `transcript.said(fullReply)` and
+    ///    `deliverTranscript(links)`, which belong to whatever call is current
+    ///    when it finally finishes — so the Signal record of call two carried a
+    ///    question and an answer from call one that nobody ever heard, plus a
+    ///    stray links message;
+    ///  - `turn` was never cleared, so `isAnswering` was true as the next call
+    ///    opened: its first "hey" was swallowed by the courtesy guard and its
+    ///    first real question got the interrupted opening;
+    ///  - and the doc on `CallConnection` told the next reader all of this was
+    ///    handled, which is how a guard gets deleted.
+    ///
+    /// Retiring the connection is still what makes it *safe* — cancellation is
+    /// cooperative, so a turn parked on the model does not stop for this, and
+    /// the descriptor guard is what catches it when it wakes. This is what stops
+    /// it doing the rest: filing a transcript, pushing links, and leaving the
+    /// appliance believing it is busy.
+    ///
+    /// `turn = nil` rather than only cancelling, because `isAnswering` reads the
+    /// reference and a cancelled task is still a task. That was the exact shape
+    /// of the 1.7.0 bug this surface has already had once.
+    private func endTheCurrentTurn() {
+        guard turn != nil else { return }
+        log("[call] the call ended mid-answer; stopping that turn")
+        turn?.cancel()
+        turn = nil
+        turnNumber += 1
     }
 
     /// Recognises an utterance and, only if it contains words, makes it the
@@ -766,6 +806,17 @@ public actor CallTurnServer {
         // caller talking over the appliance; one that finished a moment ago is
         // the caller simply saying the next thing, and those deserve different
         // opening words.
+        // **A transcription that finishes after the hang-up must not start a
+        // turn on the dead call.** The utterance tasks spawned by the read loop
+        // are not cancelled when the call ends — recognition of the caller's
+        // last words can land seconds later — and without this they would open
+        // a fresh turn, write `transcript.heard` into whatever call is current,
+        // and speak into a connection that belongs to somebody else now.
+        guard writer.isUsable else {
+            log("[call] recognised after the call ended; not starting a turn for it")
+            return
+        }
+
         let cutIn = isAnswering
         turn?.cancel()
         turnNumber += 1

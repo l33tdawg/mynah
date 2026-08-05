@@ -103,33 +103,40 @@ final class AbandonedTurnTests: XCTestCase {
 
     // MARK: - The wiring
 
-    /// That the server actually retires the connection when the call ends.
+    /// That a turn abandoned by a finished call files nothing into the next one.
     ///
-    /// The test above proves `CallConnection` keeps its promise; this one proves
-    /// `CallTurnServer` makes it. Without this, `retire()` could be deleted from
-    /// `handle(connection:)` and everything above would still pass.
+    /// **Four findings of the 1.7.2 re-audit were this one omission**, each
+    /// surviving three independent skeptics. Nothing cancelled `turn` when the
+    /// call ended, so an abandoned turn ran on past the writer guard to
+    /// `deliverTranscript(links)` and `transcript.said(fullReply)` — and
+    /// `transcript` is a single actor property that the *next* call has already
+    /// reset. So the Signal record of call two carried a question and an answer
+    /// nobody heard on it, plus a stray links message; `rememberThisCall` then
+    /// stored it as the closing for the call after that.
     ///
-    /// Observed through the log rather than the socket, so it does not depend on
-    /// which number the kernel reissues: the abandoned turn's `send` throws
-    /// `callEnded`, and only the retired path says so.
-    func testTheServerRetiresACallsWriterWhenTheCallerHangsUp() async throws {
+    /// This test used to assert only the "leaving it unsaid" log line, which
+    /// sits at the *socket*. Every side effect above happens before that, so it
+    /// covered none of them — the audit said so, and it was right.
+    func testATurnAbandonedByAFinishedCallFilesNothing() async throws {
         let socket = CallCeilingTests.scratchSocket()
         defer { try? FileManager.default.removeItem(at: socket) }
 
         let held = HoldOpen()
         let logged = Logged()
+        let posted = Logged()
         let server = CallTurnServer(
             configuration: CallTurnServer.Configuration(socketURL: socket, turnCeilingSeconds: 30),
             transcriber: Hears("what's still open"),
             synthesizer: PlainVoice(),
             answer: { _ in
-                // Held past the hang-up, which is the state the whole bug lives
-                // in: an answer still being prepared for a caller who has gone.
                 await held.wait()
-                return "The visa form is still open."
+                // Carries a link, so `deliverTranscript` is live too — one of
+                // the two paths the audit found running past the writer guard.
+                return "The visa form is still open. See https://example.com/visa"
             },
             log: { logged.add($0) }
         )
+        await server.onTranscript { posted.add($0) }
 
         let running = Task { try? await server.run() }
         defer { running.cancel() }
@@ -138,26 +145,30 @@ final class AbandonedTurnTests: XCTestCase {
         CallCeilingTests.drain(caller)
         try CallFrameWriter(descriptor: caller).send(.utterance(CallCeilingTests.aSecondOfSpeech()))
 
-        // Wait for the turn to be genuinely inside `answer` rather than guessing
-        // at it with a sleep — a turn that has not started yet would be
-        // cancelled by the hang-up and never reach a write.
         let started = await held.waitUntilSomeoneIsWaiting(within: 10)
         XCTAssertTrue(started, "the turn never reached the model: \(logged.everything)")
 
-        // Hang up mid-answer, and give the server time to end the call.
         close(caller)
-        try await Task.sleep(for: .milliseconds(500))
-
-        // Now let the abandoned turn finish and try to speak.
-        await held.open()
-
-        let noticed = await logged.waitFor("leaving it unsaid", within: 10)
+        let noticed = await logged.waitFor("stopping that turn", within: 10)
         XCTAssertNotNil(
             noticed,
+            "the call ended and the turn it was mid-answer on was left running: \(logged.everything)"
+        )
+
+        // Let the abandoned turn finish. It must file nothing.
+        await held.open()
+        try await Task.sleep(for: .seconds(2))
+
+        XCTAssertEqual(
+            posted.everything.filter { $0.contains("example.com") }, [],
             """
-            the turn abandoned by a caller who hung up was not stopped at the \
-            socket. Everything logged: \(logged.everything)
+            the abandoned turn pushed its links to the thread — on the owner's \
+            phone that is a bare URL for a question he gave up on: \(posted.everything)
             """
+        )
+        XCTAssertFalse(
+            logged.everything.contains { $0.contains("replying:") },
+            "the abandoned turn carried on into the reply path: \(logged.everything)"
         )
     }
 

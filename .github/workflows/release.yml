@@ -158,7 +158,7 @@ jobs:
       # says so; correct these to them rather than widening them.
       - name: Build and test
         env:
-          MYNAH_MIN_EXECUTED_TESTS: "1760"
+          MYNAH_MIN_EXECUTED_TESTS: "1830"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -210,7 +210,7 @@ jobs:
           #
           # Replace it with the real figure the first time this path completes:
           # assert-test-run.sh prints "N of M really ran, S skipped" on success.
-          MYNAH_MIN_EXECUTED_TESTS: "1815"
+          MYNAH_MIN_EXECUTED_TESTS: "1830"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

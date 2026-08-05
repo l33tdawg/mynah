@@ -333,9 +333,19 @@ public struct ProactiveWatch: Sendable {
             message: Self.message(from: lines),
             ledger: updated,
             sawTasks: tasks,
-            // Task news is Mynah's own reading of the owner's own list. An inbox
+// Task news is Mynah's own reading of the owner's own list. An inbox
             // line quotes an agent that is not Mynah, so the message as a whole
             // is a relay and has to be stored as one.
+            //
+            // **Deliberately still per-digest, after the 1.7.2 audit argued for
+            // marking task news too.** It is right that a title can be written
+            // by another agent — `sage_inbox` describes one-way task assignment
+            // notices and `sage_backlog` returns what is assigned to this agent.
+            // But marking every task digest as somebody else's words is the
+            // worse error: it tells the model that the owner's own list is not
+            // Mynah's business, on the surface whose whole job is his list. The
+            // injection risk is answered where it lives, by not letting a title
+            // forge structure — see `ending(_:)`.
             relaysAnotherAgent: !newMessages.isEmpty
         )
     }
@@ -410,9 +420,34 @@ public struct ProactiveWatch: Sendable {
     /// not — and `“…the TBCERT event.”.` is the sort of detail that makes a
     /// message read as assembled rather than written.
     static func ending(_ title: String) -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let last = trimmed.last else { return "" }
-        return ".!?".contains(last) ? trimmed : trimmed + "."
+        // **Flattened and bounded, because a task title is not always the
+        // owner's prose.**
+        //
+        // `sage_inbox` describes agents sending one-way task assignment notices
+        // and `sage_backlog` returns what is assigned to *this* agent, so a
+        // title can be written by something other than Mynah or its owner — and
+        // `taskNews` interpolates it straight into a message that goes to his
+        // phone and into the model's context.
+        //
+        // `excerpt(_:)` has flattened and truncated inbox text since it was
+        // written, for exactly this reason. This did neither, so a multi-line
+        // title forged extra paragraphs in the digest and an unbounded one could
+        // fill it. The same treatment, applied to the other thing an agent can
+        // write. Found by the 1.7.2 re-audit.
+        //
+        // Not framed as a relay, though: see `relaysAnotherAgent`. Telling the
+        // model that the owner's own list is somebody else's words is the worse
+        // error, so the answer is to stop a title forging structure rather than
+        // to mislabel the digest that carries it.
+        let flattened = title
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let bounded = flattened.count > excerptCharacters
+            ? String(flattened.prefix(excerptCharacters)).trimmingCharacters(in: .whitespaces) + "…"
+            : flattened
+        guard let last = bounded.last else { return "" }
+        return ".!?…".contains(last) ? bounded : bounded + "."
     }
 
     static func readable(_ status: String) -> String {

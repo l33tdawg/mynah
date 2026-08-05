@@ -117,6 +117,46 @@ final class PromptCachingTests: XCTestCase {
         XCTAssertTrue(BrainCapabilities.onDevice.servesOneCacheSlot)
     }
 
+    /// **That `complete` actually uses it.**
+    ///
+    /// Every test above calls `cachedSystemBlocks` directly, so deleting the one
+    /// line in `complete` that assigns it to `body["system"]` left the whole
+    /// file green — the switch could be turned back off with the suite passing.
+    /// Found by the 1.7.2 re-audit, and it was right: the helper is not the
+    /// feature, the assignment is.
+    ///
+    /// A source check because `complete` needs a live URLSession and a
+    /// credential. Narrow: it asserts the assignment, not the shape of the file.
+    func testCompleteActuallyPutsTheCachedBlocksOnTheRequest() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/SageVoiceCore/Brain/AnthropicBackend.swift"),
+            encoding: .utf8
+        )
+        let scan = SwiftSourceScan(source)
+        let code = scan.text(in: 0..<scan.characters.count)
+
+        XCTAssertTrue(
+            code.contains("body[\"system\"] = Self.cachedSystemBlocks(systemText)"),
+            """
+            the request no longer carries the cached system blocks, so caching is \
+            off and every hosted turn re-reads the catalogue and system prompt at \
+            full price — with these tests still green, because they call the \
+            helper rather than the encoder
+            """
+        )
+        // And the tools must still be assigned ahead of it, or the prefix drops
+        // under Haiku's 4,096-token minimum and silently never caches.
+        let toolsAt = code.range(of: "body[\"tools\"]")?.lowerBound
+        let systemAt = code.range(of: "body[\"system\"] = Self.cachedSystemBlocks")?.lowerBound
+        guard let toolsAt, let systemAt else { return XCTFail("could not find both assignments") }
+        XCTAssertLessThan(
+            toolsAt, systemAt,
+            "tools must be assigned before system so the cached prefix clears the 4,096-token minimum"
+        )
+    }
+
     // MARK: The warm-up that must not run
 
     /// **A hosted brain has no slot to protect, and was being charged to have

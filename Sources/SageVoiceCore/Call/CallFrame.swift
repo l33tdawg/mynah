@@ -255,6 +255,12 @@ public struct CallFrameWriter: Sendable {
         self.init(CallConnection(descriptor: descriptor))
     }
 
+    /// Whether the call this writer belongs to is still live.
+    ///
+    /// For callers that must not *start* work on a dead call, as distinct from
+    /// those that only need the write refused — see `replaceTurn`.
+    public var isUsable: Bool { connection.isUsable }
+
     public func send(_ frame: CallFrame) throws {
         try connection.write(frame.encoded)
     }

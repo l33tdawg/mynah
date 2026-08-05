@@ -71,13 +71,26 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 #
 # So the rule, rather than the number: **keep this within 38 of the true count**,
 # because the smallest interesting loss is a test target and the smallest test
-# target is Kokoro's 38. 1815 is 25 under today's 1840 and 13 above the 1802 a
-# missing onnxruntime produces.
+# target is Kokoro's 38.
 #
 # Raise it in the same commit that adds a batch of tests. Test counts only ever
 # grow; the only thing that lowers them is deleting tests, which ought to be
 # reviewed anyway.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1815}"
+#
+# **And it rotted anyway, by exactly the mechanism described above.** 1815 was
+# 25 under the 1840 of the day. The suite has since grown, so a build with
+# onnxruntime unstaged sailed over it — waved through, shipping an appliance
+# whose speech engine is missing. Confirmed during the 1.7.2 re-audit by
+# arithmetic, not by a build failing, which is the only reason it was caught.
+#
+# The rule was right; following it was left to memory, which is the part that
+# does not work. Restated as arithmetic anyone can redo in one line, against a
+# count measured on 2026-08-05 rather than remembered:
+#
+#   measured      1892
+#   without Kokoro  1854   (1892 - 38)
+#   floor           1867   (25 under measured, 13 above the failure it must catch)
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1867}"
 # The ceiling has to sit above the 21 that skip on a healthy build Mac and below
 # the smallest number a missing document tool produces. **26 was set against
 # pandoc's +12 and was blind to the tool this change was actually added to

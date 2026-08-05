@@ -50,8 +50,24 @@ final class MemoryCardTreatmentTests: XCTestCase {
         // still correct elsewhere on this page — the search field is a text
         // well, and content sits *in* those. Asserting the token is absent from
         // the whole file would fail on a use that was never the complaint.
+        // **Any spelling of the recessed treatment, not the one that was there.**
+        //
+        // This asserted the absence of the exact literal
+        // `memory.kind == .task ? Palette.surface.sunken`, so the same visual
+        // could come back written any other way — a reversed ternary, an `if`,
+        // a computed property — with the guard green. The audit was right that
+        // this guarded a spelling. What must stay true is that nothing on this
+        // card chooses `sunken` on the strength of being a task.
+        let recessedOnTaskness = code
+            .components(separatedBy: "Palette.surface.sunken")
+            .dropLast()
+            .contains { before in
+                // The 200 characters before any use of the recessed token: if a
+                // task test is in there, that use is conditioned on taskness.
+                String(before.suffix(200)).contains(".task")
+            }
         XCTAssertFalse(
-            code.contains("memory.kind == .task ? Palette.surface.sunken"),
+            recessedOnTaskness,
             """
             a task card is recessed again. On every other Mac interface that is \
             what "switched off" looks like, and the owner read it exactly that \
