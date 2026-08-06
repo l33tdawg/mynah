@@ -1,5 +1,89 @@
 import Foundation
 
+// MARK: - How often it happens
+
+/// How often a mirrored task comes round again.
+///
+/// **The owner's, 6 August 2026, looking at a calendar entry that said it
+/// repeated and did not:** *"the repeats is not set"*. He had asked for a
+/// standing Thursday call, Mynah confirmed *"the weekly recurrence is recorded
+/// as a permanent fact"*, and the event landed as a one-off on 6 August with
+/// `Repeat: Never` and the words "recurring weekly" sitting in its title.
+///
+/// Both halves of that were true and neither helped. SAGE really did record it
+/// — the fact is permanent, and next week Mynah would have rolled the task
+/// forward by hand. What the *calendar* got was a single event, so the alarm
+/// that actually reaches his phone and watch fires once and never again, which
+/// is the entire reason dated tasks are mirrored at all.
+///
+/// `EKRecurrenceRule` appeared nowhere in this codebase before this. The mirror
+/// could only ever produce one-offs, and `tidied` treated "every, recurring
+/// weekly" as *wreckage to sweep up* — the phrase was already recognised, and
+/// recognised as noise.
+public enum CalendarRepeat: String, Equatable, Sendable, Codable {
+    case daily
+    case weekly
+    case fortnightly
+    case monthly
+    case yearly
+
+    /// How many of `unit` between occurrences, for EventKit.
+    public var interval: Int { self == .fortnightly ? 2 : 1 }
+
+    /// What the owner said, and the text with the saying taken out.
+    ///
+    /// **Read from the ORIGINAL title, before the date is removed.** "every
+    /// Thursday" is both a recurrence and the thing `SpokenDate` uses to place
+    /// the first occurrence, so stripping it early would leave an event with a
+    /// repeat and no date. `CalendarEntry.from` detects here and strips later,
+    /// against the text the date has already been taken out of.
+    ///
+    /// Ordered longest-first: "every other week" must not be read as "every
+    /// week" with a stray "other", and "every two weeks" must beat "weeks".
+    public static func read(from text: String) -> (CalendarRepeat?, String) {
+        let patterns: [(String, CalendarRepeat)] = [
+            (#"(?i)\b(every\s+other\s+week|every\s+two\s+weeks|fortnightly|biweekly)\b"#, .fortnightly),
+            (#"(?i)\b(every\s+year|yearly|annually|annual)\b"#, .yearly),
+            (#"(?i)\b(every\s+month|monthly)\b"#, .monthly),
+            (#"(?i)\b(every\s+day|daily)\b"#, .daily),
+            // The weekday form is the one he actually used, and it is why this
+            // cannot key on the word "every" alone: "every Thursday at 6pm" is a
+            // weekly repeat, and the weekday is the date rather than part of the
+            // rule — EventKit takes the day from the start date.
+            (#"(?i)\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b"#, .weekly),
+            (#"(?i)\b(every\s+week|weekly|each\s+week)\b"#, .weekly)
+        ]
+        for (pattern, repeats) in patterns where text.range(of: pattern, options: .regularExpression) != nil {
+            return (repeats, text.replacingOccurrences(
+                of: pattern, with: " ", options: .regularExpression
+            ))
+        }
+        return (nil, text)
+    }
+
+    /// The leftovers a recurrence phrase leaves in a title, in the house style
+    /// of `tidied`.
+    ///
+    /// "Call with MT & Biniam — recurring weekly. Do not remove after" is a real
+    /// title from the owner's list, and taking "weekly" out of it leaves both a
+    /// dangling "recurring" and an instruction addressed to Mynah rather than to
+    /// him. Neither belongs on a lock screen.
+    static func tidiedAfterRemoval(_ text: String) -> String {
+        var cleaned = text
+        let repairs: [(String, String)] = [
+            (#"(?i)\s*[—–-]?\s*\brecurring\b\s*[.,]?"#, " "),
+            (#"(?i)\s*\bdo not remove( after)?\b\s*[.,]?"#, " "),
+            (#"(?i)\s*\brepeats?\b\s*[.,]?\s*$"#, " ")
+        ]
+        for (pattern, replacement) in repairs {
+            cleaned = cleaned.replacingOccurrences(
+                of: pattern, with: replacement, options: .regularExpression
+            )
+        }
+        return cleaned
+    }
+}
+
 // MARK: - What belongs in the calendar
 
 /// One dated task, as an event ought to look.
@@ -29,6 +113,12 @@ public struct CalendarEntry: Equatable, Sendable {
     /// being thrown away — the booking number and the room type matter when you
     /// arrive at the hotel, they just do not belong in the title.
     public let detail: String?
+    /// How often it comes round, or `nil` for a one-off.
+    ///
+    /// `nil` is meaningful rather than merely absent: a task that *stops*
+    /// recurring has to clear the rule off the event, so `EventKitCalendar`
+    /// assigns this in both directions rather than only when it is set.
+    public let repeats: CalendarRepeat?
 
     public init(
         taskID: String,
@@ -36,7 +126,8 @@ public struct CalendarEntry: Equatable, Sendable {
         starts: Date,
         isAllDay: Bool,
         link: URL? = nil,
-        detail: String? = nil
+        detail: String? = nil,
+        repeats: CalendarRepeat? = nil
     ) {
         self.taskID = taskID
         self.title = title
@@ -44,6 +135,7 @@ public struct CalendarEntry: Equatable, Sendable {
         self.isAllDay = isAllDay
         self.link = link
         self.detail = detail
+        self.repeats = repeats
     }
 
     /// How long a timed event runs for.
@@ -64,8 +156,14 @@ public struct CalendarEntry: Equatable, Sendable {
     /// to remember to compare. Stored in the ledger; a task whose fingerprint
     /// matches is left completely alone, which is what stops every tick from
     /// rewriting every event and making the owner's phone buzz.
+    /// `repeats` is in here, and it has to be: without it a task that gains or
+    /// loses its recurrence keeps the fingerprint it had, the plan calls it
+    /// unchanged, and the event is left alone for ever. The owner would say
+    /// "make that weekly", be told it was done, and see `Repeat: Never` — the
+    /// same failure this field exists to end, one layer down.
     public var fingerprint: String {
-        "\(title)|\(starts.timeIntervalSince1970)|\(isAllDay)|\(link?.absoluteString ?? "")|\(detail ?? "")"
+        "\(title)|\(starts.timeIntervalSince1970)|\(isAllDay)|\(link?.absoluteString ?? "")"
+            + "|\(detail ?? "")|\(repeats?.rawValue ?? "")"
     }
 
     /// The longest an event title gets before the rest becomes notes.
@@ -88,11 +186,22 @@ public struct CalendarEntry: Equatable, Sendable {
         // out before anything looks for a date, the URL cannot be misread as
         // one.
         let (link, withoutLink) = splitLink(from: task.title)
+        // **Detected before the date is read, applied after.** "every Thursday"
+        // is both the recurrence and the thing that places the first occurrence,
+        // so taking it out now would leave a repeating event with no date to
+        // repeat from — and `from` would return nil, dropping the task out of
+        // the calendar altogether.
+        let (repeats, _) = CalendarRepeat.read(from: withoutLink)
         guard let written = SpokenDate.writtenDateMatch(in: withoutLink, calendar: calendar) else {
             return nil
         }
+        // Now the date is gone, the phrase can go too — against the remainder,
+        // so what is stripped is the recurrence and never the date.
+        let (_, withoutRepeat) = CalendarRepeat.read(
+            from: SpokenDate.withoutWrittenDate(in: withoutLink, calendar: calendar)
+        )
         let (title, detail) = split(
-            tidied(SpokenDate.withoutWrittenDate(in: withoutLink, calendar: calendar))
+            tidied(CalendarRepeat.tidiedAfterRemoval(withoutRepeat))
         )
         return CalendarEntry(
             taskID: task.id,
@@ -102,7 +211,8 @@ public struct CalendarEntry: Equatable, Sendable {
             starts: written.at,
             isAllDay: written.granularity != .minute,
             link: link,
-            detail: detail
+            detail: detail,
+            repeats: repeats
         )
     }
 

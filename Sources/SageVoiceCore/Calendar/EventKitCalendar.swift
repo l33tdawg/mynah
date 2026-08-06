@@ -232,7 +232,7 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         let event = EKEvent(eventStore: store)
         event.calendar = try calendar()
         Self.apply(entry, to: event)
-        try store.save(event, span: .thisEvent, commit: true)
+        try store.save(event, span: Self.span(for: event), commit: true)
         guard let identifier = event.eventIdentifier else {
             throw Failure.eventVanished(entry.taskID)
         }
@@ -250,7 +250,7 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
             return try await add(entry)
         }
         Self.apply(entry, to: event)
-        try store.save(event, span: .thisEvent, commit: true)
+        try store.save(event, span: Self.span(for: event), commit: true)
         log("[calendar] updated “\(entry.title)”")
         return event.eventIdentifier ?? eventID
     }
@@ -258,8 +258,59 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
     public func remove(eventID: String) async throws {
         guard let event = store.event(withIdentifier: eventID) else { return }
         let name = event.title ?? eventID
-        try store.remove(event, span: .thisEvent, commit: true)
+        try store.remove(event, span: Self.span(for: event), commit: true)
         log("[calendar] removed “\(name)”")
+    }
+
+    /// The repeating rule for an entry, or `nil` for a one-off.
+    ///
+    /// **No end date, deliberately.** "Every Thursday" as the owner says it has
+    /// no last Thursday in it, and inventing one — a year out, say — would mean
+    /// the reminders quietly stop on a date nobody chose and nobody is told
+    /// about. A standing commitment ends when he says it ends, which arrives
+    /// here as the task being finished and the event removed.
+    ///
+    /// EventKit takes the *day* from the start date, so `.weekly` on an event
+    /// starting Thursday 6 August repeats on Thursdays without the weekday being
+    /// stated again. That is why `CalendarRepeat.read` maps "every Thursday" to
+    /// plain `.weekly` rather than carrying the day separately: two places
+    /// holding the same weekday is two places for them to disagree.
+    static func recurrence(for entry: CalendarEntry) -> EKRecurrenceRule? {
+        guard let repeats = entry.repeats else { return nil }
+        let frequency: EKRecurrenceFrequency
+        switch repeats {
+        case .daily: frequency = .daily
+        case .weekly, .fortnightly: frequency = .weekly
+        case .monthly: frequency = .monthly
+        case .yearly: frequency = .yearly
+        }
+        return EKRecurrenceRule(
+            recurrenceWith: frequency,
+            interval: repeats.interval,
+            end: nil
+        )
+    }
+
+    /// Which occurrences a write applies to.
+    ///
+    /// **`.thisEvent` was right for every event this mirror could produce, and
+    /// stopped being right the moment one of them could repeat.** All three
+    /// writes used it because until now nothing here had a recurrence rule, and
+    /// on a non-recurring event the two spans mean the same thing.
+    ///
+    /// On a recurring one they do not, and the dangerous one is `remove`:
+    /// `.thisEvent` deletes a single occurrence and leaves the series standing,
+    /// so a task the owner finished would clear this week's entry and go on
+    /// alarming every Thursday for ever, with no task behind it and nothing in
+    /// Mynah that still knows it exists. `save` is the same shape — `.thisEvent`
+    /// detaches the occurrence, so the edit lands on one week and the rest of
+    /// the series keeps the old title and the old time.
+    ///
+    /// Mynah always holds the master event, never a detached instance, so
+    /// `.futureEvents` on a recurring event is the whole series — which is what
+    /// "the task changed" and "the task is done" both mean here.
+    static func span(for event: EKEvent) -> EKSpan {
+        event.hasRecurrenceRules ? .futureEvents : .thisEvent
     }
 
     /// The zone an event is written in, or `nil` to let it float.
@@ -310,6 +361,11 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         // ticks carries four copies of every alarm, and the owner's phone goes
         // off four times.
         event.alarms = Self.alarms(for: entry, now: Date()).map { EKAlarm(relativeOffset: $0) }
+        // **Assigned in both directions, like `alarms` above and for the same
+        // reason.** A task that stops recurring has to lose its rule, and
+        // writing only when `repeats` is set would leave the old series running
+        // for ever with nothing behind it. `nil` clears.
+        event.recurrenceRules = Self.recurrence(for: entry).map { [$0] }
         event.url = entry.link
         // The rest of the task's own words first, then one line about where this
         // came from — so somebody looking at their calendar in six months knows

@@ -686,18 +686,38 @@ struct TalkView: View {
 
     @ViewBuilder
     private var composerContent: some View {
-        if app.isPaused {
-            HStack(spacing: s5) {
-                Text("Mynah is paused, so it isn't answering anything.")
-                    .mynahFont(.body)
-                    .foregroundStyle(Palette.ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: s5)
-                MynahButton("Start answering", kind: .secondary) { app.isPaused = false }
+        VStack(alignment: .leading, spacing: s3) {
+            // **The same mistake as the one documented four lines below, one
+            // branch up, on a different flag.**
+            //
+            // The owner: *"sometimes the send button cannot be clicked … then it
+            // says mynah is paused - you need to unpause then click send"*. This
+            // used to REPLACE the composer, so being paused meant no field, no
+            // Send, and a message he had already written with nowhere to put it.
+            // `trouble` was fixed for exactly this reason and `isPaused` was
+            // left, which is the same twin-call-site failure that has now come
+            // up in three different files.
+            //
+            // Sending resumes, rather than sending into a pause. His ruling:
+            // typing and Send just work. That is also the only reading that
+            // makes the button honest — a Send that queues silently until you
+            // notice a switch elsewhere is a second broken promise, and this
+            // release exists because of the first one.
+            //
+            // The notice stays, because "why did it start answering again"
+            // deserves an answer, and the button stays for resuming without
+            // sending anything.
+            if app.isPaused {
+                HStack(spacing: s5) {
+                    Text("Mynah is paused. Sending starts it answering again.")
+                        .mynahFont(.body)
+                        .foregroundStyle(Palette.ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: s5)
+                    MynahButton("Start answering", kind: .secondary) { app.isPaused = false }
+                }
             }
-        } else {
-            VStack(alignment: .leading, spacing: s3) {
-                // Above the composer, never instead of it.
+            // Above the composer, never instead of it.
                 //
                 // This branch used to REPLACE the field, so a blocked brain left
                 // the owner with no field, no Send and no retry — only "Quit
@@ -718,14 +738,13 @@ struct TalkView: View {
                         action: troubleAction(trouble)
                     )
                 }
-                field
-                if !model.canHoldToTalk {
-                    Text("You can also send Mynah a voice note from your phone — the answer "
-                        + "appears here too.")
-                        .mynahFont(.callout)
-                        .foregroundStyle(Palette.ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            field
+            if !model.canHoldToTalk {
+                Text("You can also send Mynah a voice note from your phone — the answer "
+                    + "appears here too.")
+                    .mynahFont(.callout)
+                    .foregroundStyle(Palette.ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -871,6 +890,16 @@ struct TalkView: View {
     }
 
     private func send() {
+        // **Before the send, not after.** `model.send()` starts the turn, and a
+        // turn that begins while `isPaused` is still true is a turn the rest of
+        // the app is entitled to drop — `MynahApp` guards on it. Resuming first
+        // means the state the turn runs under is the one the owner just chose by
+        // pressing Send.
+        //
+        // Unconditional rather than `if app.isPaused`, because the setter is
+        // already a no-op on an unchanged value: it guards `oldValue != isPaused`
+        // before it writes anything to disk or reconciles the service.
+        app.isPaused = false
         model.send()
         isComposerFocused = true
     }
