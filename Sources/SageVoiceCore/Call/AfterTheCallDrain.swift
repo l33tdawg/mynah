@@ -159,7 +159,40 @@ public struct AfterTheCallDrain: Sendable {
             // appliance quietly considering the promise kept.
             if outcome == .sent { queue.remove(entry) }
 
+        // **A string matcher is not the last word on what the owner meant.**
+        //
+        // Both of these used to end here, in a message explaining the failure,
+        // and on the queue's first real call that would have been the second
+        // reason the ferry ticket never arrived. The caller said "the ferry
+        // ticket". It is filed under the caption they sent it with,
+        // `here-s-the-ferry-booking-please-store-it`. Four widening rules and
+        // none of them join "ticket" to "booking", because none of them can:
+        // that is a question about meaning, and `slugs(matching:)` is
+        // deliberately word-wise so that "art" cannot match "cartier".
+        //
+        // Loosening it is the wrong repair — a fuzzier matcher sends the wrong
+        // file more often, and rule 2's comment is right that a title matching
+        // exactly must never compete with one that merely shares a word.
+        //
+        // The right one is already in the product and was demonstrated the same
+        // afternoon: a minute after hanging up the owner typed "send me the
+        // ferry ticket" into Signal, and the daemon ran `list_notes`,
+        // `read_note`, `send_file` and got it right first time. A model reading
+        // the catalogue resolves this; a matcher cannot. So when the matcher
+        // has no single answer, the request goes down that same path rather
+        // than into an apology.
+        //
+        // `.several` goes too, and the "naming the candidates costs a turn,
+        // guessing costs a file going somewhere it should not" rule is not
+        // being softened: that rule is about *recipients*, learned from the
+        // 1ab7aa10 / 74140c2d mix-up, and `messageTheAgent` still refuses an
+        // ambiguous name outright. Here the recipient is fixed — it is the
+        // owner, on their own thread — and the only question is which of their
+        // own files they meant. On a call there is nobody left to ask, as the
+        // note below says, so the alternative to letting the model choose is
+        // not asking: it is making the owner ask again.
         case .several(let candidates):
+            if await theBrainCanFindIt(entry) { return }
             // **Owner-facing prose, written here.** `NotesToolSource`'s refusal
             // strings are addressed to the model in the third person and tell it
             // to call `send_file` again — posting them verbatim would have the
@@ -174,6 +207,7 @@ public struct AfterTheCallDrain: Sendable {
             queue.remove(entry)
 
         case .nothing(let available):
+            if await theBrainCanFindIt(entry) { return }
             let door = available.isEmpty
                 ? "I don't have any saved files yet."
                 : "What I do have: \(Self.list(available))."
@@ -183,6 +217,34 @@ public struct AfterTheCallDrain: Sendable {
             )
             queue.remove(entry)
         }
+    }
+
+    /// Hands an unresolved file request to a full brain turn, which can read the
+    /// catalogue and decide what the owner meant.
+    ///
+    /// Returns whether the request has been dealt with — a turn that runs and
+    /// honestly reports finding nothing has dealt with it just as much as one
+    /// that sends the file, and better than the canned sentence it replaces.
+    /// Only a turn that could not run at all falls through.
+    ///
+    /// **The instruction forbids the near-miss on purpose.** The failure mode of
+    /// asking a model to resolve a fuzzy name is that it sends the closest thing
+    /// rather than admitting it is unsure, and a wrong file arriving unannounced
+    /// an hour after a call is worse than no file: the owner acts on it. So the
+    /// permission granted here is narrow — read the list, send the one they
+    /// meant, and if that is not there, say so and name what is.
+    private func theBrainCanFindIt(_ entry: CallActionQueue.Entry) async -> Bool {
+        log("[call] no single match for \"\(entry.what)\"; asking the brain to find it")
+        let outcome = await runInstruction("""
+            On the call that just ended the owner asked you to send them "\(entry.asked)". \
+            List the saved files, work out which one they meant, and send it with send_file. \
+            If nothing there is actually the thing they asked for, tell them plainly that you \
+            could not find it and name what you do have — do not send a different file instead, \
+            and do not say you have sent something you have not.
+            """)
+        guard outcome != .failed else { return false }
+        queue.remove(entry)
+        return true
     }
 
     private func messageTheAgent(_ entry: CallActionQueue.Entry) async throws {

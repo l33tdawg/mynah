@@ -256,6 +256,28 @@ public final class CallActionQueue: @unchecked Sendable {
         return entries.filter { $0.generation == generation && $0.state == .queued }.count
     }
 
+    /// Whether this call has queued anything at all, in any turn.
+    ///
+    /// **Deliberately the whole call and not the turn**, because it backs the
+    /// opposite check and the two want opposite scopes. Adding a promise wants
+    /// the turn: something was queued *just now* and the caller should hear
+    /// about it. Contradicting one wants the call: the model saying "yes, I'll
+    /// send that after we hang up" in turn five about something it queued in
+    /// turn three is ordinary speech, and calling that a broken promise would
+    /// be the appliance contradicting a promise it is in fact going to keep.
+    ///
+    /// Nothing queued anywhere on the call is the unambiguous case, and it is
+    /// the one that shipped.
+    ///
+    /// `draining` counts. By the time the drain is running the promise is being
+    /// kept, so an entry in that state is evidence for the promise, not against
+    /// it.
+    public func anythingQueued(onCall call: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.contains { $0.generation.call == call }
+    }
+
     /// Takes ownership of everything, marking it `draining` rather than
     /// deleting it, and splits it into this call's work and everything else.
     ///

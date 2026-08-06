@@ -1146,6 +1146,35 @@ public actor CallTurnServer {
                fullReply != CallTurnServer.tookTooLong {
                 fullReply = AfterTheCall.promising(fullReply)
             }
+            // **The inverse, and it is the half that actually shipped broken.**
+            //
+            // Above: something was queued and the model did not say so, so it
+            // gets said. Here: the model said so and the queue is empty, so the
+            // sentence is a promise nobody is going to keep. Asked for a ferry
+            // ticket on 1.8.0's first real call, the model answered *"Will do —
+            // I'll send the ferry ticket to your Signal thread right after we
+            // hang up"* without ever calling `after_the_call`. The caller heard
+            // a promise, hung up, and waited for a file that did not exist as a
+            // request anywhere on this Mac.
+            //
+            // `ToolLoop` catches this per turn and sends the model back with the
+            // tools still attached, which is the repair. This is the ground
+            // truth underneath it — the queue itself, which the trace cannot
+            // see — and it covers the one case the trace gets wrong: a turn
+            // orphaned by `withDeadline` calling `after_the_call` after its call
+            // has ended gets `notOnACall` back, which is a perfectly successful
+            // tool call recording nothing.
+            //
+            // `else if`, because these two are opposites and running both on one
+            // reply would append a promise and then contradict it.
+            else if let generation,
+                    let queue = afterTheCallQueue,
+                    !queue.anythingQueued(onCall: generation.call),
+                    fullReply != CallTurnServer.tookTooLong,
+                    AfterTheCall.commitsToDoingItLater(fullReply) {
+                log("[call] the reply promised after-the-call work with nothing queued; corrected")
+                fullReply = AfterTheCall.couldNotQueue
+            }
 
             thought = Date()
             guard !Task.isCancelled else { outcome = "barged in on while thinking"; return }

@@ -495,6 +495,23 @@ public enum BrainPrompts {
     /// The `NOT ON A CALL:` line is machine-readable on purpose. It is what lets
     /// a test assert that every retracted name is retracted, rather than a
     /// human noticing that a sentence went stale.
+    ///
+    /// **The middle paragraph used to hand out the answer for free**, and that
+    /// is how 1.8.0's first real call failed. It read *"call `after_the_call` to
+    /// queue it … then tell them in one short line that you will do it after you
+    /// hang up"* — two instructions, one of which is audible to the owner and
+    /// costs nothing, the other of which does the work. Asked for a ferry
+    /// ticket, the model took the free one:
+    ///
+    ///     replying: Will do — I'll send the ferry ticket to your Signal
+    ///     thread right after we hang up.
+    ///
+    /// Nothing queued, nothing drained, no ticket. So the sentence is no longer
+    /// pre-authorised here: the tool result is the only place that says what to
+    /// say, and it only exists once the tool has actually run. The last line
+    /// states the rule in the form the loop can check, which is also the form
+    /// `ToolLoop.readsAsAfterTheCallPromise` enforces when this is ignored — a
+    /// prompt asks, and after the ferry ticket this needed something that tells.
     public static func onACall(base: String) -> String {
         """
         \(base)
@@ -505,13 +522,18 @@ public enum BrainPrompts {
         you right now, and saying you have done any of them would be a lie the \
         owner will discover later.
 
-        When they ask for something like that, call \
-        \(AfterTheCallToolSource.toolName) to queue it: kind send_file to send \
-        them a saved file, message_agent to message another agent, do for a \
-        piece of work, forget to cancel what you queued if they change their \
-        mind. Then tell them in one short line that you will do it after you \
-        hang up, and carry on talking. The results arrive in their Signal \
-        thread once the call is over.
+        When they ask for something like that, the FIRST thing you do is call \
+        \(AfterTheCallToolSource.toolName): kind send_file to send them a saved \
+        file, message_agent to message another agent, do for a piece of work, \
+        forget to cancel what you queued if they change their mind. Nothing is \
+        written down until that call comes back, and what comes back tells you \
+        what to say — say that, and carry on talking.
+
+        NEVER tell the owner you will send, do, or message anything after the \
+        call unless you have called \(AfterTheCallToolSource.toolName) in this \
+        same turn. Saying it does not make it happen; the tool call is the only \
+        thing that does. If you have not made that call, do not make that \
+        promise — tell them to message you in the chat instead.
 
         NOT ON A CALL: \(NotesToolSource.toolNames.sorted().joined(separator: ", "))
         """

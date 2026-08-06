@@ -247,6 +247,26 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// assumed away.
     public var refusedToMakeAFile: Int = 0
 
+    /// Replies that promised to do something after the call, having queued
+    /// nothing.
+    ///
+    /// **The failure that shipped in 1.8.0**, on the queue's first real call.
+    /// Verbatim from the owner's Mac:
+    ///
+    ///     heard: Can you send me the ferry ticket after this call?
+    ///     replying: Will do — I'll send the ferry ticket to your Signal
+    ///     thread right after we hang up.
+    ///
+    /// No `after_the_call` in the turn, nothing on disk, no ticket. It is the
+    /// same lie as `unbackedClaims` in the future tense, and on a call it is
+    /// worse: a past-tense claim can be checked immediately, while this one is
+    /// designed to stop the owner checking until the call is over.
+    ///
+    /// Its own counter rather than a share of `unbackedClaims`, because the two
+    /// have different fixes — that one wants a better tool choice, this one
+    /// wants the call prompt to stop handing out the sentence for free.
+    public var unqueuedPromises: Int = 0
+
     /// Tools that write a document and hand it over.
     ///
     /// Listed the *dangerous* way round on purpose, and unlike `readOnlyTools`
@@ -406,6 +426,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         if unfulfilledPromises > 0 { notes.append("[PROMISED \(unfulfilledPromises)]") }
         if unbackedClaims > 0 { notes.append("[UNBACKED \(unbackedClaims)]") }
         if refusedToMakeAFile > 0 { notes.append("[REFUSED \(refusedToMakeAFile)]") }
+        if unqueuedPromises > 0 { notes.append("[UNQUEUED \(unqueuedPromises)]") }
         return notes.isEmpty ? "" : " " + notes.joined(separator: " ")
     }
 }
@@ -1210,6 +1231,59 @@ public final class ToolLoop: @unchecked Sendable {
                     // is the thing to watch.
                 }
 
+                // **A promise to do it after the call, with nothing queued.**
+                //
+                // The case below catches "I've sent it". This is the same lie in
+                // the future tense, and on a call it is the more dangerous of
+                // the two: "I'll send the ferry ticket right after we hang up"
+                // is a claim that the request was *written down*, and it is
+                // built to stop the owner checking until the call is over.
+                //
+                // Verbatim from 1.8.0, the first real call the queue ever saw:
+                //
+                //     heard: Can you send me the ferry ticket after this call?
+                //     replying: Will do — I'll send the ferry ticket to your
+                //     Signal thread right after we hang up.
+                //
+                // Nothing was queued and the ticket never came. The prompt was
+                // handing the model the whole sentence — *"then tell them in one
+                // short line that you will do it after you hang up"* — so it
+                // could satisfy the audible half of the instruction without the
+                // half that does the work. `BrainPrompts.onACall` no longer
+                // offers that shortcut; this is the guard for when a model finds
+                // one anyway, and it is the guard that has to hold, because a
+                // prompt is a request and this is a fact the loop can check.
+                //
+                // Guarded on the catalogue for the same reason the refusal above
+                // is: off a call there is no `after_the_call`, and "I'll send
+                // that after the call" is then an ordinary sentence about a call
+                // this loop knows nothing about.
+                //
+                // The predicate lives on `AfterTheCall` beside the sentence it
+                // is looking for and the sentence that replaces it, so the loop
+                // and `CallTurnServer` cannot come to different conclusions
+                // about what counts as a promise.
+                if AfterTheCall.commitsToDoingItLater(spoken),
+                   knownToolNames.contains(AfterTheCallToolSource.toolName),
+                   !trace.toolCalls.contains(where: {
+                       $0.name == AfterTheCallToolSource.toolName && !$0.failed
+                   }) {
+                    trace.unqueuedPromises += 1
+                    if trace.unqueuedPromises <= Self.maximumPromiseRetries {
+                        messages.append(.user(Self.unqueuedPromiseCorrection))
+                        continue
+                    }
+                    // Out of retries. This one is replaced rather than flagged
+                    // like the claim below, because the two ship to different
+                    // places: a flagged claim is read, where a correction can
+                    // sit above the original and both survive. This is spoken
+                    // down a phone line, where "I have NOT queued that" followed
+                    // by "I'll send it after we hang up" is just confusing.
+                    // There is a door, and it takes the owner ten seconds.
+                    reply = AfterTheCall.couldNotQueue
+                    break
+                }
+
                 if Self.readsAsCompletedAction(spoken), !trace.didSomething {
                     trace.unbackedClaims += 1
                     // Kept so the turn can still say something true if every
@@ -1720,6 +1794,21 @@ public final class ToolLoop: @unchecked Sendable {
         ]
         return claims.contains { lowered.range(of: $0, options: .regularExpression) != nil }
     }
+
+    /// What to say to a model that promised the owner something and queued
+    /// nothing.
+    ///
+    /// Phrased like `unbackedClaimCorrection` — the owner's own follow-up,
+    /// stating the fact the loop can see rather than scolding — and naming the
+    /// one tool that would fix it, because the failure is precisely that the
+    /// model reached for words instead of that tool.
+    static let unqueuedPromiseCorrection = """
+        Stop. You just told them you would do that after the call, but you did not call \
+        \(AfterTheCallToolSource.toolName), so nothing was written down and nothing will happen \
+        when the line drops. Call \(AfterTheCallToolSource.toolName) now with the right kind, or \
+        tell them plainly that you have not got it written down. Do not promise it again without \
+        that tool call.
+        """
 
     /// Whether a reply is the model refusing to produce a file it can produce.
     ///
