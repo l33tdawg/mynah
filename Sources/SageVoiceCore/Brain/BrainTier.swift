@@ -252,7 +252,29 @@ public struct BrainCapabilities: Sendable, Equatable {
 
     public static let hosted = BrainCapabilities(
         tier: .hosted,
-        minimumOutputTokens: 4_096,
+        // **16,384 because 4,096 could not emit the document it was sized for.**
+        //
+        // The arithmetic, which nobody had done end to end. `write_note` accepts
+        // 32,000 characters (`NotesToolSource.maximumContentCharacters`) and
+        // truncates past it. 32,000 characters is roughly 8,000 tokens. The
+        // document travels *inside* the tool call, so the generation budget has
+        // to cover the whole JSON argument — and at 4,096 tokens the call is cut
+        // at about 16,000 characters, half of what `write_note` would have
+        // taken. The ceiling that was supposed to bound the document was
+        // instead bounding it below its own limit.
+        //
+        // Worse on a reasoning model, which is the case this floor exists for:
+        // thinking is spent from the same allowance before a single character of
+        // the report is written, so the usable share is smaller again.
+        //
+        // 16,384 leaves the full 32,000-character document (~8,000 tokens),
+        // the JSON scaffolding around it, and room to think first.
+        //
+        // **`.onDevice` is untouched and must stay so.** Its floor is 0, which
+        // means `ReplyStyle` keeps deciding the local ceiling exactly as before.
+        // Raising it would be actively harmful — qwen3.5:4b was measured
+        // generating 4,069 tokens over 190 seconds and returning empty content.
+        minimumOutputTokens: 16_384,
         directoryResultBytes: 16_000,
         contentResultBytes: 32_000,
         mayCarryImages: false,

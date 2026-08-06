@@ -84,7 +84,36 @@ final class BrainTierTests: XCTestCase {
 
         let asked = BrainRequest(messages: [], maxOutputTokens: 1024)
         XCTAssertEqual(asked.maxOutputTokens(for: .onDevice, default: 512), 1024)
-        XCTAssertEqual(asked.maxOutputTokens(for: .hosted, default: 512), 4096)
+        XCTAssertEqual(
+            asked.maxOutputTokens(for: .hosted, default: 512),
+            BrainCapabilities.hosted.minimumOutputTokens,
+            "a hosted ask below the floor must be raised to it"
+        )
+    }
+
+    /// **The floor has to be able to emit the thing it exists for.**
+    ///
+    /// It was 4,096, and the arithmetic that nobody had done end to end says
+    /// that could not work: `write_note` accepts 32,000 characters, the document
+    /// travels *inside* the tool call, and 4,096 tokens cuts that JSON at around
+    /// 16,000 characters — half of what the tool would have accepted. The
+    /// ceiling meant to bound the document was bounding it below its own limit,
+    /// and on a reasoning model thinking comes out of the same allowance first.
+    ///
+    /// Asserted as a relationship rather than a number so it cannot rot the way
+    /// the two hardcoded 4096s in this file did: raise the note limit and this
+    /// fails until the budget follows.
+    func testTheHostedFloorCanActuallyEmitTheLongestNote() {
+        // ~4 characters per token, the usual rough conversion.
+        let tokensForLongestNote = NotesToolSource.maximumContentCharacters / 4
+
+        XCTAssertGreaterThanOrEqual(
+            BrainCapabilities.hosted.minimumOutputTokens,
+            tokensForLongestNote,
+            "the hosted budget cannot carry a full \(NotesToolSource.maximumContentCharacters)-character "
+                + "note, so write_note gets cut off mid-argument and the owner is told the document "
+                + "cannot be produced at all"
+        )
     }
 
     /// A deliberate one-token probe stays one token on either tier. The floor
@@ -242,6 +271,11 @@ final class BrainTierTests: XCTestCase {
             provider: .deepSeek
         )
 
-        XCTAssertEqual(body["max_tokens"] as? Int, 4096)
+        XCTAssertEqual(
+            body["max_tokens"] as? Int,
+            BrainCapabilities.hosted.minimumOutputTokens,
+            "DeepSeek asked for 1024 and must be raised to the hosted floor; this is the path the "
+                + "v1.5.1 bug took, where eight write_note calls arrived with no content"
+        )
     }
 }

@@ -598,6 +598,38 @@ private struct TaskCard: View {
             if hasFootnote { footnote }
         }
         .mynahCard(density: .compact)
+        // **The same mark the Memories page puts on a task.** The owner, on the
+        // two screens side by side: *"can we make the tasks in the sidebar look
+        // a bit better like the task cards here with the grey line at the side"*.
+        //
+        // There it earns its keep by separating tasks from ordinary memories in
+        // one mixed list. Here every card is a task, so it is not carrying that
+        // distinction — it is carrying the fact that these are the same objects,
+        // seen twice. A task ought to look like a task wherever the owner meets
+        // it, and until now the two screens drew it differently for no reason
+        // either of them could have explained.
+        //
+        // Monochrome for the reason `Palette.status` gives: the mark is ink, not
+        // a state, so it can never be mistaken for one. It also cannot collide
+        // with the nearness border below, which *is* a state and is a stroke in
+        // a different colour on a different edge.
+        //
+        // Dimmed on history, alone among the differences here. Those cards are
+        // deliberately muted — a haircut that already happened is not live — and
+        // a full-strength stripe would shout over the quietening the text has
+        // already been given.
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(isHistory ? Palette.accent.fill.opacity(0.3) : Palette.accent.fill)
+                .frame(width: 3)
+                // Said in the title and the accessibility label already; a
+                // second announcement of the same fact is noise in a screen
+                // reader.
+                .accessibilityHidden(true)
+        }
+        // After the stripe, so it takes the card's corners rather than running
+        // square past them.
+        .clipShape(RoundedRectangle.mynah(r.card))
         // Drawn over the card's own hairline rather than replacing it, so a
         // near task keeps the same shape as every other card and differs only
         // in colour and weight. History is never marked: a haircut that already
