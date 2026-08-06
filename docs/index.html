@@ -707,7 +707,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
       </p>
 
       <div class="get">
-        <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download Mynah</a>
+        <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest">Download Mynah</a>
         <a class="button secondary" href="#how-it-works">See how it works</a>
         <span class="aside">
           Apple silicon &middot; macOS 14+ &middot; signed and notarized &middot;
@@ -977,7 +977,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     Apple silicon, macOS 14 or later, and your Signal account.
   </p>
   <div class="get">
-    <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest/download/Mynah-macOS-arm64.dmg">Download Mynah</a>
+    <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest">Download Mynah</a>
     <span class="aside">
       <span data-download-size></span>signed and notarized &middot; free and open source &middot;
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
@@ -1025,16 +1025,24 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 <script>
 /* The download link, and which version it is.
    ==========================================================================
-   The button's href in the HTML is `releases/latest/download/Mynah-macOS-arm64.dmg`
-   — a fixed asset name, because that is the only thing GitHub's "latest"
-   redirect can resolve. It always fetches the newest release, and it always
-   saves as `Mynah-macOS-arm64.dmg`, which tells the person in their Downloads
-   folder nothing about which version they have.
+   The button's href in the HTML is `releases/latest` — the release page, not a
+   file. When the API answers it is repointed at the newest release's versioned
+   asset, so the ordinary visitor gets one click and a file in their Downloads
+   folder called `Mynah-1.8.4-macOS-arm64.dmg`, which says what it is.
 
-   So when the API answers, the link is repointed at the *versioned* asset from
-   the same release: same bytes, and a file called `Mynah-1.2.1-macOS-arm64.dmg`.
-   The fixed name stays as the href until then, so the button works with
-   JavaScript off, on a rate-limited network, and before this runs.
+   **It is the page and not a filename because a filename cannot be kept true.**
+   This used to be `releases/latest/download/Mynah-macOS-arm64.dmg`, justified
+   right here on the grounds that it "works with JavaScript off, on a
+   rate-limited network, and before this runs". That was so while releases
+   carried an unversioned copy of the DMG. They stopped at v1.4.4, on 3 August
+   2026, and for the twenty-five releases after it this href 404'd — hitting
+   only the visitor the sentence promised to protect, which is why nobody saw
+   it. `releases/latest` resolves whatever the assets are called, so no future
+   change to the naming can quietly break it again. Any edit that puts an asset
+   filename back here is re-arming that trap.
+
+   The cost is real and is the smaller one: with JavaScript off the button opens
+   a page with the DMG on it rather than starting the download.
 
    Nothing here observes the visitor: one GET, no cookie, no identifier, and no
    second request whatever comes back. */
@@ -1058,8 +1066,8 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
       // This was `getElementById("download")`, and an id has to be unique — so
       // it could only ever repoint a single button. The page has two, the
       // masthead and the closing call to action, and the masthead is the one
-      // people press. It was the one still handing over a file called
-      // `Mynah-macOS-arm64.dmg`, which says nothing about which version it is.
+      // people press. It was the one left un-upgraded, so the button most
+      // visitors actually use was the button that never got the direct link.
       document.querySelectorAll("[data-download]").forEach(button => {
         button.href = versioned.browser_download_url;
       });
