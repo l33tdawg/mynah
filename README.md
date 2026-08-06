@@ -269,17 +269,18 @@ seen a picture it discarded.
 
 ## What the model can do
 
-The loop filters the composed tool catalogue against a named allowlist of 20 —
-15 `sage_` tools, `web_search`, and four note tools — and throws rather than
+The loop filters the composed tool catalogue against a named allowlist of 19 —
+14 `sage_` tools, `web_search`, and four note tools — and throws rather than
 falling back to everything when the allowlist matches nothing. A test fails the
-build if a twenty-first is added without re-measuring routing.
+build if one is added without re-measuring routing, and another fails it if the
+prompt names a tool the allowlist does not carry.
 
-- **Memory** — `sage_recall`, `sage_remember`, `sage_forget`, `sage_list`,
-  `sage_timeline`, `sage_status`, `sage_corroborate`, `sage_link`.
-- **Work** — `sage_task`, `sage_backlog`, `sage_inbox`, `sage_reflect`.
-- **Other agents** — `sage_directory`, `sage_pipe`, `sage_federation`. The model
-  picks a recipient from a signed roster rather than matching a spoken name, so
-  an address cannot be invented. Anything another agent says arrives as
+- **Memory** — `sage_recall`, `sage_remember`, `sage_forget`, `sage_timeline`,
+  `sage_status`, `sage_corroborate`, `sage_link`.
+- **Work** — `sage_task`, `sage_backlog`, `sage_inbox`.
+- **Other agents** — `sage_directory`, `sage_message_send`, `sage_message_reply`,
+  `sage_federation`. The model picks a recipient from a signed directory rather
+  than matching a spoken name, so an address cannot be invented. Anything another agent says arrives as
   `UntrustedAgentContent` rather than a String, so rendering it as if Mynah had
   said it is a visible act at the call site.
 - **Notes and files** — `write_note`, `read_note`, `list_notes`, `send_file`.
@@ -328,7 +329,7 @@ Every boot backs up the existing key, adopts the identity an upgrading appliance
 was already using, and mints one only if there was nothing to adopt, so an update
 cannot leave the appliance with a new identity and no memories.
 
-Everything it remembers goes into one subject it owns, `voice-interface`, with
+Everything it remembers goes into one subject it owns, `mynah-home`, with
 the topic carried in tags rather than in an invented per-topic subject. SAGE's
 own word for a subject is "domain"; every owner-facing string says subject, and
 `MemorySubjectNameTests` enforces it.
