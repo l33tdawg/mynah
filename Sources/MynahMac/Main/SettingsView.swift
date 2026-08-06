@@ -453,6 +453,8 @@ final class SettingsModel {
     private let updatePreferences: URL
     private let proactivePreferences: URL
     private let proactiveLedger: URL
+    private let calendarPreferences: URL
+    private let calendarLedger: URL
 
     init(
         defaults: UserDefaults = .standard,
@@ -460,6 +462,8 @@ final class SettingsModel {
         updatePreferences: URL = UpdatePreferences.defaultFileURL(),
         proactivePreferences: URL = ProactivePreferences.defaultFileURL(),
         proactiveLedger: URL = ProactiveLedger.defaultFileURL(),
+        calendarPreferences: URL = CalendarPreferences.defaultFileURL(),
+        calendarLedger: URL = CalendarLedger.defaultFileURL(),
         phoneLink: any PhoneLinking = SignalPhoneLink(),
         backgroundServices: any SignalBackgroundServicing = SignalBackgroundServiceManager.shared
     ) {
@@ -483,6 +487,9 @@ final class SettingsModel {
         let proactive = ProactivePreferences.load(from: proactivePreferences)
         self.checksOnThings = proactive.isOn
         self.checksEveryMinutes = proactive.clampedMinutes
+        self.calendarPreferences = calendarPreferences
+        self.calendarLedger = calendarLedger
+        self.mirrorsToCalendar = CalendarPreferences.load(from: calendarPreferences).isOn
     }
 
     var canUnlinkPhone: Bool { phoneLink.canUnlink }
@@ -672,6 +679,8 @@ final class SettingsModel {
     // MARK: Checking on things unasked
 
     private(set) var checksOnThings: Bool
+    private(set) var mirrorsToCalendar: Bool = true
+    private(set) var calendarRemoval: CalendarRemoval = .idle
     private(set) var checksEveryMinutes: Int
 
     /// The intervals offered. Not a free-text field: the useful range is narrow,
@@ -702,6 +711,66 @@ final class SettingsModel {
     func setChecksEveryMinutes(_ minutes: Int) {
         checksEveryMinutes = minutes
         ProactivePreferences.amend(at: proactivePreferences) { $0.everyMinutes = minutes }
+    }
+
+    // MARK: The calendar
+
+    /// **Off stops future writes and deliberately deletes nothing.**
+    ///
+    /// Conflating the two would be a switch that destroys data, and somebody
+    /// flicking it to see what it does would lose their appointments. Taking
+    /// them back is `removeMynahCalendar()`, which says so in those words and
+    /// asks first.
+    func setMirrorsToCalendar(_ isOn: Bool) {
+        mirrorsToCalendar = isOn
+        CalendarPreferences.amend(at: calendarPreferences) { $0.isOn = isOn }
+    }
+
+    /// What the undo button is doing, and what it did.
+    enum CalendarRemoval: Equatable {
+        case idle
+        case removing
+        case removed(String)
+        case refused(String)
+    }
+
+    /// Removes Mynah's calendar and everything in it.
+    ///
+    /// The whole undo, and the same thing dragging the calendar to the bin in
+    /// Calendar.app does — deliberately, so the button is not a second mechanism
+    /// the owner has to trust. Removing events one at a time would leave an
+    /// empty calendar behind and call that finished.
+    ///
+    /// **The ledger goes too.** It maps task ids to event ids, so keeping it
+    /// after the events are gone would leave the next tick believing it had
+    /// already mirrored everything, and nothing would ever be written again.
+    func removeMynahCalendar() async {
+        calendarRemoval = .removing
+        let calendar = EventKitCalendar()
+        // Asked rather than assumed. Without access `forget()` finds no calendar
+        // and returns quietly, which would report success for having done
+        // nothing — the dead end that lies, and this screen's whole job is to
+        // not be that.
+        guard await calendar.prepare() else {
+            calendarRemoval = .refused(
+                "macOS has not given Mynah access to your calendar, so there is nothing it can "
+                    + "remove. System Settings → Privacy & Security → Calendars."
+            )
+            return
+        }
+        let held = CalendarLedger.load(from: calendarLedger).events.count
+        do {
+            try calendar.forget()
+        } catch {
+            calendarRemoval = .refused("The calendar could not be removed: \(error)")
+            return
+        }
+        try? FileManager.default.removeItem(at: calendarLedger)
+        calendarRemoval = .removed(
+            held == 0
+                ? "Mynah's calendar is gone."
+                : "Removed Mynah's calendar and the \(held) event\(held == 1 ? "" : "s") in it."
+        )
     }
 
     // MARK: Fetching a newer Mynah
@@ -2175,6 +2244,78 @@ struct SettingsView: View {
                 MynahDivider()
                 checkingIntervalRow
             }
+            MynahDivider()
+            calendarRow
+            MynahDivider()
+            calendarUndoRow
+            calendarRemovalResult
+        }
+    }
+
+    /// **The switch a thing that writes to your calendar has to have.**
+    ///
+    /// Until 1.7.8 the only way to stop the mirror was revoking a system
+    /// permission, which is a blunt instrument that leaves everything already
+    /// written behind with nothing able to take it back.
+    ///
+    /// The sentence names the calendar by name, because that is what the owner
+    /// will look for in Calendar.app, and says what turning it off does *not*
+    /// do — the question anybody reaching for this switch is actually asking.
+    private var calendarRow: some View {
+        SettingsRow(
+            "Put dated tasks in my calendar",
+            detail: "Mynah keeps its own calendar, named Mynah, and puts tasks that have a date "
+                + "in it so your Mac, phone and watch do the reminding. Turning this off stops "
+                + "new ones; anything already there stays until you remove it below."
+        ) {
+            Toggle("", isOn: Binding(
+                get: { model.mirrorsToCalendar },
+                set: { model.setMirrorsToCalendar($0) }
+            ))
+            .labelsHidden()
+            .mynahToggle()
+        }
+    }
+
+    /// The undo, which is a real one: the calendar and everything in it.
+    ///
+    /// Same act as dragging it to the bin in Calendar.app, deliberately — a
+    /// second mechanism the owner has to trust separately is a worse answer than
+    /// the one they already know.
+    private var calendarUndoRow: some View {
+        SettingsRow(
+            "Remove Mynah's calendar",
+            detail: "Deletes the Mynah calendar and every event it put there. Your own calendars "
+                + "are untouched, and your tasks stay on the board."
+        ) {
+            if model.calendarRemoval == .removing {
+                ProgressView().controlSize(.small).tint(Palette.accent.fill)
+            } else {
+                MynahButton("Remove", kind: .secondary) {
+                    Task { await model.removeMynahCalendar() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var calendarRemovalResult: some View {
+        switch model.calendarRemoval {
+        case .idle, .removing:
+            EmptyView()
+        case .removed(let sentence):
+            Text(sentence)
+                .mynahFont(.body)
+                .foregroundStyle(Palette.state.good)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, s4)
+        case .refused(let sentence):
+            Text(sentence)
+                .mynahFont(.body)
+                .foregroundStyle(Palette.state.critical)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, s4)
         }
     }
 

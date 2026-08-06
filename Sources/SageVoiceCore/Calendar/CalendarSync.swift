@@ -46,8 +46,26 @@ public struct CalendarSync: Sendable {
     public func run(
         tasks: [WatchedTask]?,
         ledger: CalendarLedger,
-        clock: Calendar = .current
+        clock: Calendar = .current,
+        preferences: CalendarPreferences = CalendarPreferences.load()
     ) async -> Outcome {
+        // **Switched off means stop writing, and it must never mean delete.**
+        //
+        // The tempting shape is to let an off switch fall through to a plan
+        // computed against no tasks, because that reads as "mirror nothing". It
+        // would empty the owner's calendar: every mirrored task becomes a
+        // `plan.remove`, and somebody flicking a switch to see what it does
+        // would lose their events. Taking them back is a separate, explicit act
+        // — `EventKitCalendar.forget()` — so that destroying data is always
+        // something the owner asked for in those words.
+        //
+        // The ledger and `mirrored` are returned untouched, which keeps
+        // `ReminderLadder` quiet about tasks the calendar is still holding. The
+        // events are still there and macOS will still shout about them; nothing
+        // about turning off future writes makes the existing alarms stop.
+        guard preferences.isOn else {
+            return Outcome(ledger: ledger, mirrored: Set(ledger.events.keys))
+        }
         guard let tasks else {
             return Outcome(ledger: ledger, mirrored: Set(ledger.events.keys))
         }
