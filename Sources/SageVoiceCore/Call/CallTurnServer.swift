@@ -171,6 +171,15 @@ public actor CallTurnServer {
     /// The opening line, made ready before anyone is listening.
     private var preparation: Task<Data?, Never>?
 
+    /// The recognition warm-up, deliberately **not** part of `preparation`.
+    ///
+    /// `handle(connection:)` awaits `preparation` before it enters its read
+    /// loop, so anything folded into that task delays the greeting by its own
+    /// duration. This one is the opposite shape: it exists to be finished by the
+    /// time the caller stops talking, and nothing should ever wait on it. Its
+    /// own handle so `//call` twice in a row does not stack two of them.
+    private var recognitionWarming: Task<Void, Never>?
+
     /// Its words, so the transcript opens with what the caller actually heard.
     private var preparedOpening: String?
 
@@ -311,6 +320,76 @@ public actor CallTurnServer {
             guard let self else { return nil }
             return await self.buildOpening()
         }
+        // **The third thing `//call` buys time for, and it was never bought.**
+        //
+        // The call site's own comment says this warms "the model, SAGE, the
+        // voice and recognition". It warmed three of those. `buildOpening` runs
+        // a brain turn and a synthesis; nothing in `prepare` has ever touched
+        // the transcriber, and the parts written for it — `silence(_:)`,
+        // `WhisperKitServerSupervisor.startWarming()`,
+        // `WhisperKitServerTranscriber.warmupTimeoutSeconds` — have no callers
+        // between them. The feature was designed, its pieces were written, the
+        // wiring was skipped, and the comment claimed it anyway.
+        //
+        // Measured on the owner's call, 6 August 2026:
+        //
+        //     15:38:40 [asr] transcribed  54kB in 10.7s — somebody else's server
+        //     15:38:43 [asr] transcribed  32kB in  2.0s — somebody else's server
+        //     15:38:57 [asr] transcribed 111kB in  1.2s — somebody else's server
+        //
+        // Twice the audio in a ninth of the time, three turns later. That is a
+        // cold model, and the log line proves it is not a cold *process*: it
+        // appends ", after Ns starting it" whenever the supervisor spent over
+        // half a second, and none of these carry it. The server was up and idle
+        // with its weights unloaded — on this Mac it is QuietType's, which
+        // Mynah cannot start or stop, so the only way to make it load them is to
+        // ask it to transcribe something.
+        //
+        // The caller pays that 10.7s twice over, because the opener cannot fire
+        // until there is a transcript to react to: the first filler on that call
+        // came at 11.5s, and everything after it at 1.8s.
+        recognitionWarming?.cancel()
+        recognitionWarming = Task { [weak self] in
+            await self?.warmRecognition()
+        }
+    }
+
+    /// Pushes a moment of silence through the real transcriber so the model is
+    /// resident before the caller speaks.
+    ///
+    /// **Through the same object a turn uses, not a fresh one.** The cascade
+    /// picks a backend at call time, so warming anything else would warm a path
+    /// the caller may not take — and on a Mac where WhisperKit is missing, this
+    /// correctly warms whichever fallback will actually answer.
+    ///
+    /// Every outcome is discarded, including the errors. Silence is exactly what
+    /// Whisper confabulates over, so `emptyTranscript` and `noiseOnlyTranscript`
+    /// are the *expected* results; the transcript was never the point, the model
+    /// load was. A failure here costs the caller the same 10.7s they pay today
+    /// and nothing more, which is why it must never be able to fail a call.
+    private func warmRecognition() async {
+        let started = Date()
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-call-warmup-\(UUID().uuidString).wav")
+        guard (try? CallTurnServer.silence(milliseconds: 250).write(to: scratch)) != nil else { return }
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        // **`withDeadline` orphaning its work is the desired behaviour here**,
+        // for once. Everywhere else in this file an orphan is the hazard — an
+        // abandoned turn that comes back and speaks, or queues into the next
+        // call. This one has no result anybody reads and no side effect beyond
+        // the one it exists for, so a warm-up that outruns the deadline goes on
+        // loading the model while we stop waiting for it, which is the whole
+        // job. The bound is on our own bookkeeping, not on the server.
+        let warm = transcriber
+        _ = try? await withDeadline(
+            WhisperKitServerTranscriber.warmupTimeoutSeconds,
+            label: "recognition warm-up"
+        ) {
+            try? await warm.transcribe(audioFile: scratch)
+        }
+        guard !Task.isCancelled else { return }
+        log("[call] recognition warmed in \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
     }
 
     private func buildOpening() async -> Data? {
@@ -652,6 +731,13 @@ public actor CallTurnServer {
             // startup finds them and tells the owner rather than performing
             // them.
             afterTheCallQueue?.closeCall()
+            // A warm-up still in flight has outlived its purpose: the caller has
+            // hung up, so nothing is about to be transcribed. Cancelling only
+            // stops us waiting — the request itself is already orphaned inside
+            // `withDeadline` and the server will finish loading either way,
+            // which costs nothing and leaves the next call warmer.
+            recognitionWarming?.cancel()
+            recognitionWarming = nil
             live.retire()
             close(connection)
         }
@@ -1352,6 +1438,17 @@ public actor CallTurnServer {
     /// waits out the real 60-second check-in, which buys nothing and costs a
     /// minute of wall clock in every suite run.
     func quietForTesting() -> TimeInterval? { quietFor() }
+
+    /// The prepared opening, awaited exactly the way `openTheCall` awaits it.
+    ///
+    /// **A seam, for the same reason as the one above.** The guarantee being
+    /// tested is that the recognition warm-up is not folded into `preparation`:
+    /// `handle(connection:)` awaits that task before its read loop, so a warm-up
+    /// living inside it would delay the greeting by its own duration — and the
+    /// warm-up is, by design, the slow thing. Asking through the socket instead
+    /// would mean standing up a connection to observe a property, and would
+    /// still be reading this same value at the end of it.
+    func openingForTesting() async -> Data? { await preparation?.value }
 
     private func quietFor() -> TimeInterval? {
         if isAnswering { return nil }

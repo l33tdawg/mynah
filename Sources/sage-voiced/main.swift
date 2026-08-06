@@ -1344,6 +1344,13 @@ func runDaemon(_ arguments: [String]) -> Never {
             // //call is several seconds of warning. Spent warming the model,
             // SAGE, the voice and recognition — and building the opening — so
             // the caller arrives to something ready rather than to a pause.
+            //
+            // Recognition was in this sentence for three releases before it was
+            // in the code. `prepare()` ran a brain turn and a synthesis and
+            // never touched the transcriber, so the first thing the caller said
+            // was still transcribed by a cold model — 10.7s on the 6 August
+            // call, against 1.2s three turns later. See
+            // `CallTurnServer.warmRecognition`; the sentence is now true.
             onCallRequested: { await callServer.prepare() },
             // What he changes himself is not news. See `OwnTaskEdits`.
             onTaskWrites: { await ownTaskEdits.record() }
