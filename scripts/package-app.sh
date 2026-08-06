@@ -49,6 +49,10 @@ SIGN_IDENTITY="${SAGE_VOICE_CODESIGN_IDENTITY:--}"
 SIGN_OPTIONS="${SAGE_VOICE_CODESIGN_OPTIONS:---options runtime}"
 ENTITLEMENTS="${SAGE_VOICE_ENTITLEMENTS:-$ROOT/resources/SageVoiceBridge.entitlements}"
 SIGNAL_ENTITLEMENTS="${SAGE_VOICE_SIGNAL_ENTITLEMENTS:-$ROOT/resources/SignalCLI.entitlements}"
+# The daemon's own, and it holds one key the GUI's does not need. See
+# resources/SageVoiced.entitlements: without it the hardened runtime refuses
+# EventKit silently and the calendar mirror can never run.
+CLI_ENTITLEMENTS="${SAGE_VOICE_CLI_ENTITLEMENTS:-$ROOT/resources/SageVoiced.entitlements}"
 ICON_SOURCE="${SAGE_VOICE_ICON:-$ROOT/resources/Mynah.icns}"
 
 BUNDLE_SAGE="${SAGE_VOICE_BUNDLE_SAGE:-1}"
@@ -276,6 +280,9 @@ APP_BIN="$(resolve_product "$APP_PRODUCT")"
 CLI_BIN="$(resolve_product "$CLI_PRODUCT")"
 
 [[ -f "$ENTITLEMENTS" ]] || die "Missing entitlements: $ENTITLEMENTS"
+[[ -f "$CLI_ENTITLEMENTS" ]] || die "Missing daemon entitlements: $CLI_ENTITLEMENTS
+Without this file sage-voiced is signed with the hardened runtime and nothing
+else, and the calendar mirror is refused silently on every tick for ever."
 [[ -f "$ICON_SOURCE" ]] || die "Missing app icon: $ICON_SOURCE
 Run scripts/make-icon.sh and commit the result. Shipping without it gives the
 owner a blank sheet of paper in their Dock."
@@ -582,7 +589,14 @@ if [[ -d "$APP/Contents/Resources/SAGE.app" ]]; then
   sign_app_bundle "$APP/Contents/Resources/SAGE.app"
 fi
 
-# 2. Our CLI helper. Also no entitlements — it never opens an audio device.
+# 2. The speech helpers. No entitlements — they never open an audio input
+#    device and they touch nothing macOS guards.
+#
+#    This comment used to cover sage-voiced too, and its reasoning was "it never
+#    opens an audio device". That is true and it answered the wrong question:
+#    the daemon does not want the microphone, it wants the calendar, and under
+#    the hardened runtime that needs an entitlement of its own. Signed below,
+#    with $CLI_ENTITLEMENTS.
 [[ ! -f "$APP/Contents/MacOS/argmax-cli" ]] || sign "$APP/Contents/MacOS/argmax-cli"
 [[ ! -f "$APP/Contents/MacOS/whisper-cli" ]] || sign "$APP/Contents/MacOS/whisper-cli"
 # signal-cli needs one entitlement of its own, and the reason is written on
@@ -614,7 +628,14 @@ fi
   || sign "$APP/Contents/Resources/pandoc/bin/pandoc"
 [[ ! -f "$APP/Contents/Resources/typst/bin/typst" ]] \
   || sign "$APP/Contents/Resources/typst/bin/typst"
-sign "$APP/Contents/MacOS/$CLI_PRODUCT"
+# The daemon, and it is the process that writes the owner's calendar. Signed
+# with its own entitlements rather than none: without
+# com.apple.security.personal-information.calendars the hardened runtime refuses
+# EventKit before macOS asks the owner anything, `granted` comes back false with
+# the status still `notDetermined`, and nothing in the appliance can tell that
+# apart from "not asked yet" — so it asks again on the next tick, for ever. 177
+# consecutive declined ticks on the owner's Mac before this line existed.
+sign "$APP/Contents/MacOS/$CLI_PRODUCT" --entitlements "$CLI_ENTITLEMENTS"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
 #    this is also the last chance to fail before a signature exists.
@@ -633,6 +654,19 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 GRANTED="$(capture codesign --display --entitlements :- "$APP")"
 [[ "$GRANTED" == *"com.apple.security.device.audio-input"* ]] \
   || die "The signed bundle has no microphone entitlement. Check $ENTITLEMENTS."
+
+# The same check for the daemon, and it needs its own because the entitlement is
+# on a different binary with a different file. The failure it catches is not a
+# crash: an unentitled sage-voiced runs perfectly, answers Signal, holds calls,
+# and silently never writes a calendar event again. It shipped that way for
+# every release up to 1.7.5 and the only visible symptom was a log line nobody
+# reads. A build is the last place this can still be caught by a machine.
+CLI_GRANTED="$(capture codesign --display --entitlements :- "$APP/Contents/MacOS/$CLI_PRODUCT")"
+[[ "$CLI_GRANTED" == *"com.apple.security.personal-information.calendars"* ]] \
+  || die "$CLI_PRODUCT has no calendar entitlement, so the calendar mirror cannot
+work in the shipped build. Under the hardened runtime EventKit is refused
+without it — no dialog, no error, and the authorization status stays
+'notDetermined' for ever. Check $CLI_ENTITLEMENTS."
 
 # Notarization rejects any executable in the bundle without the hardened
 # runtime, and it rejects it *after* the upload, minutes later. Catch it here.

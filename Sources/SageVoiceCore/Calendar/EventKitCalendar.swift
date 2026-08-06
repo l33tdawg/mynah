@@ -112,9 +112,33 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         }
     }
 
+    /// Refused with the status left at `notDetermined` — nobody was ever asked.
+    ///
+    /// **The state that cost this feature its whole life.** Under the hardened
+    /// runtime a process without
+    /// `com.apple.security.personal-information.calendars` is refused EventKit
+    /// before macOS shows the owner anything: `requestFullAccessToEvents`
+    /// returns `false`, no error is thrown, and the authorization status is
+    /// still `notDetermined` afterwards. A genuine refusal leaves `.denied`.
+    ///
+    /// So the two are distinguishable, and telling them apart is the difference
+    /// between "the owner said no" and "this build cannot ask" — which need
+    /// opposite responses and which read identically in a log that only says
+    /// "declined". `sage-voiced` shipped unentitled through 1.7.5 and wrote this
+    /// line 177 times on the owner's Mac, once every sixteen minutes, while the
+    /// mirror had never worked from the daemon at all.
+    ///
+    /// See `resources/SageVoiced.entitlements` for the measurements.
+    static func wasNeverAsked(_ status: EKAuthorizationStatus) -> Bool {
+        status == .notDetermined
+    }
+
     public func prepare() async -> Bool {
         if Self.wasRefused {
-            log("[calendar] this Mac has refused calendar access; nothing will be mirrored")
+            log("""
+                [calendar] this Mac has refused calendar access, so nothing will be mirrored. \
+                To change it: System Settings → Privacy & Security → Calendars → turn on Mynah.
+                """)
             return false
         }
         do {
@@ -124,7 +148,22 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
             // decline permanently — and a refusal is remembered for ever.
             let granted = try await store.requestFullAccessToEvents()
             guard granted else {
-                log("[calendar] calendar access was declined")
+                // Named separately, because these want opposite things from
+                // whoever reads the log. One is the owner's decision; the other
+                // is a build that cannot ask and will never be able to, and no
+                // amount of clicking in System Settings fixes it — the process
+                // does not even appear there.
+                if Self.wasNeverAsked(EKEventStore.authorizationStatus(for: .event)) {
+                    log("""
+                        [calendar] macOS refused calendar access without asking, and left the \
+                        status at "not determined". That is not the owner declining — it is this \
+                        build lacking the calendar entitlement, so it cannot ask and cannot be \
+                        switched on in System Settings either. Fix the build: see \
+                        resources/SageVoiced.entitlements.
+                        """)
+                } else {
+                    log("[calendar] calendar access was declined")
+                }
                 return false
             }
         } catch {

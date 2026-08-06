@@ -169,7 +169,7 @@ jobs:
           # when the script's own floor was raised, which turned every CI run red
           # on a perfectly healthy suite: the check is new, and the first thing
           # it caught was the commit that added it.
-          MYNAH_MIN_EXECUTED_TESTS: "1904"
+          MYNAH_MIN_EXECUTED_TESTS: "1911"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -226,7 +226,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "1942"
+          MYNAH_MIN_EXECUTED_TESTS: "1949"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the daemon, Contents/MacOS/sage-voiced.
+
+  Separate from SageVoiceBridge.entitlements on purpose. That file's own rule is
+  that an entitlement handed to a process which cannot use it is just a larger
+  thing to attack, and the daemon has no use for the microphone: it is a
+  background launchd job, it never opens an audio input device, and voice
+  reaches it as files over Signal. So it gets exactly one key, and not the GUI's.
+
+  ## Why this file exists at all: the calendar mirror never worked
+
+  `sage-voiced` was signed with the hardened runtime and NO entitlements. The
+  reason written in scripts/package-app.sh was "it never opens an audio device"
+  — true, and it answered the wrong question. Under the hardened runtime a
+  process without com.apple.security.personal-information.calendars is refused
+  calendar access **silently**:
+
+      EKEventStore.requestFullAccessToEvents -> granted = false
+      EKEventStore.authorizationStatus(for: .event) -> notDetermined, still
+
+  No dialog is shown, no error is returned, and the status never leaves
+  `notDetermined` — so `EventKitCalendar.wasRefused` is false and every tick
+  asks again, for ever. bridge.log on the owner's Mac carried 177 consecutive
+  "calendar access was declined" lines, one every sixteen minutes, from 4 August
+  2026 onward, and not one successful write.
+
+  Worse than a refusal, because a refusal can be undone: with no entitlement the
+  process cannot appear in System Settings -> Privacy & Security -> Calendars at
+  all, so there is nothing for the owner to switch on. The dead end had no door.
+
+  ## Measured, not reasoned
+
+  Nine variants under launchd and in the GUI on 6 August 2026, macOS 26
+  (Darwin 25.3.0). Changing the embedded Info.plist, the CFBundleIdentifier, the
+  codesign identifier flag, and whether the binary sat inside a signed .app changed
+  NOTHING: every one returned granted=false with the status stuck at
+  notDetermined. Adding this single key, with everything else held constant,
+  returned granted=true and fullAccess — including for a helper launched by
+  launchd, under a bundle identifier that had never been granted anything. A
+  background daemon can raise the prompt; it just could not ask without this.
+
+  That is also why the mirror appeared to work: `sage-voiced calendar` run by
+  hand from Terminal inherits Terminal's calendar grant, and that is what wrote
+  the fifteen events sitting in the owner's Mynah calendar. The daemon has never
+  written one.
+
+  ## The paired sentence
+
+  NSCalendarsFullAccessUsageDescription in resources/Info.plist. macOS reads it
+  from the bundle this executable lives in, which is why the daemon must stay
+  inside Mynah.app rather than being installed beside it.
+
+  ## When the window gains a calendar surface
+
+  Task #23 may put a switch and an undo in the app. The app is a different
+  process with its own signature, so it needs the same key adding to
+  SageVoiceBridge.entitlements at that point — it will not inherit this one.
+  Both processes resolve to the same bundle identifier, so they share one grant
+  and the owner sees a single "Mynah" row in System Settings.
+-->
+<dict>
+  <!-- Required. Without it the hardened runtime refuses EventKit before macOS
+       ever gets as far as asking the owner, and it does so without saying
+       anything. See the long note above; this is one line and it is the whole
+       fix for a feature that has never once run in production. -->
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+</dict>
+</plist>
