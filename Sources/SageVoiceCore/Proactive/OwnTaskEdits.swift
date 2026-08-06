@@ -119,6 +119,10 @@ public actor OwnTaskEdits {
         marker: URL = OwnTaskEdits.defaultMarkerURL(),
         log: (String) -> Void = { _ in }
     ) {
+        // The writing half of the same guard. Without it a suite run *plants* a
+        // suppression on the owner's Mac, and the next real edit he makes goes
+        // unannounced because a test spent it.
+        guard mayTouch(marker) else { return }
         do {
             try OwnerOnlyFileSecurity.write(Data(), to: marker)
         } catch {
@@ -138,7 +142,34 @@ public actor OwnTaskEdits {
         pending = false
         // Removal *is* the read. `fileExists` then `removeItem` would be two
         // syscalls with a window between them; this is one answer.
+        guard Self.mayTouch(marker) else { return fromHere }
         let fromElsewhere = (try? FileManager.default.removeItem(at: marker)) != nil
         return fromHere || fromElsewhere
+    }
+
+    /// Whether this instance may touch the marker on disk.
+    ///
+    /// **The suite deleted the owner's real one, and it cost a release.**
+    /// `OwnTaskEdits()` defaults to the live path, three tests construct it that
+    /// way, and `takeSuppression` reads by *removing*. So a suite run raced the
+    /// daemon: the owner moved a task at 18:54, the daemon wrote the marker, the
+    /// test ate it, and `testNothingToSuppressUntilSomethingIsWritten` failed
+    /// because a fresh instance found a suppression it had no business seeing.
+    ///
+    /// Failing the release is the benign half. The other half is that the
+    /// suppression is *gone* — so the next proactive check reads the owner's own
+    /// edit back to him as news, which is precisely the thing this type exists
+    /// to stop, caused by its own tests.
+    ///
+    /// Same guard and same reasoning as `CallActionQueue.mayTouch`, which was
+    /// written for the identical hazard on the after-the-call queue. That one
+    /// was thought of in advance; this one had to be found by a red build on a
+    /// change that had nothing to do with it.
+    static func mayTouch(
+        _ url: URL,
+        isTesting: Bool = MynahLog.isRunningUnderXCTest
+    ) -> Bool {
+        guard isTesting else { return true }
+        return url.standardizedFileURL != defaultMarkerURL().standardizedFileURL
     }
 }
