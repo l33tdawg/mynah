@@ -241,20 +241,42 @@ final class MemoryNodeChoiceTests: XCTestCase {
     /// Live-node only, for the same reason `thread`'s equivalent is: the roster
     /// is the only thing that can answer it.
     func testTheStoreSignsAsAnAgentTheNodeKnows() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["MYNAH_LIVE_NODE_TESTS"] == "1",
-            "set MYNAH_LIVE_NODE_TESTS=1 to run against the SAGE on this machine"
-        )
+        try LiveNode.required("the store must sign as an agent the node knows")
 
         let keyPath = try XCTUnwrap(SageMemoryStore.identityEnvironment[MynahIdentity.environmentVariable])
         let signingAs = try XCTUnwrap(SageAgentIdentity.agentID(ofKeyAt: URL(fileURLWithPath: keyPath)))
-        let roster = try await NodeAgentDirectory().roster()
-
         XCTAssertEqual(signingAs, SageAgentIdentity.applianceAgentID())
-        XCTAssertTrue(
-            roster.agents.contains { $0.id == signingAs },
-            "Memories signs as \(signingAs.prefix(8))…, which is not registered on this node — "
-                + "every browse will come back empty and look like a fresh install"
-        )
+
+        // **Asked as the appliance, not looked up in a roster.**
+        //
+        // This used to call `NodeAgentDirectory().roster()`, which is an
+        // unsigned `GET /v1/agents`. The first time this test was ever allowed
+        // to run — 6 August 2026, the release that stopped gating it behind a
+        // variable nobody set — it failed with `AgentTrouble.locked`, because
+        // that route answers **401** on this node. So the check could never have
+        // passed, and had been skipped for so long that nobody found out.
+        //
+        // The replacement is the one 1.7.5 established for exactly this: a
+        // signed `sage_status` is *by construction* about whoever signed it. A
+        // roster row can be matched by name or by id and both can match the
+        // wrong agent; a signed self-report cannot be about anybody else.
+        let reply = try await ApplianceWriteReadinessCheck.signedStatus(timeout: 30)
+        let standing = ApplianceWriteReadinessCheck.standing(inStatus: reply, expecting: signingAs)
+
+        switch standing {
+        case .registered:
+            break
+        case .notRegistered:
+            XCTFail(
+                "Memories signs as \(signingAs.prefix(8))…, which this node has never enrolled — "
+                    + "every browse comes back empty and looks like a fresh install"
+            )
+        case .unknown(let why):
+            XCTFail(
+                "the node would not say who \(signingAs.prefix(8))… is: \(why). If that is a "
+                    + "different agent_id than the one signing, the appliance is talking as "
+                    + "somebody else — the failure #51 existed for."
+            )
+        }
     }
 }

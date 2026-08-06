@@ -388,10 +388,20 @@ final class PipeReplyTests: XCTestCase {
     ///
     /// Read from the capture rather than from a literal here, so a change in the
     /// outbox shape shows up as a failing test instead of as a fixture that
-    /// still agrees with a codebase both of which have drifted. Both items are
-    /// unanswered, so the correct behaviour is silence — which is also the one
-    /// property this file can assert against a real reply today.
-    func testTheCapturedOutboxAnnouncesNothing() async throws {
+    /// still agrees with a codebase both of which have drifted.
+    ///
+    /// **This test used to assert silence, and the reason it did was the bug.**
+    /// Its wording was "both items are unanswered, so the correct behaviour is
+    /// silence" — true of the rule as written, and wrong about the world. One of
+    /// the two captured items is `msg-96ad952b`, which **expired undelivered** on
+    /// this owner's node on 4 August 2026. Mynah said it would send that message,
+    /// it never arrived, and the old rule filed that under "nothing to report"
+    /// because the only question it asked was whether a reply had come back.
+    ///
+    /// So the fixture was right the whole time and the assertion was wrong. Worth
+    /// keeping as a note: a captured fixture only protects the shape, never the
+    /// judgement made about it.
+    func testTheCapturedOutboxAnnouncesTheSendThatDied() async throws {
         let captured = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent()
@@ -403,10 +413,99 @@ final class PipeReplyTests: XCTestCase {
         await ritual.noteResults(in: captured)
 
         let replies = await ritual.drainReplies()
+        XCTAssertEqual(
+            replies.count, 1,
+            "the captured outbox holds one pending send and one that expired undelivered; "
+                + "exactly the dead one is news, and the pending one is not"
+        )
+        guard case .neverArrived = replies.first?.kind else {
+            return XCTFail(
+                "the expired send was reported as \(String(describing: replies.first?.kind)); "
+                    + "a message nobody received must not be read out as though somebody answered"
+            )
+        }
+    }
+    // MARK: - Sends that will never arrive
+
+    /// **Mynah said it would send something, it never got there, and nobody was
+    /// told.** Same family as #45: a promise made and silently broken.
+    ///
+    /// Everything not `completed` fell through the answered filter, which is
+    /// right for the many things still in flight and wrong for the few that have
+    /// stopped. `msg-96ad952b` expired undelivered on the owner's node on 4
+    /// August 2026 — it is in the captured fixture, and before this it was read,
+    /// discarded and never mentioned.
+    func testAnExpiredSendIsReportedAsNeverArriving() async {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-96ad952b","counterparty":"Kestrel","completed_at":"","#
+                + #""status":"expired"}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.count, 1)
+        XCTAssertEqual(
+            replies.first?.spokenDescription,
+            "Your message to Kestrel never got there — it expired before it could be delivered. "
+                + "Nobody has seen it."
+        )
+        // Not phrased as a reply. Reading a failure out with the sentence built
+        // for an answer would tell the owner an agent said something when the
+        // truth is that nobody ever received the question.
+        XCTAssertEqual(replies.first?.kind, .neverArrived(why: "it expired before it could be delivered"))
+    }
+
+    /// **The direction this must not get wrong.** An unrecognised status is a
+    /// message still on its way, not a lost one: announcing it as lost makes the
+    /// owner re-send, and the recipient gets it twice. The outbox carries
+    /// in-flight words this code has never enumerated.
+    func testAnUnfamiliarStatusIsTreatedAsStillInFlight() async {
+        let ritual = await seeded()
+
+        for status in ["pending", "queued", "delivered", "accepted", "in_progress", "claimed"] {
+            await ritual.noteResults(in: outbox(
+                #"{"message_id":"msg-\#(status)","counterparty":"Kestrel","completed_at":"","#
+                    + #""status":"\#(status)"}"#
+            ))
+        }
+
+        let replies = await ritual.drainReplies()
         XCTAssertTrue(
             replies.isEmpty,
-            "nothing in the captured outbox has been answered, so nothing is news"
+            "announced \(replies.map(\.spokenDescription)) as undeliverable; a status this code "
+                + "does not know is a message on its way, and calling it lost makes the owner re-send"
         )
+    }
+
+    /// The node goes on listing a dead send, so what stops a repeat is the
+    /// ledger. Said once, then never again — the same rule answered sends live
+    /// under, and the reason `AlreadySaid` exists at all.
+    func testAFailureIsSaidOnceHoweverOftenTheNodeRepeatsIt() async {
+        let ritual = await seeded()
+        let dead = #"{"message_id":"msg-96ad952b","counterparty":"Kestrel","completed_at":"","status":"expired"}"#
+
+        await ritual.noteResults(in: outbox(dead))
+        let first = await ritual.drainReplies()
+        XCTAssertEqual(first.count, 1)
+
+        await ritual.noteResults(in: outbox(dead))
+        let second = await ritual.drainReplies()
+        XCTAssertTrue(second.isEmpty, "the same broken promise was announced twice")
+    }
+
+    /// An answered send is still a reply. The failure path must not have
+    /// swallowed the case this code was originally for.
+    func testAnAnsweredSendIsUnaffected() async {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-ok","counterparty":"Claude","completed_at":"\#(then)","#
+                + #""status":"completed","result":"Done."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        XCTAssertEqual(replies.first?.spokenDescription, "Claude replied: Done.")
     }
 }
 
@@ -609,4 +708,5 @@ final class FirstLookTests: XCTestCase {
         XCTAssertNil(ledger.hasSeeded)
         XCTAssertTrue(ledger.has("Claude|Acknowledged."))
     }
+
 }

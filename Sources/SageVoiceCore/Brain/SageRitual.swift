@@ -713,17 +713,48 @@ public actor SageRitual {
 
     // MARK: - Replies to work this appliance sent out
 
-    /// A reply from another agent to work Mynah piped to it.
+    /// Something the outbox now says about work Mynah sent out.
     public struct PipeReply: Sendable, Equatable {
-        /// Who answered, as the node names them.
+
+        /// Which of the two things the outbox is reporting.
+        ///
+        /// **They are not variations on a theme.** One is an answer arriving;
+        /// the other is a promise breaking. Reading a failure out with the
+        /// sentence built for a reply would tell the owner an agent said
+        /// something when the truth is that nobody ever received the question.
+        public enum Kind: Sendable, Equatable {
+            case reply
+            /// Terminal, and nobody saw it. `why` is the node's own word.
+            case neverArrived(why: String)
+        }
+
+        /// Who answered, or who never received it, as the node names them.
         public let from: String
         /// What they said. Untrusted, like everything else that arrives from
-        /// another agent — see `UntrustedAgentContent`.
+        /// another agent — see `UntrustedAgentContent`. Empty for a failure,
+        /// where there is nothing anybody said.
         public let text: String
+        public let kind: Kind
+
+        public init(from: String, text: String, kind: Kind = .reply) {
+            self.from = from
+            self.text = text
+            self.kind = kind
+        }
 
         /// One sentence for the owner, attributed.
         public var spokenDescription: String {
-            "\(from) replied: \(text)"
+            switch kind {
+            case .reply:
+                return "\(from) replied: \(text)"
+            case .neverArrived(let why):
+                // Says the message did not arrive before it says why, because
+                // the first half is the part that changes what the owner does.
+                // No apology and no retry offer: `AgentSendJournal` deliberately
+                // does not replay sends, so offering one here would promise
+                // something nothing in the appliance carries out.
+                return "Your message to \(from) never got there — \(why). Nobody has seen it."
+            }
         }
     }
 
@@ -821,18 +852,36 @@ public actor SageRitual {
         // Answered only. An outbox is mostly things still in flight, and every
         // one of those would otherwise be announced as news the moment it was
         // sent — the appliance telling the owner about its own message.
-        let results = items.filter { item in
-            !(Self.text(item, ["completed_at"]) ?? "").isEmpty
-                || Self.text(item, ["status"]) == "completed"
+        let results = items.filter(Self.wasAnswered)
+        // **A send that died is news too, and it was being thrown away.**
+        //
+        // Everything not `completed` fell through the filter above, which is
+        // right for the many things still in flight and wrong for the few that
+        // have stopped. `msg-96ad952b` expired undelivered on 4 August 2026 on
+        // this owner's node: Mynah said it would send something, it never
+        // arrived, and nothing anywhere said so. Same family as #45 — a promise
+        // made and silently broken.
+        //
+        // Read here rather than from `sage_turn`'s `message_delivery_updates`
+        // deliberately. That key is a one-shot *consuming* read whose shape
+        // nobody has ever observed, and a wrong reader there eats the update and
+        // stays quiet, which is indistinguishable from this bug. The outbox is
+        // non-consuming, already polled, and its shape is in a captured fixture.
+        let stranded = items.filter { !Self.wasAnswered($0) && Self.terminalFailure(in: $0) != nil }
+        guard !results.isEmpty || !stranded.isEmpty else { return }
+        if !results.isEmpty {
+            log("[sage] \(results.count) answered send(s) in the outbox: \(String(describing: results).prefix(300))")
         }
-        guard !results.isEmpty else { return }
-        log("[sage] \(results.count) answered send(s) in the outbox: \(String(describing: results).prefix(300))")
+        if !stranded.isEmpty {
+            log("[sage] \(stranded.count) send(s) that will never arrive: \(String(describing: stranded).prefix(300))")
+        }
 
         // Born on this turn. Everything the node is holding gets written down
         // and none of it is said — see `AlreadySaid.hasSeeded`.
         let seeding = !(alreadySaid.hasSeeded ?? !alreadySaid.ids.isEmpty)
         if seeding {
-            log("[sage] first look at pipe results: noting \(results.count) without saying them")
+            log("[sage] first look at the outbox: noting \(results.count + stranded.count) "
+                + "without saying them")
         }
 
         var changed = false
@@ -865,11 +914,68 @@ public actor SageRitual {
             guard !seeding else { continue }
             arrivedReplies.append(PipeReply(from: Self.shortened(from), text: said))
         }
+        for dead in stranded {
+            // `counterparty` again, and here it is the agent who never got it.
+            let to = Self.text(dead, ["counterparty", "to", "to_name", "agent", "recipient"])
+                ?? "one of your agents"
+            guard let why = Self.terminalFailure(in: dead) else { continue }
+            // The same ledger as answered sends, so a failure is said once and
+            // then never again however long the node goes on listing it. No
+            // fallback on the message text: a send that never arrived has no
+            // reply to make it unique, and two failures to the same agent are
+            // two separate broken promises that both deserve saying.
+            guard let identity = Self.text(dead, ["message_id", "pipe_id", "id"]) else {
+                log("[sage] an undelivered send carried no identifier, so it cannot be reported "
+                    + "once: \(String(describing: dead.keys.sorted()))")
+                continue
+            }
+            guard !alreadySaid.has(identity) else { continue }
+            alreadySaid.remember(identity)
+            changed = true
+            guard !seeding else { continue }
+            arrivedReplies.append(
+                PipeReply(from: Self.shortened(to), text: "", kind: .neverArrived(why: why))
+            )
+        }
         if seeding {
             alreadySaid.hasSeeded = true
             changed = true
         }
         if changed { alreadySaid.save(to: alreadySaidFile) }
+    }
+
+    /// Whether the outbox says this send has been answered.
+    ///
+    /// Both spellings, because `completed_at` is the timestamp and `status` is
+    /// the word, and a node has been seen carrying one without the other.
+    static func wasAnswered(_ item: [String: Any]) -> Bool {
+        !(text(item, ["completed_at"]) ?? "").isEmpty || text(item, ["status"]) == "completed"
+    }
+
+    /// The node's word for why this send is finished and nobody saw it, or
+    /// `nil` if it is simply still in flight.
+    ///
+    /// **`expired` is the measured one.** `msg-96ad952b` on this owner's node,
+    /// 4 August 2026. The rest are read on the same principle as
+    /// `requires_reply`/`requires_result`: a status this appliance does not
+    /// recognise must not be silently treated as "still going", because that is
+    /// how a broken promise becomes indistinguishable from a slow one.
+    ///
+    /// Deliberately a fixed set rather than "anything that is not `pending`".
+    /// The outbox carries in-flight words this has never enumerated —
+    /// `queued`, `delivered`, `accepted`, whatever 11.18 adds — and treating an
+    /// unknown one as a failure would announce a message as lost while it was
+    /// on its way. Wrong in that direction is worse: the owner re-sends, and
+    /// the recipient gets it twice.
+    static func terminalFailure(in item: [String: Any]) -> String? {
+        guard let status = text(item, ["status"])?.lowercased() else { return nil }
+        switch status {
+        case "expired": return "it expired before it could be delivered"
+        case "failed": return "the node reported it failed"
+        case "undeliverable", "undelivered": return "it could not be delivered"
+        case "rejected": return "it was rejected"
+        default: return nil
+        }
     }
 
     private static func text(_ object: [String: Any], _ keys: [String]) -> String? {

@@ -33,10 +33,7 @@ import XCTest
 final class ApplianceReadReachProbe: XCTestCase {
 
     func testWhatMynahCanActuallyRead() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["MYNAH_LIVE_NODE_TESTS"] == "1",
-            "opt-in: signs as the appliance and reads from the live node"
-        )
+        try LiveNode.required("signs as the appliance and reads from the live node")
 
         // `SageMemoryStore` is the app's own reader and signs with
         // `MynahIdentity.applianceEnvironment()` — Mynah's key, not this

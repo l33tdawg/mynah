@@ -309,10 +309,7 @@ final class CerebrumTaskSourceTests: XCTestCase {
     /// board reads, an encrypted one throws `locked`. What must never happen is
     /// a success carrying no tasks.
     func testTheRealNodeEitherAnswersOrSaysItIsLocked() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["MYNAH_LIVE_NODE_TESTS"] == "1",
-            "set MYNAH_LIVE_NODE_TESTS=1 to run against the SAGE on this machine"
-        )
+        try LiveNode.required("the real node either answers or says it is locked")
 
         do {
             let board = try await CerebrumTaskSource().board()

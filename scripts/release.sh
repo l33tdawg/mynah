@@ -138,6 +138,31 @@ step "tests"
 # with no check at all, which is how no document test has ever run on a public
 # runner. Two scripts agreeing about the numbers by copy is two scripts waiting
 # to disagree.
+# **The live-node tests, which had never run on a release.**
+#
+# Four tests talk to the SAGE on this Mac, and they are the only ones that can
+# see the failure that cost 1.7.5 four separate fixes: code reading a shape the
+# node stopped emitting. A stub cannot catch that — a fixture agrees with
+# whatever the code expects, by construction — so these are the whole defence.
+#
+# They were gated behind an environment variable set nowhere in this repository,
+# under two different names, and a skipped test counts as a pass. So the defence
+# written for the exact defect family this project keeps hitting was skipped in
+# every build that has ever shipped. See Tests/SageVoiceCoreTests/LiveNode.swift.
+#
+# Turned on only when there is a node to talk to, because the alternative is a
+# release that cannot be cut on a machine without SAGE installed. Which one
+# happened is printed rather than left to be deduced from a skip count — a
+# silent "off" here is how this went unnoticed for five releases.
+SAGE_FOR_TESTS="${MYNAH_SAGE_APP:-/Applications/SAGE.app/Contents/MacOS/sage-gui}"
+if [[ -x "$SAGE_FOR_TESTS" ]]; then
+  export MYNAH_LIVE_NODE_TESTS=1
+  echo "      live-node tests: ON ($SAGE_FOR_TESTS)"
+else
+  echo "      live-node tests: OFF — no SAGE at $SAGE_FOR_TESTS, so the four tests that"
+  echo "      read the real node will skip. Set MYNAH_SAGE_APP to run them."
+fi
+
 TEST_LOG="$(mktemp "${TMPDIR:-/tmp}/mynah-release-tests.XXXXXX")"
 trap 'rm -f "$TEST_LOG"' EXIT
 if [[ "$(uname -m)" == "arm64" ]]; then

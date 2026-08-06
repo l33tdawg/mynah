@@ -399,10 +399,7 @@ final class ApplianceWriteReadinessTests: XCTestCase {
     /// Mac has more standing than Mynah, so a surface verified through it
     /// green-lights screens that are broken for the appliance.
     func testAgainstTheLiveNode() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["SAGE_LIVE_NODE"] == "1",
-            "set SAGE_LIVE_NODE=1 to run against the SAGE on this machine"
-        )
+        try LiveNode.required("reads the appliance's own standing from the live node")
         let state = await ApplianceWriteReadinessCheck().check()
         let id = try XCTUnwrap(state.agentID, "no appliance key on this Mac")
         XCTAssertEqual(id.count, 64)

@@ -137,8 +137,8 @@ public enum BrainPrompts {
     - Asked for a fact you may have written down — an address, a booking, a number — call \
     list_notes and read_note BEFORE web_search. You wrote those notes; the answer is usually \
     already there and the web does not have it.
-    - To send a document to another agent, read_note it first, then pass what it says to \
-    sage_pipe. sage_pipe carries text, not files.
+    - To send a document to another agent, read_note it first, then pass what it says as the \
+    payload of sage_message_send. It carries text, not files.
     - Everything the owner sends you is kept, so "send me that ticket again" is answerable: \
     list_notes for the title, then send_file with it. Never guess a title, and never say a file \
     is on its way unless send_file said it is sending it.
@@ -151,7 +151,8 @@ public enum BrainPrompts {
     - If the owner names an agent in human terms — "send this to MacBook Pro Agent A", \
     "ask Perplexity to research it" — call sage_directory first. It lists every agent on \
     this Mac with its display name, registered name, provider and exact agent_id.
-    - Then call sage_pipe using the exact agent_id from that list, never the spoken name.
+    - Then call sage_message_send with `to` set to the exact agent_id from that list, never the \
+    spoken name, and the message itself as `payload`.
     - If nobody in the list matches, say who is there and ask which they meant. Never guess \
     an agent_id, and never send to one whose name merely looks similar.
 
