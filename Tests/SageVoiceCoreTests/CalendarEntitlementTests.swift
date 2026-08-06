@@ -13,13 +13,30 @@ import EventKit
 /// `bridge.log` on the owner's Mac carried 177 consecutive "calendar access was
 /// declined" lines between 4 and 6 August 2026 with not one successful write.
 ///
-/// Measured nine ways on 6 August 2026, macOS 26 (Darwin 25.3.0): changing the
-/// embedded Info.plist, the bundle identifier, the codesign `--identifier`, and
-/// whether the binary sat inside a signed `.app` changed nothing. Adding this
-/// one key, everything else held constant, turned `granted=false /
-/// notDetermined` into `granted=true / fullAccess` — including for a helper
-/// launched by launchd under a bundle identifier that had never been granted
-/// anything.
+/// It was measured nine ways on 6 August 2026, macOS 26 (Darwin 25.3.0), and
+/// **the conclusion drawn from those nine variants was wrong.** 1.7.6 gave the
+/// key to `sage-voiced`, 1.7.7 shipped it, and the owner's log went on reading
+/// "macOS refused calendar access without asking" every sixteen minutes.
+///
+/// Four fresh variants the same day, each a Developer ID hardened-runtime
+/// LaunchAgent under a bundle identifier that had never been asked, differing
+/// only in which binary carried the key:
+///
+///     main executable   nested helper   result
+///     entitled          (is main)       prompt -> granted=true, fullAccess
+///     NOT entitled      entitled        NO PROMPT, granted=false, notDetermined
+///     entitled          entitled        prompt shown
+///     entitled          NOT entitled    prompt shown
+///
+/// Row two is 1.7.7. **TCC reads this entitlement off the enclosing app bundle's
+/// main executable — `Contents/MacOS/Mynah` — not off the nested helper that
+/// calls EventKit.** The nine variants missed it because every granting one put
+/// the key on the executable TCC evaluates, so none of them was ever the shape
+/// that ships.
+///
+/// The lesson worth keeping: **a probe proves something only if one of its
+/// variants is the shape you actually ship.** Nine variants that all differ from
+/// production the same way agree with each other and say nothing.
 ///
 /// These tests exist because none of that is visible from Swift. The defect
 /// lives in a shell script and a plist, it produces a build that runs perfectly
@@ -104,6 +121,41 @@ final class CalendarEntitlementTests: XCTestCase {
         )
     }
 
+    /// **The key TCC actually reads, which 1.7.6 and 1.7.7 both shipped without.**
+    ///
+    /// The daemon's own entitlement, asserted above, is not what makes the mirror
+    /// work — measured 6 August 2026, a nested helper carrying the key inside a
+    /// bundle whose main executable does not gets no prompt at all, `granted =
+    /// false`, and the status stays `notDetermined` for ever. That is exactly the
+    /// shape of 1.7.7 and exactly the owner's symptom.
+    ///
+    /// So this assertion, not the one above, is the one guarding the feature.
+    /// Deleting this key on the grounds that "the window hardly touches the
+    /// calendar" would silently freeze the daemon's mirror with no crash, no
+    /// error and nothing failing anywhere but a log line.
+    func testTheAppBundleEntitlementsGrantCalendarAccess() throws {
+        let entitlements = try text("resources/SageVoiceBridge.entitlements")
+        XCTAssertTrue(
+            entitlements.contains("com.apple.security.personal-information.calendars"),
+            "the app bundle's main executable has no calendar entitlement. TCC reads this key "
+                + "off the main executable rather than off the nested helper that calls EventKit, "
+                + "so without it the daemon's mirror is refused silently — no prompt, no error, "
+                + "status stuck at notDetermined. This is the shape 1.7.7 shipped."
+        )
+    }
+
+    /// The daemon's key is the weaker guard, and the file should say which is
+    /// which. A future reader who trusts the wrong one repeats 1.7.6.
+    func testTheDaemonEntitlementsRecordThatTheyAreNotTheFix() throws {
+        let entitlements = try text("resources/SageVoiced.entitlements")
+        XCTAssertTrue(
+            entitlements.contains("SageVoiceBridge.entitlements"),
+            "resources/SageVoiced.entitlements does not point at the file that actually carries "
+                + "the load-bearing key, so the next person to read it draws the same wrong "
+                + "conclusion 1.7.6 did"
+        )
+    }
+
     /// A signature can drop an entitlement without failing, so the build checks
     /// the finished binary rather than trusting the flag it passed.
     func testPackagingVerifiesTheEntitlementSurvivedSigning() throws {
@@ -113,6 +165,30 @@ final class CalendarEntitlementTests: XCTestCase {
                 && script.contains(#"$CLI_GRANTED" == *"com.apple.security.personal-information.calendars"*"#),
             "package-app.sh never reads the calendar entitlement back off the signed daemon, so a "
                 + "signature that quietly dropped it would ship exactly as before"
+        )
+    }
+
+    /// **And the same read-back on the binary that decides.**
+    ///
+    /// Signing the app bundle re-signs its main executable, so entitlements
+    /// passed to an earlier `codesign` call on that same binary are discarded
+    /// without a word — measured while building the probe for this very defect,
+    /// where signing the bundle after the executable silently emptied the
+    /// entitlements. Both the bundle and `Contents/MacOS/Mynah` are checked,
+    /// because they are two signatures and only reading them back proves it.
+    func testPackagingVerifiesTheMainExecutableCarriesTheCalendarKey() throws {
+        let script = try text("scripts/package-app.sh")
+        XCTAssertTrue(
+            script.contains("CAL_GRANTED=")
+                && script.contains(#"$CAL_GRANTED" == *"com.apple.security.personal-information.calendars"*"#),
+            "package-app.sh never reads the calendar entitlement back off the app bundle's main "
+                + "executable. That is the binary TCC evaluates, so a build that dropped it would "
+                + "ship a permanently frozen calendar mirror and pass every other check here."
+        )
+        XCTAssertTrue(
+            script.contains(#"for target in "$APP" "$APP/Contents/MacOS/$APP_PRODUCT""#),
+            "the calendar read-back does not cover both the bundle and its main executable, which "
+                + "are two separate signatures"
         )
     }
 

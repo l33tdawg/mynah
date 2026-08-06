@@ -31,16 +31,49 @@
   process cannot appear in System Settings -> Privacy & Security -> Calendars at
   all, so there is nothing for the owner to switch on. The dead end had no door.
 
-  ## Measured, not reasoned
+  ## Measured, not reasoned — and then measured again, because the first
+  ## conclusion was wrong
 
-  Nine variants under launchd and in the GUI on 6 August 2026, macOS 26
-  (Darwin 25.3.0). Changing the embedded Info.plist, the CFBundleIdentifier, the
-  codesign identifier flag, and whether the binary sat inside a signed .app changed
-  NOTHING: every one returned granted=false with the status stuck at
-  notDetermined. Adding this single key, with everything else held constant,
-  returned granted=true and fullAccess — including for a helper launched by
-  launchd, under a bundle identifier that had never been granted anything. A
-  background daemon can raise the prompt; it just could not ask without this.
+  Nine variants were run under launchd and in the GUI on 6 August 2026, macOS 26
+  (Darwin 25.3.0), and this file shipped in 1.7.6 carrying their verdict: that
+  the embedded Info.plist, the CFBundleIdentifier and the codesign identifier all
+  changed nothing, and that adding this one key to the daemon was the whole fix.
+
+  **That verdict was wrong, and 1.7.7 proved it in production.** With this key
+  present on a Developer ID, hardened-runtime `sage-voiced`, on a Mac whose TCC
+  record had been reset, bridge.log still read:
+
+      2026-08-06 09:47:06 [calendar] macOS refused calendar access without
+      asking, and left the status at "not determined".
+
+  The flaw in the nine variants was that every *granting* one put the entitlement
+  on the executable TCC actually evaluates, and no variant isolated the case this
+  bundle is in. Four fresh variants on 6 August 2026, each a Developer ID,
+  hardened-runtime LaunchAgent under a bundle identifier that had never been
+  asked, differing only in which binary carried the key:
+
+      main executable   nested helper   result
+      entitled          (is main)       prompt shown -> granted=true, fullAccess
+      NOT entitled      entitled        NO PROMPT, granted=false, notDetermined
+      entitled          entitled        prompt shown
+      entitled          NOT entitled    prompt shown
+
+  Row two is Mynah 1.7.7 exactly, and it reproduces the owner's symptom on the
+  first try. **TCC evaluates the entitlement on the enclosing app bundle's main
+  executable — Contents/MacOS/Mynah — not on the nested helper that makes the
+  request.** A key on the daemon alone could never have worked, and rows three
+  and four say the main executable's key is the load-bearing one.
+
+  So the fix is in SageVoiceBridge.entitlements, not here. This key is kept
+  because row three is what ships and is the configuration actually measured, and
+  because dropping it would leave the daemon depending on an attribution rule
+  Apple has never documented and could tighten. But do not mistake it for the
+  thing that makes the mirror work.
+
+  The general rule, which is the part worth carrying to the next TCC feature:
+  **a probe only proves something if one of its variants is the shape you
+  actually ship.** Nine variants that all differ from production in the same way
+  agree with each other and say nothing.
 
   That is also why the mirror appeared to work: `sage-voiced calendar` run by
   hand from Terminal inherits Terminal's calendar grant, and that is what wrote
@@ -51,15 +84,10 @@
 
   NSCalendarsFullAccessUsageDescription in resources/Info.plist. macOS reads it
   from the bundle this executable lives in, which is why the daemon must stay
-  inside Mynah.app rather than being installed beside it.
-
-  ## When the window gains a calendar surface
-
-  Task #23 may put a switch and an undo in the app. The app is a different
-  process with its own signature, so it needs the same key adding to
-  SageVoiceBridge.entitlements at that point — it will not inherit this one.
-  Both processes resolve to the same bundle identifier, so they share one grant
-  and the owner sees a single "Mynah" row in System Settings.
+  inside Mynah.app rather than being installed beside it. Measured on the same
+  day: a helper whose name does NOT match CFBundleExecutable still resolves
+  Bundle.main to the enclosing .app and still reads that string, so the name
+  mismatch between `sage-voiced` and `Mynah` is not a problem and never was.
 -->
 <dict>
   <!-- Required. Without it the hardened runtime refuses EventKit before macOS

@@ -102,9 +102,9 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      1975   (1.7.6, live-node tests on; was 1954 at 1.7.5)
-#   without Kokoro  1937   (1975 - 38)
-#   floor           1963   (12 under measured, 26 above the failure it must catch)
+#   measured      2011   (1.7.8, live-node tests on; was 1975 at 1.7.6)
+#   without Kokoro  1973   (2011 - 38)
+#   floor           1999   (12 under measured, 26 above the failure it must catch)
 #
 # **1.7.5 raised it by 26 and that is the whole point of the rule.** The floor
 # was 1916, which is exactly the without-Kokoro number for this suite — so the
@@ -122,7 +122,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1963}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-1999}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

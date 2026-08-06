@@ -629,12 +629,19 @@ fi
 [[ ! -f "$APP/Contents/Resources/typst/bin/typst" ]] \
   || sign "$APP/Contents/Resources/typst/bin/typst"
 # The daemon, and it is the process that writes the owner's calendar. Signed
-# with its own entitlements rather than none: without
-# com.apple.security.personal-information.calendars the hardened runtime refuses
-# EventKit before macOS asks the owner anything, `granted` comes back false with
-# the status still `notDetermined`, and nothing in the appliance can tell that
-# apart from "not asked yet" — so it asks again on the next tick, for ever. 177
-# consecutive declined ticks on the owner's Mac before this line existed.
+# with its own entitlements rather than none, so that the binary calling EventKit
+# carries the key it is asking about.
+#
+# **This is not what makes the mirror work, and believing it was cost three
+# releases.** Measured 6 August 2026 (table in resources/SageVoiced.entitlements):
+# TCC evaluates com.apple.security.personal-information.calendars on the enclosing
+# bundle's MAIN executable, not on the nested helper making the request. 1.7.6
+# added the key here and only here; 1.7.7 shipped it; the owner's log went on
+# reading "macOS refused calendar access without asking" every sixteen minutes.
+# The key that actually decides is on $APP_PRODUCT, from $ENTITLEMENTS.
+#
+# Kept here anyway because that is the configuration measured as working, and
+# because the attribution rule above is undocumented and could tighten.
 sign "$APP/Contents/MacOS/$CLI_PRODUCT" --entitlements "$CLI_ENTITLEMENTS"
 
 # 3. The main executable. Entitlements attach here and to the bundle below;
@@ -655,18 +662,38 @@ GRANTED="$(capture codesign --display --entitlements :- "$APP")"
 [[ "$GRANTED" == *"com.apple.security.device.audio-input"* ]] \
   || die "The signed bundle has no microphone entitlement. Check $ENTITLEMENTS."
 
-# The same check for the daemon, and it needs its own because the entitlement is
-# on a different binary with a different file. The failure it catches is not a
-# crash: an unentitled sage-voiced runs perfectly, answers Signal, holds calls,
-# and silently never writes a calendar event again. It shipped that way for
-# every release up to 1.7.5 and the only visible symptom was a log line nobody
-# reads. A build is the last place this can still be caught by a machine.
+# The calendar entitlement on the MAIN executable, which is the one TCC reads.
+#
+# Checked on the bundle and on Contents/MacOS/$APP_PRODUCT separately, because
+# they are two signatures and 1.7.7 shipped with this key on neither while the
+# daemon carried it happily — which is precisely the combination that fails.
+# Measured 6 August 2026: TCC evaluates this entitlement on the enclosing app
+# bundle's main executable, NOT on the nested helper that calls EventKit. So
+# $CLI_PRODUCT having it, checked below, proves nothing on its own.
+#
+# The failure is silent in the same way as the daemon's: no crash, no dialog,
+# no error, the authorization status simply never leaves 'notDetermined' and the
+# mirror never writes again. It went unnoticed from 4 August to 6 August across
+# three releases, one of which was cut specifically to fix it.
+for target in "$APP" "$APP/Contents/MacOS/$APP_PRODUCT"; do
+  CAL_GRANTED="$(capture codesign --display --entitlements :- "$target")"
+  [[ "$CAL_GRANTED" == *"com.apple.security.personal-information.calendars"* ]] \
+    || die "$(basename "$target") has no calendar entitlement, so the calendar mirror
+cannot work in the shipped build — not from the window and not from the daemon.
+TCC reads this key off the app bundle's main executable, so putting it only on
+$CLI_PRODUCT is not enough; that is the exact shape 1.7.7 shipped and it left
+the owner's mirror frozen with 'notDetermined' forever. Check $ENTITLEMENTS."
+done
+
+# The same check for the daemon. It is the weaker of the two — the loop above is
+# the one that catches a broken mirror — but it is kept so that the shipped
+# bundle stays in the configuration that was actually measured, rather than
+# drifting onto an undocumented TCC attribution rule by accident.
 CLI_GRANTED="$(capture codesign --display --entitlements :- "$APP/Contents/MacOS/$CLI_PRODUCT")"
 [[ "$CLI_GRANTED" == *"com.apple.security.personal-information.calendars"* ]] \
-  || die "$CLI_PRODUCT has no calendar entitlement, so the calendar mirror cannot
-work in the shipped build. Under the hardened runtime EventKit is refused
-without it — no dialog, no error, and the authorization status stays
-'notDetermined' for ever. Check $CLI_ENTITLEMENTS."
+  || die "$CLI_PRODUCT has no calendar entitlement. This is not on its own the
+thing that breaks the mirror — TCC reads the key off $APP_PRODUCT, checked above
+— but it puts the build into a shape nobody has measured. Check $CLI_ENTITLEMENTS."
 
 # Notarization rejects any executable in the bundle without the hardened
 # runtime, and it rejects it *after* the upload, minutes later. Catch it here.

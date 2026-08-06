@@ -29,14 +29,24 @@
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- Required for the calendar switch and the undo button in Settings.
+  <!-- Required for the calendar, and it is the key the whole feature rests on —
+       including the daemon's mirror, which does not run in this process.
 
-       The daemon has carried this since 1.7.6 (resources/SageVoiced.entitlements
-       has the measurements). The window is a separate signature and does not
-       inherit it: under the hardened runtime, EventKit is refused before macOS
-       shows anybody a prompt, granted comes back false, and the status stays at
-       "not determined" forever. Without this key the undo button could only ever
-       report that it had nothing to remove.
+       **This is the one that matters, and 1.7.6 put it in the wrong file.** That
+       release gave com.apple.security.personal-information.calendars to
+       Contents/MacOS/sage-voiced and stopped there, on a measurement that had
+       never tested a nested helper inside an unentitled bundle. Measured properly
+       on 6 August 2026 (the table in resources/SageVoiced.entitlements): TCC
+       evaluates this entitlement on the enclosing app bundle's MAIN executable —
+       this binary — not on the helper making the request. With the key on the
+       daemon alone, EventKit is refused with no prompt, granted=false, and the
+       status stuck at "not determined" forever. 1.7.7 shipped exactly that and
+       the owner's mirror stayed frozen.
+
+       So this key is what lets the *daemon* write the calendar, not just what
+       lets the undo button in Settings find something to remove. Removing it
+       because "the window barely touches the calendar" would silently break the
+       mirror again, with no crash and no error — only a log line nobody reads.
 
        Both processes resolve to the same CFBundleIdentifier, local.sage.voicebridge,
        so they share one grant and the owner sees a single "Mynah" row in
