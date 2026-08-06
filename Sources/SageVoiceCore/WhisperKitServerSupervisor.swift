@@ -28,6 +28,7 @@ public final class WhisperKitServerSupervisor: @unchecked Sendable {
     private let stateLock = NSLock()
     private var process: Process?
     private var logSink: FileHandle?
+    private var adoptedExistingServer = false
 
     public init(
         executableURL: URL,
@@ -55,11 +56,60 @@ public final class WhisperKitServerSupervisor: @unchecked Sendable {
         URL(string: "http://\(host):\(port)")!
     }
 
+    /// True when the server answering on this port is one somebody else started.
+    ///
+    /// **Measured on the owner's Mac, 6 August 2026, and it explains why he
+    /// cannot reproduce the tester's complaint.** Port 50060 was owned by
+    /// `/Applications/QuietType.app/Contents/MacOS/argmax-cli`, so
+    /// `ensureRunning` found it healthy and returned before starting anything.
+    /// Mynah has been transcribing through another app's process, and nothing
+    /// anywhere said so.
+    ///
+    /// Two consequences worth separating. The benign one: on that Mac there is
+    /// no second 626 MB model resident, which is exactly why "it's made my
+    /// laptop very laggy" reproduces on the tester's machine and not on his. The
+    /// other one is a defect — the endpoint belongs to a process this appliance
+    /// did not start and cannot restart, so when QuietType quits, transcription
+    /// fails until the daemon is restarted.
+    public var isUsingSomebodyElsesServer: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return adoptedExistingServer
+    }
+
+    /// Everything `startIfNeeded` needs on disk, checked without launching.
+    ///
+    /// The boot check that replaces starting the server at boot. The failure the
+    /// eager start was there to surface — a bundle shipped with no ASR helper,
+    /// which once crash-looped the daemon under launchd — is a missing file, and
+    /// a missing file can be seen without loading 626 MB of weights.
+    public func verifyInstallation() throws {
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw WhisperKitServerSupervisorError.missingExecutable(executableURL.path)
+        }
+        guard let modelPath else {
+            throw WhisperKitServerSupervisorError.incompleteModel("No complete local WhisperKit model was found.")
+        }
+        guard WhisperKitModelLocator.isCompleteModel(at: modelPath) else {
+            throw WhisperKitServerSupervisorError.incompleteModel(modelPath.path)
+        }
+    }
+
     public func ensureRunning(stopOnTimeout: Bool = true) async throws {
         if await isServerHealthy() {
+            // Ours if we started it, somebody else's if we did not. Recorded
+            // rather than shrugged at: which of the two it is decides whether
+            // this Mac carries a second copy of the model, and it is the whole
+            // difference between the machine the lag was reported on and the
+            // machine it could not be reproduced on.
+            //
+            // In a sync helper because `NSLock` may not be taken across an
+            // await — unavailable from an async context in Swift 6.
+            recordWhoseServerAnswered()
             return
         }
 
+        recordThatItIsOurs()
         try startIfNeeded()
         let deadline = Date().addingTimeInterval(startupTimeoutSeconds)
         while Date() < deadline {
@@ -103,6 +153,18 @@ public final class WhisperKitServerSupervisor: @unchecked Sendable {
         try? activeLogSink?.close()
     }
 
+    private func recordWhoseServerAnswered() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if process?.isRunning != true { adoptedExistingServer = true }
+    }
+
+    private func recordThatItIsOurs() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        adoptedExistingServer = false
+    }
+
     private func startIfNeeded() throws {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -111,14 +173,9 @@ public final class WhisperKitServerSupervisor: @unchecked Sendable {
             return
         }
 
-        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
-            throw WhisperKitServerSupervisorError.missingExecutable(executableURL.path)
-        }
+        try verifyInstallation()
         guard let modelPath else {
             throw WhisperKitServerSupervisorError.incompleteModel("No complete local WhisperKit model was found.")
-        }
-        if !WhisperKitModelLocator.isCompleteModel(at: modelPath) {
-            throw WhisperKitServerSupervisorError.incompleteModel(modelPath.path)
         }
 
         let process = Process()

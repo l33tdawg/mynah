@@ -132,7 +132,13 @@ public actor LocalASRRuntime {
 
     public init() {}
 
-    public func prepare(language: String = "en") async throws -> CascadingAudioFileTranscriber {
+    /// - Parameter log: where the per-transcription timing goes. Defaulted to
+    ///   nothing so the app and the CLI probes stay quiet; the daemon passes its
+    ///   own, because the daemon is the process somebody complained about.
+    public func prepare(
+        language: String = "en",
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> CascadingAudioFileTranscriber {
         var backends: [AudioFileTranscribing] = []
         var startupFailures: [String] = []
 
@@ -145,12 +151,34 @@ public actor LocalASRRuntime {
                 nativeSupervisor = supervisor
             }
             do {
-                try await supervisor.ensureRunning()
-                backends.append(WhisperKitServerTranscriber(
-                    endpoint: supervisor.baseURL.appendingPathComponent("v1/audio/transcriptions"),
-                    model: "large-v3-v20240930_626MB",
-                    language: language,
-                    timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+                // **Checked, not started.** This called `ensureRunning()` here,
+                // at daemon boot, and the comment at the call site defended it:
+                // "better to know now than when the first voice note arrives".
+                //
+                // That argument is about *diagnosis*, and it is right — a bundle
+                // shipped with no ASR helper once crash-looped the daemon under
+                // launchd. But what it was diagnosing is a missing file, and a
+                // missing file can be seen without loading a 626 MB model.
+                //
+                // What the eager start actually bought was a whisper-large-v3
+                // server resident for the life of the daemon on every Mac,
+                // holding both encoder and decoder on `cpuAndGPU`, whether or
+                // not anybody ever sent a voice note. That is the leading
+                // candidate for "it's made my laptop very laggy", and it is
+                // invisible on this owner's Mac because QuietType already owns
+                // the port — see `isUsingSomebodyElsesServer`.
+                //
+                // So: the file check at boot, the process on first speech.
+                try supervisor.verifyInstallation()
+                backends.append(ManagedWhisperKitTranscriber(
+                    supervisor: supervisor,
+                    inner: WhisperKitServerTranscriber(
+                        endpoint: supervisor.baseURL.appendingPathComponent("v1/audio/transcriptions"),
+                        model: "large-v3-v20240930_626MB",
+                        language: language,
+                        timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
+                    ),
+                    log: log
                 ))
             } catch {
                 startupFailures.append("WhisperKit: \(error)")
@@ -169,6 +197,63 @@ public actor LocalASRRuntime {
             throw AudioTranscriberError.allBackendsFailed(startupFailures)
         }
         return CascadingAudioFileTranscriber(backends)
+    }
+}
+
+/// Starts the ASR server the first time somebody actually speaks, and checks it
+/// is still there before every transcription after that.
+///
+/// ## Two failures, one wrapper
+///
+/// **The server was started once, at daemon boot, and never checked again.** The
+/// endpoint was baked into a `WhisperKitServerTranscriber` at that moment, so
+/// nothing downstream could tell a healthy server from a departed one — every
+/// voice note simply failed until somebody restarted the daemon. That is not
+/// hypothetical on the owner's Mac: the process answering on port 50060 belongs
+/// to **QuietType**, not to Mynah, and Mynah adopted it without noticing. When
+/// QuietType quits, so does Mynah's ability to hear.
+///
+/// **And starting at boot is what made the appliance heavy.** A 626 MB
+/// whisper-large-v3 model, encoder and decoder both on `cpuAndGPU`, resident for
+/// the life of the daemon on every Mac — including the ones where nobody ever
+/// sends a voice note. Asking here instead means a Mac that is never spoken to
+/// never loads it.
+///
+/// ## The timing line
+///
+/// #34 asked for per-request ASR timing and there was none, which is why "ASR
+/// exceeded the model on three of twelve turns" could be observed and not
+/// explained. Emitted per transcription rather than aggregated, because the
+/// interesting cases are individual: 5.8 s to transcribe half a second of speech
+/// is not visible in a mean.
+struct ManagedWhisperKitTranscriber: AudioFileTranscribing {
+    let supervisor: WhisperKitServerSupervisor
+    let inner: WhisperKitServerTranscriber
+    let log: @Sendable (String) -> Void
+
+    func transcribe(audioFile: URL, options: AudioTranscriptionOptions) async throws -> String {
+        let waitingForServer = Date()
+        try await supervisor.ensureRunning()
+        let startupSeconds = Date().timeIntervalSince(waitingForServer)
+
+        let started = Date()
+        let text = try await inner.transcribe(audioFile: audioFile, options: options)
+        let seconds = Date().timeIntervalSince(started)
+
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: audioFile.path)[.size] as? Int) ?? nil
+        // Whose server did the work is on every line, not just the first. It is
+        // the difference between a Mac carrying its own copy of the model and
+        // one borrowing somebody else's, and that difference is the whole of why
+        // the lag report could not be reproduced here.
+        log(String(
+            format: "[asr] transcribed %@ in %.1fs%@ — %@ server%@",
+            bytes.map { "\($0 / 1024)kB" } ?? "audio",
+            seconds,
+            startupSeconds > 0.5 ? String(format: ", after %.1fs starting it", startupSeconds) : "",
+            supervisor.isUsingSomebodyElsesServer ? "somebody else's" : "our own",
+            text.isEmpty ? " — and it heard nothing" : ""
+        ))
+        return text
     }
 }
 

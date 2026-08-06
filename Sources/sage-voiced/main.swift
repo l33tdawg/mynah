@@ -986,11 +986,20 @@ func runDaemon(_ arguments: [String]) -> Never {
 
         // Not fatal, and this took the appliance down to learn it.
         //
-        // Preparing speech recognition eagerly is right — better to know now
-        // than when the first voice note arrives. Refusing to *start* over it is
-        // not: the deployed bundle has never carried an ASR helper, so the
-        // daemon crash-looped under launchd and every text message went
-        // unanswered because it could not transcribe audio nobody had sent.
+        // **Checked at boot, started on first speech**, which is a change from
+        // what this comment used to say. It read "preparing speech recognition
+        // eagerly is right — better to know now than when the first voice note
+        // arrives", and the diagnosis half of that still holds. What it missed
+        // is that the thing being diagnosed is a *missing file*, and checking
+        // for a missing file does not require loading a 626 MB model and holding
+        // it on `cpuAndGPU` for the life of the daemon on a Mac that may never
+        // receive a voice note at all. `verifyInstallation()` gets the same
+        // answer for none of the cost. See `ManagedWhisperKitTranscriber`.
+        //
+        // Refusing to *start* over it is still wrong: the deployed bundle has
+        // never carried an ASR helper, so the daemon crash-looped under launchd
+        // and every text message went unanswered because it could not transcribe
+        // audio nobody had sent.
         //
         // Text and voice are separate capabilities. Losing one must not cost the
         // other, and `handle` already replies "I couldn't read that voice note"
@@ -1005,7 +1014,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                     timeoutSeconds: WhisperKitServerTranscriber.minimumFullAudioTimeoutSeconds
                 )
             } else {
-                transcriber = try await LocalASRRuntime.shared.prepare()
+                transcriber = try await LocalASRRuntime.shared.prepare(log: { note($0) })
             }
         } catch {
             // Two stamped lines rather than one block: a multi-line write puts
