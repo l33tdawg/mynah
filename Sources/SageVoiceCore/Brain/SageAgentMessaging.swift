@@ -151,14 +151,49 @@ public struct SageAgentMessaging: AgentMessaging {
             throw Self.trouble(from: "\(error)", name: "your agents")
         }
 
-        guard let root = Self.object(in: reply),
-              let items = root["items"] as? [[String: Any]] else {
-            // An empty inbox and an unparseable one are the same to a screen
-            // that has nothing to show. A thrown error here would put a red
-            // banner on a page whose honest state is "nothing yet".
-            return []
+        guard let root = Self.object(in: reply), Self.isAnInbox(root) else {
+            throw AgentMessagingTrouble.unreadableInbox(Self.condensed(reply))
         }
-        return items.compactMap(Self.item(from:))
+        return (root["items"] as? [[String: Any]] ?? []).compactMap(Self.item(from:))
+    }
+
+    /// Whether the node's reply is an inbox at all — the question the old
+    /// `return []` never asked.
+    ///
+    /// **This used to coalesce, and the justification outlived its reason by
+    /// eight days.** The branch returned `[]` for anything it could not read,
+    /// defended by: *"An empty inbox and an unparseable one are the same to a
+    /// screen that has nothing to show. A thrown error here would put a red
+    /// banner on a page whose honest state is 'nothing yet'."* That was written
+    /// on 29 July, when the Agents panel existed and was the only consumer. The
+    /// panel was deleted on 30 July in `dc4e4f1`; the sentence stayed, and by
+    /// 1.8.4 the only readers were `ProactiveWatch` and the `check` diagnostic —
+    /// neither of which is a page and both of which need the distinction.
+    ///
+    /// What it cost: `ProactiveWatch` guards every ledger mutation behind `if
+    /// let messages`, beneath a comment insisting a failed check "must not
+    /// *forget* anything either". An unreadable reply arrived as a successful
+    /// empty list, so the guard passed and `forgetMessagesNotIn(Set([]))` erased
+    /// the record of every message already announced — and the next healthy
+    /// check announced the whole inbox again. Exactly the shape of the backlog
+    /// read that emptied the owner's calendar on 6 August; see
+    /// `SageProactiveSource.openTasks`.
+    ///
+    /// **`items` is the signal, and the counters are the safety net.** A live
+    /// 11.17.10 reply carries `items` alongside `count`, `message_count` and
+    /// `task_assignment_count`. The counters are accepted on their own because
+    /// the *empty* reply has not been observed — reaching it would have meant
+    /// draining the owner's real inbox — so if the node expresses "nothing
+    /// waiting" by dropping the array rather than sending `items: []`, that
+    /// still reads as an empty inbox and not as a fault. Mistaking empty for
+    /// broken is the opposite error and would silently stop the watch.
+    static func isAnInbox(_ root: [String: Any]) -> Bool {
+        if root["items"] is [Any] { return true }
+        // Present but not a list is a shape change, not an empty inbox.
+        if root["items"] != nil { return false }
+        return root["count"] != nil
+            || root["message_count"] != nil
+            || root["task_assignment_count"] != nil
     }
 
     // MARK: Shapes

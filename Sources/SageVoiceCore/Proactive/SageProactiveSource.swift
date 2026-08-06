@@ -22,8 +22,21 @@ public struct SageProactiveSource: ProactiveSource {
         case unreadableBacklog(String)
     }
 
+    /// The inbox, with the same nil-versus-empty rule as `openTasks`.
+    ///
+    /// Only the unreadable case is logged here. A node that is simply down
+    /// already says so through `MCPClient`, and repeating it would put two lines
+    /// in the owner's log for one event — but a node that *answers* with
+    /// something else leaves no trace anywhere else, which is precisely how the
+    /// backlog version of this went unexplained for a day.
     public func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
-        try await SageAgentMessaging(tools: tools).inbox(limit: limit)
+        do {
+            return try await SageAgentMessaging(tools: tools).inbox(limit: limit)
+        } catch AgentMessagingTrouble.unreadableInbox(let reply) {
+            log("[watch] sage_inbox answered with something that is not an inbox, so this "
+                + "check changed nothing: \(Self.head(of: reply))")
+            throw AgentMessagingTrouble.unreadableInbox(reply)
+        }
     }
 
     /// **Throws rather than manufacturing an empty backlog, and that is the

@@ -209,10 +209,94 @@ final class AgentMessagingTests: XCTestCase {
 
     // MARK: - Reading
 
-    func testAnUnreadableInboxIsEmptyRatherThanAnError() async throws {
-        let tools = ScriptedTools(replies: ["sage_inbox": "not json at all"])
+    /// **This test used to assert the opposite, and it was right to, once.**
+    ///
+    /// It read `XCTAssertTrue(items.isEmpty, "a page whose honest state is
+    /// 'nothing yet' got a red banner")` — faithful to a contract written on 29
+    /// July, when the Agents panel was the only consumer. The panel was deleted
+    /// the next day. The assertion outlived it and held the coalescing in place.
+    func testAnUnreadableInboxIsAFailureAndNotAnEmptyOne() async {
+        for reply in [
+            "not json at all",
+            "",
+            #"{"error":"pipeline inbox: Active agent required"}"#,
+            "You have no messages.",
+            #"{"items":"soon"}"#
+        ] {
+            let tools = ScriptedTools(replies: ["sage_inbox": reply])
+            do {
+                let items = try await SageAgentMessaging(tools: tools).inbox()
+                XCTFail("“\(reply)” came back as \(items.count) item(s) instead of throwing")
+            } catch {
+                // The point. Anything, as long as it is not a successful empty.
+            }
+        }
+    }
+
+    /// And an inbox with nothing in it is still an inbox. Reading *that* as a
+    /// fault would stop the watch announcing anything ever again — the opposite
+    /// failure, silent, and worse.
+    func testAGenuinelyEmptyInboxIsStillEmpty() async throws {
+        for reply in [
+            #"{"items":[]}"#,
+            // The live 11.17.10 envelope, minus the array — the shape this
+            // cannot observe without draining the owner's real inbox.
+            #"{"count":0,"message_count":0,"task_assignment_count":0}"#
+        ] {
+            let tools = ScriptedTools(replies: ["sage_inbox": reply])
+            let items = try await SageAgentMessaging(tools: tools).inbox()
+            XCTAssertTrue(items.isEmpty, reply)
+        }
+    }
+
+    /// A reply captured verbatim from the owner's live 11.17.10 node on 7 August
+    /// 2026, so a shape change breaks a test rather than a Sunday.
+    ///
+    /// **It reads as an inbox with nothing announceable in it, and that is two
+    /// separate facts.** The envelope is recognised — this must not throw, or
+    /// every check against a node holding only task assignments would count as a
+    /// failed look. The item is then dropped by `item(from:)`, which requires
+    /// `message_id`/`pipe_id`/`id`, and a `task_assignment` notice carries
+    /// neither: it has `notification_id` and `task_id`.
+    ///
+    /// Dropping it is the right outcome and is reached by accident. These
+    /// notices are one-way, `requires_result: false`, and the node's own
+    /// guidance is to "verify in sage_backlog before work begins" — which
+    /// `openTasks` already does, so the owner hears about an assigned task as a
+    /// task. Announcing it a second time as *"somebody sent you a message"*
+    /// would be the 1.7.5 mistake again. Nothing in this codebase says any of
+    /// that; the notice simply falls through a `compactMap` for want of an id.
+    /// Written down here because behaviour nobody chose is behaviour nobody
+    /// maintains.
+    func testALiveReplyOfOnlyTaskAssignmentsIsAnEmptyInboxAndNotAFailure() async throws {
+        let tools = ScriptedTools(replies: ["sage_inbox": #"""
+            {"count":1,"items":[{"assignment_version":1,"authority":"notification_only",
+            "created_at":"2026-08-06T10:10:07.341Z","domain":"voice-interface",
+            "kind":"task_assignment","message":"Open sage_backlog to review this assigned task.",
+            "notification_id":"task-assignment:903843c7-16b3-4455-8e0e-23001a552773:1",
+            "requires_result":false,"task_id":"903843c7-16b3-4455-8e0e-23001a552773",
+            "title":"A task was assigned to you","trust":"untrusted_metadata"}],
+            "message":"You have 1 inbox item(s).","message_count":0,"task_assignment_count":1}
+            """#])
+
         let items = try await SageAgentMessaging(tools: tools).inbox()
-        XCTAssertTrue(items.isEmpty, "a page whose honest state is 'nothing yet' got a red banner")
+        XCTAssertTrue(items.isEmpty, "a task assignment is not a message to announce")
+    }
+
+    /// And a real message in the same envelope does come through, or the test
+    /// above would pass just as well against a parser that reads nothing.
+    func testAMessageInTheLiveEnvelopeIsRead() async throws {
+        let tools = ScriptedTools(replies: ["sage_inbox": #"""
+            {"count":1,"items":[{"message_id":"m-1","from":"Cerebrum",
+            "payload":"The roof quote came back at 4,200.","trust":"agent_untrusted",
+            "created_at":"2026-08-06T10:10:07.341Z","requires_reply":true}],
+            "message":"You have 1 inbox item(s).","message_count":1,"task_assignment_count":0}
+            """#])
+
+        let items = try await SageAgentMessaging(tools: tools).inbox()
+        XCTAssertEqual(items.map(\.id), ["m-1"])
+        XCTAssertEqual(items.first?.content.sender, "Cerebrum")
+        XCTAssertTrue(items.first?.expectsAResult == true)
     }
 
     /// The node caps at 20. Asking for more should not make the two disagree.

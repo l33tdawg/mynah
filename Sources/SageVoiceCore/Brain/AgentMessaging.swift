@@ -142,6 +142,12 @@ public enum AgentMessagingTrouble: LocalizedError, Equatable {
     case refused(String)
     /// No node answered at all.
     case nodeUnavailable
+    /// The node answered, and the answer was not an inbox.
+    ///
+    /// **A distinct case because "nothing is waiting" and "I could not look" are
+    /// opposite facts**, and the read used to hand both of them back as an empty
+    /// list. See `SageAgentMessaging.inbox`.
+    case unreadableInbox(String)
 
     public var errorDescription: String? {
         switch self {
@@ -157,6 +163,9 @@ public enum AgentMessagingTrouble: LocalizedError, Equatable {
             return Self.ownerSentence(forRefusal: detail)
         case .nodeUnavailable:
             return "Mynah can't reach your SAGE node, so it can't send anything to your agents."
+        case .unreadableInbox:
+            return "Your SAGE node answered, but Mynah couldn't read the reply, so it can't say "
+                + "what's waiting for you."
         }
     }
 
@@ -191,6 +200,8 @@ public enum AgentMessagingTrouble: LocalizedError, Equatable {
             return detail
         case .unreachable(_, let why):
             return why
+        case .unreadableInbox(let reply):
+            return reply
         case .noSuchAgent, .ambiguousName, .nodeUnavailable:
             return nil
         }
