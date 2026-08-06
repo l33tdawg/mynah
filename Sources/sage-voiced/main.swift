@@ -410,6 +410,64 @@ func makeToolSource(
     return (CompositeToolSource(sources: sources, log: { note($0) }), notes)
 }
 
+/// **The call's own catalogue: no notes source at all, and a queue instead.**
+///
+/// The owner's ruling is that a call never sends a file or emits a document
+/// while the line is open. Leaving the notes source in and merely filtering the
+/// names out of the allowlist would be the weaker half of that:
+/// `CompositeToolSource` builds its name→provider table from what each source
+/// publishes, so a model that produced `send_file` anyway would still route to
+/// it, put the owner's file into the daemon's shared `outgoing` buffer, and have
+/// it arrive stapled to some unrelated later reply. Not registering the source
+/// is what makes the name genuinely unreachable — it comes back as
+/// `Failure.unknownTool`.
+///
+/// Shares the same `MCPClient` and the same decorator stack as the daemon's, so
+/// there is no second node process and no second journal.
+///
+/// `makeToolSource`'s signature is untouched, so the one-shot `runBrain` path is
+/// unaffected.
+func makeCallToolSource(
+    mcp: MCPClient,
+    allowWeb: Bool,
+    queue: CallActionQueue
+) -> ToolProviding {
+    var sources: [CompositeToolSource.Source] = [
+        .init(
+            label: "SAGE MCP",
+            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
+            isRequired: true,
+            expectedToolNames: BrainPrompts.callToolAllowlist
+                .subtracting([WebSearchToolSource.toolName])
+                .subtracting([AfterTheCallToolSource.toolName])
+        ),
+        // Required for the same reason the notes source is on the daemon: it is
+        // in-process and has nothing to be down, so a failure to publish it
+        // means something is wrong with the appliance rather than with the
+        // network, and degrading quietly would hide it.
+        .init(
+            label: "after the call",
+            provider: AfterTheCallToolSource(queue: queue, log: { note($0) }),
+            isRequired: true,
+            expectedToolNames: [AfterTheCallToolSource.toolName]
+        )
+    ]
+    if allowWeb {
+        sources.append(
+            .init(
+                label: "web search",
+                provider: WebSearchToolSource(
+                    backends: WebSearchToolSource.defaultBackends(),
+                    log: { note($0) }
+                ),
+                isRequired: false,
+                expectedToolNames: [WebSearchToolSource.toolName]
+            )
+        )
+    }
+    return CompositeToolSource(sources: sources, log: { note($0) })
+}
+
 func runBrain(_ arguments: [String]) -> Never {
     guard let transcript = arguments.first, !transcript.hasPrefix("--") else { usage() }
     let flags = parseFlags(Array(arguments.dropFirst()))
@@ -1104,11 +1162,31 @@ func runDaemon(_ arguments: [String]) -> Never {
         // most of why the call surface never got one.
         let ownTaskEdits = OwnTaskEdits()
 
+        // **The call gets its own catalogue, its own allowlist and its own
+        // prompt.** All three, because any one of them alone leaves a way
+        // through: the catalogue is what makes `send_file` unroutable, the
+        // allowlist is what stops it being offered, and the prompt is what stops
+        // the model being told in the imperative to use a tool it no longer has.
+        let afterTheCall = CallActionQueue()
+        let callTools = makeCallToolSource(
+            mcp: mcp,
+            allowWeb: !arguments.contains("--no-web"),
+            queue: afterTheCall
+        )
+        // `.forStyle` then mutate, never a bare `Configuration(...)` — a literal
+        // there is how the window twice got the written prompt on a spoken token
+        // ceiling. `allowedToolNames` is a `var` for exactly this.
+        var callConfiguration = loopConfiguration(for: .spoken)
+        callConfiguration.allowedToolNames = BrainPrompts.callToolAllowlist
         let callLoop = ToolLoop(
             backend: backend,
-            mcp: tools,
-            configuration: loopConfiguration(for: .spoken)
+            mcp: callTools,
+            configuration: callConfiguration
         )
+        // `basePrompt`, not `systemPrompt` — the getter appends the
+        // where-you-are block, and feeding that back in duplicates it. Both
+        // surfaces got this wrong once already.
+        callLoop.setSystemPrompt(BrainPrompts.onACall(base: callLoop.basePrompt))
         let callHistory = CallHistory()
         let callServer = CallTurnServer(
             configuration: CallTurnServer.Configuration(
@@ -1274,6 +1352,51 @@ func runDaemon(_ arguments: [String]) -> Never {
         // Signal path as everything else and the daemon owns it.
         await callServer.onTranscript { [weak daemon] transcript in
             await daemon?.postCallTranscript(transcript)
+        }
+
+        // **What the call promised, done once the line is down.**
+        //
+        // Wired here, after the daemon, for the same reason `onTranscript` is:
+        // the thing that can reach Signal is built after the call server.
+        //
+        // The owner's own thread is resolved now rather than at drain time, so
+        // that work recovered at startup — before any call has been placed in
+        // this process — still has somewhere to be reported.
+        let ownerThread: SignalRecipient? = (flags["account"] ?? allowlist.identities.compactMap {
+            if case .phoneNumber(let number) = $0 { return number }
+            return nil
+        }.sorted().first).map { SignalRecipient.account($0) }
+
+        let afterTheCallDrain = AfterTheCallDrain(
+            queue: afterTheCall,
+            notesDirectory: notes.notesDirectory,
+            tools: callTools,
+            deliver: { [weak daemon] text, files in
+                await daemon?.postAfterTheCall(text, attaching: files, to: ownerThread) ?? .failed
+            },
+            runInstruction: { [weak daemon] text in
+                await daemon?.doAfterTheCall(text, to: ownerThread) ?? .failed
+            },
+            log: { note($0) }
+        )
+        await callServer.onAfterTheCall(afterTheCall) { mine, abandoned in
+            // **Detached, and that is load-bearing.** The turn that queued this
+            // was cancelled at hang-up by design, and `callTask.cancel()` tears
+            // down the call server on shutdown. A drain in either tree would be
+            // killed by the very events that make the work outstanding.
+            Task.detached {
+                await afterTheCallDrain.drain(mine: mine, abandoned: abandoned)
+            }
+        }
+
+        // Anything the appliance died holding. Reported, never performed —
+        // replaying a queue after a crash can deliver a message the owner has
+        // since changed their mind about, but going quiet about it is how a
+        // written promise ends up with nothing that will ever mention it again.
+        //
+        // Detached so a Signal path that is not up yet cannot hold up startup.
+        Task.detached {
+            await afterTheCallDrain.recoverAtStartup()
         }
 
         // And the other direction, so a call opens on the conversation the

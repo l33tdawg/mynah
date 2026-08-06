@@ -273,7 +273,17 @@ public struct ToolLoopTrace: Sendable, Equatable {
         "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
         "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
         "sage_scope_get", "sage_scope_list", "sage_federation", "sage_gov_status",
-        "web_search", "list_notes", "read_note"
+        "web_search", "list_notes", "read_note",
+        // **Queueing is not acting, and that is the whole point of it being
+        // here.** This list is inverted deliberately — anything unlisted counts
+        // as having changed something, which is what lets a claim of completed
+        // action through unchallenged. `after_the_call` writes a record and
+        // performs nothing: no file has moved, no message has gone, nothing the
+        // owner can observe has changed yet. Treating it as an action would let
+        // the unbacked-claim machinery accept "I've sent the file" on the
+        // strength of a queue write, which is precisely the lie the queue was
+        // built to end.
+        AfterTheCallToolSource.toolName
     ]
 
     /// Whether anything this turn actually changed something.
@@ -338,7 +348,11 @@ public struct ToolLoopTrace: Sendable, Equatable {
     static let sendingTools: Set<String> = [
         "sage_pipe", "sage_pipe_result", "sage_message_send", "sage_message_reply",
         "sage_task", "sage_remember", "sage_forget",
-        "sage_reflect", "sage_turn", "write_note"
+        "sage_reflect", "sage_turn", "write_note",
+        // Not because it sends — it does not — but because "it said it queued
+        // something and nothing ever drained" has to be answerable from the log
+        // alone. This is the only record that the request was ever made.
+        AfterTheCallToolSource.toolName
     ]
 
     /// What each acting call actually returned, short enough for one line.

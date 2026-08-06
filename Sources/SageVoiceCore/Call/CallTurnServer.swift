@@ -194,6 +194,21 @@ public actor CallTurnServer {
     /// Watches for a call nobody is on any more.
     private var idleWatch: Task<Void, Never>?
 
+    /// **Which call this is**, minted per connection.
+    ///
+    /// Not decoration and not a log line: it is what tells a turn abandoned by
+    /// `withDeadline` that it belongs to a call which has already ended. Without
+    /// an identity per call, a queue entry arriving from an orphan is
+    /// indistinguishable from one the current caller just asked for.
+    private var callID: String?
+
+    /// Where "do this after we hang up" is recorded. Nil until wired, which is
+    /// what keeps every existing test constructing this server unchanged.
+    private var afterTheCallQueue: CallActionQueue?
+
+    /// Started once the line is down, with this call's claimed work.
+    private var startTheDrain: (@Sendable ([CallActionQueue.Entry], [CallActionQueue.Entry]) -> Void)?
+
     public init(
         configuration: Configuration,
         transcriber: any AudioFileTranscribing,
@@ -222,6 +237,21 @@ public actor CallTurnServer {
     /// Where finished transcripts are posted.
     public func onTranscript(_ deliver: @escaping @Sendable (String) async -> Void) {
         deliverTranscript = deliver
+    }
+
+    /// Where after-the-call work is recorded, and what runs it once the line is
+    /// down. Set after construction, like `onTranscript` and for the same
+    /// reason: the thing that can reach Signal is built after this is.
+    ///
+    /// `drain` must start a **detached** task. A drain that inherited this
+    /// actor's task tree would be cancelled by the very shutdown that makes the
+    /// work outstanding.
+    public func onAfterTheCall(
+        _ queue: CallActionQueue,
+        drain: @escaping @Sendable ([CallActionQueue.Entry], [CallActionQueue.Entry]) -> Void
+    ) {
+        afterTheCallQueue = queue
+        startTheDrain = drain
     }
 
     /// Housekeeping to run once a turn has actually been spoken.
@@ -615,6 +645,13 @@ public actor CallTurnServer {
             // again. The defer is where `retire()` already lives for the same
             // reason.
             endTheCurrentTurn()
+            // The daemon-shutdown exit leaves through here and nowhere else —
+            // `while !Task.isCancelled` falls out without reaching either catch
+            // arm, so nothing is claimed and nothing is posted. Closing the call
+            // means the entries keep their now-dead call id, and the next
+            // startup finds them and tells the owner rather than performing
+            // them.
+            afterTheCallQueue?.closeCall()
             live.retire()
             close(connection)
         }
@@ -622,6 +659,9 @@ public actor CallTurnServer {
         let writer = CallFrameWriter(live)
         log("[call] a call connected")
         transcript = CallTranscript()
+        let thisCall = UUID().uuidString
+        callID = thisCall
+        afterTheCallQueue?.beginCall(thisCall)
         lastHeard = Date()
         startIdleWatch(over: writer)
 
@@ -656,6 +696,7 @@ public actor CallTurnServer {
                 endTheCurrentTurn()
                 idleWatch?.cancel()
                 lastCallEnded = Date()
+                queueTheAfterCallWork()
                 rememberThisCall()
                 await postTranscript()
                 return
@@ -672,6 +713,7 @@ public actor CallTurnServer {
                 endTheCurrentTurn()
                 idleWatch?.cancel()
                 lastCallEnded = Date()
+                queueTheAfterCallWork()
                 rememberThisCall()
                 await postTranscript()
                 return
@@ -1030,13 +1072,29 @@ public actor CallTurnServer {
             // isolation. It captures the closure and the caller's sentence and
             // nothing else, which is what lets it be abandoned safely.
             let think = answer
-            let fullReply: String
+            // **Stamped with the call and turn this work belongs to, before the
+            // model is asked anything.**
+            //
+            // `withDeadline` runs `think` in an unstructured task and walks away
+            // from it on overrun, and `MCPClient` reads the node's pipe with no
+            // deadline at all — so that orphan can come back minutes later, on a
+            // call the caller was told had failed, and still dispatch its tool
+            // calls. A task-local is the one mechanism with the right
+            // inheritance: an unstructured `Task {}` carries it, so the orphan
+            // still knows which call it was, while `Task.detached` does not,
+            // which is what stops the drain from ever queueing anything.
+            let generation = callID.map {
+                CallActionQueue.Generation(call: $0, turn: turnNumber)
+            }
+            var fullReply: String
             do {
-                fullReply = try await withDeadline(
-                    configuration.turnCeilingSeconds,
-                    label: "call turn"
-                ) {
-                    try await think(heard)
+                fullReply = try await CallActionQueue.$current.withValue(generation) {
+                    try await withDeadline(
+                        configuration.turnCeilingSeconds,
+                        label: "call turn"
+                    ) {
+                        try await think(heard)
+                    }
                 }
             } catch let overrun as DeadlineExceeded {
                 // Spoken, not thrown. `turnFailed` ends the turn at the endpoint
@@ -1063,6 +1121,31 @@ public actor CallTurnServer {
             // widening the cover silently delayed it. Both, not either.
             // `Task.cancel()` is idempotent.
             waiting.cancel()
+
+            // **The caller is told out loud, whether or not the model remembers
+            // to say it.**
+            //
+            // The tool result instructs the model to promise it, and mostly it
+            // will. But there are six early returns below the model call and a
+            // barge-in right after a tool call is the ordinary way a second
+            // request arrives — so "mostly" here means a caller who asked for
+            // something, was told nothing, and gets a file an hour later with no
+            // idea why.
+            //
+            // Counted per turn rather than from a running total: a shared
+            // counter would report an abandoned turn's queueing against
+            // whichever turn happens to be running, which is precisely backwards
+            // and is the defect `FillerTally` was made a per-turn box for.
+            if let generation,
+               let queue = afterTheCallQueue,
+               queue.queued(inTurn: generation) > 0,
+               // `tookTooLong` exists to hand the work to Signal — "send it to
+               // me there and I'll give it the time it needs". Promising to
+               // handle it after the call in the same breath tells the caller to
+               // do both, and if they comply it happens twice.
+               fullReply != CallTurnServer.tookTooLong {
+                fullReply = AfterTheCall.promising(fullReply)
+            }
 
             thought = Date()
             guard !Task.isCancelled else { outcome = "barged in on while thinking"; return }
@@ -1317,6 +1400,30 @@ public actor CallTurnServer {
     private func endCall(over writer: CallFrameWriter) async {
         log("[call] no one has spoken for \(Int(CallTurnServer.hangUpAfter))s; ending the call")
         try? await send(.endCall, over: writer)
+    }
+
+    /// **Takes ownership of what this call asked for, and starts the work.**
+    ///
+    /// Synchronous, deliberately. The accept loop awaits `handle(connection:)`
+    /// to completion behind a listen backlog of one, so a suspension here would
+    /// hold the next call off for as long as the drain takes — and a drain that
+    /// sends files can take minutes. This does one claim and one file write; the
+    /// work itself is a detached task started inside `startTheDrain`.
+    ///
+    /// Placed before `rememberThisCall()` so what was promised rides into
+    /// `LastCall` and the next call opens knowing about it, and before
+    /// `postTranscript()` because that resets the transcript before it awaits
+    /// delivery — anything appended after it is never posted.
+    private func queueTheAfterCallWork() {
+        guard let queue = afterTheCallQueue, let id = callID else { return }
+        callID = nil
+        let taken = queue.claim(forCall: id)
+        guard !taken.mine.isEmpty || !taken.abandoned.isEmpty else { return }
+        if !taken.mine.isEmpty {
+            transcript.queued(taken.mine.map(\.spokenLine))
+            log("[call] \(taken.mine.count) action(s) queued for after the call")
+        }
+        startTheDrain?(taken.mine, taken.abandoned)
     }
 
     /// Keeps what this call was about, for the next one to open with.

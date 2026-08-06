@@ -61,7 +61,8 @@ public struct SageAgentMessaging: AgentMessaging {
     public func send(
         _ message: String,
         to recipient: AgentAddress,
-        intent: String?
+        intent: String?,
+        retrying resumed: String?
     ) async throws -> SentAgentMessage {
         // **One key per logical send, written down before the request.**
         //
@@ -71,7 +72,13 @@ public struct SageAgentMessaging: AgentMessaging {
         // never derived from the message text — a content-derived key would make
         // two deliberate sends of the same sentence collide, and the second
         // would report success while nothing arrived. See `AgentSendJournal`.
-        let key = AgentSendJournal.newKey()
+        //
+        // **Unless the caller already has one.** A queued after-the-call message
+        // mints its key at enqueue and persists it, so every drain of that entry
+        // presents the same key and "this exact send" stays true across a
+        // restart. Minting a fresh one here would make a re-drain a second
+        // message, which is the one thing the key exists to prevent.
+        let key = resumed ?? AgentSendJournal.newKey()
         journal.starting(key: key, to: recipient.wire, message: message)
 
         var arguments: [String: JSONValue] = [

@@ -216,14 +216,40 @@ public protocol AgentMessaging: Sendable {
     /// Resolves what the owner typed to an exact recipient.
     func findAgent(named name: String) async throws -> AgentAddress
     /// Sends work. `intent` is a hint like `research` or `review`.
-    func send(_ message: String, to recipient: AgentAddress, intent: String?) async throws -> SentAgentMessage
+    ///
+    /// **`retrying` is the requirement, and the plain send is the convenience.**
+    /// It would read better the other way round, with a defaulted parameter on
+    /// an extension — but a default that quietly mints a fresh key turns a
+    /// conformer's omission into a duplicate message the owner cannot unsend.
+    /// Making the key-carrying form the thing a type must implement means the
+    /// compiler asks the question instead.
+    ///
+    /// Pass a key only when re-attempting a send that was already recorded
+    /// somewhere durable — `CallActionQueue` mints one at enqueue and presents
+    /// the same one on every drain, so a drain interrupted after the node
+    /// accepted the message returns the original `message_id` instead of
+    /// sending twice. Pass nil for an ordinary send, which is one logical send
+    /// and wants its own fresh key.
+    func send(
+        _ message: String,
+        to recipient: AgentAddress,
+        intent: String?,
+        retrying key: String?
+    ) async throws -> SentAgentMessage
     /// What is waiting. Called when the owner looks, never on a timer.
     func inbox(limit: Int) async throws -> [AgentInboxItem]
 }
 
 public extension AgentMessaging {
     func send(_ message: String, to recipient: AgentAddress) async throws -> SentAgentMessage {
-        try await send(message, to: recipient, intent: nil)
+        try await send(message, to: recipient, intent: nil, retrying: nil)
+    }
+    func send(
+        _ message: String,
+        to recipient: AgentAddress,
+        intent: String?
+    ) async throws -> SentAgentMessage {
+        try await send(message, to: recipient, intent: intent, retrying: nil)
     }
     func inbox() async throws -> [AgentInboxItem] { try await inbox(limit: 20) }
 }

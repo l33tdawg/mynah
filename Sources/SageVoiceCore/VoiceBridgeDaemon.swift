@@ -1442,6 +1442,137 @@ public actor VoiceBridgeDaemon {
         await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
     }
 
+    /// **Delivers one after-the-call result, and says honestly whether the files
+    /// went with it.**
+    ///
+    /// Deliberately not `postCallTranscript`, which cannot carry attachments and
+    /// whose `Void` return would let a drain delete a queue entry on a send that
+    /// never happened.
+    ///
+    /// Also deliberately not routed through `deliverTranscript`: `postTranscript`
+    /// returns early when the owner has switched call transcripts off, and an
+    /// owner who does not want a transcript must still be told what their
+    /// appliance did on their behalf. The *list* of what was queued is a
+    /// transcript line and obeys that switch; the *receipts* are not, and do not.
+    /// Two promises, kept separately.
+    ///
+    /// `.unprompted` because a queued result is not the answer to a turn in
+    /// flight — the caller hung up before this existed.
+    /// `to` is the fallback for a drain that runs before any call has been
+    /// placed in this process — the startup recovery, which reports work the
+    /// appliance died holding. `lastCallRecipient` is in-memory and is nil then,
+    /// and "the owner cannot be told because we restarted" is precisely the
+    /// silence that recovery exists to break.
+    @discardableResult
+    public func postAfterTheCall(
+        _ text: String,
+        attaching files: [URL] = [],
+        to fallback: SignalRecipient? = nil
+    ) async -> AfterTheCallDelivery {
+        guard let recipient = lastCallRecipient ?? fallback else { return .failed }
+        recordFromCall(text, for: recipient.description)
+
+        let sent = await reply(
+            text,
+            to: recipient,
+            attaching: files,
+            // Kept on one line, because `WorkingLineGateTests` reads the
+            // statement a line at a time: an unprompted line that lost its
+            // `allowSpeaking: false` would otherwise come out of the speaker
+            // over whatever the owner is doing, and the guard that catches that
+            // cannot see across a line break.
+            allowSpeaking: false, as: .unprompted,
+            attachmentsAreThePoint: !files.isEmpty
+        )
+        if sent { return .sent }
+        guard !files.isEmpty else { return .failed }
+
+        // The attachment was refused. Say so in words rather than sending the
+        // sentence that referred to it and calling that a success — the owner
+        // would be reading "here's the budget deck" with nothing attached. The
+        // file is still on the Mac, so the sentence names the door.
+        let withoutIt = await reply(
+            text + "\n\n(The file wouldn't go through Signal. It's still here on the Mac — "
+                + "ask me for it again and I'll try once more.)",
+            to: recipient,
+            allowSpeaking: false, as: .unprompted
+        )
+        return withoutIt ? .sentWithoutTheFiles : .failed
+    }
+
+    /// Runs one queued "do this afterwards" through the ordinary brain, so it
+    /// gets the turn ceiling, the history and the document handoff that any
+    /// Signal message already gets.
+    public func doAfterTheCall(
+        _ instruction: String,
+        to fallback: SignalRecipient? = nil
+    ) async -> AfterTheCallDelivery {
+        guard let recipient = lastCallRecipient ?? fallback else { return .failed }
+        let key = recipient.description
+
+        // Anything left in the shared buffer belongs to an earlier turn. Clear
+        // it first so this instruction's own output cannot be confused with it.
+        _ = notes?.drainOutgoingFiles()
+
+        let priorTurns = histories[key] ?? []
+        let catalogue: [MCPTool]
+        do {
+            catalogue = try await toolCatalogue()
+        } catch {
+            log("[daemon] a queued after-the-call instruction could not reach its tools: \(error)")
+            return .failed
+        }
+
+        let result: ToolLoopResult
+        do {
+            let turn = try await withDeadline(configuration.turnCeilingSeconds, label: "after the call") {
+                try await self.loop.run(
+                    transcript: instruction,
+                    tools: catalogue,
+                    history: priorTurns,
+                    images: [],
+                    onToolDecision: nil,
+                    onProgress: nil
+                )
+            }
+            // **A queued instruction can write to the task list, and the watch
+            // has to be told it was us.**
+            //
+            // Beside the turn rather than further down, which is both clearer
+            // and what `OwnTaskEditsTests` can actually verify: it follows the
+            // binding nearest the `.run(` call, so a result assigned into a
+            // variable declared earlier reads to it as a discarded turn.
+            //
+            // Without this, "add a task to chase the invoice" asked for on a
+            // call comes back over Signal a quarter of an hour later as news, as
+            // though a stranger had written it — the exact thing `OwnTaskEdits`
+            // exists to stop, arriving through a surface that did not exist when
+            // it was written.
+            if OwnTaskEdits.wroteToTheTaskList(turn.trace) {
+                await onTaskWrites?()
+            }
+            result = turn
+        } catch {
+            log("[daemon] a queued after-the-call instruction failed: \(error)")
+            return .failed
+        }
+
+        histories[key] = Self.history(
+            histories[key] ?? [],
+            after: result.messages,
+            startingFrom: priorTurns,
+            keepingLastTurns: configuration.historyTurnLimit
+        )
+        persistConversations()
+        log("[daemon] \(result.trace.summary)")
+
+        return await postAfterTheCall(
+            result.reply,
+            attaching: notes?.drainOutgoingFiles() ?? [],
+            to: fallback
+        )
+    }
+
     /// Files a call's written record in the thread it belongs to.
     private func recordFromCall(_ text: String, for key: String) {
         histories[key] = Self.history(
@@ -1527,7 +1658,8 @@ public actor VoiceBridgeDaemon {
         attaching attachments: [URL] = [],
         allowSpeaking: Bool = true,
         as utterance: Utterance = .answer,
-        promising question: String? = nil
+        promising question: String? = nil,
+        attachmentsAreThePoint: Bool = false
     ) async -> Bool {
         if case .answer = utterance {
             workingLines.answered()
@@ -1588,6 +1720,23 @@ public actor VoiceBridgeDaemon {
                 // Nowhere left to report to — the reply channel is what failed.
                 log("[daemon] could not send reply to "
                     + "\(SignalSenderAllowlist.redact(recipient.description)): \(error)")
+                return false
+            }
+            // **When the file IS the message, a text-only retry is a failure
+            // wearing a success.**
+            //
+            // The fallback below is right for an answer: the words matter more
+            // than the attachment, and silence would be worse. It is wrong for a
+            // queued "send me the budget deck", where the whole content of the
+            // promise is the file. Returning true there would let the caller
+            // delete its queue entry believing the promise was kept, and the
+            // owner would get a message referring to a file with no file — the
+            // exact silent broken promise the after-the-call queue exists to
+            // end. So the caller says which kind of send this is, and owns the
+            // decision about what to do instead.
+            guard !attachmentsAreThePoint else {
+                log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); "
+                    + "not retrying as text because the files were the point")
                 return false
             }
             log("[daemon] send with \(attachments.count) attachment(s) failed (\(error)); retrying as text")

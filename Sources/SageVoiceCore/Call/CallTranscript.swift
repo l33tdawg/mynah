@@ -40,6 +40,28 @@ public struct CallTranscript: Sendable {
         append(Line(speaker: .appliance, text: text))
     }
 
+    /// **What the call promised to do afterwards, so the owner can see it.**
+    ///
+    /// Appended at hang-up, before the transcript is posted, so the list rides
+    /// the same message rather than arriving as a second one nobody asked for.
+    ///
+    /// Bounded on both axes. This is the last line of the transcript, and
+    /// `LastCall.from` walks backwards from the end against a 700-character
+    /// budget — an unbounded line here would eat the entire closing summary the
+    /// next call opens with. The bound is belt and braces now that `from` no
+    /// longer breaks empty, and it is still right: nobody reads a nine-item
+    /// bulleted promise in a chat thread.
+    public mutating func queued(_ items: [String], most: Int = 5, characters: Int = 240) {
+        guard !items.isEmpty else { return }
+        var shown = items.prefix(most).map { item -> String in
+            item.count > characters ? String(item.prefix(characters)) + "…" : item
+        }
+        if items.count > most {
+            shown.append("and \(items.count - most) more")
+        }
+        append(Line(speaker: .appliance, text: "After this call I'll: " + shown.joined(separator: "; ")))
+    }
+
     private mutating func append(_ line: Line) {
         let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -141,7 +163,19 @@ public struct LastCall: Sendable, Codable, Equatable {
         for line in transcript.lines.reversed() {
             let speaker = line.speaker == .owner ? "They said" : "I said"
             let piece = "\(speaker): \(line.text)\n"
-            if closing.count + piece.count > characters { break }
+            guard closing.count + piece.count <= characters else {
+                // **Never come away with nothing.**
+                //
+                // This walks backwards from the end and used to stop dead at the
+                // first piece that overflowed — so a single final line longer
+                // than the whole budget broke on iteration one, left `closing`
+                // empty, and saved that over a real record. The next call would
+                // then open having forgotten everything, in exactly the case
+                // with the most to remember. Truncating the most recent line is
+                // worse than keeping it whole and better than keeping nothing.
+                if closing.isEmpty { closing = String(piece.prefix(characters)) }
+                break
+            }
             closing = piece + closing
         }
         return LastCall(ended: Date(), closing: closing.trimmingCharacters(in: .whitespacesAndNewlines))

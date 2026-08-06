@@ -456,4 +456,64 @@ public enum BrainPrompts {
         // published it — leaving this out was a silent no-op for web search.
         WebSearchToolSource.toolName
     ]).union(NotesToolSource.toolNames)
+
+    /// **What a call may reach, which is not what a Signal message may reach.**
+    ///
+    /// The owner's ruling, 5 August 2026: "calls cannot send files bro - calls
+    /// are for actionable things that happen AFTER the call ... but sending
+    /// files should be done at the end".
+    ///
+    /// **This subtraction is new, and the note it replaces was wrong.** The
+    /// design ruling was written down as "the call catalogue must keep
+    /// subtracting `NotesToolSource.toolNames`", which read as a description of
+    /// existing behaviour. It was not: the call builds its loop from
+    /// `Configuration.forStyle(.spoken)`, whose `allowedToolNames` defaults to
+    /// `voiceToolAllowlist` — and that unions the notes tools in, four lines
+    /// above. The only `.subtracting(NotesToolSource.toolNames)` in the tree is
+    /// an `expectedToolNames` health check declaring what the *SAGE* source
+    /// should publish, which has nothing to do with what a model may call. So
+    /// `send_file` was live on every call from the day calls shipped.
+    ///
+    /// The global set is deliberately untouched. Catalogue size is the dominant
+    /// term in routing accuracy on a small model — 27 tools scored 5-6/12 where
+    /// 14 scored 12/12 — and `BrainTierTests` ratchets against
+    /// `BrainCapabilities.onDevice.maxRoutableTools`. Subtracting four and
+    /// adding one leaves a call strictly smaller than a message, never larger.
+    public static let callToolAllowlist: Set<String> = voiceToolAllowlist
+        .subtracting(NotesToolSource.toolNames)
+        .union([AfterTheCallToolSource.toolName])
+
+    /// **Layered on top of the shared body, never replacing it.**
+    ///
+    /// The body instructs, in the imperative, to use `list_notes` then
+    /// `send_file`, and `read_note` then `sage_message_send` — tools a call no
+    /// longer has. A prompt that names a tool the model cannot call is exactly
+    /// the defect `PromptNamesOnlyRealToolsTests` exists to catch, and it would
+    /// otherwise sit here unnoticed because that test only ever looked at the
+    /// daemon's surface.
+    ///
+    /// The `NOT ON A CALL:` line is machine-readable on purpose. It is what lets
+    /// a test assert that every retracted name is retracted, rather than a
+    /// human noticing that a sentence went stale.
+    public static func onACall(base: String) -> String {
+        """
+        \(base)
+
+        YOU ARE ON A PHONE CALL. Nothing you do here leaves the Mac until the \
+        call ends. You cannot send a file, write a document, or message another \
+        agent while the line is open — the tools for those are not available to \
+        you right now, and saying you have done any of them would be a lie the \
+        owner will discover later.
+
+        When they ask for something like that, call \
+        \(AfterTheCallToolSource.toolName) to queue it: kind send_file to send \
+        them a saved file, message_agent to message another agent, do for a \
+        piece of work, forget to cancel what you queued if they change their \
+        mind. Then tell them in one short line that you will do it after you \
+        hang up, and carry on talking. The results arrive in their Signal \
+        thread once the call is over.
+
+        NOT ON A CALL: \(NotesToolSource.toolNames.sorted().joined(separator: ", "))
+        """
+    }
 }
