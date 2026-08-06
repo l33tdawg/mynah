@@ -164,6 +164,17 @@ enum MynahButtonKind: Sendable {
     /// "Not now", "Later", "Skip", "Learn more". Every one of these must lead
     /// somewhere observable — a dead escape hatch is worse than none.
     case quiet
+    /// A small utility action that sits in a header rather than in a row of
+    /// commitments: "Clear the conversation".
+    ///
+    /// Shaped as a capsule so it reads as a control at a glance. A `.quiet`
+    /// button is bare text, which is right beside a primary — the pairing tells
+    /// you it is a button — and wrong alone in a header, where nothing nearby
+    /// says it can be clicked and the owner has only the wording to go on.
+    ///
+    /// Set a step down in type, because it is a tool for tidying the screen and
+    /// not a thing the page is asking anybody to do.
+    case pill
 }
 
 struct MynahButtonStyle: ButtonStyle {
@@ -187,13 +198,13 @@ struct MynahButtonStyle: ButtonStyle {
 
         var body: some View {
             label
-                .contentShape(RoundedRectangle.mynah(r.control))
+                .contentShape(outline)
                 // Full Keyboard Access draws its ring on the *focus effect*
                 // shape, which defaults to the view's bounds rectangle — square
                 // corners over a 10pt continuous button. Stating it costs one
                 // line and is the difference between a finished control and one
                 // that only looks finished with a mouse.
-                .contentShape(.focusEffect, RoundedRectangle.mynah(r.control))
+                .contentShape(.focusEffect, outline)
                 .scaleEffect(pressScale)
                 .opacity(pressOpacity)
                 .mynahAnimation(Motion.hair, value: configuration.isPressed)
@@ -288,7 +299,39 @@ struct MynahButtonStyle: ButtonStyle {
                     .foregroundStyle(quietInk)
                     .padding(.horizontal, s3)
                     .padding(.vertical, 6)
+
+            case .pill:
+                configuration.label
+                    .mynahFont(.label)
+                    // The same ink ladder as `.quiet` — this is the same weight
+                    // of action, wearing a shape so it can be found.
+                    .foregroundStyle(quietInk)
+                    .padding(.horizontal, s4)
+                    .padding(.vertical, 5)
+                    .background(
+                        configuration.isPressed
+                            ? Palette.ink.primary.opacity(0.05)
+                            : Palette.surface.raised,
+                        in: Capsule()
+                    )
+                    // `mynahBorder` draws a rounded rectangle, which would cut
+                    // the corners off a capsule. Stated explicitly rather than
+                    // approximated with a large radius.
+                    .overlay(
+                        Capsule().strokeBorder(
+                            isHovering && isEnabled ? Palette.line.strong : Palette.line.hairline
+                        )
+                    )
             }
+        }
+
+        /// The shape the control is hit-tested and focus-ringed against.
+        ///
+        /// Kind-aware because a capsule hit-tested as a rounded rectangle
+        /// accepts clicks in the corners it does not occupy, and Full Keyboard
+        /// Access would draw a rectangle's ring around a pill.
+        private var outline: AnyShape {
+            kind == .pill ? AnyShape(Capsule()) : AnyShape(RoundedRectangle.mynah(r.control))
         }
 
         /// A disabled quiet button used to render identically to a working one —

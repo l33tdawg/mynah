@@ -342,30 +342,36 @@ struct TalkView: View {
     /// a window would deserve it. This one cannot: it empties its own record and
     /// never writes to the messages.
     ///
-    /// The sentence is dropped, not truncated, when the window is too narrow for
-    /// it. Half a promise is worse than none, and the hint below keeps it for
-    /// VoiceOver either way.
+    /// **The standing sentence is gone.** It read "Clearing here changes nothing
+    /// on your phone.", and the owner: *"remove the changes here nothing on your
+    /// phone - makes no sense"*.
+    ///
+    /// He is right about the cost of it. It answered a question nobody had asked
+    /// yet — it sat in the header permanently, before anyone had reached for the
+    /// control — so its actual job was to explain a fear it had just introduced.
+    /// A header that pre-emptively promises not to break something teaches the
+    /// reader that it might.
+    ///
+    /// **The reassurance itself is not lost.** It is on the button, where it is
+    /// read at the moment somebody considers pressing it, and VoiceOver reads it
+    /// aloud there. That is the only moment it was ever useful.
+    ///
+    /// The `ViewThatFits` went with it: with one control there is nothing to
+    /// drop when the window narrows.
     private var clearControl: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: s4) {
-                clearNote
-                clearButton
-            }
-            clearButton
-        }
-    }
-
-    private var clearNote: some View {
-        Text("Clearing here changes nothing on your phone.")
-            .mynahFont(.label)
-            .foregroundStyle(Palette.ink.secondary)
-            .lineLimit(1)
+        clearButton
     }
 
     /// Names the thing it clears. "This window" was ambiguous the moment the
     /// window held two things.
+    ///
+    /// A pill, not bare text: *"the clear converstion make it a pill button -
+    /// would look nicer"*. It is also the more honest shape here. A `.quiet`
+    /// button is text with no chrome, which works beside a primary — the pairing
+    /// says it is a button — and not alone in a header, where nothing nearby
+    /// says it can be clicked at all.
     private var clearButton: some View {
-        MynahButton("Clear the conversation", kind: .quiet) { clearWindow() }
+        MynahButton("Clear the conversation", kind: .pill) { clearWindow() }
             .accessibilityHint("Clears the conversation shown here. "
                 + "Your phone keeps it, and your tasks are untouched.")
     }
