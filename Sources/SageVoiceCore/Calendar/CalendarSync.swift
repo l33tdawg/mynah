@@ -74,6 +74,28 @@ public struct CalendarSync: Sendable {
             return Outcome(ledger: ledger, mirrored: Set(ledger.events.keys))
         }
 
+        // **Said out loud, because on 6 August it was not.**
+        //
+        // Eleven events were removed in one tick and the only line about it was
+        // "mirroring 0 dated task(s)" — true about the plan, silent about why.
+        // The cause was upstream and is fixed there: `SageProactiveSource` used
+        // to turn a reply it could not read into an empty backlog, so a node
+        // that answered something else looked exactly like an owner who had
+        // finished everything.
+        //
+        // This stays anyway, because the guard above it is a distinction that
+        // has to be maintained by every future caller, and the failure mode is
+        // silent deletion of the owner's calendar. Clearing the whole mirror in
+        // one tick is a real thing he can ask for — finish the last dated task
+        // and it is correct — but it is rare enough to be worth a line, and the
+        // line is what turns the next occurrence into five minutes of reading
+        // rather than an evening of inference.
+        if !plan.remove.isEmpty, plan.remove.count == ledger.events.count, plan.add.isEmpty {
+            log("[calendar] every mirrored event (\(plan.remove.count)) is about to be removed, "
+                + "because this look saw \(tasks.count) dated task(s). If that is not what the "
+                + "owner did, the backlog read is the thing to check, not the calendar.")
+        }
+
         // Asked only now, on the first tick that genuinely has something to
         // write. This is the moment the owner's task actually gained a date, and
         // it is the only honest time to ask — a prompt at launch, before the

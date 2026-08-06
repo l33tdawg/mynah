@@ -120,14 +120,14 @@ final class SageReplyCallersTests: XCTestCase {
         json + "\n\n[SAGE] Reminder: call sage_turn with the current topic + observation."
     }
 
-    func testTheBacklogReadsThroughAReminder() {
+    func testTheBacklogReadsThroughAReminder() throws {
         let reply = withReminder("""
         {"tasks_by_domain":{"mynah-home":[
           {"memory_id":"abc","content":"[TASK] Send the car in","task_status":"planned"}]},
          "total_open":1}
         """)
 
-        let tasks = SageProactiveSource.tasks(inBacklog: reply)
+        let tasks = try XCTUnwrap(SageProactiveSource.tasks(inBacklog: reply))
 
         XCTAssertEqual(tasks.count, 1)
         XCTAssertEqual(tasks.first?.title, "Send the car in")

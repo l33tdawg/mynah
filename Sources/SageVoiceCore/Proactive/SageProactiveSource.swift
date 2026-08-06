@@ -9,18 +9,77 @@ import Foundation
 public struct SageProactiveSource: ProactiveSource {
 
     private let tools: any ToolProviding
+    private let log: @Sendable (String) -> Void
 
-    public init(tools: any ToolProviding) {
+    public init(tools: any ToolProviding, log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.tools = tools
+        self.log = log
+    }
+
+    /// What went wrong, when the node answered but not with a backlog.
+    public enum Trouble: Error, Equatable {
+        /// The reply parsed as neither a backlog nor an empty one.
+        case unreadableBacklog(String)
     }
 
     public func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
         try await SageAgentMessaging(tools: tools).inbox(limit: limit)
     }
 
+    /// **Throws rather than manufacturing an empty backlog, and that is the
+    /// whole of this.**
+    ///
+    /// On 6 August 2026 the owner restarted his SAGE node, and eleven of his
+    /// calendar events were deleted and re-created thirty-two minutes later. He
+    /// read it right: *"seems like our app problem not a sage problem"*.
+    ///
+    /// `CalendarSync.run(tasks:)` takes an optional and its doc comment calls
+    /// the nil-versus-empty distinction "the whole safety property" — an
+    /// unreachable node changes nothing. `ProactiveWatch` feeds it `try? await
+    /// source.openTasks()`, which is correct for a *throw*. But `tasks(inBacklog:)`
+    /// used to turn any reply it could not read into `[]`, so a node answering
+    /// something other than a backlog produced a successful empty list, `try?`
+    /// saw no error, and the calendar was told every dated task had just been
+    /// completed. The safety property was built carefully at the bottom and
+    /// defeated one layer above it.
+    ///
+    /// Its old justification is quoted here because it was reasonable when it
+    /// was written: *"a backlog this cannot read is indistinguishable from an
+    /// empty one for the purpose of 'has anything changed'"*. True while the
+    /// only consumer was the digest, where the cost is one quiet tick. It
+    /// stopped being true when the calendar started reading the same value, and
+    /// nothing revisited the sentence — the same twin-consumer drift that put
+    /// `send_file` on a call and left `isPaused` replacing the composer.
+    ///
+    /// An empty `tasks_by_domain` is still an empty backlog and still returns
+    /// `[]`: the owner finishing everything is a real state and must not read as
+    /// a fault.
     public func openTasks() async throws -> [WatchedTask] {
         let reply = try await tools.call(name: "sage_backlog", arguments: [:])
-        return Self.tasks(inBacklog: reply)
+        guard let tasks = Self.tasks(inBacklog: reply) else {
+            // **The line that was missing on 6 August.** The calendar emptied
+            // itself and the log said only "mirroring 0 dated task(s)", which is
+            // a true statement about the plan and says nothing about why. The
+            // reply is what makes the next one diagnosable rather than guessed
+            // at, so a bounded head of it goes in the log verbatim.
+            log("[watch] sage_backlog answered with something that is not a backlog, so this "
+                + "check changed nothing: \(Self.head(of: reply))")
+            throw Trouble.unreadableBacklog(Self.head(of: reply))
+        }
+        return tasks
+    }
+
+    /// Enough of a reply to recognise it, and not enough to fill the log.
+    ///
+    /// Newlines flattened because this shares a log with lines that are read by
+    /// eye, and a JSON blob across forty lines buries whatever came next.
+    static func head(of reply: String, limit: Int = 300) -> String {
+        let flat = reply
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard flat.count > limit else { return flat }
+        return String(flat.prefix(limit)) + "…"
     }
 
     /// Reads `sage_backlog`'s answer.
@@ -30,18 +89,17 @@ public struct SageProactiveSource: ProactiveSource {
     /// — the owner does not think in domains, and a message that named them
     /// would be the appliance describing its own filing system.
     ///
-    /// Anything unparseable becomes an empty list rather than an error. A check
-    /// nobody asked for must not put a failure on the owner's phone, and a
-    /// backlog this cannot read is indistinguishable from an empty one for the
-    /// purpose of "has anything changed".
-    static func tasks(inBacklog reply: String) -> [WatchedTask] {
+    /// `nil` when the reply is not a backlog at all — see `openTasks`. An empty
+    /// list means the node was read and the owner has nothing dated, which is an
+    /// ordinary state and must stay distinguishable from a failure.
+    static func tasks(inBacklog reply: String) -> [WatchedTask]? {
         // Through `SageReply`, because the node appends prose after the JSON
         // every few calls and parsing the whole string fails on it. That is not
         // a hypothetical: it is why this returned nothing against a node
         // answering "You have 3 assigned open tasks".
         guard let root = SageReply.object(in: reply),
               let byDomain = root["tasks_by_domain"] as? [String: Any] else {
-            return []
+            return nil
         }
         var found: [WatchedTask] = []
         // Sorted, so two checks that saw the same backlog produce the same

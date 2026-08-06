@@ -486,7 +486,7 @@ final class ProactiveScheduleTests: XCTestCase {
 
 final class SageBacklogReadingTests: XCTestCase {
 
-    func testItReadsTheNodesOwnShape() {
+    func testItReadsTheNodesOwnShape() throws {
         let reply = """
         {"message":"You have 2 assigned open tasks across 2 domains.",
          "tasks_by_domain":{
@@ -497,7 +497,7 @@ final class SageBacklogReadingTests: XCTestCase {
          "total_open":2}
         """
 
-        let tasks = SageProactiveSource.tasks(inBacklog: reply)
+        let tasks = try XCTUnwrap(SageProactiveSource.tasks(inBacklog: reply))
 
         XCTAssertEqual(tasks.count, 2)
         XCTAssertEqual(tasks.first?.id, "298e")
@@ -515,16 +515,46 @@ final class SageBacklogReadingTests: XCTestCase {
         """
 
         XCTAssertEqual(
-            SageProactiveSource.tasks(inBacklog: reply).map(\.id),
+            SageProactiveSource.tasks(inBacklog: reply)?.map(\.id),
             ["1", "2"],
             "a message whose lines shuffle between checks reads as more having happened"
         )
     }
 
-    func testSomethingUnreadableIsAnEmptyBacklogRatherThanACrash() {
-        XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "Error: not authorised").count, 0)
-        XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "").count, 0)
-        XCTAssertEqual(SageProactiveSource.tasks(inBacklog: "{}").count, 0)
+    /// **This test used to assert the opposite, and the opposite deleted the
+    /// owner's calendar.**
+    ///
+    /// It read `testSomethingUnreadableIsAnEmptyBacklogRatherThanACrash` and
+    /// checked that an unreadable reply came back as zero tasks. That was a
+    /// reasonable contract when the only consumer was the proactive digest,
+    /// where an unreadable backlog costs one quiet tick.
+    ///
+    /// It stopped being reasonable when `CalendarSync` began reading the same
+    /// value. That type takes an optional and its doc comment calls the
+    /// nil-versus-empty distinction "the whole safety property" — and this
+    /// function was manufacturing the empty side of it out of failures. On 6
+    /// August 2026 the owner restarted his node, `sage_backlog` answered with
+    /// something that was not a backlog, and eleven calendar events were deleted
+    /// and re-created thirty-two minutes later.
+    ///
+    /// Not a crash either way. The choice is between "nothing is there" and "I
+    /// could not look", and only one of those is safe to act on.
+    func testSomethingUnreadableIsNotAnEmptyBacklog() {
+        XCTAssertNil(SageProactiveSource.tasks(inBacklog: "Error: not authorised"))
+        XCTAssertNil(SageProactiveSource.tasks(inBacklog: ""))
+        XCTAssertNil(SageProactiveSource.tasks(inBacklog: "{}"))
+        XCTAssertNil(
+            SageProactiveSource.tasks(inBacklog: #"{"error":"node is starting up"}"#),
+            "a node that answers while it is rebuilding must not read as a finished list"
+        )
+    }
+
+    /// **And a genuinely empty backlog is still empty.** The owner finishing
+    /// everything is a real state; reading it as a fault would leave stale
+    /// events in his calendar for ever, which is the opposite failure and just
+    /// as wrong.
+    func testAnEmptyBacklogIsStillAnEmptyBacklog() {
+        XCTAssertEqual(SageProactiveSource.tasks(inBacklog: #"{"tasks_by_domain":{}}"#), [])
     }
 }
 

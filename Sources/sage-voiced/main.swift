@@ -1436,7 +1436,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             guard let owner else { return }
 
             await runProactiveWatch(
-                source: SageProactiveSource(tools: mcp),
+                // Logged, because a backlog read that fails silently is what
+                // emptied the owner's calendar on 6 August and left nothing in
+                // the log to say why.
+                source: SageProactiveSource(tools: mcp, log: { note($0) }),
                 ownEdits: ownTaskEdits,
                 calendar: CalendarSync(
                     calendar: EventKitCalendar(log: { note($0) }),
