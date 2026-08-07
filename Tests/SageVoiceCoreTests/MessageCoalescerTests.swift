@@ -14,14 +14,34 @@ import XCTest
 /// chat thread is for.
 final class MessageCoalescerTests: XCTestCase {
 
-    private func message(_ text: String, from number: String = "+60123821767") -> SignalIncomingMessage {
-        SignalIncomingMessage(
+    /// Built through `SignalChannel.translate` rather than as a bare
+    /// `ChannelMessage`, so these tests keep exercising the seam the daemon
+    /// actually reads through. Constructing the destination type directly would
+    /// leave the translation itself untested by everything here.
+    ///
+    /// Force-unwrapped deliberately: `translate` returns nil only when there is
+    /// no reply address, and `destinationNumber` is set on every message below.
+    /// A nil here means the translation broke, and failing loudly at the line
+    /// that built the message says so better than a nil threading through six
+    /// assertions.
+    private func message(_ text: String, from number: String = "+60123821767") -> ChannelMessage {
+        SignalChannel.translate(SignalIncomingMessage(
             kind: .syncSent,
             sourceNumber: number,
             destinationNumber: number,
             timestamp: 0,
             text: text
-        )
+        ))!
+    }
+
+    private func whatsAppMessage(_ text: String, from number: String = "60123821767") -> ChannelMessage {
+        WhatsAppChannel.translate(WhatsAppIncomingMessage(
+            sequence: 1,
+            messageID: "wa-\(text.hashValue)",
+            chatID: "\(number)@s.whatsapp.net",
+            senderID: "\(number)@s.whatsapp.net",
+            body: text
+        ))
     }
 
     // MARK: Merging
@@ -66,6 +86,53 @@ final class MessageCoalescerTests: XCTestCase {
         )
         XCTAssertTrue(
             MessageCoalescer.belongsTogether(batch: batch, next: message("second"))
+        )
+    }
+
+    /// **The same person on two channels is two threads.**
+    ///
+    /// A WhatsApp message arriving while the owner is mid-sentence on Signal
+    /// must not be merged into that turn: the single answer would go back on
+    /// whichever channel came first, and he would watch one of the two
+    /// conversations go silent.
+    ///
+    /// **Asserted with the same address on both, deliberately.** In the wild the
+    /// two are `+60123821767` and `60123821767@s.whatsapp.net`, which differ as
+    /// strings — so a comparison that ignored the channel entirely would still
+    /// separate them, and a test built only from realistic values would pass
+    /// against the bug. That difference is an accident of how two other
+    /// companies write addresses, not something this code controls, and
+    /// `ChannelRecipient` claims the channel is what keeps them apart. This
+    /// makes the claim the thing being tested.
+    func testTheSamePersonOnTwoChannelsIsNotOneTurn() {
+        func addressed(_ kind: ChannelKind, _ address: String) -> ChannelMessage {
+            ChannelMessage(
+                kind: kind,
+                recipient: ChannelRecipient(kind: kind, address: address),
+                id: "\(kind)-\(address)"
+            )
+        }
+        XCTAssertFalse(
+            MessageCoalescer.belongsTogether(
+                batch: [addressed(.signal, "60123821767")],
+                next: addressed(.whatsapp, "60123821767")
+            ),
+            "one address on two channels was merged into a single turn"
+        )
+        XCTAssertTrue(
+            MessageCoalescer.belongsTogether(
+                batch: [addressed(.whatsapp, "60123821767")],
+                next: addressed(.whatsapp, "60123821767")
+            ),
+            "two messages in one WhatsApp thread stopped being one turn"
+        )
+        // And the shapes that actually arrive, so the realistic case is covered
+        // too rather than only the constructed one.
+        XCTAssertFalse(
+            MessageCoalescer.belongsTogether(
+                batch: [message("look up xyz", from: "+60123821767")],
+                next: whatsAppMessage("and abc", from: "60123821767")
+            )
         )
     }
 

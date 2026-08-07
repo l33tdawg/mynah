@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 
@@ -328,6 +328,138 @@ test('events acked below the mark do not reappear after a crash mid-compaction',
 
     const recovered = createEventSpool({ dir });
     assert.deepEqual(recovered.pending(), [], 'the ack mark filters them out');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- what a 43-agent audit of this branch found, and none of the above caught ---
+
+test('a spool whose mark cannot be read refuses to start rather than renumbering', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    spool.append(message('what time is the ferry'));
+    spool.ack(1);
+
+    // The steady state: the events file is gone, everything is in the mark. A
+    // mark that will not parse used to be read as 0, which restarts numbering at
+    // 1 — and the consumer has already seen 1. Both directions lose messages:
+    // its ack for the old 1 retires the new 1 unread, and its ledger holds the
+    // number open for the one it never gets.
+    writeFileSync(path.join(dir, 'ack'), 'not-a-number\n');
+
+    assert.throws(
+      () => createEventSpool({ dir }),
+      /acknowledgement mark|not a whole number/,
+      'a spool with an unreadable mark started anyway and restarted sequence numbering'
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the refusal names the one command that repairs it', () => {
+  const dir = scratch();
+  try {
+    createEventSpool({ dir }).append(message('one'));
+    writeFileSync(path.join(dir, 'ack'), '\n');
+    try {
+      createEventSpool({ dir });
+      assert.fail('expected a refusal');
+    } catch (error) {
+      // Every dead end names the next action.
+      assert.match(error.message, /mv /, `no repair offered: ${error.message}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an acknowledgement refused as out of range stays refused once the spool grows', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    spool.append(message('one'));
+
+    // A consumer holding a mark from a spool directory that was deleted and
+    // recreated. Refused — the bound added by the previous round.
+    assert.equal(spool.ack(4), 0);
+
+    // …and the consumer re-sends the same mark on every reconnection, which is
+    // correct behaviour for it. Before the latch, the bound only held until the
+    // spool caught up: these three messages arrive, nextSeq passes 4, and the
+    // identical ack is then accepted and retires all of them unread.
+    spool.append(message('two'));
+    spool.append(message('three'));
+    spool.append(message('four'));
+
+    assert.equal(spool.ack(4), 0, 'a stale mark was accepted once the spool grew past it');
+    assert.equal(spool.pending().length, 4, 'four messages were retired without being read');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a mark that cannot be read at all is refused, not read as zero', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    spool.append(message('what time is the ferry'));
+    spool.ack(1);
+
+    // Unreadable rather than unparseable — EACCES, which is the shape a
+    // permissions accident takes. Both used to return 0 and renumber; only the
+    // parse failure was covered, and the mutation that removed this branch
+    // survived a green suite.
+    const ackPath = path.join(dir, 'ack');
+    chmodSync(ackPath, 0o000);
+    try {
+      assert.throws(
+        () => createEventSpool({ dir }),
+        /could not be read/,
+        'a mark that could not be read was treated as 0, restarting sequence numbering'
+      );
+    } finally {
+      chmodSync(ackPath, 0o600);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a spool that could not read its events never overwrites them', () => {
+  const dir = scratch();
+  const eventsPath = path.join(dir, 'events.jsonl');
+  try {
+    const first = createEventSpool({ dir });
+    first.append(message('the ferry booking'));
+    first.append(message('and the hotel'));
+    const before = readFileSync(eventsPath, 'utf8');
+    assert.ok(before.includes('the ferry booking'));
+
+    // Write-only: `load` cannot read it, `append` can still open it with 'a'.
+    // That is what makes the next acknowledgement reach `compact` with an empty
+    // record list — which used to unlink the file, turning "I could not look"
+    // into "there was nothing there" one acknowledgement after `load` had
+    // carefully refused to do exactly that.
+    chmodSync(eventsPath, 0o200);
+    let reopened;
+    try {
+      reopened = createEventSpool({ dir });
+      assert.equal(reopened.pending().length, 0, 'the unreadable file was somehow read');
+      reopened.append(message('a third, after the damage'));
+      const retired = reopened.ack(reopened.stats().nextSeq - 1);
+      assert.equal(retired, 1, 'the new message was not acknowledged');
+    } finally {
+      chmodSync(eventsPath, 0o600);
+    }
+
+    const after = readFileSync(eventsPath, 'utf8');
+    assert.ok(
+      after.includes('the ferry booking') && after.includes('and the hotel'),
+      'two messages nobody could read were deleted by the next acknowledgement'
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

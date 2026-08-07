@@ -67,13 +67,16 @@ public struct MessageCoalescer: Sendable {
     /// conversations, and merging them would put one owner's words into the
     /// other's turn — the same isolation the per-thread history already keeps.
     public static func belongsTogether(
-        batch: [SignalIncomingMessage],
-        next: SignalIncomingMessage
+        batch: [ChannelMessage],
+        next: ChannelMessage
     ) -> Bool {
         guard batch.count < maximumMerged else { return false }
         guard let first = batch.first else { return true }
-        guard let a = first.replyRecipient, let b = next.replyRecipient else { return false }
-        return a.description == b.description
+        // `ChannelRecipient` carries its channel, so this is a same-thread test
+        // and a same-channel one at once. Comparing addresses alone would let a
+        // WhatsApp JID and a Signal group id that happened to match merge two
+        // strangers' messages into one turn.
+        return first.recipient == next.recipient
     }
 }
 
@@ -84,15 +87,15 @@ public struct MessageCoalescer: Sendable {
 /// this; the answering loop drains it.
 ///
 /// The separation has a second benefit worth naming. Before it, a message sent
-/// while a turn was running stayed unread in the Signal stream for the whole
+/// while a turn was running stayed unread in the channel's stream for the whole
 /// turn — survivable at 30 seconds, not at the 300-second ceiling the deadline
 /// now allows.
 actor MessageInbox {
-    private var pending: [SignalIncomingMessage] = []
+    private var pending: [ChannelMessage] = []
     private var waiter: CheckedContinuation<Void, Never>?
     private var closed = false
 
-    func append(_ message: SignalIncomingMessage) {
+    func append(_ message: ChannelMessage) {
         pending.append(message)
         wake()
     }
@@ -122,11 +125,11 @@ actor MessageInbox {
     /// and abc", "and def" become one turn rather than tailing off into three.
     /// It stops at `MessageCoalescer.maximumMerged`, and messages for other
     /// threads are left queued rather than dropped.
-    func takeBatch(quietWindow: Duration) async -> [SignalIncomingMessage] {
+    func takeBatch(quietWindow: Duration) async -> [ChannelMessage] {
         guard !pending.isEmpty else { return [] }
 
-        var batch: [SignalIncomingMessage] = []
-        var deferred: [SignalIncomingMessage] = []
+        var batch: [ChannelMessage] = []
+        var deferred: [ChannelMessage] = []
         for message in pending {
             if MessageCoalescer.belongsTogether(batch: batch, next: message) {
                 batch.append(message)
@@ -141,7 +144,7 @@ actor MessageInbox {
             try? await Task.sleep(for: quietWindow)
             guard !pending.isEmpty else { break }
 
-            var stillDeferred: [SignalIncomingMessage] = []
+            var stillDeferred: [ChannelMessage] = []
             for message in pending {
                 if MessageCoalescer.belongsTogether(batch: batch, next: message) {
                     batch.append(message)

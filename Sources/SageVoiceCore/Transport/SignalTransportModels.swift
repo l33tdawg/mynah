@@ -104,83 +104,15 @@ public enum SignalRecipient: Equatable, Sendable, CustomStringConvertible {
 /// signal-cli only reports attachment *metadata* over JSON-RPC; the decrypted bytes
 /// are written to `<data-dir>/attachments/`. `localURL` is this library resolving
 /// that file for you (see `SignalAttachmentLocator`).
-public struct SignalAttachment: Equatable, Sendable {
-    public let id: String
-    public let contentType: String?
-    /// Filename chosen by the sender. Signal voice notes normally have none.
-    public let filename: String?
-    public let size: Int64?
-    public let caption: String?
-    /// The decrypted file on disk, if it could be found.
-    public let localURL: URL?
-
-    public init(
-        id: String,
-        contentType: String? = nil,
-        filename: String? = nil,
-        size: Int64? = nil,
-        caption: String? = nil,
-        localURL: URL? = nil
-    ) {
-        self.id = id
-        self.contentType = contentType
-        self.filename = filename
-        self.size = size
-        self.caption = caption
-        self.localURL = localURL
-    }
-
-    /// Signal has no protocol-level "voice note" flag that survives into signal-cli's
-    /// JSON, so audio is detected from the MIME type, falling back to the extension.
-    /// Signal voice notes arrive as `audio/aac` with no filename.
-    public var isAudio: Bool {
-        if let contentType, !contentType.isEmpty {
-            let normalized = contentType.lowercased()
-            if normalized.hasPrefix("audio/") {
-                return true
-            }
-            if normalized.hasPrefix("video/") || normalized.hasPrefix("image/") {
-                return false
-            }
-        }
-        let candidate = (filename ?? localURL?.lastPathComponent ?? "")
-        guard let dot = candidate.lastIndex(of: ".") else {
-            return false
-        }
-        let ext = String(candidate[candidate.index(after: dot)...]).lowercased()
-        return SignalAttachmentLocator.audioFileExtensions.contains(ext)
-    }
-
-    /// A still image a vision model could look at.
-    ///
-    /// MIME type first, extension as the fallback, mirroring `isAudio` — and
-    /// like it, this has to answer for attachments signal-cli reports with no
-    /// filename at all.
-    ///
-    /// GIFs are excluded on purpose: Signal sends them as `video/mp4`, and the
-    /// ones that do arrive as `image/gif` are animations whose first frame is
-    /// rarely the point.
-    public var isImage: Bool {
-        if let contentType, !contentType.isEmpty {
-            let normalized = contentType.lowercased()
-            if normalized == "image/gif" {
-                return false
-            }
-            if normalized.hasPrefix("image/") {
-                return true
-            }
-            if normalized.hasPrefix("audio/") || normalized.hasPrefix("video/") {
-                return false
-            }
-        }
-        let candidate = (filename ?? localURL?.lastPathComponent ?? "")
-        guard let dot = candidate.lastIndex(of: ".") else {
-            return false
-        }
-        let ext = String(candidate[candidate.index(after: dot)...]).lowercased()
-        return ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"].contains(ext)
-    }
-}
+///
+/// **The same shape as a WhatsApp attachment, so it is the same type.** This was
+/// its own struct with its own `isAudio`/`isImage`, and WhatsApp needed both
+/// rules verbatim — a second copy would have let "is this a picture" answer
+/// differently depending on which app the owner happened to use. The fields and
+/// the rules now live on `ChannelAttachment`; the Signal name stays because the
+/// parser and its tests are about signal-cli's JSON and reading `SignalAttachment`
+/// there says something true.
+public typealias SignalAttachment = ChannelAttachment
 
 // MARK: - Incoming messages
 

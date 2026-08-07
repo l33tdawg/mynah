@@ -875,7 +875,11 @@ final class SignalLinkModel {
 // MARK: - QR rendering
 
 /// Turns the linking URI into a square, with CoreImage and nothing else.
-private enum LinkCodeRenderer {
+///
+/// Internal rather than private since 2.0.0: WhatsApp is linked by QR too, and
+/// a second renderer would be a second set of decisions about correction level
+/// and scaling for the same phone camera at the same arm's length.
+enum LinkCodeRenderer {
 
     /// `CIContext` is expensive to build and safe to share; one per app rather
     /// than one per code.
@@ -905,9 +909,14 @@ private enum LinkCodeRenderer {
 /// Mynah where a literal white is right and a surface token would be wrong: it
 /// is a scan target, not a surface, and an inverted code is a code some phones
 /// quietly refuse.
-private struct LinkCodeSquare: View {
+struct LinkCodeSquare: View {
     let uri: String
     var isSpent: Bool = false
+    /// Which app the owner is meant to point at it. Only VoiceOver reads this,
+    /// which is exactly why it must not keep saying Signal on the WhatsApp
+    /// screen — the one owner who cannot see which sheet they are on is the one
+    /// being told the wrong thing.
+    var appName: String = "Signal"
 
     @State private var rendered: NSImage?
 
@@ -933,14 +942,14 @@ private struct LinkCodeSquare: View {
         .opacity(isSpent ? 0.16 : 1)
         .mynahAnimation(Motion.fade, value: isSpent)
         .task(id: uri) { rendered = LinkCodeRenderer.image(for: uri) }
-        .accessibilityLabel("The linking square. Point Signal's camera at it.")
+        .accessibilityLabel("The linking square. Point \(appName)'s camera at it.")
         .accessibilityHidden(rendered == nil)
     }
 }
 
 /// What sits where the square goes before the owner has asked for one, and while
 /// the helper is starting.
-private struct LinkCodePlaceholder<Content: View>: View {
+struct LinkCodePlaceholder<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {

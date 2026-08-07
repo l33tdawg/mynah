@@ -161,7 +161,7 @@ jobs:
           # **The runner's graph is not the build Mac's, so this is not the
           # script's number.** vendor/onnxruntime is deliberately not staged
           # below, so Package.swift drops KokoroEngineTests and its 38 tests
-          # before the run starts: 2145 on the build Mac means 2107 here.
+          # before the run starts: 2219 on the build Mac means 2181 here.
           #
           # Twelve under the runner's own count, which is what assert-test-run.sh's
           # rot check wants — it fires at floor + 38, so a floor set further under
@@ -172,7 +172,7 @@ jobs:
           #
           # Raise both in one commit. They are one subtraction apart and setting
           # only one is how this first went red.
-          MYNAH_MIN_EXECUTED_TESTS: "2107"
+          MYNAH_MIN_EXECUTED_TESTS: "2181"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -229,7 +229,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2145"
+          MYNAH_MIN_EXECUTED_TESTS: "2219"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

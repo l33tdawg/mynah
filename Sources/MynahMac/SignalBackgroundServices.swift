@@ -15,6 +15,50 @@ struct SignalServiceConfiguration: Sendable, Equatable {
     let model: String?
     let socketPath: String
 
+    /// Which channels the owner turned on. See `ChannelSelectionStore`.
+    let channels: ChannelSelection
+
+    /// `nil` when WhatsApp is off, **or** when it is on and the app cannot
+    /// actually run it — a build that did not vendor Node, a bundle missing
+    /// bridge.js.
+    ///
+    /// Nested rather than five more optional fields beside `account`, because
+    /// the five are only ever meaningful together: a configuration carrying a
+    /// port and no bridge path is a state that cannot be acted on, and making
+    /// it representable is how a half-configured job gets installed.
+    let whatsApp: WhatsAppServiceConfiguration?
+
+    /// Written out rather than synthesised, so the two new fields can default.
+    ///
+    /// A default is right here and wrong in `PromiseLedger.promised` next door,
+    /// and the difference is worth stating: this describes an appliance's shape,
+    /// and "Signal, no WhatsApp" is both the shape every existing install has
+    /// and the shape every caller that omits these means. `promised` decides
+    /// where one message's apology is sent, where a default would silently pick
+    /// a channel. `current()` below passes both explicitly, so nothing in
+    /// production reaches these.
+    init(
+        account: String,
+        signalCLI: URL,
+        bridge: URL,
+        sage: URL,
+        provider: String,
+        model: String?,
+        socketPath: String,
+        channels: ChannelSelection = .signalOnly,
+        whatsApp: WhatsAppServiceConfiguration? = nil
+    ) {
+        self.account = account
+        self.signalCLI = signalCLI
+        self.bridge = bridge
+        self.sage = sage
+        self.provider = provider
+        self.model = model
+        self.socketPath = socketPath
+        self.channels = channels
+        self.whatsApp = whatsApp
+    }
+
     static func current(
         appBundle: URL = Bundle.main.bundleURL,
         defaults: UserDefaults = .standard
@@ -36,6 +80,8 @@ struct SignalServiceConfiguration: Sendable, Equatable {
         let vendored = contents.appendingPathComponent("Resources/SAGE.app/Contents/MacOS/sage-gui")
         let node = SageNodeChoice.resolve(vendored: vendored)
 
+        let channels = ChannelSelectionStore.current(defaults)
+
         return SignalServiceConfiguration(
             account: account,
             signalCLI: signalCLI,
@@ -43,7 +89,71 @@ struct SignalServiceConfiguration: Sendable, Equatable {
             sage: node?.executable ?? vendored,
             provider: brain.backendIdentifier,
             model: brain.modelName,
-            socketPath: SignalTooling.socketPath
+            socketPath: SignalTooling.socketPath,
+            channels: channels,
+            whatsApp: channels.includes(.whatsapp)
+                ? WhatsAppServiceConfiguration.inside(contents, signalAccount: account, defaults: defaults)
+                : nil
+        )
+    }
+}
+
+/// What launchd needs to run the vendored WhatsApp bridge.
+///
+/// Built from the app bundle rather than remembered, for the reason
+/// `MYNAH_BUILD_STAMP` exists next door: these paths move when the owner
+/// replaces the app, and a remembered path outlives the bundle it named.
+struct WhatsAppServiceConfiguration: Sendable, Equatable {
+    /// The vendored interpreter. `Contents/Resources/node/bin/node`, re-signed
+    /// by package-app.sh with allow-jit and nothing else.
+    let node: URL
+    /// `Contents/Resources/whatsapp/bridge.js`.
+    let bridge: URL
+    /// Who may talk to the appliance, in WhatsApp's own form: digits, country
+    /// code first, no `+`.
+    ///
+    /// **Empty is not "everybody".** `bridge.js` refuses every incoming message
+    /// when `WHATSAPP_ALLOWED_USERS` is unset, and `*` is what would open it —
+    /// so an empty list here fails closed. That is the right direction, but it
+    /// also means an empty list produces a bridge that answers nothing, which is
+    /// why `enable` refuses to install one rather than starting a helper that
+    /// can only disappoint.
+    let numbers: [String]
+    /// Loopback only. Where `WhatsAppChannel` POSTs sends.
+    let port: Int
+    /// The UNIX socket inbound messages are pushed over.
+    let socketPath: String
+
+    static let defaultPort = 39930
+
+    /// - Parameter signalAccount: what the WhatsApp allowlist is derived from
+    ///   when the owner has not given one of their own. Optional because a Mac
+    ///   with no Signal account linked is a real state — and one where there is
+    ///   nothing to derive, so this returns nil rather than installing a bridge
+    ///   that answers nobody.
+    static func inside(
+        _ contents: URL,
+        signalAccount: String?,
+        defaults: UserDefaults = .standard
+    ) -> WhatsAppServiceConfiguration? {
+        let node = contents.appendingPathComponent("Resources/node/bin/node")
+        let bridge = contents.appendingPathComponent("Resources/whatsapp/bridge.js")
+        // **Absent rather than broken.** A build made without
+        // provision-node.sh has no interpreter, and a plist naming a
+        // non-existent program is a job launchd retries every 30 seconds
+        // forever, writing a screenful into bridge.log each time.
+        guard FileManager.default.isExecutableFile(atPath: node.path),
+              FileManager.default.fileExists(atPath: bridge.path) else {
+            return nil
+        }
+        let numbers = ChannelSelectionStore.whatsAppNumbers(defaults, signalAccount: signalAccount)
+        guard !numbers.isEmpty else { return nil }
+        return WhatsAppServiceConfiguration(
+            node: node,
+            bridge: bridge,
+            numbers: numbers,
+            port: defaultPort,
+            socketPath: WhatsAppClient.defaultSocketPath()
         )
     }
 }
@@ -92,6 +202,15 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
 
     static let signalLabel = "local.sage.voicebridge.signal"
     static let bridgeLabel = "local.sage.voicebridge"
+    static let whatsAppLabel = "local.sage.voicebridge.whatsapp"
+
+    /// Everything this app is allowed to install or remove from launchd.
+    ///
+    /// A list rather than three constants spelled out at each site, because
+    /// `disable` used to name two and there are now three — and a helper left
+    /// loaded after the owner turns answering off is a WhatsApp client still
+    /// connected to their account by an app that believes it stopped.
+    static let managedLabels = [bridgeLabel, signalLabel, whatsAppLabel]
 
     private let runner: ProbeCommandRunning
     private let fileManager: FileManager
@@ -107,6 +226,18 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     struct InstalledBuild: Hashable, Sendable {
         let signal: String
         let bridge: String
+        /// `nil` when WhatsApp is off. Part of the identity rather than beside
+        /// it, so turning WhatsApp on is a different build to
+        /// `failedToApply` — otherwise a Signal-only start that failed once
+        /// would suppress the install of the WhatsApp helper the owner has since
+        /// asked for, until the next launch.
+        let whatsApp: String?
+
+        init(signal: String, bridge: String, whatsApp: String? = nil) {
+            self.signal = signal
+            self.bridge = bridge
+            self.whatsApp = whatsApp
+        }
     }
 
     /// Builds this process has already failed to start. See `enable`.
@@ -171,14 +302,48 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         try fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
         protectLogs(in: logs)
 
+        // **Created here, `0700`, rather than left to the bridge's own mkdir.**
+        // What lands in it is the owner's paired WhatsApp session — the keys
+        // that let this Mac send as them — and their message text in the spool.
+        // `bridge.js` creates these directories under launchd's umask, which is
+        // the same route by which `bridge.log` arrived `0644` with his phone
+        // number in it twenty-six times. Owning the creation is the only way the
+        // mode is a measurement rather than a hope.
+        let whatsAppState = homeDirectory
+            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
+            .appendingPathComponent("WhatsApp", isDirectory: true)
+        if configuration.whatsApp != nil {
+            try? OwnerOnlyFileSecurity.prepareDirectory(whatsAppState, fileManager: fileManager)
+            for name in ["session", "spool"] {
+                try? OwnerOnlyFileSecurity.prepareDirectory(
+                    whatsAppState.appendingPathComponent(name, isDirectory: true),
+                    fileManager: fileManager
+                )
+            }
+        }
+
         let signalURL = launchAgents.appendingPathComponent("\(Self.signalLabel).plist")
         let bridgeURL = launchAgents.appendingPathComponent("\(Self.bridgeLabel).plist")
+        let whatsAppURL = launchAgents.appendingPathComponent("\(Self.whatsAppLabel).plist")
         let signalData = try Self.plistData(
             Self.signalPlist(configuration, logs: logs, home: homeDirectory)
         )
         let bridgeData = try Self.plistData(
             Self.bridgePlist(configuration, logs: logs, home: homeDirectory)
         )
+        // **`nil` is a state this has to install, not skip.** WhatsApp being off
+        // is not "leave whatever is there alone" — it is "there must be no
+        // WhatsApp helper", and a bridge left loaded after the owner switched
+        // the channel off is this app keeping a live connection to their
+        // WhatsApp account after telling them it had stopped.
+        let whatsAppData = try configuration.whatsApp.map {
+            try Self.plistData(Self.whatsAppPlist(
+                $0,
+                logs: logs,
+                home: homeDirectory,
+                state: whatsAppState
+            ))
+        }
 
         // Nothing to do is a real answer, and it used to be the one answer this
         // could not give.
@@ -199,12 +364,14 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // loaded that is not.
         let installed = InstalledBuild(
             signal: Self.executableStamp(configuration.signalCLI),
-            bridge: Self.executableStamp(configuration.bridge)
+            bridge: Self.executableStamp(configuration.bridge),
+            whatsApp: configuration.whatsApp.map { Self.executableStamp($0.bridge) }
         )
 
         if await isAlreadyReconciled(
             signal: signalData, at: signalURL,
             bridge: bridgeData, at: bridgeURL,
+            whatsApp: whatsAppData, at: whatsAppURL,
             running: installed
         ) {
             return
@@ -229,6 +396,14 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
 
         try signalData.write(to: signalURL, options: .atomic)
         try bridgeData.write(to: bridgeURL, options: .atomic)
+        if let whatsAppData {
+            try whatsAppData.write(to: whatsAppURL, options: .atomic)
+        } else {
+            // Booted out and removed, not merely left unwritten. See the note
+            // where `whatsAppData` is built.
+            _ = await bootout(Self.whatsAppLabel)
+            try? fileManager.removeItem(at: whatsAppURL)
+        }
 
         // bootout returns non-zero on a first install; that only means there
         // was nothing stale to stop. The bridge goes first and the socket is
@@ -238,6 +413,14 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         _ = await bootout(Self.bridgeLabel)
         if await bootout(Self.signalLabel) {
             try? fileManager.removeItem(atPath: configuration.socketPath)
+        }
+        if whatsAppData != nil {
+            _ = await bootout(Self.whatsAppLabel)
+            // The events socket belongs to the process just stopped. A stale one
+            // left in place is a path `WhatsAppClient` connects to and then waits
+            // on for ever — connected, silent, and indistinguishable from a
+            // WhatsApp that nobody is messaging.
+            try? fileManager.removeItem(atPath: configuration.whatsApp?.socketPath ?? "")
         }
 
         // **Both are attempted, and neither can now prevent the other.** This
@@ -249,6 +432,13 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // Signal from the 1.7.2 bundle until it crashed at 20:07.
         let signalStarted = await bootstrap(signalURL, label: Self.signalLabel)
         let bridgeStarted = await bootstrap(bridgeURL, label: Self.bridgeLabel)
+        // Attempted like the other two, and like them it cannot prevent either.
+        // A WhatsApp helper that will not start must not take Signal down with
+        // it — the owner asked for both, and one of two is not none.
+        var whatsAppStarted = true
+        if whatsAppData != nil {
+            whatsAppStarted = await bootstrap(whatsAppURL, label: Self.whatsAppLabel)
+        }
 
         // **Said afterwards, and only when it is true.** The notice this
         // replaces was printed before any of the work above, so `mynah.log`
@@ -261,7 +451,8 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             Self.log.error("""
                 the phone bridge is still not running the installed build \
                 (signal \(signalStarted ? "started" : "did not start"), \
-                bridge \(bridgeStarted ? "started" : "did not start")). \
+                bridge \(bridgeStarted ? "started" : "did not start"), \
+                whatsapp \(whatsAppData == nil ? "off" : (whatsAppStarted ? "started" : "did not start"))). \
                 Quit Mynah and open it again to apply it.
                 """)
             throw Failure.launchFailed(Self.bridgeLabel)
@@ -361,6 +552,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     private func isAlreadyReconciled(
         signal: Data, at signalURL: URL,
         bridge: Data, at bridgeURL: URL,
+        whatsApp: Data?, at whatsAppURL: URL,
         running installed: InstalledBuild
     ) async -> Bool {
         // **The disk check alone is what made a failed restart permanent.**
@@ -388,6 +580,27 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // one a failed restart cannot answer falsely.
         guard (try? Data(contentsOf: signalURL)) == signal,
               (try? Data(contentsOf: bridgeURL)) == bridge else {
+            return false
+        }
+        // **Deliberately redundant today, and worth keeping — but say so
+        // plainly rather than let it read as proof.**
+        //
+        // Every state this can currently reject is also rejected downstream:
+        // `isRunningTheInstalledBuild` compares the WhatsApp job's loaded stamp
+        // and requires no job at all when WhatsApp is off. Putting this whole
+        // block back to `_ = whatsApp` leaves every test in
+        // `TheThirdLaunchAgentTests` green, which is the honest measurement.
+        //
+        // It stays because the redundancy is an accident of what the *other*
+        // plist happens to carry. The daemon's job currently repeats
+        // `--whatsapp-allow`, so a changed allowlist is caught by the comparison
+        // above; the day somebody has the daemon read the numbers from the same
+        // store instead — a reasonable change — the stamp becomes the only
+        // remaining check, and a stamp cannot see an allowlist. This is the one
+        // check that compares the WhatsApp job to the WhatsApp job.
+        if let whatsApp {
+            guard (try? Data(contentsOf: whatsAppURL)) == whatsApp else { return false }
+        } else if fileManager.fileExists(atPath: whatsAppURL.path) {
             return false
         }
         // **This replaces a pair of `isLoaded` calls, and subsumes them.** A
@@ -424,12 +637,13 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // unified log where `.info` and `.debug` do not — is true of Apple's
         // defaults and false on his Mac, where nothing is retrievable after the
         // fact at any level. The level is still right; the reasoning was not.
-        Self.log.error("removing both LaunchAgents, so the phone will stop being answered: \(reason)")
-        _ = await bootout(Self.bridgeLabel)
-        _ = await bootout(Self.signalLabel)
+        Self.log.error("removing every LaunchAgent Mynah manages, so the phone will stop being answered: \(reason)")
+        for label in Self.managedLabels {
+            _ = await bootout(label)
+        }
 
         // A booted-out LaunchAgent whose plist is left behind can be loaded
-        // again at the next login. Removing only Mynah's two managed plists
+        // again at the next login. Removing only Mynah's own managed plists
         // makes Pause and the Settings switch survive a restart; enable()
         // recreates them from the persisted choices when the owner turns
         // answering back on.
@@ -437,7 +651,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             "Library/LaunchAgents",
             isDirectory: true
         )
-        for label in [Self.bridgeLabel, Self.signalLabel] {
+        for label in Self.managedLabels {
             try? fileManager.removeItem(
                 at: launchAgents.appendingPathComponent("\(label).plist")
             )
@@ -545,7 +759,24 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// one restart rather than an appliance stuck on an old build.
     private func isRunningTheInstalledBuild(_ installed: InstalledBuild) async -> Bool {
         guard await loadedStamp(Self.signalLabel) == installed.signal else { return false }
-        return await loadedStamp(Self.bridgeLabel) == installed.bridge
+        guard await loadedStamp(Self.bridgeLabel) == installed.bridge else { return false }
+        // **The third job, asked the same way and only when it should exist.**
+        //
+        // Leaving it out would have been the defect this method was written to
+        // end, one channel over: a WhatsApp helper that refused to start would
+        // have left both other stamps matching, so `enable` would declare
+        // itself finished, record nothing in `failedToApply`, and
+        // `isAlreadyReconciled` would then decline to try again — for ever. The
+        // owner would have WhatsApp switched on in Settings, no error anywhere,
+        // and an app that never attempts to start it.
+        //
+        // `nil` when WhatsApp is off is not "do not check". There must be no
+        // WhatsApp job at all in that case, and `loadedStamp` returning
+        // something means launchd still holds one.
+        guard let whatsApp = installed.whatsApp else {
+            return await loadedStamp(Self.whatsAppLabel) == nil
+        }
+        return await loadedStamp(Self.whatsAppLabel) == whatsApp
     }
 
     private func loadedStamp(_ label: String) async -> String? {
@@ -680,6 +911,23 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         if let model = configuration.model, !model.isEmpty {
             arguments += ["--model", model]
         }
+        // **Passed even when it is just "signal".** The daemon defaults to
+        // Signal without this flag, so omitting it would produce the same
+        // behaviour today — and a plist that says nothing about channels is one
+        // nobody can read to find out which the appliance is answering. It is
+        // also what makes turning WhatsApp on a plist change, which is what
+        // `isAlreadyReconciled` compares to decide whether to restart anything.
+        arguments += ["--channels", ChannelKind.allCases
+            .filter(configuration.channels.includes)
+            .map(\.rawValue)
+            .joined(separator: ",")]
+        if let whatsApp = configuration.whatsApp {
+            arguments += [
+                "--whatsapp-allow", whatsApp.numbers.joined(separator: ","),
+                "--whatsapp-port", String(whatsApp.port),
+                "--whatsapp-socket", whatsApp.socketPath
+            ]
+        }
         return [
             "Label": bridgeLabel,
             "ProgramArguments": arguments,
@@ -695,6 +943,91 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
                 // Not read by anything. It is here so that replacing the app
                 // changes these bytes, which is what makes `enable()` notice.
                 "MYNAH_BUILD_STAMP": executableStamp(configuration.bridge)
+            ]
+        ]
+    }
+
+    /// The vendored Node process that owns the WhatsApp connection.
+    ///
+    /// **`RunAtLoad` and `KeepAlive` like the other two, but the failure mode is
+    /// different and worth naming.** signal-cli and the daemon can be killed and
+    /// restarted freely. This one holds a paired WhatsApp session: a restart
+    /// loop that outruns `ThrottleInterval` looks to WhatsApp like a client
+    /// reconnecting dozens of times a minute, which is how a linked device gets
+    /// dropped and the owner has to scan a QR again. Hence the same 30-second
+    /// throttle, and hence `enable` refusing to install a job whose program is
+    /// missing rather than letting launchd discover it every 30 seconds forever.
+    static func whatsAppPlist(
+        _ whatsApp: WhatsAppServiceConfiguration,
+        logs: URL,
+        home: URL,
+        state: URL
+    ) -> [String: Any] {
+        [
+            "Label": whatsAppLabel,
+            "ProgramArguments": [
+                whatsApp.node.path,
+                whatsApp.bridge.path,
+                "--port", String(whatsApp.port),
+                // Without this the bridge behaves exactly as upstream does: an
+                // in-memory queue and no spool. It is the flag that turns on the
+                // durable inbound path Mynah reads. See whatsapp/bridge.js.
+                "--events-socket", whatsApp.socketPath,
+                "--spool", state.appendingPathComponent("spool", isDirectory: true).path,
+                "--session", state.appendingPathComponent("session", isDirectory: true).path
+            ],
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ThrottleInterval": 30,
+            // Not the home directory: `WorkingDirectory` is what SAGE derives an
+            // agent identity from elsewhere in this product, and a bridge that
+            // never speaks to SAGE has no business influencing it. Its own
+            // directory is the honest answer and the one that keeps a relative
+            // path in a stack trace meaningful.
+            "WorkingDirectory": whatsApp.bridge.deletingLastPathComponent().path,
+            "StandardOutPath": logs.appendingPathComponent("whatsapp.log").path,
+            "StandardErrorPath": logs.appendingPathComponent("whatsapp.log").path,
+            "ProcessType": "Interactive",
+            "LowPriorityIO": false,
+            "EnvironmentVariables": [
+                "HOME": home.path,
+                // Homebrew ahead of the system paths, matching the Signal
+                // job. Not for Node — that is passed by absolute path — but for
+                // ffmpeg, which `/send-media` shells out to so a spoken reply
+                // arrives as a voice bubble rather than a file. It ships with
+                // neither macOS nor this app, so `/usr/bin:/bin` guaranteed the
+                // conversion failed on every Mac; with this, an owner who has it
+                // gets the bubble and one who does not gets a playable file and
+                // a log line saying why.
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                // **The bridge's own allowlist, and it is not the only one.**
+                // `WhatsAppSenderAllowlist` on the Swift side refuses the same
+                // senders again. That is deliberate: this list lives in a plist
+                // the owner can edit and on a process this app launches, and a
+                // second check inside the app is what makes an edited plist a
+                // bridge that spools messages nobody answers rather than an
+                // appliance serving strangers.
+                //
+                // Empty would mean "reject everything" here, not "allow
+                // everything" — but `WhatsAppServiceConfiguration.inside`
+                // refuses to build at all in that case, so this is never empty.
+                "WHATSAPP_ALLOWED_USERS": whatsApp.numbers.joined(separator: ","),
+                "WHATSAPP_MODE": "self-chat",
+                // **Empty on purpose, and this is not cosmetic.** Unset, the
+                // bridge prefixes every outgoing message with its upstream
+                // vendor's banner. Mynah already puts its own marker on a reply
+                // before the text ever reaches the bridge, so a prefix here
+                // would arrive on the owner's phone underneath somebody else's
+                // branding, twice-marked.
+                //
+                // The cost is that the bridge's own echo detection falls back to
+                // the ids it remembers sending, which are in memory and gone
+                // after a restart. The daemon covers that window: a message
+                // whose text begins with Mynah's reply prefix is refused as
+                // another bridge answering the same thread, which is exactly
+                // what an unrecognised echo of our own reply is.
+                "WHATSAPP_REPLY_PREFIX": "",
+                "MYNAH_BUILD_STAMP": executableStamp(whatsApp.bridge)
             ]
         ]
     }

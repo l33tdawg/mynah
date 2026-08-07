@@ -106,12 +106,24 @@ public struct WhatsAppSenderAllowlist: Equatable, Sendable, CustomStringConverti
         case senderNotAllowed(String)
         case groupsNotAllowed(String)
 
+        /// **Redacted, because this is a log line and it was not.**
+        ///
+        /// `WhatsAppTransportLog.standardError` interpolates this straight into
+        /// the daemon's stderr, which lands in a file on disk. The person most
+        /// often refused is somebody the owner knows who messaged him — so the
+        /// unredacted version wrote a third party's phone number into a log, for
+        /// the crime of not being on a list. Signal's equivalent path logs no
+        /// identifier at all.
+        ///
+        /// Redacted rather than removed: `60*****767` is still enough to tell
+        /// two refusals apart and to recognise your own number, which is the
+        /// whole job of this line.
         public var description: String {
             switch self {
             case .senderNotAllowed(let who):
-                return "sender \(who) is not on the allowlist"
+                return "sender \(SignalSenderAllowlist.redact(who)) is not on the allowlist"
             case .groupsNotAllowed(let chat):
-                return "group \(chat) is not answered"
+                return "group \(SignalSenderAllowlist.redact(chat)) is not answered"
             }
         }
     }

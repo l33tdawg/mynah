@@ -18,16 +18,56 @@ export function normalizeWhatsAppId(value) {
   return String(value).replace(':', '@');
 }
 
+/**
+ * The actual content, out from under however many wrappers WhatsApp used.
+ *
+ * **This unwrapped one level and knew five wrappers, and anything it missed was
+ * silently dropped.** A message it fails to unwrap matches none of
+ * `extractBridgeEvent`'s branches, so `body` stays `''` and `hasMedia` stays
+ * false — the bridge treats it as an empty message and it never reaches the
+ * spool. The owner sends a view-once photo or edits a message he already sent,
+ * and Mynah simply does not answer, with nothing in the log to say a message
+ * arrived at all.
+ *
+ * Two changes. First, the list gained the wrappers Baileys' own
+ * `normalizeMessageContent` covers and this did not:
+ * `viewOnceMessageV2Extension`, `editedMessage`, `documentWithCaptionMessage`'s
+ * sibling `groupStatusMentionMessage`, and `associatedChildMessage`. Second, it
+ * loops — WhatsApp nests these, most commonly `ephemeralMessage` around
+ * `viewOnceMessageV2`, and one pass through an outer wrapper leaves the inner
+ * one in place.
+ *
+ * Bounded at five, which is Baileys' own depth. A cap rather than
+ * `while (true)`: a malformed message that wrapped itself would otherwise spin
+ * a loop inside the socket's event handler.
+ *
+ * Kept as a local function rather than importing `normalizeMessageContent`
+ * because the last three entries are not wrappers at all — `templateMessage`,
+ * `buttonsMessage` and `listMessage` are terminal shapes this bridge reads
+ * fields off, and upstream's normaliser does not return them.
+ */
+const MESSAGE_WRAPPERS = [
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+  'editedMessage',
+  'documentWithCaptionMessage',
+  'groupStatusMentionMessage',
+  'associatedChildMessage',
+];
+
 export function getMessageContent(msg) {
-  const content = msg?.message || {};
-  if (content.ephemeralMessage?.message) return content.ephemeralMessage.message;
-  if (content.viewOnceMessage?.message) return content.viewOnceMessage.message;
-  if (content.viewOnceMessageV2?.message) return content.viewOnceMessageV2.message;
-  if (content.documentWithCaptionMessage?.message) return content.documentWithCaptionMessage.message;
-  if (content.templateMessage?.hydratedTemplate) return content.templateMessage.hydratedTemplate;
-  if (content.buttonsMessage) return content.buttonsMessage;
-  if (content.listMessage) return content.listMessage;
-  return content;
+  let content = msg?.message || {};
+  for (let depth = 0; depth < 5; depth += 1) {
+    const wrapper = MESSAGE_WRAPPERS.find((name) => content?.[name]?.message);
+    if (!wrapper) break;
+    content = content[wrapper].message;
+  }
+  if (content?.templateMessage?.hydratedTemplate) return content.templateMessage.hydratedTemplate;
+  if (content?.buttonsMessage) return content.buttonsMessage;
+  if (content?.listMessage) return content.listMessage;
+  return content || {};
 }
 
 export function getContextInfo(messageContent) {

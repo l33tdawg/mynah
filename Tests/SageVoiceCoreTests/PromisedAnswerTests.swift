@@ -22,7 +22,7 @@ final class PromisedAnswerTests: XCTestCase {
         account: String = "+60111222333",
         at date: Date = Date()
     ) -> PromisedAnswer {
-        PromisedAnswer(account: account, question: question, promisedAt: date)
+        PromisedAnswer(account: account, question: question, promisedAt: date, channel: .signal)
     }
 
     // MARK: The ordinary round trip
@@ -148,7 +148,7 @@ final class PromisedAnswerTests: XCTestCase {
 
         // And the other half, so this cannot pass by never clearing anything.
         ledger.beginExchange()
-        if let made = ledger.promised(to: "+60111222333", question: "something asked now", at: Date()) {
+        if let made = ledger.promised(to: "+60111222333", channel: .signal, question: "something asked now", at: Date()) {
             store.record(made)
         }
         if let discharged = ledger.answered() { store.clear(ifStill: discharged) }
@@ -179,7 +179,7 @@ final class PromisedAnswerTests: XCTestCase {
         var ledger = PromiseLedger()
 
         ledger.beginExchange()
-        let owed = ledger.promised(to: "+60111222333", question: "what's the connector", at: Date())
+        let owed = ledger.promised(to: "+60111222333", channel: .signal, question: "what's the connector", at: Date())
         XCTAssertNotNil(owed)
         // The answer never reaches Signal, so nothing discharges it here.
 
@@ -202,7 +202,7 @@ final class PromisedAnswerTests: XCTestCase {
         var ledger = PromiseLedger()
         ledger.beginExchange()
 
-        let made = ledger.promised(to: "+60111222333", question: "what's the connector", at: Date())
+        let made = ledger.promised(to: "+60111222333", channel: .signal, question: "what's the connector", at: Date())
         XCTAssertNotNil(made)
         XCTAssertEqual(ledger.outstanding, made)
 
@@ -219,7 +219,7 @@ final class PromisedAnswerTests: XCTestCase {
         var ledger = PromiseLedger()
         ledger.beginExchange()
 
-        XCTAssertNil(ledger.promised(to: "+60111222333", question: "   ", at: Date()))
+        XCTAssertNil(ledger.promised(to: "+60111222333", channel: .signal, question: "   ", at: Date()))
         XCTAssertNil(
             ledger.outstanding,
             "a promise was recorded with no question in it, so its apology could not say what was asked"
@@ -234,8 +234,8 @@ final class PromisedAnswerTests: XCTestCase {
         var ledger = PromiseLedger()
         ledger.beginExchange()
 
-        _ = ledger.promised(to: "+60111222333", question: "first", at: Date(timeIntervalSince1970: 1))
-        let second = ledger.promised(to: "+60111222333", question: "second", at: Date(timeIntervalSince1970: 2))
+        _ = ledger.promised(to: "+60111222333", channel: .signal, question: "first", at: Date(timeIntervalSince1970: 1))
+        let second = ledger.promised(to: "+60111222333", channel: .signal, question: "second", at: Date(timeIntervalSince1970: 2))
 
         XCTAssertEqual(ledger.outstanding, second)
         XCTAssertEqual(ledger.answered(), second)

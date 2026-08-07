@@ -85,7 +85,21 @@ public actor WhatsAppClient {
     public init(configuration: Configuration) {
         self.configuration = configuration
         var continuation: AsyncStream<WhatsAppIncomingMessage>.Continuation!
-        self.incomingMessages = AsyncStream(bufferingPolicy: .bufferingNewest(256)) { continuation = $0 }
+        // **Unbounded, and the 256 it replaces was a silent message shredder.**
+        //
+        // `bufferingNewest(256)` discards the OLDEST element when the consumer
+        // falls behind, and `yield`'s result was thrown away. `deliver` runs
+        // just before this, so a discarded element is a sequence the ledger
+        // believes is in flight with nothing left alive to settle it: the
+        // contiguous-run watermark never passes it, the spool never truncates,
+        // and at 10,000 unacknowledged records every further inbound message is
+        // refused outright. One dropped element costs the channel, not a
+        // message.
+        //
+        // Unbounded is not "no limit" — `event_spool.js` bounds this path at
+        // `maxUnacked`, loudly, on disk, where the owner's messages actually
+        // are. A second bound here could only ever be the lossy one.
+        self.incomingMessages = AsyncStream(bufferingPolicy: .unbounded) { continuation = $0 }
         self.continuation = continuation
     }
 
@@ -223,9 +237,30 @@ public actor WhatsAppClient {
         switch configuration.allowlist.decide(message) {
         case .denied(let denial):
             configuration.logger(.refused(denial))
-            // Refused, and therefore dealt with — otherwise the bridge replays a
-            // stranger's message on every reconnection for ever and the spool
-            // fills with mail nobody will ever answer.
+            // **A refusal here destroys the message, so the cost of a wrong one
+            // is total — and this side cannot evaluate every address WhatsApp
+            // uses.**
+            //
+            // The bridge allowlisted everything in the spool before it got here,
+            // so a refusal at this point means the two lists disagree. That is
+            // usually the case this second check exists for: a plist somebody
+            // edited, where destroying the message is exactly right.
+            //
+            // It was also reachable for an address this side simply cannot read.
+            // WhatsApp increasingly addresses people by LID — `<digits>@lid`,
+            // an opaque id that is not a phone number — and `number(inJID:)`
+            // compares bare digits, so the owner's own message could arrive,
+            // fail to match, and be acknowledged away. The bridge now resolves
+            // LIDs to phone numbers before the event leaves it, using the
+            // mapping files only it has; see `resolveLidToPhoneJid` in
+            // bridge.js. An unresolvable LID is still refused, which is correct
+            // — nobody can attribute it — and is why this logs rather than
+            // passing over in silence.
+            //
+            // Settling is still right for a genuine refusal: without it the
+            // bridge replays a stranger's message on every reconnection for
+            // ever, and the spool fills at 10,000 with mail nobody will answer,
+            // at which point the owner's own messages start being refused.
             //
             // Through the ledger, never straight to the watermark: if the
             // owner's message is outstanding underneath this one, saying

@@ -59,11 +59,63 @@ URL="${SAGE_VOICE_NODE_URL:-https://nodejs.org/dist/v${VERSION}/${ARCHIVE}}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Node's licence travels with it. Apache 2.0 section 4 requires it for our own
+# licence, and Node's MIT terms require the notice to accompany the copy.
+#
+# Fatal, not a warning. This warned, and the warning was the defect: the binary
+# it protects is 107 MB of somebody else's MIT-licensed code, package-app.sh used
+# to copy the LICENSE only `[[ -f ]]`, and scripts/release.sh runs both without a
+# human reading the scroll-back. A transient network failure here would have
+# shipped it with the notice silently absent — a licence breach that looks
+# exactly like a successful release.
+#
+# A function, and called on both paths, because it used to sit only at the end of
+# the fresh-download path. Every rerun took the early return above it, so the one
+# instruction package-app.sh gives when the file is missing — "rerun
+# provision-node.sh" — did nothing.
+#
+# Skips the fetch when the file is already the real notice, so an offline rebuild
+# of an already-provisioned tree works.
+stage_licence() {
+  if [[ -s "$DEST_ROOT/LICENSE" ]] \
+     && grep -q "Permission is hereby granted, free of charge" "$DEST_ROOT/LICENSE"; then
+    return 0
+  fi
+  mkdir -p "$DEST_ROOT"
+  curl -fsSL "https://raw.githubusercontent.com/nodejs/node/v${VERSION}/LICENSE" \
+    -o "$DEST_ROOT/LICENSE" \
+    || die "could not fetch Node's LICENSE for v${VERSION}.
+It ships beside the binary because MIT requires the notice to travel with the
+copy, so this is not optional and packaging will refuse without it.
+Retry, or save it by hand to $DEST_ROOT/LICENSE:
+  curl -fsSL https://raw.githubusercontent.com/nodejs/node/v${VERSION}/LICENSE -o '$DEST_ROOT/LICENSE'"
+
+  # Fetched, but is it the licence or a proxy's error page? `-f` catches an HTTP
+  # status; it does not catch a captive portal answering 200 with HTML.
+  [[ -s "$DEST_ROOT/LICENSE" ]] && grep -q "Permission is hereby granted, free of charge" "$DEST_ROOT/LICENSE" \
+    || die "what was fetched for Node's LICENSE is not the MIT notice: $DEST_ROOT/LICENSE
+Something answered the request that was not GitHub. Delete it and retry."
+}
+
+# **The binary being there is not the same as the staging being complete, and
+# treating them alike made a fatal check unrecoverable.**
+#
+# This returned here the moment bin/node existed, which is every run after the
+# first — so the LICENSE fetch at the bottom was reached exactly once in the life
+# of a checkout. package-app.sh now *dies* when that file is missing and tells
+# the operator to rerun this script, which in precisely that state did nothing at
+# all. A dead end whose only signposted exit is a no-op.
+#
+# So the early return now requires everything this script is responsible for, and
+# a missing piece falls through to the code that creates it rather than being
+# reported. `stage_licence` is idempotent.
 if [[ -x "$DEST" ]]; then
   FOUND="$("$DEST" --version 2>/dev/null || true)"
   [[ "$FOUND" == "v$VERSION" ]] \
     || die "vendored node is '$FOUND'; this release pins v$VERSION.
 Delete $DEST_ROOT and rerun to restage."
+  stage_licence
+  echo "$VERSION" > "$DEST_ROOT/VERSION"
   echo "$DEST"
   exit 0
 fi
@@ -113,28 +165,7 @@ FOUND="$("$DEST" --version)"
 # Node's licence travels with it. Apache 2.0 section 4 requires it for our own
 # licence, and Node's MIT terms require the notice to accompany the copy.
 #
-# Fatal, not a warning. This warned, and the warning was the defect: the binary
-# it protects is staged by the line above, package-app.sh copies the LICENSE
-# only `[[ -f ]]`, and scripts/release.sh runs both without a human reading the
-# scroll-back. A transient network failure here would have shipped 107 MB of
-# somebody else's MIT-licensed code with the notice silently absent — a licence
-# breach that looks exactly like a successful release.
-#
-# Failing costs a rerun. There is no honest version of "warn and carry on" for
-# an obligation that only binds if the file is actually there.
-curl -fsSL "https://raw.githubusercontent.com/nodejs/node/v${VERSION}/LICENSE" \
-  -o "$DEST_ROOT/LICENSE" \
-  || die "could not fetch Node's LICENSE for v${VERSION}.
-It ships beside the binary because MIT requires the notice to travel with the
-copy, so this is not optional and packaging will refuse without it.
-Retry, or save it by hand to $DEST_ROOT/LICENSE:
-  curl -fsSL https://raw.githubusercontent.com/nodejs/node/v${VERSION}/LICENSE -o '$DEST_ROOT/LICENSE'"
-
-# Fetched, but is it the licence or a proxy's error page? `-f` catches an HTTP
-# status; it does not catch a captive portal answering 200 with HTML.
-[[ -s "$DEST_ROOT/LICENSE" ]] && grep -q "Permission is hereby granted, free of charge" "$DEST_ROOT/LICENSE" \
-  || die "what was fetched for Node's LICENSE is not the MIT notice: $DEST_ROOT/LICENSE
-Something answered the request that was not GitHub. Delete it and retry."
+stage_licence
 
 echo "$VERSION" > "$DEST_ROOT/VERSION"
 echo "node v$VERSION staged at $DEST ($(du -h "$DEST" | cut -f1))"

@@ -676,6 +676,96 @@ if [[ -x "$APP/Contents/Resources/pandoc/bin/pandoc" ]]; then
     || die "pandoc is GPL 2.0-or-later and ships in this bundle, but its licence text was not staged.
 Put the licence at resources/licences/GPL-2.0.txt."
 fi
+# **The npm tree, which nobody was looking at.**
+#
+# Every check above enumerates a binary this repository vendors on purpose:
+# signal-cli, espeak-ng, pandoc, Graphviz. `cp -R node_modules` stages 1,200
+# packages nobody enumerated, and one of them — libsignal, a direct dependency
+# of Baileys and imported in-process by the bridge — is GPL-3.0. It had shipped
+# in every build carrying WhatsApp, while NOTICE, the About screen and this
+# script all said the WhatsApp side was MIT.
+#
+# So this is a scan rather than a list. A list is what failed: it named what
+# somebody remembered, and the dependency arrived through a transitive edge that
+# nobody chose. Anything in the staged tree whose licence is not on the
+# permissive set has to be named in KNOWN_COPYLEFT below, which is a line
+# somebody has to write deliberately after reading NOTICE.
+#
+# Run against the STAGED copy, not `whatsapp/node_modules`. What ships is the
+# only thing with an obligation attached, and the two differ the moment
+# provisioning changes.
+if [[ -d "$APP/Contents/Resources/whatsapp/node_modules" ]]; then
+  # name@version : licence. Adding a line here is a statement that NOTICE and
+  # About.swift describe this package and that its licence text is staged.
+  KNOWN_COPYLEFT="libsignal@6.0.0 : GPL-3.0"
+
+  FOUND_COPYLEFT="$(
+    "$APP/Contents/Resources/node/bin/node" -e '
+      const fs = require("fs"), path = require("path");
+      // Names, not SPDX parsing: this decides whether a human has to look, and
+      // erring towards "look" is free. Anything unrecognised — including a
+      // licence given as an object rather than a string, which older packages
+      // do — comes out as something to be named.
+      const permissive = /^(MIT|ISC|BSD|Apache|Unlicense|CC0|CC-BY|0BSD|Python|BlueOak|WTFPL|Zlib)/i;
+      const found = [];
+      const seen = new Set();
+      (function walk(dir, depth) {
+        if (depth > 6) return;
+        let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const child = path.join(dir, entry.name);
+          if (entry.name === "node_modules") { walk(child, depth + 1); continue; }
+          const manifest = path.join(child, "package.json");
+          if (fs.existsSync(manifest)) {
+            try {
+              const p = JSON.parse(fs.readFileSync(manifest, "utf8"));
+              const licence = typeof (p.license ?? p.licenses) === "string"
+                ? (p.license ?? p.licenses)
+                : Array.isArray(p.licenses) && typeof p.licenses[0]?.type === "string"
+                  ? p.licenses[0].type
+                  : "UNDECLARED";
+              const key = `${p.name}@${p.version} : ${licence}`;
+              if (!permissive.test(licence) && !seen.has(key)) { seen.add(key); found.push(key); }
+            } catch {}
+          }
+          if (entry.name.startsWith("@")) walk(child, depth);
+        }
+      })(process.argv[1], 0);
+      // Sorted, so the diff between two builds is readable.
+      console.log(found.sort().join("\n"));
+    ' "$APP/Contents/Resources/whatsapp/node_modules"
+  )" || die "the licence scan of the staged npm tree could not run"
+
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    grep -qxF "$package" <<< "$KNOWN_COPYLEFT" || die \
+"a package with a non-permissive licence ships in this bundle and nothing declares it:
+
+    $package
+
+Every build that carries WhatsApp conveys this file to whoever installs Mynah,
+which is what makes it an obligation rather than a detail. Do one of:
+
+  * Name it in KNOWN_COPYLEFT in this script, AND describe it in NOTICE and in
+    Sources/MynahMac/Main/About.swift, AND stage its licence text under
+    resources/licences/. That is the path libsignal took — read those three
+    places for the shape.
+  * Remove the dependency and rerun scripts/provision-whatsapp-bridge.sh.
+
+Do not silence this by widening the permissive pattern above. The pattern
+decides whether a person looks, and every package it waves through is one
+nobody read."
+  done <<< "$FOUND_COPYLEFT"
+
+  # libsignal is GPL-3.0 and in-tree, so the licence text has to travel with it.
+  # The same file signal-cli needs, required again here rather than assumed: the
+  # two obligations are independent, and a build that drops signal-cli would
+  # otherwise take this check away with it.
+  [[ -f "$APP/Contents/Resources/licences/GPL-3.0.txt" ]] \
+    || die "libsignal is GPL 3.0 and ships in this bundle's npm tree, but its licence text was not staged."
+fi
+
 # The Graphviz inside the diagram plugin. A WASM file is still a binary somebody
 # else wrote, and EPL 2.0 asks for the same conveyance as any other copyleft.
 if [[ -d "$APP/Contents/Resources/typst/packages/local/diagraph" ]]; then

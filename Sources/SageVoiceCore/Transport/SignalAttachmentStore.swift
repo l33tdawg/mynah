@@ -79,8 +79,14 @@ public struct SignalAttachmentStore: Sendable {
     /// turn that carries on — refusing to answer because one attachment was
     /// unreadable would be a worse appliance than one that says what it kept.
     @discardableResult
+    /// - Parameter via: which app the owner sent it from. It goes into the note,
+    ///   and it is the note that search returns — "the ferry booking I sent on
+    ///   WhatsApp" only finds anything if the note says WhatsApp. This said
+    ///   "Signal" unconditionally, which for a WhatsApp attachment is a
+    ///   remembered fact that is simply false.
     public func keep(
-        _ attachments: [SignalAttachment],
+        _ attachments: [ChannelAttachment],
+        via channel: ChannelKind,
         caption: String?,
         receivedAt: Date,
         log: (String) -> Void = { _ in }
@@ -103,13 +109,14 @@ public struct SignalAttachmentStore: Sendable {
                 log("[attachments] \(attachment.contentType ?? "unknown") has no file on disk yet")
                 return nil
             }
-            return keep(source, attachment: attachment, caption: caption, receivedAt: receivedAt, in: directory, log: log)
+            return keep(source, attachment: attachment, via: channel, caption: caption, receivedAt: receivedAt, in: directory, log: log)
         }
     }
 
     private func keep(
         _ source: URL,
-        attachment: SignalAttachment,
+        attachment: ChannelAttachment,
+        via channel: ChannelKind,
         caption: String?,
         receivedAt: Date,
         in directory: URL,
@@ -125,6 +132,7 @@ public struct SignalAttachmentStore: Sendable {
             let note = try writeNote(
                 for: destination,
                 attachment: attachment,
+                via: channel,
                 caption: caption,
                 receivedAt: receivedAt
             )
@@ -144,7 +152,8 @@ public struct SignalAttachmentStore: Sendable {
     /// which names the file.
     private func writeNote(
         for file: URL,
-        attachment: SignalAttachment,
+        attachment: ChannelAttachment,
+        via channel: ChannelKind,
         caption: String?,
         receivedAt: Date
     ) throws -> URL {
@@ -155,7 +164,7 @@ public struct SignalAttachmentStore: Sendable {
         var lines = [
             "# \(Self.title(caption: caption, receivedAt: receivedAt))",
             "",
-            "Sent to Mynah on Signal, \(stamp)."
+            "Sent to Mynah on \(channel.displayName), \(stamp)."
         ]
         if let caption, !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines += ["", "What you said when you sent it:", "", "> \(caption)"]
@@ -172,7 +181,7 @@ public struct SignalAttachmentStore: Sendable {
 
     /// A name that says what it is, with a hash so two photos sent in the same
     /// minute cannot land on each other.
-    static func fileName(for attachment: SignalAttachment, caption: String?, receivedAt: Date) -> String {
+    static func fileName(for attachment: ChannelAttachment, caption: String?, receivedAt: Date) -> String {
         let stem = NoteSlug.slug(from: title(caption: caption, receivedAt: receivedAt))
         let unique = SHA256.hash(data: Data((attachment.id + attachment.contentType.orEmpty).utf8))
             .map { String(format: "%02x", $0) }

@@ -35,9 +35,9 @@ import express from 'express';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import path from 'path';
-import { mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, readdirSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import qrcode from 'qrcode-terminal';
@@ -177,6 +177,30 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * MYNAH: one reply is one turn in the queue, however many chunks it is.
+ *
+ * `enqueueSend` serialises individual `sendMessage` calls, and a long reply is
+ * several of them with a deliberate pause between each — a pause taken *outside*
+ * the queue, so another request's chunks slot straight into it. Two answers
+ * going to the same chat interleave: paragraph 1 of A, paragraph 1 of B,
+ * paragraph 2 of A. The queue was serialising the wrong unit.
+ *
+ * Reachable on this appliance rather than theoretical: the daemon answers turns
+ * sequentially, but the proactive watch, the after-the-call drain and an
+ * unkept-promise apology all send on their own schedules, and any of them can
+ * land inside another reply's chunk gap.
+ *
+ * Takes the queue slot for the whole run, and the inner `sendWithTimeout` calls
+ * re-enter it — which is safe because `_sendQueue` is a promise chain rather than
+ * a lock: the inner calls chain onto the tail this one already holds, so they run
+ * in order and nothing deadlocks. What cannot get between them is another
+ * *request*, which is the point.
+ */
+function enqueueReply(fn) {
+  return enqueueSend(fn);
+}
+
 function sendWithTimeout(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT_MS) {
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
@@ -299,6 +323,22 @@ function buildLidMap() {
   return map;
 }
 let lidToPhone = buildLidMap();
+
+/**
+ * MYNAH: `<lid>@lid` → `<phone>@s.whatsapp.net`, when this session knows the
+ * pair.
+ *
+ * Rebuilt on every `creds.update`, so a mapping learned mid-session is
+ * available to the next message. Returns the input unchanged when there is no
+ * mapping — an unresolvable LID is still refused by both allowlists, which is
+ * the correct outcome for an address nobody can attribute. What this prevents is
+ * the *resolvable* one being refused.
+ */
+function resolveLidToPhoneJid(jid) {
+  if (!jid || !jid.endsWith('@lid')) return jid;
+  const phone = lidToPhone[jid.replace(/@.*/, '')];
+  return phone ? `${phone}@s.whatsapp.net` : jid;
+}
 
 const logger = pino({ level: 'warn' });
 
@@ -511,7 +551,30 @@ async function startSocket() {
     },
   });
 
-  sock.ev.on('creds.update', () => { saveCreds(); lidToPhone = buildLidMap(); });
+  // MYNAH: awaited-with-a-catch, not fire-and-forget.
+  //
+  // `saveCreds` is `async () => writeData(creds, 'creds.json')` and rejects on
+  // ENOSPC, EACCES, EIO or a session directory that has gone. Node 22's default
+  // for an unhandled rejection is to throw, and this file installs no
+  // `unhandledRejection` handler — so a full disk did not degrade the bridge, it
+  // ended the process, and KeepAlive then restarted it into the same full disk
+  // every thirty seconds.
+  //
+  // Logged rather than fatal. Failing to persist a key rotation is recoverable:
+  // the in-memory socket keeps working, and the next rotation writes both. What
+  // is not recoverable is the process dying mid-session.
+  sock.ev.on('creds.update', () => {
+    Promise.resolve()
+      .then(() => saveCreds())
+      .catch((error) => {
+        console.error(
+          `[whatsapp] could not save the session credentials: ${error?.message || error}. ` +
+          `This connection carries on, but if the bridge restarts before the next successful ` +
+          `save it will ask for a new QR. Check free space and the permissions on ${SESSION_DIR}.`
+        );
+      });
+    lidToPhone = buildLidMap();
+  });
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -635,7 +698,22 @@ async function startSocket() {
       if (!msg.message) continue;
 
       const chatId = msg.key.remoteJid;
-      const senderId = msg.key.participant || chatId;
+      // MYNAH: a LID resolved back to the phone number, because the consumer
+      // cannot do it and destroys what it cannot recognise.
+      //
+      // WhatsApp increasingly addresses people by LID — an opaque per-account
+      // id, `<digits>@lid`, that is not a phone number. This bridge copes: its
+      // own allowlist walks the `lid-mapping-*.json` files in the session
+      // directory. Mynah's second allowlist, on the Swift side, has no such
+      // mapping and compares bare digits, so a `@lid` sender never matches and
+      // is refused — and `WhatsAppClient.receive` responds to a refusal by
+      // acknowledging the message, which retires it from this spool for good.
+      //
+      // So an owner whose own messages arrive over LID gets silence, and the
+      // message is destroyed rather than held. The information needed to avoid
+      // that exists here and nowhere else, so it travels with the event.
+      const rawSenderId = normalizeWhatsAppId(msg.key.participant || chatId);
+      const senderId = resolveLidToPhoneJid(rawSenderId);
       const isGroup = chatId.endsWith('@g.us');
       const senderNumber = senderId.replace(/@.*/, '');
       emitDebugEvent({
@@ -738,13 +816,39 @@ async function startSocket() {
           } catch {}
           continue;
         }
+        // MYNAH: a Status post is not a message to us, and answering one
+        // publishes the reply to every contact the poster has.
+        //
+        // The `fromMe` branch above filters `status@broadcast`; this one checked
+        // the sender allowlist and nothing else. A Status posted by an
+        // allowlisted person — the owner himself, in the Message-Yourself setup
+        // — arrives with `remoteJid: 'status@broadcast'`, passes the allowlist,
+        // and becomes a message whose reply address is `status@broadcast`. The
+        // agent's answer would go out as the owner's own WhatsApp Status.
+        //
+        // Groups are refused here for the same reason they are on the other
+        // branch: `WhatsAppSenderAllowlist` refuses them on the Swift side too,
+        // and a chat type this appliance does not serve should not reach the
+        // spool at all.
+        if (chatId === 'status@broadcast' || chatId.endsWith('@broadcast')) {
+          emitDebugEvent({
+            stage: 'ignored',
+            reason: 'status_broadcast',
+            chatId: redactWhatsAppId(chatId),
+          });
+          continue;
+        }
         if (WHATSAPP_DM_POLICY !== 'pairing' && !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)) {
           try {
+            // Redacted, like every neighbouring line. This one printed the
+            // refused sender's full number and chat id into whatsapp.log — and
+            // the sender who is refused most often is somebody the owner knows,
+            // whose number is now on disk because they messaged him.
             console.log(JSON.stringify({
               event: 'ignored',
               reason: 'allowlist_mismatch',
-              chatId,
-              senderId,
+              chatId: redactWhatsAppId(chatId),
+              senderId: redactWhatsAppId(senderId),
             }));
           } catch {}
           continue;
@@ -905,6 +1009,68 @@ app.use((req, res, next) => {
   next();
 });
 
+// MYNAH: a shared secret, because the Host check is not authentication and was
+// the only thing in front of this API.
+//
+// **What it was protecting.** `POST /send` sends a WhatsApp message as the
+// owner. `/send-media` takes a `filePath` this process reads and uploads, so any
+// readable file on the Mac can be exfiltrated to any chat. `GET /messages`
+// drains the inbound queue — every message the owner receives, and draining it
+// takes it from whoever was reading. Before this, all of that was reachable by
+// any process running as any user on the machine with one curl, and the Host
+// header it had to send is a constant.
+//
+// The UNIX socket beside it is `0600` and carries acknowledgements in one
+// direction only, so it was never the hole; the loopback port was, and
+// `WhatsAppChannel` documents the port as the honest cost of using upstream's
+// own send endpoint. This closes it without moving sends onto the socket.
+//
+// **A file rather than an argument.** A token in `ProgramArguments` is in the
+// plist, which is world-readable, and in the output of `ps` for every account on
+// the Mac. This reads a `0600` file that the same owner-only directory holds as
+// the session keys. Absent means the token is generated and written here, so a
+// bridge started by hand still comes up — and Mynah reads the same file.
+//
+// Compared with `timingSafeEqual`, which is not superstition on a local socket:
+// an attacker who can time this can also run it a few million times.
+const API_TOKEN_PATH = path.join(MYNAH_STATE_DIR, 'api-token');
+
+function loadOrCreateApiToken() {
+  try {
+    const existing = readFileSync(API_TOKEN_PATH, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch {}
+  const minted = randomBytes(32).toString('hex');
+  mkdirSync(MYNAH_STATE_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(API_TOKEN_PATH, `${minted}\n`, { mode: 0o600 });
+  // Rewritten explicitly: `mode` on writeFileSync is masked by umask, and a
+  // umask of 022 turns 0600 into 0600 — but a pre-existing file keeps its own
+  // mode entirely, which is the case that matters after an upgrade.
+  chmodSync(API_TOKEN_PATH, 0o600);
+  return minted;
+}
+
+const API_TOKEN = loadOrCreateApiToken();
+
+app.use((req, res, next) => {
+  // `/health` stays open. It reports liveness and nothing about the owner, and
+  // it is what tells Mynah whether the bridge is up — including in the window
+  // before it can read the token.
+  if (req.path === '/health') return next();
+
+  const offered = String(req.headers['x-mynah-token'] || '');
+  const expected = API_TOKEN;
+  // Length first: timingSafeEqual throws on a mismatch, and the length is not
+  // the secret.
+  if (offered.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(offered), Buffer.from(expected))) {
+    return res.status(401).json({
+      error: 'Missing or wrong X-Mynah-Token. This bridge answers only the app that started it.',
+    });
+  }
+  next();
+});
+
 // Poll for new messages (long-poll style)
 app.get('/messages', (req, res) => {
   const msgs = messageQueue.splice(0, messageQueue.length);
@@ -925,20 +1091,23 @@ app.post('/send', async (req, res) => {
   try {
     const chunks = splitLongMessage(formatOutgoingMessage(message));
     const messageIds = [];
-    for (let i = 0; i < chunks.length; i += 1) {
-      const { content: payload, options } = buildTextSendPayload(chunks[i], {
-        chatId,
-        replyTo: i === 0 ? replyTo : undefined,
-        messageStore,
-      });
-      const sent = await sendWithTimeout(chatId, payload, options);
-      trackSentMessageId(sent);
-      messageStore.remember(sent);
-      if (sent?.key?.id) messageIds.push(sent.key.id);
-      if (chunks.length > 1 && i < chunks.length - 1) {
-        await sleep(CHUNK_DELAY_MS);
+    // The whole reply, not each chunk. See `enqueueReply`.
+    await enqueueReply(async () => {
+      for (let i = 0; i < chunks.length; i += 1) {
+        const { content: payload, options } = buildTextSendPayload(chunks[i], {
+          chatId,
+          replyTo: i === 0 ? replyTo : undefined,
+          messageStore,
+        });
+        const sent = await sendWithTimeout(chatId, payload, options);
+        trackSentMessageId(sent);
+        messageStore.remember(sent);
+        if (sent?.key?.id) messageIds.push(sent.key.id);
+        if (chunks.length > 1 && i < chunks.length - 1) {
+          await sleep(CHUNK_DELAY_MS);
+        }
       }
-    }
+    });
 
     res.json({
       success: true,
@@ -1058,14 +1227,46 @@ app.post('/send-media', async (req, res) => {
             audioBuffer = readFileSync(tmpPath);
             audioExt = 'ogg';
           } catch (convErr) {
-            // ffmpeg not available or conversion failed — fall back to original format
-            console.warn('[bridge] ffmpeg conversion failed, sending as file attachment:', convErr.message);
+            // MYNAH: the usual case on this appliance, not an exception.
+            //
+            // ffmpeg ships with neither macOS nor this repository, and the
+            // WhatsApp LaunchAgent's PATH is deliberately narrow. Mynah speaks
+            // its replies as `.m4a`, so every spoken reply takes this branch
+            // unless the owner happens to have ffmpeg installed — which the
+            // plist's PATH now looks for.
+            console.warn(
+              `[bridge] could not convert ${ext} to ogg/opus (${convErr.message}). ` +
+              `Sending it as an ordinary audio file: it plays, but WhatsApp will not ` +
+              `draw it as a voice bubble. Install ffmpeg to get the bubble.`
+            );
           } finally {
             try { if (tmpPath && existsSync(tmpPath)) unlinkSync(tmpPath); } catch (_) {}
           }
         }
-        const audioMime = (audioExt === 'ogg' || audioExt === 'opus') ? 'audio/ogg; codecs=opus' : 'audio/mpeg';
-        msgPayload = { audio: audioBuffer, mimetype: audioMime, ptt: audioExt === 'ogg' || audioExt === 'opus' };
+        // MYNAH: the real type, rather than `audio/mpeg` for everything that is
+        // not ogg.
+        //
+        // The fallback above is reached by every spoken Mynah reply, and it used
+        // to label an AAC-in-MPEG-4 file as `audio/mpeg` — which is mp3. Some
+        // clients take the declared type at its word and fail to decode; the
+        // rest ignore it, which only means the mislabelling costs nothing
+        // *today*. Sending a truthful type is free.
+        const AUDIO_MIME_BY_EXTENSION = {
+          ogg: 'audio/ogg; codecs=opus',
+          opus: 'audio/ogg; codecs=opus',
+          m4a: 'audio/mp4',
+          mp4: 'audio/mp4',
+          aac: 'audio/aac',
+          mp3: 'audio/mpeg',
+          wav: 'audio/wav',
+          flac: 'audio/flac',
+          amr: 'audio/amr',
+        };
+        const isVoiceNote = audioExt === 'ogg' || audioExt === 'opus';
+        // Unknown extensions keep the old default rather than guessing something
+        // new: this is the one place a wrong answer is worse than a vague one.
+        const audioMime = AUDIO_MIME_BY_EXTENSION[audioExt] || 'audio/mpeg';
+        msgPayload = { audio: audioBuffer, mimetype: audioMime, ptt: isVoiceNote };
         break;
       }
       case 'document':
@@ -1211,6 +1412,34 @@ app.get('/health', (req, res) => {
       ? { ...eventSpool.stats(), consumerConnected: eventSocket.hasConsumer }
       : null,
   });
+});
+
+// MYNAH: the last line of defence, and it belongs above everything that runs.
+//
+// One unawaited promise was enough to end this process — `saveCreds` was the
+// one an audit found, and it is fixed at its own call site. This is here for the
+// next one. Node 22 throws on an unhandled rejection by default, and a bridge
+// that exits takes the owner's WhatsApp with it; launchd restarts it thirty
+// seconds later, which turns a transient fault into a reconnect loop WhatsApp
+// eventually responds to by dropping the linked device.
+//
+// **Deliberately does not exit.** That is the opposite of Node's default and it
+// is the right trade for this process: it holds one socket and a spool, both of
+// which survive an error in a request handler, and there is no state here worth
+// more than the connection. Logged loudly enough to find, because a swallowed
+// error nobody can see is how the next one takes a week to diagnose.
+process.on('unhandledRejection', (reason) => {
+  console.error(
+    `[whatsapp] an operation failed and nothing was waiting for the result: ` +
+    `${reason?.stack || reason?.message || reason}. The bridge is still running. ` +
+    `If WhatsApp misbehaves after this line, it is the place to start.`
+  );
+});
+process.on('uncaughtException', (error) => {
+  console.error(
+    `[whatsapp] uncaught: ${error?.stack || error?.message || error}. The bridge is still ` +
+    `running, but this one is not routine — please report the lines above.`
+  );
 });
 
 // Start

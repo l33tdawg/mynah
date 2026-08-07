@@ -37,6 +37,20 @@ struct WhatsAppAcknowledgementLedger: Equatable {
     mutating func deliver(_ sequence: Int) {
         observe(sequence)
         guard sequence > watermark else { return }
+        // **The stale `settled` entry has to go, and leaving it walked the
+        // watermark over a live message.**
+        //
+        // Redelivery is ordinary here, not exotic: the bridge replays everything
+        // above ITS mark, and its mark is the last watermark we managed to send
+        // — which by construction is below anything sitting in `settled`. So a
+        // sequence settled early, before the gap under it closed, comes back on
+        // the next reconnect and is delivered again.
+        //
+        // Without this line it is in `outstanding` and in `settled` at once, and
+        // when the gap finally closes the contiguous run below strides straight
+        // through it. That is the original defect this whole type was written to
+        // end, reached by a second route.
+        settled.remove(sequence)
         outstanding.insert(sequence)
     }
 
@@ -44,8 +58,26 @@ struct WhatsAppAcknowledgementLedger: Equatable {
     /// watermark across whatever contiguous run that completes, and no further.
     mutating func settle(_ sequence: Int) {
         observe(sequence)
-        guard sequence > watermark else { return }   // already covered; idempotent
+        // **Removed before the guard, and no test can currently tell.** Said
+        // plainly because the alternative is a line that reads as a fix.
+        //
+        // An audit reported that a `settle` below the watermark returned without
+        // clearing `outstanding`, leaving a retired sequence named for ever by
+        // `blocking` — the diagnostic somebody reads when acknowledgement looks
+        // stuck. True of the code as it stood. But the only route into that
+        // state was the redelivery bug fixed in `deliver` above: with that
+        // closed, the watermark can no longer pass anything that is in
+        // `outstanding`, because the contiguous run walks `settled` and `deliver`
+        // now takes a sequence out of `settled` when it comes back. Moving this
+        // line back below the guard leaves every test in the suite green.
+        //
+        // Kept anyway, and not as superstition: "a settled sequence is not
+        // outstanding" is unconditionally true, and stating it here does not
+        // depend on a second function continuing to behave. The fix that makes
+        // this unreachable lives ten lines away and could be undone by somebody
+        // who has not read this paragraph.
         outstanding.remove(sequence)
+        guard sequence > watermark else { return }   // already covered; idempotent
         settled.insert(sequence)
 
         while settled.remove(watermark + 1) != nil {

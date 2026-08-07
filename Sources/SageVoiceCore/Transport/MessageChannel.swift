@@ -85,6 +85,101 @@ public struct ChannelRecipient: Equatable, Sendable, CustomStringConvertible {
     }
 }
 
+/// One file that arrived with a message, already decrypted onto disk.
+///
+/// **Not `[String]` of paths, which is what this was.** The daemon has to know
+/// three things a path cannot answer: is this the voice note that *is* the
+/// message (transcribe it, do not file it), is it a picture (show the model),
+/// or is it a document (keep it for later). Signal answers those from the MIME
+/// type with the extension as a fallback, because signal-cli reports voice
+/// notes as `audio/aac` with no filename at all. WhatsApp has the same problem
+/// and the same answer, so the rule lives here once rather than being re-derived
+/// per channel — two copies of "is this a picture" is how a photo becomes a
+/// document on one channel and not the other.
+public struct ChannelAttachment: Equatable, Sendable {
+    public let id: String
+    public let contentType: String?
+    /// Filename chosen by the sender. Voice notes normally have none.
+    public let filename: String?
+    public let size: Int64?
+    public let caption: String?
+    /// The decrypted file on disk, if it could be found.
+    public let localURL: URL?
+
+    public init(
+        id: String,
+        contentType: String? = nil,
+        filename: String? = nil,
+        size: Int64? = nil,
+        caption: String? = nil,
+        localURL: URL? = nil
+    ) {
+        self.id = id
+        self.contentType = contentType
+        self.filename = filename
+        self.size = size
+        self.caption = caption
+        self.localURL = localURL
+    }
+
+    /// Neither channel has a protocol-level "voice note" flag that survives into
+    /// what we are handed, so audio is detected from the MIME type, falling back
+    /// to the extension. Signal voice notes arrive as `audio/aac` with no
+    /// filename; WhatsApp's are `audio/ogg; codecs=opus`.
+    public var isAudio: Bool {
+        if let contentType, !contentType.isEmpty {
+            let normalized = contentType.lowercased()
+            if normalized.hasPrefix("audio/") {
+                return true
+            }
+            if normalized.hasPrefix("video/") || normalized.hasPrefix("image/") {
+                return false
+            }
+        }
+        guard let ext = Self.fileExtension(of: filename ?? localURL?.lastPathComponent) else {
+            return false
+        }
+        return SignalAttachmentLocator.audioFileExtensions.contains(ext)
+    }
+
+    /// A still image a vision model could look at.
+    ///
+    /// MIME type first, extension as the fallback, mirroring `isAudio` — and
+    /// like it, this has to answer for attachments reported with no filename at
+    /// all.
+    ///
+    /// GIFs are excluded on purpose: Signal sends them as `video/mp4`, WhatsApp
+    /// sends them as a video too, and the ones that do arrive as `image/gif` are
+    /// animations whose first frame is rarely the point.
+    public var isImage: Bool {
+        if let contentType, !contentType.isEmpty {
+            let normalized = contentType.lowercased()
+            if normalized == "image/gif" {
+                return false
+            }
+            if normalized.hasPrefix("image/") {
+                return true
+            }
+            if normalized.hasPrefix("audio/") || normalized.hasPrefix("video/") {
+                return false
+            }
+        }
+        guard let ext = Self.fileExtension(of: filename ?? localURL?.lastPathComponent) else {
+            return false
+        }
+        return Self.imageFileExtensions.contains(ext)
+    }
+
+    static let imageFileExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"]
+
+    private static func fileExtension(of name: String?) -> String? {
+        guard let name, let dot = name.lastIndex(of: "."), dot != name.index(before: name.endIndex) else {
+            return nil
+        }
+        return String(name[name.index(after: dot)...]).lowercased()
+    }
+}
+
 /// One inbound message, whichever channel it came in on.
 public struct ChannelMessage: Equatable, Sendable {
     public let kind: ChannelKind
@@ -96,7 +191,7 @@ public struct ChannelMessage: Equatable, Sendable {
     public let senderDisplayName: String?
     public let text: String?
     /// Files the channel has already decrypted and written to disk.
-    public let attachmentPaths: [String]
+    public let attachments: [ChannelAttachment]
     /// Seconds since epoch.
     public let timestamp: Int64
 
@@ -110,7 +205,7 @@ public struct ChannelMessage: Equatable, Sendable {
         id: String,
         senderDisplayName: String? = nil,
         text: String? = nil,
-        attachmentPaths: [String] = [],
+        attachments: [ChannelAttachment] = [],
         timestamp: Int64 = 0,
         acknowledgementToken: Int? = nil
     ) {
@@ -119,9 +214,48 @@ public struct ChannelMessage: Equatable, Sendable {
         self.id = id
         self.senderDisplayName = senderDisplayName
         self.text = text
-        self.attachmentPaths = attachmentPaths
+        self.attachments = attachments
         self.timestamp = timestamp
         self.acknowledgementToken = acknowledgementToken
+    }
+
+    public var attachmentPaths: [String] { attachments.compactMap { $0.localURL?.path } }
+
+    public var audioAttachments: [ChannelAttachment] { attachments.filter(\.isAudio) }
+
+    /// The first audio attachment that actually exists on disk, ready for ASR.
+    public var voiceNoteURL: URL? { audioAttachments.compactMap(\.localURL).first }
+
+    public var imageAttachments: [ChannelAttachment] { attachments.filter(\.isImage) }
+
+    /// Images that exist on disk, ready for a vision model.
+    ///
+    /// Capped, because either channel will happily carry twenty photos in one
+    /// message and each one costs context on a 4B model. The owner asking about
+    /// "this screenshot" means the one they just sent, not a gallery.
+    public var imageURLs: [URL] {
+        Array(imageAttachments.compactMap(\.localURL).prefix(Self.maximumImagesPerMessage))
+    }
+
+    public static let maximumImagesPerMessage = 3
+
+    public var hasText: Bool {
+        !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Short, log-safe rendering. Deliberately does not include message text.
+    ///
+    /// **The Signal twin of this line printed the owner's phone number in full
+    /// for months**, twenty-six times in one `bridge.log`, while its doc comment
+    /// said "log-safe" — see `SignalIncomingMessage.logDescription`, which keeps
+    /// the whole account. The mechanism that stops it recurring is
+    /// `SignalTransportRedactionTests`, and it now builds a WhatsApp message as
+    /// well as a Signal one: a JID carries the owner's number too, with no `+`
+    /// in front of it.
+    public var logDescription: String {
+        let sender = SignalSenderAllowlist.redact(recipient.address)
+        let shape = attachments.isEmpty ? "text" : "text+\(attachments.count) attachment(s)"
+        return "\(kind.rawValue) from \(sender) at \(timestamp) (\(shape))"
     }
 }
 
@@ -179,11 +313,43 @@ public struct ChannelReply: Equatable, Sendable {
 /// set is meaningful and is not an error here — it is an appliance nobody can
 /// message, which is a legitimate state during setup and one the UI must be
 /// able to describe.
-public struct ChannelSelection: Equatable, Sendable, Codable {
+public struct ChannelSelection: Equatable, Hashable, Sendable, Codable {
     public var enabled: Set<ChannelKind>
 
     public init(_ enabled: Set<ChannelKind> = []) {
         self.enabled = enabled
+    }
+
+    public enum Failure: Error, Equatable, CustomStringConvertible {
+        case unknown(String)
+
+        public var description: String {
+            switch self {
+            case .unknown(let name):
+                return "'\(name)' is not a channel. Choose from "
+                    + ChannelKind.allCases.map(\.rawValue).joined(separator: ", ")
+                    + " — or several, comma-separated, for more than one at once."
+            }
+        }
+    }
+
+    /// What the daemon's `--channels` flag and the app's stored setting both
+    /// parse. One reader, so a value the app writes cannot mean something else
+    /// to the process that has to act on it.
+    ///
+    /// An empty string is the empty selection rather than an error, matching
+    /// `ChannelSelection.none`: an appliance nobody can message is a real state
+    /// during setup, and refusing to parse it would make the UI's own "neither
+    /// yet" unrepresentable.
+    public init(commaSeparated raw: String) throws {
+        var found: Set<ChannelKind> = []
+        for piece in raw.split(separator: ",") {
+            let name = piece.trimmingCharacters(in: .whitespaces).lowercased()
+            if name.isEmpty { continue }
+            guard let kind = ChannelKind(rawValue: name) else { throw Failure.unknown(name) }
+            found.insert(kind)
+        }
+        self.enabled = found
     }
 
     public static let none = ChannelSelection([])

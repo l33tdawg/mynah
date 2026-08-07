@@ -17,7 +17,11 @@ public final class SignalChannel: MessageChannel {
     public init(client: SignalClient) {
         self.client = client
         var continuation: AsyncStream<ChannelMessage>.Continuation!
-        self.incomingMessages = AsyncStream(bufferingPolicy: .bufferingNewest(256)) { continuation = $0 }
+        // Unbounded, matching the WhatsApp side and `MessageInbox`, which has
+        // always been an unbounded array. Signal has no spool behind it: a
+        // dropped element here is a message the owner sent that nobody will ever
+        // see again, and there is nothing to replay it from.
+        self.incomingMessages = AsyncStream(bufferingPolicy: .unbounded) { continuation = $0 }
         let out = continuation!
         self.translation = Task {
             for await message in client.incomingMessages {
@@ -57,7 +61,11 @@ public final class SignalChannel: MessageChannel {
             id: String(message.timestamp),
             senderDisplayName: message.sourceName,
             text: message.text,
-            attachmentPaths: message.attachments.compactMap { $0.localURL?.path },
+            // The attachments themselves, not their paths. A path cannot say
+            // whether the file is the voice note that IS this message or a
+            // document to be filed, and getting that wrong makes Mynah answer a
+            // spoken question by saying it has saved the owner's voice.
+            attachments: message.attachments,
             timestamp: message.timestamp / 1000,   // Signal counts milliseconds
             acknowledgementToken: nil              // nothing to acknowledge
         )

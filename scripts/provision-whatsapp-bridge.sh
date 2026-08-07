@@ -36,11 +36,34 @@ die() { echo "error: $*" >&2; exit 1; }
 #
 # Checked before the install rather than after, because npm's own error for a
 # too-old Node is about engines and does not say what to do about it.
-NODE="$(command -v node || true)"
-[[ -n "$NODE" ]] || die \
-"node is not on PATH, and the WhatsApp bridge is a Node process.
+#
+# **The vendored one first, and that is the whole point of the ordering.** This
+# resolved `command -v node` and accepted any major >= 22 — so the start probe
+# below, which this script's own comments call "the only check that could have
+# caught a broken tree", and all 49 bridge tests, ran on whatever the build Mac
+# happened to have on PATH. The interpreter that actually ships is
+# vendor/node/bin/node at the pinned 22.22.0, staged by provision-node.sh, and it
+# was never the one exercised. A build Mac on 24.x would have proved nothing
+# about the appliance.
+#
+# PATH stays as the fallback so a checkout that has not run provision-node.sh
+# still works — with a line saying which interpreter is being used, because
+# "tests passed" means something different in each case.
+VENDORED_NODE="${SAGE_VOICE_NODE_ROOT:-$ROOT/vendor/node}/bin/node"
+if [[ -x "$VENDORED_NODE" ]]; then
+  NODE="$VENDORED_NODE"
+else
+  NODE="$(command -v node || true)"
+  [[ -n "$NODE" ]] || die \
+"node is not on PATH and none is vendored, and the WhatsApp bridge is a Node process.
 
-Install Node $EXPECTED_NODE_MAJOR (nvm install $EXPECTED_NODE_MAJOR) and run this again."
+Stage the pinned runtime — this is what ships, so it is the one to test against:
+    bash scripts/provision-node.sh
+
+Or install Node $EXPECTED_NODE_MAJOR yourself (nvm install $EXPECTED_NODE_MAJOR) and run this again."
+  echo "warning: testing against $NODE, which is NOT the interpreter that ships." >&2
+  echo "         Run scripts/provision-node.sh first to exercise the vendored $EXPECTED_NODE_MAJOR.x." >&2
+fi
 
 NODE_VERSION="$("$NODE" --version)"          # e.g. v22.22.0
 NODE_MAJOR="${NODE_VERSION#v}"; NODE_MAJOR="${NODE_MAJOR%%.*}"

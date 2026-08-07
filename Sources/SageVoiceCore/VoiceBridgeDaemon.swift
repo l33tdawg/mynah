@@ -211,7 +211,14 @@ public actor VoiceBridgeDaemon {
         case failed(String)
     }
 
-    private let signal: SignalClient
+    /// Every channel the owner has turned on — Signal, WhatsApp, or both.
+    ///
+    /// This was `SignalClient`, and nothing below it changed when it stopped
+    /// being one: the loop reads messages, answers them, and sends replies back
+    /// where they came from, which is the whole of what it ever needed a
+    /// transport for. See `ChannelSet` for why a second daemon was the wrong
+    /// answer to "or both".
+    private let channels: ChannelSet
     private let transcriber: AudioFileTranscribing
 
     /// Called the moment //call arrives, before the link is even built.
@@ -224,7 +231,7 @@ public actor VoiceBridgeDaemon {
 
 
     /// Who asked for the last call, so its transcript goes back to them.
-    private var lastCallRecipient: SignalRecipient?
+    private var lastCallRecipient: ChannelRecipient?
     private let loop: ToolLoop
     private let configuration: Configuration
     private let log: (String) -> Void
@@ -294,7 +301,7 @@ public actor VoiceBridgeDaemon {
     ///   turn ends up promising to come back, the promise can name it. Captured
     ///   per turn rather than stored, so an abandoned turn cannot pair its own
     ///   recipient with a later turn's question.
-    private func beginQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) {
+    private func beginQuietPeriod(to recipient: ChannelRecipient, thread: String, question: String) {
         quietPeriod?.cancel()
         workingLines.beginTurn()
         // The promise ledger is NOT reset here. It looks like the right place —
@@ -311,7 +318,7 @@ public actor VoiceBridgeDaemon {
     }
 
     /// The turn is taking a while after all. Say whatever was held.
-    private func endQuietPeriod(to recipient: SignalRecipient, thread: String, question: String) async {
+    private func endQuietPeriod(to recipient: ChannelRecipient, thread: String, question: String) async {
         guard let line = workingLines.quietPeriodEnded() else { return }
         lastWorkingLines[thread] = line
         await reply(line, to: recipient, as: .workingLine, promising: question)
@@ -322,7 +329,7 @@ public actor VoiceBridgeDaemon {
         _ line: String,
         isArrivalOpener: Bool = false,
         thread: String,
-        to recipient: SignalRecipient,
+        to recipient: ChannelRecipient,
         question: String
     ) async {
         let decision = workingLines.offer(
@@ -423,7 +430,7 @@ public actor VoiceBridgeDaemon {
     private let synthesizer: SpeechSynthesizing?
 
     public init(
-        signal: SignalClient,
+        channels: ChannelSet,
         transcriber: AudioFileTranscribing,
         loop: ToolLoop,
         configuration: Configuration = Configuration(),
@@ -446,7 +453,7 @@ public actor VoiceBridgeDaemon {
         pause: PauseState = PauseState(),
         log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     ) {
-        self.signal = signal
+        self.channels = channels
         self.pause = pause
         self.transcriber = transcriber
         self.loop = loop
@@ -474,9 +481,34 @@ public actor VoiceBridgeDaemon {
         self.log = { log(SignalSenderAllowlist.redactingNumbers(in: $0)) }
     }
 
-    /// Runs until the message stream finishes (i.e. until `signal.stop()`).
+    /// Runs until every channel's message stream finishes (i.e. until `stop()`).
     public func run() async {
-        await signal.start()
+        // **Reading starts before any of the slow work below, and that ordering
+        // is load-bearing.**
+        //
+        // `channels.start()` is the moment the WhatsApp bridge writes its entire
+        // unacknowledged spool down the socket in one burst. Everything between
+        // here and the answering loop — restoring conversations, SAGE's
+        // inception round trip, a measured fourteen seconds of model prefill —
+        // used to happen with that backlog arriving and nothing draining it. The
+        // stream buffers are unbounded now so nothing is lost either way, but a
+        // fix that depends only on buffer size is one policy change away from
+        // the failure it replaced.
+        //
+        // Reading and answering are split for their own reason as well: a
+        // follow-up sent while the previous one is still in flight lands
+        // somewhere, instead of sitting unread in the stream behind a turn that
+        // can now run five minutes.
+        let inbox = MessageInbox()
+        let reader = Task { [channels] in
+            for await message in channels.incomingMessages {
+                await inbox.append(message)
+            }
+            await inbox.close()
+        }
+        defer { reader.cancel() }
+
+        await channels.start()
 
         // Before anything else the owner might reply into. A restart is
         // invisible from their side — they just carry on talking — so the
@@ -531,19 +563,7 @@ public actor VoiceBridgeDaemon {
             Task { [weak self] in await self?.keepTheBrokenPromise(inherited) }
         }
 
-        log("[daemon] listening for Signal messages")
-
-        // Reading and answering are split so a follow-up sent while the previous
-        // one is still in flight lands somewhere, instead of sitting unread in
-        // the stream behind a turn that can now run five minutes.
-        let inbox = MessageInbox()
-        let reader = Task { [signal] in
-            for await message in signal.incomingMessages {
-                await inbox.append(message)
-            }
-            await inbox.close()
-        }
-        defer { reader.cancel() }
+        log("[daemon] listening on \(channels.kinds.map(\.displayName).joined(separator: " + "))")
 
         while true {
             await inbox.waitForArrival()
@@ -561,6 +581,31 @@ public actor VoiceBridgeDaemon {
             // is no throughput to win.
             let outcome = await handle(batch)
             log("[daemon] \(batch[0].logDescription) -> \(outcome.logDescription)")
+
+            // **This retires the message, and until now nothing called it.**
+            //
+            // `MessageChannel.acknowledge` is the only thing that lets the
+            // WhatsApp bridge drop a message from its crash-durable spool. It
+            // existed, it was documented as the one way, `ChannelSet` and
+            // `WhatsAppChannel` and `WhatsAppClient` each implemented it — and
+            // no line in `Sources/` ever invoked it. The whole durable path
+            // terminated in dead code: the spool would have grown to its 10,000
+            // limit and then refused every further inbound message, and every
+            // reconnect in between would have re-answered the entire history.
+            //
+            // **Here, after `handle` returns, and not on receipt.** Earlier and
+            // a crash mid-turn loses the message the spool exists to keep. The
+            // outcome is deliberately not consulted: `handle` returning at all
+            // means the message was read and something was said back or
+            // deliberately ignored, including every refusal. Redelivering a
+            // failed turn after a restart would answer a question the owner has
+            // already had an apology for — and the apology itself is durable,
+            // which is what `PromisedAnswer` is.
+            //
+            // Signal's implementation is empty, so this costs nothing there.
+            for message in batch {
+                await channels.acknowledge(message)
+            }
         }
         log("[daemon] message stream finished")
     }
@@ -568,7 +613,7 @@ public actor VoiceBridgeDaemon {
     public func stop() async {
         keepWarmTask?.cancel()
         keepWarmTask = nil
-        await signal.stop()
+        await channels.stop()
     }
 
     /// Re-primes the cache on a timer so an idle appliance stays fast.
@@ -663,7 +708,7 @@ public actor VoiceBridgeDaemon {
 
     /// Exposed so a test can drive a synthetic message without a live daemon.
     @discardableResult
-    public func handle(_ message: SignalIncomingMessage) async -> Outcome {
+    public func handle(_ message: ChannelMessage) async -> Outcome {
         await handle([message])
     }
 
@@ -673,7 +718,7 @@ public actor VoiceBridgeDaemon {
     /// several requests — it is one request the owner finished typing late, and
     /// everything downstream (history, tools, the reply) should see exactly one
     /// turn. See `MessageCoalescer`.
-    public func handle(_ batch: [SignalIncomingMessage]) async -> Outcome {
+    public func handle(_ batch: [ChannelMessage]) async -> Outcome {
         let started = Date()
 
         // **The exchange boundary, and it is here rather than at the turn.**
@@ -699,12 +744,11 @@ public actor VoiceBridgeDaemon {
         ledger.beginExchange()
 
         guard let message = batch.first else { return .ignoredEmpty }
-        guard let recipient = message.replyRecipient else {
-            // Nothing to reply to. Dropping is correct: the alternative is
-            // guessing a destination, and guessing wrong means the owner's
-            // agent messages a stranger.
-            return .failed("no reply recipient on \(message.logDescription)")
-        }
+        // Non-optional now, and that is the point of `ChannelMessage`: a channel
+        // that cannot work out where a reply goes drops the message before the
+        // daemon sees it, rather than handing over something unanswerable. See
+        // `SignalChannel.translate`, which is where the old `nil` branch went.
+        let recipient = message.recipient
 
         // One unreadable voice note in a batch must not discard the text that
         // came with it — the owner said both things.
@@ -1129,7 +1173,7 @@ public actor VoiceBridgeDaemon {
 
     /// Voice note first, then text. A message carrying both is a voice note
     /// with a caption, and the spoken part is the instruction.
-    private func resolveTranscript(_ message: SignalIncomingMessage) async throws -> String? {
+    private func resolveTranscript(_ message: ChannelMessage) async throws -> String? {
         if let audio = message.voiceNoteURL {
             let heard = try await transcriber.transcribe(
                 audioFile: audio,
@@ -1167,7 +1211,7 @@ public actor VoiceBridgeDaemon {
     /// than one that says it cannot see anything.
     /// Files everything attached to this batch, whatever the brain can do with
     /// it. See `SignalAttachmentStore`.
-    private func keepAttachments(in batch: [SignalIncomingMessage]) -> [SignalAttachmentStore.Kept] {
+    private func keepAttachments(in batch: [ChannelMessage]) -> [SignalAttachmentStore.Kept] {
         let store = SignalAttachmentStore(
             notesDirectory: notes?.notesDirectory ?? NotesToolSource.defaultDirectory()
         )
@@ -1189,6 +1233,7 @@ public actor VoiceBridgeDaemon {
                 // transcribe, so the two cannot disagree about which attachment
                 // is the message.
                 message.attachments.filter { !$0.isAudio },
+                via: message.kind,
                 caption: message.text,
                 receivedAt: Date(),
                 log: { [weak self] line in self?.log(line) }
@@ -1213,7 +1258,7 @@ public actor VoiceBridgeDaemon {
         )
     }
 
-    private func resolveImages(_ message: SignalIncomingMessage) -> [Data] {
+    private func resolveImages(_ message: ChannelMessage) -> [Data] {
         // Logged unconditionally when anything is attached, because the failure
         // this catches is silent by construction: an attachment that is not
         // recognised as an image produces no error, no empty file and no
@@ -1256,7 +1301,7 @@ public actor VoiceBridgeDaemon {
     /// unavailable" would be true and useless; which model is too slow, and
     /// that voice notes still work, is the difference between a dead end and a
     /// choice.
-    private func handleCallRequest(from recipient: SignalRecipient) async {
+    private func handleCallRequest(from recipient: ChannelRecipient) async {
         guard let calls else {
             await reply("Calling isn't set up on this Mac yet.", to: recipient)
             return
@@ -1389,7 +1434,7 @@ public actor VoiceBridgeDaemon {
     @discardableResult
     public func announce(
         _ text: String,
-        to recipient: SignalRecipient,
+        to recipient: ChannelRecipient,
         quotingAnotherAgent: Bool = false
     ) async -> Bool {
         let key = recipient.description
@@ -1467,7 +1512,7 @@ public actor VoiceBridgeDaemon {
     public func postAfterTheCall(
         _ text: String,
         attaching files: [URL] = [],
-        to fallback: SignalRecipient? = nil
+        to fallback: ChannelRecipient? = nil
     ) async -> AfterTheCallDelivery {
         guard let recipient = lastCallRecipient ?? fallback else { return .failed }
         recordFromCall(text, for: recipient.description)
@@ -1505,7 +1550,7 @@ public actor VoiceBridgeDaemon {
     /// Signal message already gets.
     public func doAfterTheCall(
         _ instruction: String,
-        to fallback: SignalRecipient? = nil
+        to fallback: ChannelRecipient? = nil
     ) async -> AfterTheCallDelivery {
         guard let recipient = lastCallRecipient ?? fallback else { return .failed }
         let key = recipient.description
@@ -1654,7 +1699,7 @@ public actor VoiceBridgeDaemon {
     @discardableResult
     private func reply(
         _ text: String,
-        to recipient: SignalRecipient,
+        to recipient: ChannelRecipient,
         attaching attachments: [URL] = [],
         allowSpeaking: Bool = true,
         as utterance: Utterance = .answer,
@@ -1679,9 +1724,11 @@ public actor VoiceBridgeDaemon {
         // characters or it is nowhere.
         let spaced = SignalReplyText.spacingOutLists(in: linked)
         let body = configuration.replyPrefix.isEmpty ? spaced : configuration.replyPrefix + spaced
-        // Signal's own bold on the marker — see `SignalReplyText.styles`, which
-        // holds the rule and the reasoning.
-        let styles = SignalReplyText.styles(forPrefix: configuration.replyPrefix)
+        // Bold on the marker — see `SignalReplyText.emphasis`, which holds the
+        // rule and the reasoning. Described rather than spelled: Signal wants
+        // `0:8:BOLD` and WhatsApp wants asterisks in the text, and each channel
+        // renders this its own way. See `ChannelReply`.
+        let styles = SignalReplyText.emphasis(forPrefix: configuration.replyPrefix)
         // Spoken as well as written, never instead of. A voice note the owner
         // cannot play — on a watch, in a meeting, on a bad connection — would
         // otherwise be an answer they cannot read, and the text costs nothing.
@@ -1697,10 +1744,12 @@ public actor VoiceBridgeDaemon {
         }
         let attachments = attachments + spoken
         do {
-            _ = try await signal.send(
-                text: body,
-                attachmentPaths: attachments.map(\.path),
-                textStyles: styles,
+            try await channels.send(
+                ChannelReply(
+                    text: body,
+                    attachmentPaths: attachments.map(\.path),
+                    emphasis: styles
+                ),
                 to: recipient
             )
             // **After the wire call returned, and nowhere else.**
@@ -1785,10 +1834,10 @@ public actor VoiceBridgeDaemon {
         log("[daemon] a previous run promised an answer at \(promise.promisedAt) and never sent it")
 
         // Wait for the socket rather than assume it. `run()` has called
-        // `signal.start()`, but connecting is asynchronous and a send into a nil
+        // `channels.start()`, but connecting is asynchronous and a send into a nil
         // socket throws rather than queues.
         let deadline = Date().addingTimeInterval(Self.longestWaitForSignalBeforeApologising)
-        while await !signal.isConnected {
+        while await !channels.isConnected(promise.channel) {
             guard Date() < deadline else {
                 // Deliberately clears nothing. A boot that never reached Signal
                 // has not spent the apology, so the next start should try again.
@@ -1800,8 +1849,8 @@ public actor VoiceBridgeDaemon {
                 // promise by design, and the newer one is the better thing to
                 // keep — but the older apology is lost, so it is logged rather
                 // than left to be inferred.
-                log("[daemon] could not reach Signal to apologise for the unkept promise; "
-                    + "leaving it for the next start unless a newer promise replaces it")
+                log("[daemon] could not reach \(promise.channel.displayName) to apologise for the "
+                    + "unkept promise; leaving it for the next start unless a newer promise replaces it")
                 return
             }
             try? await Task.sleep(for: .milliseconds(500))
@@ -1813,7 +1862,7 @@ public actor VoiceBridgeDaemon {
         let delivered = await announce(
             "Sorry — I said I'd come back to you on that and then I fell over before I could. "
                 + "I'm back now. You asked: \"\(promise.question)\" — send it again and I'll have another go.",
-            to: .account(promise.account)
+            to: ChannelRecipient(kind: promise.channel, address: promise.account, isGroup: false)
         )
 
         // **Only after it was actually delivered, and only if this is still the
@@ -1845,14 +1894,18 @@ public actor VoiceBridgeDaemon {
     /// never asked that person.
     private func recordThePromise(
         _ utterance: Utterance,
-        to recipient: SignalRecipient,
+        to recipient: ChannelRecipient,
         question: String?
     ) {
         switch utterance {
         case .workingLine:
             guard let question,
                   let promise = ledger.promised(
-                      to: recipient.description,
+                      // The address alone. `description` carries the channel
+                      // name in front of it, and this string is fed back into a
+                      // `ChannelRecipient` when the apology is sent.
+                      to: recipient.address,
+                      channel: recipient.kind,
                       question: question,
                       at: Date()
                   ) else { return }

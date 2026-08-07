@@ -75,6 +75,10 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   const ackPath = path.join(dir, ACK_FILE);
 
   let ackedThrough = readAck(ackPath, warn);
+  // The highest acknowledgement refused as out of range. Latched, so a consumer
+  // repeating a mark from a different spool cannot have it accepted later. See
+  // `ack`.
+  let refusedAbove = 0;
   const loaded = load(eventsPath, warn);
   let records = loaded.records.filter((r) => r.seq > ackedThrough);
 
@@ -92,9 +96,23 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   // torn tail: a corrupt line in the middle is damage that must stay visible
   // until an ack compacts it away, and appending after it is safe anyway
   // because the last line is intact.
-  if (loaded.torn) {
+  if (loaded.torn && !loaded.unreadable) {
     compact(eventsPath, records);
   }
+
+  // **A failed read must stay a failed read, and `compact` was undoing that.**
+  //
+  // `load()` deliberately returns an empty list without rewriting anything when
+  // it cannot read the file, so as not to turn "I could not look" into "there
+  // was nothing there". The very next `ack()` then called `compact` with that
+  // empty list — which unlinks the file. The scruple lasted exactly one
+  // acknowledgement.
+  //
+  // So a spool that could not read its own events refuses to compact at all.
+  // The file stays, unreadable and intact, for whoever comes to look at it; the
+  // mark still advances, so the consumer is not stuck; and the events file is
+  // simply larger than it needs to be, which is the cheapest possible symptom.
+  const mayRewriteEvents = !loaded.unreadable;
 
   // The next sequence continues past anything on disk INCLUDING acked-and-
   // compacted history, so a sequence number is never reused within the life of
@@ -179,27 +197,71 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
     const target = Number(seq);
     if (!Number.isSafeInteger(target) || target <= ackedThrough) return 0;
 
-    if (target >= nextSeq) {
+    // **Refused once is refused for good, and the latch is the whole fix.**
+    //
+    // Without it the bound only holds until `nextSeq` catches up. The consumer
+    // re-sends the same mark on every reconnection — that is correct behaviour
+    // for it, and this file says so two paragraphs up — so a spool that receives
+    // 57 real messages after refusing `{"ack":57}` accepts the very next copy of
+    // it and retires all 57 unread. The bound moved the loss later rather than
+    // preventing it.
+    if (target >= nextSeq || target <= refusedAbove) {
+      if (target > refusedAbove) refusedAbove = target;
       warn(
         `spool: refusing an acknowledgement of ${target} — nothing above ` +
         `${nextSeq - 1} has been written. Accepting it would retire the next ` +
-        `${target - nextSeq + 1} message(s) unread. The consumer is holding a ` +
-        `mark from a different spool; it will be corrected on the next connection.`
+        `${Math.max(0, target - nextSeq + 1)} message(s) unread. The consumer is holding a ` +
+        `mark from a different spool and will keep re-sending it, so it is refused ` +
+        `permanently rather than until this spool grows past it. Nothing is lost: ` +
+        `every record here is still replayed on the next connection, and the ` +
+        `consumer's mark is rebuilt from the first sequence it sees.`
       );
       return 0;
     }
 
+    // **Disk first, memory second.** This used to move `records` and
+    // `ackedThrough` before touching the disk, then call `writeAtomic` and
+    // `compact` with no handling at all — and both throw on the ENOSPC and EIO
+    // that `append` was hardened against. The throw arrives from
+    // `event_socket.js`'s `data` listener, which has no catch, in a process with
+    // no `uncaughtException` handler: one full disk and the bridge is gone,
+    // having already dropped the records from memory.
+    //
+    // Written this way round, a failure leaves the spool exactly as it was and
+    // the consumer simply re-acks on its next connection.
     const before = records.length;
-    records = records.filter((r) => r.seq > target);
-    ackedThrough = target;
+    const remaining = records.filter((r) => r.seq > target);
 
-    // Order matters. The ack file is written FIRST and fsynced, then the
-    // events file is compacted. Crash in between and the events are still on
+    // Order matters here too. The ack file is written FIRST and fsynced, then
+    // the events file is compacted. Crash in between and the events are still on
     // disk but below the ack mark, so the next load() filters them out — a
-    // duplicate-free replay. Do it the other way round and a crash loses
-    // events that were never acknowledged.
-    writeAtomic(ackPath, `${ackedThrough}\n`);
-    compact(eventsPath, records);
+    // duplicate-free replay. Do it the other way round and a crash loses events
+    // that were never acknowledged.
+    try {
+      writeAtomic(ackPath, `${target}\n`);
+    } catch (error) {
+      warn(
+        `spool: could not record an acknowledgement of ${target} at ${ackPath} ` +
+        `(${error.message}). Nothing was dropped — every message here is still on ` +
+        `disk and will be replayed. Free some space; the consumer re-acknowledges ` +
+        `on its next connection.`
+      );
+      return 0;
+    }
+    ackedThrough = target;
+    records = remaining;
+    try {
+      if (mayRewriteEvents) compact(eventsPath, records);
+    } catch (error) {
+      // The mark is already down, so these records are retired whether or not
+      // the file shrinks — `load()` filters by the mark. A failure here costs
+      // disk space, not messages.
+      warn(
+        `spool: acknowledged through ${target} but could not shrink ${eventsPath} ` +
+        `(${error.message}). No message is lost; the file is larger than it needs to be ` +
+        `and the next successful acknowledgement rewrites it.`
+      );
+    }
     return before - records.length;
   }
 
@@ -211,16 +273,57 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   return { append, pending, ack, stats, eventsPath, ackPath };
 }
 
+/**
+ * The mark, or a refusal to start.
+ *
+ * **Absent and unreadable are different, and treating them alike restarts
+ * sequence numbering.** No file at all is a fresh spool, and 0 is the right
+ * answer. A file that exists and will not parse is the opposite: this spool has
+ * a history and we cannot see how far it got. Answering 0 there makes `nextSeq`
+ * restart at 1 — the events file is normally absent in the steady state,
+ * because `compact` unlinks it once everything is acknowledged, so there are no
+ * records to derive a floor from either.
+ *
+ * What that costs is not one message. Sequence numbers are the only thing
+ * identifying a message to the consumer, and the file at line 99 states that
+ * one is never reused within the life of a spool directory. Reuse breaks the
+ * consumer's watermark in both directions at once: acks for the old 1..N retire
+ * the new 1..N unread, and the ledger on the other side has already seen those
+ * numbers.
+ *
+ * So this throws, and the bridge refuses to start. Loud and stopped beats
+ * running and quietly reusing numbers — and the message says exactly which file
+ * to move aside, which is a repair the owner can carry out in one command.
+ */
 function readAck(ackPath, warn) {
   if (!existsSync(ackPath)) return 0;
+  let raw;
   try {
-    const value = Number(readFileSync(ackPath, 'utf8').trim());
-    if (Number.isSafeInteger(value) && value >= 0) return value;
-    warn(`spool: ack file at ${ackPath} is not a whole number; treating as 0`);
+    raw = readFileSync(ackPath, 'utf8');
   } catch (error) {
-    warn(`spool: could not read ack file at ${ackPath}: ${error.message}`);
+    throw new Error(
+      `the spool's acknowledgement mark at ${ackPath} could not be read (${error.message}).\n` +
+      `Starting anyway would restart sequence numbering at 1 and hand the consumer numbers it\n` +
+      `has already seen, which loses messages silently in both directions.\n` +
+      `Fix the permissions on that file, or move the whole spool directory aside to start clean:\n` +
+      `  mv '${ackPath}' '${ackPath}.broken'`
+    );
   }
-  return 0;
+  const trimmed = raw.trim();
+  // **Blank is not zero.** `Number('')` is 0, and 0 is the answer for a spool
+  // that has never acknowledged anything — so an ack file truncated to nothing,
+  // which is what a crash between `open` and `write` leaves, read as "start
+  // again from 1". Exactly the renumbering this function throws to prevent, and
+  // it arrived through the emptiest possible door.
+  const value = trimmed === '' ? Number.NaN : Number(trimmed);
+  if (Number.isSafeInteger(value) && value >= 0) return value;
+  throw new Error(
+    `the spool's acknowledgement mark at ${ackPath} is ${trimmed === '' ? 'empty' : `not a whole number (${JSON.stringify(raw.slice(0, 40))})`}.\n` +
+    `Starting anyway would restart sequence numbering at 1 and hand the consumer numbers it\n` +
+    `has already seen, which loses messages silently in both directions.\n` +
+    `Move it aside to start clean, accepting that anything unacknowledged in it is gone:\n` +
+    `  mv '${ackPath}' '${ackPath}.broken'`
+  );
 }
 
 /**
@@ -232,20 +335,28 @@ function readAck(ackPath, warn) {
  * is reported rather than passed over in silence, because quietly reading
  * around a hole is how a spool that has lost messages goes on looking healthy.
  *
- * Returns `{ records, torn }`. `torn` says the file itself needs rewriting
- * before anything is appended to it — see the caller.
+ * Returns `{ records, torn, unreadable }`. `torn` says the file itself needs
+ * rewriting before anything is appended to it; `unreadable` says nothing may
+ * rewrite it at all — see the caller.
  */
 function load(eventsPath, warn) {
-  if (!existsSync(eventsPath)) return { records: [], torn: false };
+  if (!existsSync(eventsPath)) return { records: [], torn: false, unreadable: false };
   let text;
   try {
     text = readFileSync(eventsPath, 'utf8');
   } catch (error) {
-    warn(`spool: could not read ${eventsPath}: ${error.message}`);
-    // Not `torn`. We could not read the file, so we know nothing about its
-    // shape — rewriting it from an empty record list would turn "I could not
-    // look" into "there was nothing there", which is the whole rule.
-    return { records: [], torn: false };
+    warn(
+      `spool: could not read ${eventsPath}: ${error.message}. ` +
+      `Nothing in it will be replayed and nothing will overwrite it either — it is left ` +
+      `exactly as found. Fix the permissions and restart to recover whatever is in there.`
+    );
+    // Not `torn`, and now `unreadable` as well. We could not read the file, so
+    // we know nothing about its shape — rewriting it from an empty record list
+    // would turn "I could not look" into "there was nothing there", which is the
+    // whole rule. Saying so in the return value is what makes the rule hold past
+    // this function: the flag travels to `compact`, which was undoing it on the
+    // very next acknowledgement.
+    return { records: [], torn: false, unreadable: true };
   }
 
   const lines = text.split('\n');
@@ -279,7 +390,7 @@ function load(eventsPath, warn) {
 
   // Sorted rather than assumed sorted: append order is sequence order today,
   // and a future writer that batches would break that assumption silently.
-  return { records: records.sort((a, b) => a.seq - b.seq), torn: trailingPartial };
+  return { records: records.sort((a, b) => a.seq - b.seq), torn: trailingPartial, unreadable: false };
 }
 
 function compact(eventsPath, records) {

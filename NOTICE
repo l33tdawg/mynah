@@ -16,3 +16,23 @@ Research — MIT License, full text in whatsapp/LICENSE.hermes. The upstream
 commit it was taken from, and every local change, are recorded in
 whatsapp/PROVENANCE.md. It uses Baileys (https://github.com/WhiskeySockets/Baileys)
 — MIT License — which is not affiliated with or endorsed by WhatsApp.
+
+Baileys depends on libsignal (https://github.com/privacyresearchgroup/libsignal-protocol-typescript,
+published to npm as `libsignal`), which is **GPL-3.0**, and it ships inside
+Mynah.app in Contents/Resources/whatsapp/node_modules. This paragraph exists
+because the one above it used to end at "MIT License" and was read, correctly,
+as a statement that the whole WhatsApp side was permissively licensed. It was
+not.
+
+What that means here: libsignal is loaded by the WhatsApp bridge, which is a
+separate program — its own `node` process, talking to Mynah over a UNIX socket
+and a loopback port. Mynah conveys it rather than linking it, so the obligation
+is conveyance: the GPL-3.0 text travels in the bundle at
+Contents/Resources/licences/GPL-3.0.txt, libsignal's own copy stays where npm
+put it, and the complete corresponding source for the version shipped is
+available from the address in this file on request, for as long as this build is
+distributed. No local modifications have been made to it.
+
+scripts/package-app.sh refuses to build if a copyleft package appears in that
+tree without being named here — see the licence gate. That check is new; before
+it, this dependency had shipped unnoticed.

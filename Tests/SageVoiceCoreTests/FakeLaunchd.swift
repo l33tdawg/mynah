@@ -46,6 +46,13 @@ actor FakeLaunchd: ProbeCommandRunning {
             SignalBackgroundServiceManager.executableStamp(configuration.signalCLI)
         loaded[SignalBackgroundServiceManager.bridgeLabel] =
             SignalBackgroundServiceManager.executableStamp(configuration.bridge)
+        // Only when the configuration has one. A fake that loaded a WhatsApp job
+        // for a Signal-only appliance would be modelling a machine that cannot
+        // exist, and every reconcile test would then be asserting against it.
+        if let whatsApp = configuration.whatsApp {
+            loaded[SignalBackgroundServiceManager.whatsAppLabel] =
+                SignalBackgroundServiceManager.executableStamp(whatsApp.bridge)
+        }
     }
 
     /// Puts launchd in the state the owner's Mac was in on 5 August: both jobs
@@ -60,6 +67,27 @@ actor FakeLaunchd: ProbeCommandRunning {
     /// have been.
     func refuseToStart() { startsSucceed = false }
 
+    /// The same failure for one job only.
+    ///
+    /// Needed because "all three refuse" cannot tell the interesting case from
+    /// the boring one: the check being pinned is whether a reconcile notices a
+    /// *third* job missing while the two it has always asked about are fine.
+    /// With everything refusing, a check that still only looks at two would fail
+    /// for the right reason by accident.
+    func refuseToStartWhatsApp() {
+        refusedLabels.insert(SignalBackgroundServiceManager.whatsAppLabel)
+    }
+
+    /// A job loaded behind Mynah's back — a leftover plist bootstrapped at
+    /// login, or a hand-run launchctl.
+    func loadStrayWhatsApp() {
+        loaded[SignalBackgroundServiceManager.whatsAppLabel] = "stray-1-1"
+    }
+
+    func isLoaded(_ label: String) -> Bool { loaded[label] != nil }
+
+    private var refusedLabels: Set<String> = []
+
     func forgetCalls() { calls = [] }
 
     func run(
@@ -71,7 +99,10 @@ actor FakeLaunchd: ProbeCommandRunning {
 
         switch arguments.first {
         case "bootstrap":
-            guard startsSucceed else {
+            guard startsSucceed,
+                  !refusedLabels.contains(Self.label(ofPlistAt: arguments.last ?? "")) else {
+                // Exit 0 and nothing loaded: launchctl accepted the command and
+                // the job did not come up, which is the whole point.
                 return ProbeCommandResult(exitCode: 0, standardOutput: "", standardError: "")
             }
             guard let path = arguments.last,

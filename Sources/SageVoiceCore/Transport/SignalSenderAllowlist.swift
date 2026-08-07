@@ -287,11 +287,21 @@ public struct SignalSenderAllowlist: Equatable, Sendable, CustomStringConvertibl
     /// attachment counts are small. Running it over an already-redacted string
     /// is a no-op, because `+60******767` no longer matches.
     ///
+    /// **The second alternative is WhatsApp, and leaving it out would have
+    /// repeated the exact leak this function exists to end.** A WhatsApp address
+    /// is `60123456789@s.whatsapp.net` — the same number, with no `+` in front
+    /// of it, so the E.164 pattern above sees nothing and every JID the daemon
+    /// logged would have gone to disk in full. `@` is what makes the bare digit
+    /// run safe to match: a Signal timestamp is thirteen bare digits too, and
+    /// nothing else this daemon logs puts one immediately before an `@`. Group
+    /// JIDs (`120363…@g.us`) and LID addresses (`…@lid`) are the same shape and
+    /// are covered by the same branch.
+    ///
     /// It is not a claim that nothing sensitive can reach a log. It is one
     /// specific thing — the identifier that is also a way to contact him — made
     /// structurally unable to arrive there by accident.
     public static func redactingNumbers(in line: String) -> String {
-        guard let pattern = try? NSRegularExpression(pattern: #"\+\d{7,15}"#) else { return line }
+        guard let pattern = try? NSRegularExpression(pattern: #"\+\d{7,15}|\d{7,20}(?=@)"#) else { return line }
         let text = line as NSString
         var result = line
         let matches = pattern.matches(in: line, range: NSRange(location: 0, length: text.length))
