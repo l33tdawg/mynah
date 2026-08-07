@@ -133,5 +133,27 @@ import that resolves on disk and throws at execution — check the first stack
 frame above. Do not stage this into a release."
 fi
 
+# --- the tests ---------------------------------------------------------------
+#
+# Run per file rather than as one `node --test *.test.mjs`. The aggregate form
+# prints a single TAP plan, so a file that failed to load at all — a bad import,
+# a syntax error — subtracts its tests from a total nobody is checking and the
+# run still says "pass". That is the same false green scripts/assert-test-run.sh
+# exists to stop on the Swift side, and it is worth two extra seconds here.
+echo
+FAILED=0
+for file in "$BRIDGE_DIR"/*.test.mjs; do
+  name="$(basename "$file")"
+  if OUTPUT="$(cd "$BRIDGE_DIR" && "$NODE" --test "$name" 2>&1)"; then
+    printf '  %-28s %s\n' "$name" "$(echo "$OUTPUT" | grep -E '^# pass' | tr -d '\n')"
+  else
+    printf '  %-28s FAILED\n' "$name"
+    echo "$OUTPUT" | grep -E '^not ok|Error' | head -5
+    FAILED=1
+  fi
+done
+[[ "$FAILED" -eq 0 ]] || die "bridge tests failed (above). Do not stage this into a release."
+
+echo
 echo "bridge starts, no native addons, $(du -sh "$MODULES" | cut -f1) installed"
 echo "$BRIDGE_DIR"

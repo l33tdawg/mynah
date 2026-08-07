@@ -58,6 +58,10 @@ import {
   pollCreationMessageFromPayload,
   pollUpdateForAggregation,
 } from './bridge_helpers.js';
+// MYNAH: the durable inbound path. See event_spool.js for why upstream's
+// GET /messages is not enough here.
+import { createEventSpool } from './event_spool.js';
+import { createEventSocket } from './event_socket.js';
 
 // Parse CLI args
 const args = process.argv.slice(2);
@@ -302,6 +306,66 @@ const logger = pino({ level: 'warn' });
 const messageQueue = [];
 const MAX_QUEUE_SIZE = 100;
 
+// MYNAH: a second, durable way out for the same events.
+//
+// The queue above stays exactly as upstream wrote it, so `GET /messages` and
+// upstream's own tests keep working unchanged and a re-sync stays readable.
+// What is added is a spool and a socket beside it: an event is written to disk
+// before anyone is told, and stays there until a consumer acknowledges it.
+//
+// Both paths see every event, and that is deliberate rather than sloppy — they
+// are independent readers, not a fan-out that needs coordinating. The queue is
+// still at-most-once and still drops its oldest past MAX_QUEUE_SIZE; the spool
+// is the one Mynah reads, and the one that survives a restart on either side.
+//
+// Off unless asked for. Without --events-socket this file behaves precisely as
+// upstream does, which is what makes the difference testable: the same bridge,
+// one flag apart.
+const EVENTS_SOCKET = getArg('events-socket', process.env.WHATSAPP_EVENTS_SOCKET || '');
+const SPOOL_DIR = getArg('spool', path.join(MYNAH_STATE_DIR, 'spool'));
+
+const eventSpool = EVENTS_SOCKET
+  ? createEventSpool({ dir: SPOOL_DIR, warn: (line) => console.warn(line) })
+  : null;
+const eventSocket = EVENTS_SOCKET
+  ? createEventSocket({ path: EVENTS_SOCKET, spool: eventSpool, log: (line) => console.log(line) })
+  : null;
+
+/**
+ * MYNAH: the one way an inbound event leaves this file.
+ *
+ * Both upstream push sites call this instead of touching messageQueue, so
+ * there is no route by which an event reaches one path and not the other. That
+ * is the whole reason it is a function: the previous shape had the queue push
+ * duplicated at two call sites 400 lines apart, and adding a third consumer to
+ * only one of them is the kind of mistake nobody notices until a particular
+ * kind of message stops arriving.
+ */
+function publish(event) {
+  messageQueue.push(event);
+  if (messageQueue.length > MAX_QUEUE_SIZE) {
+    messageQueue.shift();
+  }
+
+  if (!eventSpool) return;
+  try {
+    const seq = eventSpool.append(event);
+    eventSocket.notify({ seq, event });
+  } catch (error) {
+    // A full spool throws rather than dropping, and this is where that
+    // decision is paid for. There is nothing clever to do: WhatsApp has
+    // already been told the message was delivered, so it cannot be re-fetched,
+    // and the consumer that would have taken it is evidently not running.
+    //
+    // Say so, loudly and with the number. A silent catch here would recreate
+    // the exact defect this whole path exists to remove — except worse,
+    // because the spool would look healthy while messages vanished.
+    console.error(`[whatsapp] FAILED TO SPOOL AN INBOUND MESSAGE: ${error.message}`);
+    console.error('[whatsapp] That message is not recoverable. Start Mynah, or');
+    console.error(`[whatsapp] inspect the spool at ${SPOOL_DIR}.`);
+  }
+}
+
 // Track recently sent message IDs.  Two purposes:
 //   1. Prevent echo-back loops with media in self-chat mode.
 //   2. (When WHATSAPP_FORWARD_OWNER_MESSAGES=true) distinguish our own
@@ -406,10 +470,7 @@ function enqueuePollUpdateEvent({ key, update, selectedOptions, aggregation }) {
     botIds: [],
     timestamp: Math.floor(Date.now() / 1000),
   };
-  messageQueue.push(event);
-  if (messageQueue.length > MAX_QUEUE_SIZE) {
-    messageQueue.shift();
-  }
+  publish(event);   // MYNAH: was messageQueue.push + shift; see publish()
 }
 
 function rememberSentId(id) {
@@ -791,7 +852,7 @@ async function startSocket() {
       }
 
       messageStore.remember(msg);
-      messageQueue.push(event);
+      publish(event);   // MYNAH: was messageQueue.push; see publish()
       emitDebugEvent({
         stage: 'queued',
         chatId: redactWhatsAppId(chatId),
@@ -802,9 +863,9 @@ async function startSocket() {
         mediaType: event.mediaType,
         queueLength: messageQueue.length,
       });
-      if (messageQueue.length > MAX_QUEUE_SIZE) {
-        messageQueue.shift();
-      }
+      // MYNAH: the trim that stood here moved into publish(), so both call
+      // sites bound the queue the same way. Leaving it would have trimmed
+      // twice on this path and once on the other.
     }
   });
 }
@@ -1142,6 +1203,13 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     scriptHash: SCRIPT_HASH,
     sendReadReceipts: SEND_READ_RECEIPTS,
+    // MYNAH: the durable path's state, so "is anything stuck?" is answerable
+    // without reading files. `spool: null` means the socket was never asked
+    // for — which is a different thing from a spool that is empty, and the two
+    // must not look alike here of all places.
+    spool: eventSpool
+      ? { ...eventSpool.stats(), consumerConnected: eventSocket.hasConsumer }
+      : null,
   });
 });
 
@@ -1163,6 +1231,26 @@ if (PAIR_ONLY) {
     process.exit(1);
   });
 } else {
+  // MYNAH: the events socket comes up BEFORE the HTTP listener and before
+  // WhatsApp is connected, and a failure here is fatal rather than logged.
+  //
+  // Both halves of that are deliberate. If it started later, messages could
+  // arrive in the gap with nowhere durable to go. And the one way it fails is
+  // clearStaleSocket refusing because another bridge already holds the path —
+  // carrying on from that would mean two bridges on one WhatsApp session,
+  // which is the failure PROVENANCE.md describes: they invalidate each other's
+  // keys and both stop decrypting, silently.
+  if (eventSocket) {
+    await eventSocket.start().catch((error) => {
+      console.error(`error: ${error.message}`);
+      process.exit(1);
+    });
+    const waiting = eventSpool.stats().pending;
+    if (waiting > 0) {
+      console.log(`📬 ${waiting} message(s) waiting from before this restart`);
+    }
+  }
+
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`🌉 WhatsApp bridge listening on port ${PORT} (mode: ${WHATSAPP_MODE})`);
     console.log(`📁 Session stored in: ${SESSION_DIR}`);

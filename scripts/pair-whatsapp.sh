@@ -26,6 +26,20 @@ SESSION_DIR="${SAGE_VOICE_WHATSAPP_SESSION:-$HOME/Library/Application Support/SA
 # session with SAGE_VOICE_WHATSAPP_SESSION does not leave the chmod below
 # pointing at a directory this run never touches.
 STATE_DIR="$(dirname "$SESSION_DIR")"
+SPOOL_DIR="${SAGE_VOICE_WHATSAPP_SPOOL:-$STATE_DIR/spool}"
+
+# The durable inbound path: the bridge writes every message here before anyone
+# is told about it, and keeps it until Mynah says it has taken it. See
+# whatsapp/event_spool.js.
+#
+# **The socket is deliberately not next to the spool.** A UNIX socket path has
+# to fit in sockaddr_un.sun_path — 104 bytes, which is nothing. The natural
+# home, "$STATE_DIR/events.sock", is 82 bytes for the account this was written
+# on and grows with the length of the home directory, so a longer username is
+# enough to break it. $TMPDIR is per-user, 0700, and short. The socket itself
+# is chmod 0600 either way, and it holds no state worth keeping across a
+# restart — the spool does.
+EVENTS_SOCKET="${SAGE_VOICE_WHATSAPP_EVENTS_SOCKET:-${TMPDIR:-/tmp}/mynah-whatsapp.sock}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -65,8 +79,8 @@ Stop that one before starting another. Two bridges sharing one session
 directory invalidate each other's keys and both quietly stop decrypting."
 fi
 
-mkdir -p "$SESSION_DIR"
-chmod 700 "$STATE_DIR" "$SESSION_DIR"
+mkdir -p "$SESSION_DIR" "$SPOOL_DIR"
+chmod 700 "$STATE_DIR" "$SESSION_DIR" "$SPOOL_DIR"
 
 if [[ -f "$SESSION_DIR/creds.json" ]]; then
   echo "Already paired — this session is in $SESSION_DIR."
@@ -94,6 +108,8 @@ fi
 echo "  Allowed: $ALLOWED"
 echo "  Session: $SESSION_DIR"
 echo "  Bridge:  http://127.0.0.1:$PORT  (loopback only)"
+echo "  Events:  $EVENTS_SOCKET  (0600)"
+echo "  Spool:   $SPOOL_DIR"
 echo
 
 # self-chat is the plan's Message-Yourself setup: one number, and Mynah answers
@@ -103,4 +119,8 @@ echo
 exec env \
   WHATSAPP_MODE="${WHATSAPP_MODE:-self-chat}" \
   WHATSAPP_ALLOWED_USERS="$ALLOWED" \
-  node "$BRIDGE_DIR/bridge.js" --port "$PORT" --session "$SESSION_DIR"
+  node "$BRIDGE_DIR/bridge.js" \
+    --port "$PORT" \
+    --session "$SESSION_DIR" \
+    --events-socket "$EVENTS_SOCKET" \
+    --spool "$SPOOL_DIR"
