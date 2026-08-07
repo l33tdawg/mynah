@@ -564,6 +564,13 @@ final class SettingsModel {
         return (configuration.node, configuration.bridge)
     }
 
+    /// Said out loud rather than swallowed: the owner has just pressed Unlink
+    /// and the row will still say Linked, so silence here is the screen
+    /// disagreeing with itself for no stated reason.
+    func forgetWhatsAppFailed(_ error: Error) {
+        log.error("could not forget the WhatsApp session: \(error.localizedDescription)")
+    }
+
     var canUnlinkPhone: Bool { phoneLink.canUnlink }
 
     /// The option behind `brain`, read from this model's own defaults.
@@ -2540,6 +2547,37 @@ struct SettingsView: View {
                 } else {
                     MynahButton("Link WhatsApp", kind: .secondary) { isLinkingWhatsApp = true }
                 }
+            }
+            MynahDivider()
+            // **The way back, which did not exist.** `isPaired` only asks
+            // whether creds.json is there, so a session WhatsApp had already
+            // invalidated — the owner removed the device from their phone, which
+            // is the ordinary way this ends — showed "Linked" for ever over a
+            // bridge that could not connect, with no control to clear it.
+            SettingsRow(
+                "Link a different WhatsApp",
+                detail: "Mynah forgets this WhatsApp session so you can scan a new code. "
+                    + "Do this if you removed Mynah under Linked Devices on your phone, or if "
+                    + "WhatsApp stopped answering and re-linking is the fix."
+            ) {
+                MynahButton("Unlink", kind: .secondary) {
+                    Task {
+                        // Stopped first: removing the session from under a
+                        // running Baileys is how a half-written one gets
+                        // recreated a second later.
+                        await SignalBackgroundServiceManager.shared.disable(
+                            because: "unlinking WhatsApp, which cannot happen while the bridge holds the session"
+                        )
+                        do {
+                            try WhatsAppPairing.forgetSession()
+                        } catch {
+                            model.forgetWhatsAppFailed(error)
+                        }
+                        await app.reconcileAnsweringService()
+                        model.refresh()
+                    }
+                }
+                .disabled(!model.whatsAppPairing.isPaired)
             }
         }
     }

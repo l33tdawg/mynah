@@ -1849,6 +1849,26 @@ public actor VoiceBridgeDaemon {
             // send if it cannot read one attachment, so a note with a name it
             // dislikes would otherwise swallow the answer as well — retry
             // without the files rather than leave the owner with silence.
+            // **The words already arrived, so do not send them again.**
+            //
+            // The retry below is right for Signal, where text and files go in
+            // one call and a throw means nothing was sent. WhatsApp sends the
+            // text and each file as separate requests, so a failure after the
+            // text succeeded would make the retry deliver the whole answer a
+            // second time — the owner reads it twice and the file still never
+            // arrives.
+            //
+            // Counted as delivered unless the file was the point, which is the
+            // same rule `attachmentsAreThePoint` states below and for the same
+            // reason: a queued "send me the budget deck" is not kept by a
+            // message describing a deck nobody received.
+            if case WhatsAppChannel.Failure.attachmentsFailedAfterText = error {
+                log("[daemon] the reply reached \(recipient.kind.displayName) and "
+                    + "\(attachments.count) file(s) did not: \(error)")
+                if case .answer = utterance { answerReachedTheWire = true }
+                recordThePromise(utterance, to: recipient, question: question)
+                return !attachmentsAreThePoint
+            }
             guard !attachments.isEmpty else {
                 // Nowhere left to report to — the reply channel is what failed.
                 log("[daemon] could not send reply to "

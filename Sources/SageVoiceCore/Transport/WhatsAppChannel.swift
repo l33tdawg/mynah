@@ -57,6 +57,16 @@ public actor WhatsAppChannel: MessageChannel {
         case notConnected
         case rejected(status: Int, detail: String)
         case noToken(String)
+        /// The words arrived and a file did not.
+        ///
+        /// **Its own case because the caller's recovery differs.** `reply`
+        /// handles a failed send by retrying without attachments, which is right
+        /// for Signal — signal-cli takes text and files in one call, so a throw
+        /// means nothing was sent. WhatsApp has no such call: `send` is a POST
+        /// for the text and one more per file, so a throw after the text
+        /// succeeded means the owner already has the words. Retrying sends them
+        /// a second time.
+        case attachmentsFailedAfterText(String)
 
         public var description: String {
             switch self {
@@ -64,6 +74,8 @@ public actor WhatsAppChannel: MessageChannel {
                 return "The WhatsApp bridge is not answering on loopback. It is started by Mynah; if it is not running, WhatsApp is off or the helper stopped."
             case .rejected(let status, let detail):
                 return "The WhatsApp bridge refused the send (HTTP \(status)): \(detail)"
+            case .attachmentsFailedAfterText(let detail):
+                return "The message was sent but the file was not: \(detail)"
             case .noToken(let path):
                 // Every dead end names the next action. The token is written by
                 // the bridge on its first start, so "it is not there" almost
@@ -252,8 +264,16 @@ public actor WhatsAppChannel: MessageChannel {
                 body: ["chatId": recipient.address, "message": Self.render(text, emphasis: reply.emphasis)]
             )
         }
+        // Tracked, so a failure here is distinguishable from one before the
+        // text went. See `attachmentsFailedAfterText`.
+        let wordsAreThere = !(reply.text ?? "").isEmpty
         for path in reply.attachmentPaths {
-            try await post(path: "/send-media", body: ["chatId": recipient.address, "filePath": path])
+            do {
+                try await post(path: "/send-media", body: ["chatId": recipient.address, "filePath": path])
+            } catch {
+                guard wordsAreThere else { throw error }
+                throw Failure.attachmentsFailedAfterText("\(error)")
+            }
         }
     }
 

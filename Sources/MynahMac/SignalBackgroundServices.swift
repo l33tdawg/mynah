@@ -718,18 +718,38 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// involved. The bridge is the one asked about because the signal helper
     /// exists to serve it — a running signal-cli with no bridge answers nothing.
     func state() async -> BackgroundHelperState {
-        let plist = homeDirectory
-            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-            .appendingPathComponent("\(Self.bridgeLabel).plist")
-        let installed = fileManager.fileExists(atPath: plist.path)
-
-        guard let loaded = await isLoaded(Self.bridgeLabel) else {
-            // launchctl did not answer at all. Reporting "off" here would be a
-            // guess, and the guess that costs the owner most.
-            return installed ? .unknown : .absent
+        // **Every job Mynah installed, not just the daemon.**
+        //
+        // This asked about the bridge alone, on the reasoning that it is the job
+        // that answers the phone. True, and it stopped being sufficient when a
+        // third job arrived: with WhatsApp switched on and its helper dead, the
+        // daemon is still loaded, so this returned `.running` and every screen
+        // said the appliance was fine while WhatsApp answered nothing.
+        //
+        // A job whose plist is on disk is one Mynah asked for, so it is one this
+        // has to account for. Nothing is hardcoded about which — the plists are
+        // the source of truth, which is what stops a fourth job being forgotten
+        // the way the third was.
+        let launchAgents = homeDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let installedLabels = Self.managedLabels.filter {
+            fileManager.fileExists(atPath: launchAgents.appendingPathComponent("\($0).plist").path)
         }
-        if loaded { return .running }
-        return installed ? .installedButNotRunning : .absent
+        guard !installedLabels.isEmpty else { return .absent }
+
+        var anyUnknown = false
+        for label in installedLabels {
+            guard let loaded = await isLoaded(label) else {
+                // launchctl did not answer. Reporting "off" would be a guess,
+                // and the guess that costs the owner most.
+                anyUnknown = true
+                continue
+            }
+            // One helper down is the whole appliance degraded: the owner cannot
+            // be reached on that channel, and saying "Running" would send him
+            // looking anywhere but here.
+            if !loaded { return .installedButNotRunning }
+        }
+        return anyUnknown ? .unknown : .running
     }
     /// Whether launchd has this job, or `nil` when launchctl could not be asked.
     ///

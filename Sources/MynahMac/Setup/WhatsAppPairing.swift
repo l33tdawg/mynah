@@ -98,6 +98,30 @@ enum WhatsAppPairing {
         )
     }
 
+    /// Forgets this Mac's WhatsApp session, so the next start asks for a QR.
+    ///
+    /// **There was no way back.** `isPaired` reads `creds.json`, the Settings
+    /// row shows "Linked" whenever it exists, and the Link button is hidden when
+    /// it does — so a session that WhatsApp had invalidated (the owner removed
+    /// the device from their phone, which is the ordinary way this ends) left a
+    /// permanent "Linked" pill over a bridge drawing a QR nobody could see, with
+    /// no control anywhere in the app to clear it. Deleting a directory by hand
+    /// was the only exit, and nothing told the owner that.
+    ///
+    /// The whole directory, not just `creds.json`: Baileys keeps pre-key and
+    /// sender-key files beside it, and a session with keys but no credentials is
+    /// a state neither end can make sense of.
+    ///
+    /// The caller must stop the bridge first. Removing this from under a running
+    /// Baileys is how a half-written session gets recreated a second later.
+    static func forgetSession(
+        _ directory: URL = WhatsAppPairing.defaultSessionDirectory(),
+        fileManager: FileManager = .default
+    ) throws {
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        try fileManager.removeItem(at: directory)
+    }
+
     static func defaultSessionDirectory(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
