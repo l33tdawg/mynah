@@ -9,3 +9,10 @@ Sources/SageVoiceCore contains speech-to-text code lifted from QuietType
 
 The ASR runtime depends on argmax-oss-swift (WhisperKit / TTSKit),
 Copyright (c) 2024 argmax, inc. — MIT License.
+
+whatsapp/ is derived from the WhatsApp bridge in hermes-agent
+(https://github.com/NousResearch/hermes-agent), Copyright (c) 2025 Nous
+Research — MIT License, full text in whatsapp/LICENSE.hermes. The upstream
+commit it was taken from, and every local change, are recorded in
+whatsapp/PROVENANCE.md. It uses Baileys (https://github.com/WhiskeySockets/Baileys)
+— MIT License — which is not affiliated with or endorsed by WhatsApp.

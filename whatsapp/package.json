@@ -1,0 +1,41 @@
+{
+  "name": "mynah-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp transport for Mynah. Vendored from NousResearch/hermes-agent (MIT) — see PROVENANCE.md. Transport only: the agent is Sources/SageVoiceCore.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "start": "node bridge.js",
+    "test": "node --test *.test.mjs"
+  },
+  "comment:versions": [
+    "Pinned exactly, no carets. Every other third-party thing this app ships is",
+    "pinned to a version and a SHA (see scripts/provision-typst.sh), and a range",
+    "here would mean the bundle in a signed release is not the bundle anybody",
+    "tested. package-lock.json is committed for the same reason.",
+    "Measured working on Node v22.22.0, macOS 15.x arm64, 7 August 2026."
+  ],
+  "comment:sharp": [
+    "sharp is NOT listed here and that is deliberate, not an omission.",
+    "It is a non-optional peer dependency of Baileys — peerDependenciesMeta",
+    "marks audio-decode, jimp and link-preview-js optional, and sharp is not",
+    "among them — so a plain `npm install` pulls it in along with libvips:",
+    "27 MB of a 55 MB tree, and the only native binary in it.",
+    "scripts/provision-whatsapp-bridge.sh is where the exclusion happens, and",
+    "it re-checks that the bridge still starts afterwards rather than trusting",
+    "this note. Measured 7 Aug 2026: without sharp the bridge still reaches a",
+    "pairing QR. The limit of that measurement is that it STARTS. Whether a",
+    "media send needs sharp for thumbnails is untested and belongs to the media",
+    "phase, where a real send can answer it."
+  ],
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "express": "4.22.2",
+    "pino": "9.14.0",
+    "qrcode-terminal": "0.12.0"
+  },
+  "overrides": {
+    "protobufjs": "^7.5.5"
+  }
+}

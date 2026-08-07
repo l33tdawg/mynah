@@ -12,6 +12,24 @@ dist/
 # Go build output for the WebRTC sidecar
 webrtc/sage-voice-webrtc
 
+# The WhatsApp bridge's dependency tree. Restored by
+# scripts/provision-whatsapp-bridge.sh, pinned by whatsapp/package-lock.json,
+# which IS committed — the lock file is the reproducible part.
+whatsapp/node_modules/
+
+# WhatsApp session state. Its real home is
+# ~/Library/Application Support/SAGE Voice Bridge/WhatsApp/, outside the
+# repository, and these patterns exist for the day somebody points --session
+# at a checkout while debugging. Committing it would publish a live WhatsApp
+# login: anyone holding creds.json is signed in as the owner, and a git
+# history does not forget.
+whatsapp/session/
+**/creds.json
+**/app-state-sync-*.json
+**/pre-key-*.json
+**/session-*.json
+**/sender-key-*.json
+
 # Built by scripts/build-opus.sh, not committed: an unreviewable binary in a
 # repository is provenance nobody can check.
 third_party/
