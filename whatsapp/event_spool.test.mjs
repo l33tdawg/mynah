@@ -464,3 +464,26 @@ test('a spool that could not read its events never overwrites them', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('one bogus acknowledgement does not refuse every legitimate one beneath it', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    spool.append(message('one'));
+
+    // A consumer holding a mark from a spool directory that was recreated. Far
+    // above anything written, so it is refused.
+    assert.equal(spool.ack(9000), 0);
+
+    // **The latch must be the value, not a floor.** It was `target <=
+    // refusedAbove`, which blocks a RANGE: after refusing 9,000 every honest
+    // acknowledgement from 1 to 9,000 was refused too, the spool filled to
+    // maxUnacked, and inbound WhatsApp stopped — the exact outcome the bound was
+    // added to prevent, produced by the bound.
+    spool.append(message('two'));
+    assert.equal(spool.ack(1), 1, 'a legitimate acknowledgement was refused by the bogus one above it');
+    assert.equal(spool.pending().length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

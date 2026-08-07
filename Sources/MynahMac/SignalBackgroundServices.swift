@@ -212,6 +212,19 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// connected to their account by an app that believes it stopped.
     static let managedLabels = [bridgeLabel, signalLabel, whatsAppLabel]
 
+    /// Every log file a job this app installs writes to.
+    ///
+    /// launchd creates these from `StandardOutPath` under the job's umask, so
+    /// they arrive `0644` and no write path this codebase owns ever touches
+    /// them — `protectLogs` chmods them instead. whatsapp.log was missing for
+    /// the whole of the third job's life, and it is the one with the most in it:
+    /// who messaged the owner, the allowlist on every start, and until this
+    /// release the device-linking QR.
+    ///
+    /// A named constant so a test can compare it against what the plists
+    /// actually declare, rather than against a second hand-written list.
+    static let protectedLogNames = ["bridge.log", "signal.log", "appliance.log", "whatsapp.log"]
+
     private let runner: ProbeCommandRunning
     private let fileManager: FileManager
     private let homeDirectory: URL
@@ -224,7 +237,8 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// signal-cli kept running the old bundle for hours. Either one being stale
     /// means the update has not finished.
     struct InstalledBuild: Hashable, Sendable {
-        let signal: String
+        /// `nil` when Signal is off, like `whatsApp`.
+        let signal: String?
         let bridge: String
         /// `nil` when WhatsApp is off. Part of the identity rather than beside
         /// it, so turning WhatsApp on is a different build to
@@ -233,7 +247,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         /// asked for, until the next launch.
         let whatsApp: String?
 
-        init(signal: String, bridge: String, whatsApp: String? = nil) {
+        init(signal: String?, bridge: String, whatsApp: String? = nil) {
             self.signal = signal
             self.bridge = bridge
             self.whatsApp = whatsApp
@@ -290,7 +304,13 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             Self.log.error("a test reached the real launchd; refusing to install anything")
             return
         }
-        for executable in [configuration.signalCLI, configuration.bridge, configuration.sage] {
+        // Only what this configuration will actually run. `signalCLI` was in
+        // this list unconditionally, so a WhatsApp-only appliance refused to
+        // install at all on a Mac with no signal-cli — a state the Settings
+        // picker can now produce.
+        var required = [configuration.bridge, configuration.sage]
+        if configuration.channels.includes(.signal) { required.append(configuration.signalCLI) }
+        for executable in required {
             guard fileManager.isExecutableFile(atPath: executable.path) else {
                 throw Failure.missingExecutable(executable.path)
             }
@@ -325,9 +345,19 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         let signalURL = launchAgents.appendingPathComponent("\(Self.signalLabel).plist")
         let bridgeURL = launchAgents.appendingPathComponent("\(Self.bridgeLabel).plist")
         let whatsAppURL = launchAgents.appendingPathComponent("\(Self.whatsAppLabel).plist")
-        let signalData = try Self.plistData(
-            Self.signalPlist(configuration, logs: logs, home: homeDirectory)
-        )
+        // **Optional for the same reason the WhatsApp one is.** This was
+        // unconditional, so choosing WhatsApp-only still installed and started
+        // signal-cli — a daemon told `--channels whatsapp` reads nothing from
+        // it, while signal-cli sits on the owner's Signal account draining
+        // messages into a socket nobody is listening to. Signal's own delivery
+        // receipts go out, so the sender sees delivered and the owner never
+        // sees a reply.
+        //
+        // Symmetric with `whatsAppData`: nil means there must be no such job,
+        // not "leave whatever is there".
+        let signalData = configuration.channels.includes(.signal)
+            ? try Self.plistData(Self.signalPlist(configuration, logs: logs, home: homeDirectory))
+            : nil
         let bridgeData = try Self.plistData(
             Self.bridgePlist(configuration, logs: logs, home: homeDirectory)
         )
@@ -363,7 +393,9 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // behaviour, and a false "yes" needs launchd to have reported a job
         // loaded that is not.
         let installed = InstalledBuild(
-            signal: Self.executableStamp(configuration.signalCLI),
+            signal: configuration.channels.includes(.signal)
+                ? Self.executableStamp(configuration.signalCLI)
+                : nil,
             bridge: Self.executableStamp(configuration.bridge),
             whatsApp: configuration.whatsApp.map { Self.executableStamp($0.bridge) }
         )
@@ -394,7 +426,13 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             return
         }
 
-        try signalData.write(to: signalURL, options: .atomic)
+        if let signalData {
+            try signalData.write(to: signalURL, options: .atomic)
+        } else {
+            _ = await bootout(Self.signalLabel)
+            try? fileManager.removeItem(at: signalURL)
+            try? fileManager.removeItem(atPath: configuration.socketPath)
+        }
         try bridgeData.write(to: bridgeURL, options: .atomic)
         if let whatsAppData {
             try whatsAppData.write(to: whatsAppURL, options: .atomic)
@@ -411,7 +449,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // running signal-cli, and deleting it under a live one is how the
         // bridge loses its connection.
         _ = await bootout(Self.bridgeLabel)
-        if await bootout(Self.signalLabel) {
+        if signalData != nil, await bootout(Self.signalLabel) {
             try? fileManager.removeItem(atPath: configuration.socketPath)
         }
         if whatsAppData != nil {
@@ -430,7 +468,10 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // that is what happened: 1.7.3 installed at 19:49, both bootouts failed
         // at 19:52, the first bootstrap threw, and the daemon went on serving
         // Signal from the 1.7.2 bundle until it crashed at 20:07.
-        let signalStarted = await bootstrap(signalURL, label: Self.signalLabel)
+        var signalStarted = true
+        if signalData != nil {
+            signalStarted = await bootstrap(signalURL, label: Self.signalLabel)
+        }
         let bridgeStarted = await bootstrap(bridgeURL, label: Self.bridgeLabel)
         // Attempted like the other two, and like them it cannot prevent either.
         // A WhatsApp helper that will not start must not take Signal down with
@@ -450,7 +491,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             failedToApply.insert(installed)
             Self.log.error("""
                 the phone bridge is still not running the installed build \
-                (signal \(signalStarted ? "started" : "did not start"), \
+                (signal \(signalData == nil ? "off" : (signalStarted ? "started" : "did not start")), \
                 bridge \(bridgeStarted ? "started" : "did not start"), \
                 whatsapp \(whatsAppData == nil ? "off" : (whatsAppStarted ? "started" : "did not start"))). \
                 Quit Mynah and open it again to apply it.
@@ -535,7 +576,16 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// to install his appliance.
     private func protectLogs(in logs: URL) {
         try? OwnerOnlyFileSecurity.prepareDirectory(logs, fileManager: fileManager)
-        for name in ["bridge.log", "signal.log", "appliance.log"] {
+        // **whatsapp.log was missing, and it is the one with the most in it.**
+        //
+        // launchd creates it from StandardOutPath under the job's umask, so it
+        // arrives 0644 like the other two did — and it carries what the bridge
+        // prints: refusal lines naming who messaged the owner, the allowlist on
+        // every start, and until this release the device-linking QR. This list
+        // is hardcoded, which is why adding a fourth job did not add a fourth
+        // entry; the plists are the source of truth for what exists and this is
+        // a copy of that knowledge kept by hand.
+        for name in Self.protectedLogNames {
             try? OwnerOnlyFileSecurity.protectFile(
                 logs.appendingPathComponent(name),
                 fileManager: fileManager
@@ -550,7 +600,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// keep a job running under a stale configuration after the owner changed
     /// their model.
     private func isAlreadyReconciled(
-        signal: Data, at signalURL: URL,
+        signal: Data?, at signalURL: URL,
         bridge: Data, at bridgeURL: URL,
         whatsApp: Data?, at whatsAppURL: URL,
         running installed: InstalledBuild
@@ -578,8 +628,10 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         //
         // So the authoritative question is the third one, and it is the only
         // one a failed restart cannot answer falsely.
-        guard (try? Data(contentsOf: signalURL)) == signal,
-              (try? Data(contentsOf: bridgeURL)) == bridge else {
+        guard (try? Data(contentsOf: bridgeURL)) == bridge else { return false }
+        if let signal {
+            guard (try? Data(contentsOf: signalURL)) == signal else { return false }
+        } else if fileManager.fileExists(atPath: signalURL.path) {
             return false
         }
         // **Deliberately redundant today, and worth keeping — but say so
@@ -758,6 +810,9 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     /// let a reconcile declare itself finished, and the cost of being wrong is
     /// one restart rather than an appliance stuck on an old build.
     private func isRunningTheInstalledBuild(_ installed: InstalledBuild) async -> Bool {
+        // `nil` on either side means the job must not exist at all, which
+        // `loadedStamp` reports as nil too — so one comparison covers both
+        // directions for both optional jobs.
         guard await loadedStamp(Self.signalLabel) == installed.signal else { return false }
         guard await loadedStamp(Self.bridgeLabel) == installed.bridge else { return false }
         // **The third job, asked the same way and only when it should exist.**

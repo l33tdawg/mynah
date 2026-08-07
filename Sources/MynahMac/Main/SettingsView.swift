@@ -1249,12 +1249,20 @@ struct SettingsView: View {
                     stopBackgroundBridge: { await SignalBackgroundServiceManager.shared.disable(
                         because: "pairing WhatsApp, which cannot share the session with the running bridge"
                     ) },
-                    onLinked: {
-                        Task {
-                            await app.reconcileAnsweringService()
-                            model.refresh()
-                        }
-                    },
+                    // **Deliberately does not reconcile.** `Done` calls this
+                    // and then `onClose`, and both used to spawn their own
+                    // `Task { await app.reconcileAnsweringService() }` — two
+                    // `enable(_:)` runs interleaving inside a reentrant actor,
+                    // over the same plists and the same launchctl. One can
+                    // observe the other's half-finished world, conclude the
+                    // build will not start, and put it in `failedToApply`, which
+                    // suppresses every later attempt for the life of the app —
+                    // leaving the owner with no LaunchAgents at all until he
+                    // quits and reopens.
+                    //
+                    // `onClose` runs on every exit from this sheet, successful
+                    // or not, so one reconcile there covers both.
+                    onLinked: {},
                     onClose: {
                         // Reconciled on close as well as on success. A pairing
                         // the owner abandoned still left the bridge booted out,

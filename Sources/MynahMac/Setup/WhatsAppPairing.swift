@@ -137,6 +137,18 @@ final class WhatsAppPairingSession {
     private let log = MynahLog(category: "whatsapp-pairing")
     private var process: Process?
 
+    /// Set the moment the sheet goes away, whether or not a process exists yet.
+    ///
+    /// **`cancel()` was a no-op for the whole of `stopBackgroundBridge()`.**
+    /// That call boots out three LaunchAgents and can take seconds; if the owner
+    /// closed the sheet inside that window, `cancel()` found `process == nil`,
+    /// returned, and `start()` then went on to spawn a bridge that nothing owned
+    /// and nothing would ever terminate. It holds the session directory, and the
+    /// reconcile that follows starts the real bridge on top of it — two Baileys
+    /// writers on one auth state, which is the collision that silently stops
+    /// both ends decrypting.
+    private var cancelled = false
+
     init(node: URL, bridge: URL, sessionDirectory: URL = WhatsAppPairing.defaultSessionDirectory()) {
         self.node = node
         self.bridge = bridge
@@ -149,8 +161,10 @@ final class WhatsAppPairingSession {
     ///   `SignalBackgroundServiceManager.isTestReachingTheRealMachine` exists
     ///   for.
     func start(stopBackgroundBridge: @escaping @Sendable () async -> Void) async {
-        guard process == nil else { return }
+        guard process == nil, !cancelled else { return }
         await stopBackgroundBridge()
+        // Checked again: the sheet may have gone away while that was running.
+        guard !cancelled else { return }
 
         // `0700` before the bridge writes into it. What lands here is the
         // credential that lets this Mac send as the owner; anybody who can read
@@ -188,6 +202,14 @@ final class WhatsAppPairingSession {
         } catch {
             phase = .failed("Mynah could not start the WhatsApp helper: \(error.localizedDescription)")
             return
+        }
+        // **Terminated if the app goes away, and reaped when it exits on its
+        // own.** Without a handler the pairing bridge outlived the sheet, the
+        // window and the app: nothing called `waitUntilExit`, nothing observed
+        // termination, and a quit mid-pairing left it running against the
+        // owner's session directory until the Mac restarted.
+        task.terminationHandler = { _ in
+            Task { @MainActor [weak self] in self?.reap() }
         }
         process = task
         phase = .waiting
@@ -256,10 +278,33 @@ final class WhatsAppPairingSession {
         }
     }
 
-    /// Called when the owner closes the sheet. Terminates a pairing in flight.
+    /// The process exited on its own — normally two seconds after `connected`,
+    /// having flushed the credentials.
+    private func reap() {
+        process = nil
+    }
+
+    /// Called when the owner closes the sheet, and when the sheet's task is
+    /// cancelled. Safe before `start()` has spawned anything.
     func cancel() {
+        cancelled = true
         guard let process else { return }
         self.process = nil
+        // **Not while it is writing the credentials.** Baileys flushes
+        // `creds.json` from a `creds.update` that arrives just after
+        // `connected`, and bridge.js waits two seconds before exiting for
+        // exactly that reason. A SIGTERM inside that window is how a pairing the
+        // owner watched succeed leaves a session that cannot log in — and
+        // `isPaired` would still say Linked, because the file exists.
+        //
+        // So a linked session is given its two seconds; anything else stops now.
+        if case .linked = phase {
+            Task.detached {
+                try? await Task.sleep(for: .seconds(3))
+                if process.isRunning { process.terminate() }
+            }
+            return
+        }
         process.terminate()
         phase = .idle
     }

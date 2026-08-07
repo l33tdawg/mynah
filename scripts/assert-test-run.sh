@@ -102,9 +102,9 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2231   (2.0.0, WhatsApp end to end; was 2111 at 1.9.0)
-#   without Kokoro  2193   (2231 - 38)
-#   floor           2219   (12 under measured, 26 above the failure it must catch)
+#   measured      2241   (2.0.0, WhatsApp end to end; was 2111 at 1.9.0)
+#   without Kokoro  2203   (2241 - 38)
+#   floor           2229   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -130,7 +130,15 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # message, a loopback API with no authentication in front of it, and a refused
 # sender's phone number written into a log. Every one was mutated back before this
 # number moved; two of the mutations survived the first attempt, and the tests
-# were rewritten rather than the finding waved off. The bridge's
+# were rewritten rather than the finding waved off.
+#
+# 2231 to 2241 is the SECOND audit of the same branch, which confirmed 27 more —
+# five critical, and five of the total introduced by round two's own repairs. The
+# ten here cover the ones a value can reach: the acknowledgement that destroyed a
+# message whose reply never left the Mac, conversation threads orphaned by a key
+# that gained a channel prefix, a WhatsApp allowlist that could only ever be the
+# Signal number, and a Signal helper started for an appliance that had turned
+# Signal off. The bridge's
 # own 49 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
 # own gate with its own per-file check. Two suites in two languages, and this
@@ -169,7 +177,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2219}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2229}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

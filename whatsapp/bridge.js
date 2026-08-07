@@ -51,8 +51,12 @@ import {
   buildLocationPayload,
   buildTextSendPayload,
   createBoundedMessageStore,
+  createSendQueue,
   extractBridgeEvent,
+  getContextInfo,
+  getMessageContent,
   inboundReadReceiptKeys,
+  tokensMatch,
   inferMediaType,
   mediaPayloadForFile,
   pollCreationMessageFromPayload,
@@ -165,43 +169,20 @@ const SEND_TIMEOUT_MS = parseInt(process.env.WHATSAPP_SEND_TIMEOUT_MS || '60000'
 //     Overlapping sends are the root cause of cross-chat contamination
 //     (#33360) — the WhatsApp protocol-level routing can misdeliver when
 //     two sendMessage() Promises race on the same socket. ---
-let _sendQueue = Promise.resolve();
-
-function enqueueSend(fn) {
-  const task = _sendQueue.then(() => fn(), () => fn());
-  _sendQueue = task.catch(() => {});
-  return task;
-}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * MYNAH: one reply is one turn in the queue, however many chunks it is.
+ * MYNAH: the send itself, with no queue around it.
  *
- * `enqueueSend` serialises individual `sendMessage` calls, and a long reply is
- * several of them with a deliberate pause between each — a pause taken *outside*
- * the queue, so another request's chunks slot straight into it. Two answers
- * going to the same chat interleave: paragraph 1 of A, paragraph 1 of B,
- * paragraph 2 of A. The queue was serialising the wrong unit.
- *
- * Reachable on this appliance rather than theoretical: the daemon answers turns
- * sequentially, but the proactive watch, the after-the-call drain and an
- * unkept-promise apology all send on their own schedules, and any of them can
- * land inside another reply's chunk gap.
- *
- * Takes the queue slot for the whole run, and the inner `sendWithTimeout` calls
- * re-enter it — which is safe because `_sendQueue` is a promise chain rather than
- * a lock: the inner calls chain onto the tail this one already holds, so they run
- * in order and nothing deadlocks. What cannot get between them is another
- * *request*, which is the point.
+ * Split out because a queued function that calls a queued function deadlocks —
+ * see `enqueueReply`. Nothing outside this file should call it directly: on its
+ * own it is not serialised, and two concurrent Baileys sends to one chat are
+ * what the queue exists to prevent.
  */
-function enqueueReply(fn) {
-  return enqueueSend(fn);
-}
-
-function sendWithTimeout(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT_MS) {
+function sendNow(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT_MS) {
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(
@@ -209,10 +190,38 @@ function sendWithTimeout(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT
       timeoutMs,
     );
   });
-  return enqueueSend(() =>
-    Promise.race([sock.sendMessage(chatId, payload, options), timeoutPromise])
-      .finally(() => clearTimeout(timer))
-  );
+  return Promise.race([sock.sendMessage(chatId, payload, options), timeoutPromise])
+    .finally(() => clearTimeout(timer));
+}
+
+// The one queue. See `createSendQueue` in bridge_helpers.js for why it is not
+// declared here any more.
+const { enqueueSend, enqueueReply } = createSendQueue(sendNow);
+
+/**
+ * MYNAH: one reply is one turn in the queue, however many chunks it is.
+ *
+ * `enqueueSend` serialises individual `sendMessage` calls, and a long reply is
+ * several of them with a deliberate pause between each — a pause taken *outside*
+ * the queue, so another request's chunks slot straight into it. Two answers to
+ * one chat interleave: paragraph 1 of A, paragraph 1 of B, paragraph 2 of A.
+ * The queue was serialising the wrong unit.
+ *
+ * **The first version of this deadlocked every outbound message, and the comment
+ * explaining why it could not was the reason it shipped.** It read: "the inner
+ * calls chain onto the tail this one already holds, so they run in order and
+ * nothing deadlocks". The tail it holds INCLUDES ITSELF. `enqueueSend` assigns
+ * `_sendQueue = task.catch(...)` before `fn` runs, so an inner `enqueueSend`
+ * chains onto a promise that only settles when `fn` returns — and `fn` is
+ * awaiting the inner one. Nothing resolves, ever, and because `_sendQueue` is
+ * now permanently pending the FIRST reply wedges the queue for the life of the
+ * process: every later send hangs too.
+ *
+ * So the callback is handed `sendNow`, which does the wire call without
+ * re-entering. The slot is held for the whole reply; nothing inside it queues.
+ */
+function sendWithTimeout(chatId, payload, options = {}, timeoutMs = SEND_TIMEOUT_MS) {
+  return enqueueSend(() => sendNow(chatId, payload, options, timeoutMs));
 }
 
 function formatOutgoingMessage(message) {
@@ -284,28 +293,17 @@ function emitDebugEvent(payload) {
   } catch {}
 }
 
-function getMessageContent(msg) {
-  const content = msg?.message || {};
-  if (content.ephemeralMessage?.message) return content.ephemeralMessage.message;
-  if (content.viewOnceMessage?.message) return content.viewOnceMessage.message;
-  if (content.viewOnceMessageV2?.message) return content.viewOnceMessageV2.message;
-  if (content.documentWithCaptionMessage?.message) return content.documentWithCaptionMessage.message;
-  if (content.templateMessage?.hydratedTemplate) return content.templateMessage.hydratedTemplate;
-  if (content.buttonsMessage) return content.buttonsMessage;
-  if (content.listMessage) return content.listMessage;
-  return content;
-}
-
-function getContextInfo(messageContent) {
-  if (!messageContent || typeof messageContent !== 'object') return {};
-  for (const value of Object.values(messageContent)) {
-    if (value && typeof value === 'object' && value.contextInfo) {
-      return value.contextInfo;
-    }
-  }
-  return {};
-}
-
+// MYNAH: `getMessageContent` and `getContextInfo` are imported from
+// bridge_helpers.js, not redeclared here.
+//
+// **They were declared in both files, and the round-2 fix reached only one.**
+// bridge_helpers.js was taught to loop five levels over eight wrappers so a
+// view-once photo or an edited message is not silently dropped; this file kept
+// a private one-level, five-wrapper copy, and line 902 — the live inbound path
+// — called the private one. So the fix was tested, committed, and never ran.
+//
+// Two copies of a rule is the defect. Deleting one is the fix; keeping them in
+// step by hand is what produced this.
 mkdirSync(SESSION_DIR, { recursive: true });
 
 // Build LID → phone reverse map from session files (lid-mapping-{phone}.json)
@@ -582,10 +580,30 @@ async function startSocket() {
     if (qr) {
       if (PAIR_JSON) {
         emitPairEvent({ event: 'qr', qr });
-      } else {
+      } else if (process.stdout.isTTY) {
         console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
         qrcode.generate(qr, { small: true });
         console.log('\nWaiting for scan...\n');
+      } else {
+        // MYNAH: a QR is a credential, and stdout here is a file.
+        //
+        // The LaunchAgent runs this without --pair-json and points
+        // StandardOutPath at ~/Library/Logs/Mynah/whatsapp.log. So on any start
+        // where the session is missing or has been invalidated, the device-
+        // linking code was drawn into a log file — and anyone who scans it
+        // before it rotates is linked to the owner's WhatsApp account as a
+        // device. Twenty seconds of validity is not a defence against a file.
+        //
+        // A TTY is a person looking at a terminal, which is the only place
+        // drawing it is right. Everywhere else says a code was needed and where
+        // to go, which is the actionable half anyway: the LaunchAgent cannot be
+        // scanned from, so the owner has to use the app.
+        console.log(
+          '[whatsapp] WhatsApp wants this Mac linked again, and a QR cannot be shown here. ' +
+          'Open Mynah, go to Settings, and use "Link WhatsApp". ' +
+          '(The code itself is deliberately not written to this log — it would let ' +
+          'whoever reads it link themselves to your account.)'
+        );
       }
     }
 
@@ -807,11 +825,23 @@ async function startSocket() {
       if (!msg.key.fromMe) {
         if (WHATSAPP_MODE === 'self-chat') {
           try {
+            // MYNAH: redacted, and this is the line that matters.
+            //
+            // The round-2 audit redacted `allowlist_mismatch` below — a branch
+            // self-chat mode can never reach, because this `continue` fires
+            // first. The plist sets WHATSAPP_MODE=self-chat, so THIS is the only
+            // refusal log a shipped install ever writes, and it was printing the
+            // full number of every person who messages the owner into
+            // ~/Library/Logs/Mynah/whatsapp.log.
+            //
+            // The seventh time in this codebase a fix landed on one of two
+            // twins. The difference here is which twin: the redacted one was
+            // dead code.
             console.log(JSON.stringify({
               event: 'ignored',
               reason: 'self_chat_mode_rejects_non_self',
-              chatId,
-              senderId,
+              chatId: redactWhatsAppId(chatId),
+              senderId: redactWhatsAppId(senderId),
             }));
           } catch {}
           continue;
@@ -1058,12 +1088,9 @@ app.use((req, res, next) => {
   // before it can read the token.
   if (req.path === '/health') return next();
 
-  const offered = String(req.headers['x-mynah-token'] || '');
-  const expected = API_TOKEN;
-  // Length first: timingSafeEqual throws on a mismatch, and the length is not
-  // the secret.
-  if (offered.length !== expected.length ||
-      !timingSafeEqual(Buffer.from(offered), Buffer.from(expected))) {
+  // `tokensMatch` lives in bridge_helpers.js so a test can reach it — the
+  // comparison used to be inline here, where nothing could.
+  if (!tokensMatch(req.headers['x-mynah-token'], API_TOKEN)) {
     return res.status(401).json({
       error: 'Missing or wrong X-Mynah-Token. This bridge answers only the app that started it.',
     });
@@ -1092,14 +1119,14 @@ app.post('/send', async (req, res) => {
     const chunks = splitLongMessage(formatOutgoingMessage(message));
     const messageIds = [];
     // The whole reply, not each chunk. See `enqueueReply`.
-    await enqueueReply(async () => {
+    await enqueueReply(async (send) => {
       for (let i = 0; i < chunks.length; i += 1) {
         const { content: payload, options } = buildTextSendPayload(chunks[i], {
           chatId,
           replyTo: i === 0 ? replyTo : undefined,
           messageStore,
         });
-        const sent = await sendWithTimeout(chatId, payload, options);
+        const sent = await send(chatId, payload, options);
         trackSentMessageId(sent);
         messageStore.remember(sent);
         if (sent?.key?.id) messageIds.push(sent.key.id);
@@ -1398,6 +1425,21 @@ app.get('/chat/:id', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
+  // MYNAH: liveness for anybody, the owner's numbers only for the app.
+  //
+  // `/health` is exempt from the token middleware because it is what answers
+  // before Mynah has read the token, and because "is the process up" is not a
+  // secret. What IS a secret is everything else this used to return
+  // unconditionally: `queueLength` and the spool's `pending` count are a live
+  // readout of how much unanswered mail the owner has, and `uptime` says when he
+  // last restarted. Any account on the Mac could poll it.
+  //
+  // So the exemption is narrowed to the field it exists for. The detail is
+  // behind the same token as everything else, which is where it always belonged.
+  if (!tokensMatch(req.headers['x-mynah-token'], API_TOKEN)) {
+    return res.json({ status: connectionState });
+  }
+
   res.json({
     status: connectionState,
     queueLength: messageQueue.length,
@@ -1480,11 +1522,28 @@ if (PAIR_ONLY) {
     }
   }
 
-  app.listen(PORT, '127.0.0.1', () => {
+  // MYNAH: a bind failure has to end the process, not be swallowed.
+  //
+  // There was no 'error' listener here at all, and the `uncaughtException`
+  // handler added in round 2 deliberately does NOT exit — which together turn
+  // EADDRINUSE into the worst possible outcome: a bridge that connects to
+  // WhatsApp, spools every inbound message, and has no listener, so no reply can
+  // ever be sent. It looks alive from every angle, and /health cannot say
+  // otherwise because /health is served by the listener that does not exist.
+  //
+  // Exiting is right here and wrong in a request handler, and the difference is
+  // what is left working: a handler that throws has damaged one request; this
+  // has removed the process's whole reason to exist. launchd restarts it on the
+  // 30-second throttle, which is the right response to a port that is
+  // temporarily held — and if it is held permanently, a log line naming the
+  // port every thirty seconds is how somebody finds out.
+  const server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`🌉 WhatsApp bridge listening on port ${PORT} (mode: ${WHATSAPP_MODE})`);
     console.log(`📁 Session stored in: ${SESSION_DIR}`);
     if (ALLOWED_USERS.size > 0) {
-      console.log(`🔒 Allowed users: ${Array.from(ALLOWED_USERS).join(', ')}`);
+      // MYNAH: redacted. This is the owner's own number, printed into
+      // whatsapp.log on every single start.
+      console.log(`🔒 Allowed users: ${Array.from(ALLOWED_USERS).map(redactWhatsAppId).join(', ')}`);
     } else if (WHATSAPP_MODE === 'self-chat') {
       console.log(`🔒 Self-chat mode — only your own messages to yourself are processed.`);
     } else if (WHATSAPP_MODE === 'bot' && WHATSAPP_DM_POLICY === 'pairing') {
@@ -1500,4 +1559,19 @@ if (PAIR_ONLY) {
     console.log();
     scheduleReconnect(0);
   });
+  server.on('error', (error) => {
+    if (error && error.code === 'EADDRINUSE') {
+      console.error(
+        `[whatsapp] port ${PORT} on 127.0.0.1 is already in use, so this bridge cannot ` +
+        `accept a single send. Something else is holding it — most likely another copy ` +
+        `of this bridge started by hand, or scripts/pair-whatsapp.sh left running. ` +
+        `Find it with: lsof -nP -iTCP:${PORT} -sTCP:LISTEN`
+      );
+    } else {
+      console.error(`[whatsapp] the send listener failed: ${error?.message || error}`);
+    }
+    // Deliberate, and the opposite of the unhandledRejection handler above.
+    process.exit(1);
+  });
+
 }

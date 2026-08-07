@@ -75,10 +75,18 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   const ackPath = path.join(dir, ACK_FILE);
 
   let ackedThrough = readAck(ackPath, warn);
-  // The highest acknowledgement refused as out of range. Latched, so a consumer
-  // repeating a mark from a different spool cannot have it accepted later. See
-  // `ack`.
-  let refusedAbove = 0;
+  // Acknowledgements refused as out of range, latched so a consumer repeating a
+  // mark from a different spool cannot have it accepted later.
+  //
+  // **A set of exact values, not a floor.** It was `refusedAbove`, compared with
+  // `target <= refusedAbove`, which blocks a whole RANGE: one bogus ack of 9,000
+  // against a young spool refused every legitimate acknowledgement from 1 to
+  // 9,000 for the life of the process. The spool then fills to `maxUnacked` and
+  // inbound WhatsApp stops — the outcome the bound was added to prevent,
+  // produced by the bound. Only the exact value a consumer keeps re-sending
+  // needs latching, because re-sending it is the behaviour being defended
+  // against.
+  const refusedAcks = new Set();
   const loaded = load(eventsPath, warn);
   let records = loaded.records.filter((r) => r.seq > ackedThrough);
 
@@ -205,8 +213,8 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
     // 57 real messages after refusing `{"ack":57}` accepts the very next copy of
     // it and retires all 57 unread. The bound moved the loss later rather than
     // preventing it.
-    if (target >= nextSeq || target <= refusedAbove) {
-      if (target > refusedAbove) refusedAbove = target;
+    if (target >= nextSeq || refusedAcks.has(target)) {
+      refusedAcks.add(target);
       warn(
         `spool: refusing an acknowledgement of ${target} — nothing above ` +
         `${nextSeq - 1} has been written. Accepting it would retire the next ` +

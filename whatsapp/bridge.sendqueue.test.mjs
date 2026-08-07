@@ -1,112 +1,106 @@
-/**
- * Regression tests for the WhatsApp bridge send queue (#33360).
- *
- * The bridge must serialise all sock.sendMessage() calls through a
- * promise-based queue so that concurrent HTTP /send requests never
- * produce overlapping Baileys socket writes.  Overlapping writes are
- * the confirmed root cause of cross-chat contamination.
- *
- * These tests exercise the queue itself — they do NOT require a live
- * WhatsApp socket.
- */
+// Two replies to one chat never interleave, and a reply never hangs.
+//
+// **This file used to re-declare the queue inside itself.** `createSendQueue()`
+// was a local copy of bridge.js's implementation, so no case here could fail for
+// anything wrong in bridge.js — and that is not hypothetical: the shipped
+// `enqueueReply` deadlocked every outbound WhatsApp message while this file was
+// green. A test that carries its own copy of the subject is a test of the copy.
+//
+// The queue now lives in bridge_helpers.js and is imported. bridge.js is not
+// imported directly by anything here, because importing it opens a WhatsApp
+// connection.
 
-import { strict as assert } from 'node:assert';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
-// ------------------------------------------------------------------
-// 1.  Unit test for the queue primitives
-// ------------------------------------------------------------------
+import { createSendQueue } from './bridge_helpers.js';
 
-/**
- * Replicate the queue logic from bridge.js so we can test it in
- * isolation without importing the full module (which would trigger
- * Baileys / express side effects).
- */
-function createSendQueue() {
-  let _sendQueue = Promise.resolve();
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  function enqueueSend(fn) {
-    const task = _sendQueue.then(() => fn(), () => fn());
-    _sendQueue = task.catch(() => {});
-    return task;
-  }
-
-  return { enqueueSend };
-}
-
-// -- serial ordering -------------------------------------------------
-{
-  const { enqueueSend } = createSendQueue();
+test('sends run one at a time, in the order they were asked for', async () => {
   const order = [];
+  const queue = createSendQueue(async () => {});
+  const done = [
+    queue.enqueueSend(async () => { order.push('a-start'); await tick(); order.push('a-end'); }),
+    queue.enqueueSend(async () => { order.push('b-start'); await tick(); order.push('b-end'); }),
+  ];
+  await Promise.all(done);
+  assert.deepEqual(order, ['a-start', 'a-end', 'b-start', 'b-end']);
+});
 
-  const a = enqueueSend(async () => {
-    await new Promise(r => setTimeout(r, 30));
-    order.push('a');
-    return 'A';
-  });
-  const b = enqueueSend(async () => {
-    order.push('b');
-    return 'B';
-  });
-  const c = enqueueSend(async () => {
-    await new Promise(r => setTimeout(r, 10));
-    order.push('c');
-    return 'C';
-  });
-
-  const results = await Promise.all([a, b, c]);
-  assert.deepStrictEqual(results, ['A', 'B', 'C'], 'all tasks resolve');
-  assert.deepStrictEqual(order, ['a', 'b', 'c'], 'tasks execute in FIFO order');
-  console.log('  ✓ serial ordering');
-}
-
-// -- error isolation (one rejection does not stall the queue) --------
-{
-  const { enqueueSend } = createSendQueue();
+test('a failed send does not wedge the ones behind it', async () => {
   const order = [];
+  const queue = createSendQueue(async () => {});
+  const first = queue.enqueueSend(async () => { throw new Error('WhatsApp said no'); });
+  const second = queue.enqueueSend(async () => { order.push('ran'); });
+  await assert.rejects(first, /WhatsApp said no/);
+  await second;
+  assert.deepEqual(order, ['ran'], 'one refused send stopped the queue for ever');
+});
 
-  const bad = enqueueSend(async () => {
-    order.push('bad');
-    throw new Error('boom');
+// --- the deadlock ---
+
+test('a multi-chunk reply completes rather than hanging for ever', async () => {
+  // The regression. `enqueueReply(fn)` holds the slot for the whole reply, and
+  // `fn` used to call the *queued* send for each chunk — which chains onto a
+  // tail that only settles when `fn` returns, while `fn` awaits it. Nothing
+  // resolves. With the bug present this test does not fail an assertion, it
+  // never returns, which is why it carries its own timeout.
+  const sent = [];
+  const queue = createSendQueue(async (chatId, payload) => {
+    sent.push(payload.text);
+    return { key: { id: `id-${sent.length}` } };
   });
-  const good = enqueueSend(async () => {
-    order.push('good');
-    return 'ok';
+
+  const reply = queue.enqueueReply(async (send) => {
+    for (const chunk of ['one', 'two', 'three']) {
+      await send('60123@s.whatsapp.net', { text: chunk });
+    }
   });
 
-  await assert.rejects(() => bad, /boom/, 'bad task rejects');
-  const g = await good;
-  assert.strictEqual(g, 'ok', 'good task still resolves');
-  assert.deepStrictEqual(order, ['bad', 'good'], 'good runs after bad');
-  console.log('  ✓ error isolation');
-}
+  const finished = await Promise.race([
+    reply.then(() => 'finished'),
+    new Promise((resolve) => setTimeout(() => resolve('hung'), 1000)),
+  ]);
+  assert.equal(finished, 'finished', 'the reply never completed — the send queue is deadlocked');
+  assert.deepEqual(sent, ['one', 'two', 'three']);
+});
 
-// -- timeout still fires (wrapped inside enqueueSend) ----------------
-{
-  const { enqueueSend } = createSendQueue();
-  const timedOut = enqueueSend(async () => {
-    await new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 20));
+test('a deadlocked reply would also wedge every send after it', async () => {
+  // The half that makes the deadlock catastrophic rather than local: the queue
+  // is one promise chain, so a reply that never settles leaves the tail pending
+  // and everything queued behind it waits for ever too. Asserting the fixed
+  // behaviour — a later send still runs — is what pins that.
+  const queue = createSendQueue(async () => ({ key: { id: 'x' } }));
+  await queue.enqueueReply(async (send) => {
+    await send('chat', { text: 'a' });
+    await send('chat', { text: 'b' });
   });
-  await assert.rejects(() => timedOut, /timeout/, 'inner timeout propagates');
-  console.log('  ✓ timeout propagation');
-}
 
-// -- concurrent enqueues maintain single-consumer semantics ----------
-{
-  const { enqueueSend } = createSendQueue();
-  let concurrent = 0;
-  let maxConcurrent = 0;
+  const after = await Promise.race([
+    queue.enqueueSend(async () => 'ran'),
+    new Promise((resolve) => setTimeout(() => resolve('hung'), 1000)),
+  ]);
+  assert.equal(after, 'ran', 'a send queued after a reply never ran');
+});
 
-  async function tracked() {
-    concurrent += 1;
-    if (concurrent > maxConcurrent) maxConcurrent = concurrent;
-    await new Promise(r => setTimeout(r, 5));
-    concurrent -= 1;
-  }
+test('another request cannot slot between one reply\'s chunks', async () => {
+  // What the whole thing is for. Chunks are separated by a deliberate pause, and
+  // before `enqueueReply` that pause was taken outside the queue — so a second
+  // answer to the same chat interleaved: paragraph 1 of A, paragraph 1 of B,
+  // paragraph 2 of A.
+  const order = [];
+  const queue = createSendQueue(async (chatId, payload) => { order.push(payload.text); });
 
-  await Promise.all(Array.from({ length: 20 }, () => enqueueSend(tracked)));
-  assert.strictEqual(maxConcurrent, 1, 'never more than one in-flight');
-  assert.strictEqual(concurrent, 0, 'all finished');
-  console.log('  ✓ single-consumer concurrency');
-}
+  const reply = queue.enqueueReply(async (send) => {
+    await send('chat', { text: 'A1' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await send('chat', { text: 'A2' });
+  });
+  // Queued while the reply is mid-pause, which is exactly the window that used
+  // to be open.
+  const interloper = queue.enqueueSend(async () => { order.push('B1'); });
 
-console.log('\n✅ All send-queue tests passed.');
+  await Promise.all([reply, interloper]);
+  assert.deepEqual(order, ['A1', 'A2', 'B1'], 'another message landed inside a reply');
+});

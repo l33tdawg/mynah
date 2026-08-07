@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto';
 import path from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
@@ -663,4 +664,73 @@ export function createVersionResolver(fetchVersionFn, {
     }
     return cachedVersion;
   };
+}
+
+/**
+ * MYNAH: the outbound send queue, extracted so a test can reach the real one.
+ *
+ * **It lived in bridge.js, and the only test named for it re-declared its own
+ * copy inside the test file.** So `bridge.sendqueue.test.mjs` was green while
+ * the shipped `enqueueReply` deadlocked every outbound message — the test could
+ * not have failed for anything wrong in bridge.js, because it never ran a line
+ * of it. A hollow test is worse than none: it is the reason nobody looked.
+ *
+ * `send` is the un-queued wire call. Serialising is this object's whole job, so
+ * it is the only thing that may call `send` directly.
+ */
+export function tokensMatch(offered, expected) {
+  const a = Buffer.from(String(offered ?? ''), 'utf8');
+  const b = Buffer.from(String(expected ?? ''), 'utf8');
+  // **The `catch` is the fix; the length comparison is an early-out.**
+  //
+  // The original compared `offered.length` and `expected.length` as STRINGS,
+  // which count UTF-16 code units, and then handed the buffers to
+  // `timingSafeEqual` — which throws unless they are the same size in BYTES. A
+  // token of the right character count containing anything non-ASCII passed the
+  // guard, threw inside express's middleware, and answered an unauthenticated
+  // caller with a 500 and a stack trace instead of a 401.
+  //
+  // Both lines below are correct, and only one of them is load-bearing: deleting
+  // the length comparison changes no behaviour, because the catch already turns
+  // the throw into `false`. Said plainly because a guard that cannot fail reads
+  // like the thing keeping you safe, and the next person to touch this should
+  // know which line actually is.
+  //
+  // An empty expected token never matches, so a bridge that somehow failed to
+  // mint one refuses everything rather than accepting everything.
+  if (b.length === 0) return false;
+  try {
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+export function createSendQueue(send) {
+  let tail = Promise.resolve();
+
+  /** One wire call, in order. */
+  function enqueueSend(fn) {
+    const task = tail.then(() => fn(), () => fn());
+    tail = task.catch(() => {});
+    return task;
+  }
+
+  /**
+   * A whole reply — however many chunks, and the pauses between them — as one
+   * turn in the queue.
+   *
+   * **The callback is handed `send`, and must not call `enqueueSend`.** That is
+   * not a style rule. `enqueueSend` assigns `tail` before `fn` runs, so an inner
+   * `enqueueSend` chains onto a promise that settles only when `fn` returns —
+   * while `fn` is awaiting the inner one. Nothing resolves, and because `tail`
+   * is then permanently pending, the FIRST reply wedges the queue for the life
+   * of the process: every later send hangs too. That shipped, under a comment
+   * asserting it could not happen.
+   */
+  function enqueueReply(fn) {
+    return enqueueSend(() => fn(send));
+  }
+
+  return { enqueueSend, enqueueReply };
 }

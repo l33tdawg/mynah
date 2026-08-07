@@ -209,6 +209,27 @@ public actor VoiceBridgeDaemon {
         /// The message came from another appliance answering the same thread.
         case ignoredSecondBridge
         case failed(String)
+
+        /// Whether this outcome retires the message on its own, with no send
+        /// having to have succeeded.
+        ///
+        /// These four say nothing back — there is no reply whose delivery could
+        /// be in question — and every one of them is permanent: replaying a
+        /// blank voice note, or a message that arrived while the appliance was
+        /// paused, produces the same nothing on every attempt. Left
+        /// unacknowledged they would be redelivered on every reconnection for
+        /// ever, and the spool would fill with them.
+        ///
+        /// `.replied` and `.failed` are deliberately absent: both may have tried
+        /// to say something, and whether it arrived is what `run` has to ask.
+        var retiresWithoutASend: Bool {
+            switch self {
+            case .ignoredEmpty, .ignoredBlankTranscript, .paused, .ignoredSecondBridge:
+                return true
+            case .replied, .failed:
+                return false
+            }
+        }
     }
 
     /// Every channel the owner has turned on — Signal, WhatsApp, or both.
@@ -229,6 +250,20 @@ public actor VoiceBridgeDaemon {
     /// `OwnTaskEdits`.
     private var onTaskWrites: (@Sendable () async -> Void)?
 
+
+    /// Whether this exchange's answer actually left the Mac.
+    ///
+    /// **Set by `reply` after the wire call returns, and read by `run` to decide
+    /// whether the message may be retired.** The distinction is the same one
+    /// `PromisedAnswer` was built on — "sent" and "composed" differ by exactly
+    /// the window that matters — and acknowledging a WhatsApp message is far
+    /// more destructive than recording a promise: it truncates the only durable
+    /// copy of the owner's question that exists anywhere.
+    ///
+    /// Reset per exchange, beside `ledger.beginExchange()`, for the same reason
+    /// that is: a value that outlives its turn lets one message's success retire
+    /// the next message's failure.
+    private var answerReachedTheWire = false
 
     /// Who asked for the last call, so its transcript goes back to them.
     private var lastCallRecipient: ChannelRecipient?
@@ -514,7 +549,7 @@ public actor VoiceBridgeDaemon {
         // invisible from their side — they just carry on talking — so the
         // conversation has to be back before the first message can arrive.
         if let conversations {
-            let restored = conversations.load()
+            let restored = Self.migratingLegacyThreadKeys(conversations.load())
             if !restored.isEmpty {
                 histories = restored
                 let turns = restored.values.reduce(0) { $0 + $1.count }
@@ -582,32 +617,79 @@ public actor VoiceBridgeDaemon {
             let outcome = await handle(batch)
             log("[daemon] \(batch[0].logDescription) -> \(outcome.logDescription)")
 
-            // **This retires the message, and until now nothing called it.**
+            // **This retires the message, and it must not run unless the
+            // answer actually left the Mac.**
             //
             // `MessageChannel.acknowledge` is the only thing that lets the
-            // WhatsApp bridge drop a message from its crash-durable spool. It
-            // existed, it was documented as the one way, `ChannelSet` and
-            // `WhatsAppChannel` and `WhatsAppClient` each implemented it — and
-            // no line in `Sources/` ever invoked it. The whole durable path
-            // terminated in dead code: the spool would have grown to its 10,000
-            // limit and then refused every further inbound message, and every
-            // reconnect in between would have re-answered the entire history.
+            // WhatsApp bridge drop a message from its crash-durable spool, and
+            // until this release nothing called it at all — the whole durable
+            // path terminated in dead code.
             //
-            // **Here, after `handle` returns, and not on receipt.** Earlier and
-            // a crash mid-turn loses the message the spool exists to keep. The
-            // outcome is deliberately not consulted: `handle` returning at all
-            // means the message was read and something was said back or
-            // deliberately ignored, including every refusal. Redelivering a
-            // failed turn after a restart would answer a question the owner has
-            // already had an apology for — and the apology itself is durable,
-            // which is what `PromisedAnswer` is.
+            // The first repair called it unconditionally, on the reasoning that
+            // `handle` returning at all means something was said back. That is
+            // false, and an audit found the case that makes it expensive: the
+            // bridge is its own KeepAlive job, so it can be connected to the
+            // socket and disconnected from WhatsApp at the same time. On a
+            // restart `event_socket.js` replays the entire unacknowledged
+            // backlog the instant we connect, and if WhatsApp is still
+            // reconnecting every one of those sends is refused with 503.
+            // `reply` catches that, logs a line, returns false — and the false
+            // was discarded. So the backlog the spool exists to preserve across
+            // exactly this restart was retired unanswered, in bulk, silently.
+            //
+            // `PromisedAnswer` does not cover it either. The promise is written
+            // only after a *successful* working line, so a turn whose sends all
+            // failed leaves no record at all.
+            //
+            // So: retire what is genuinely finished, and leave the rest for the
+            // bridge to replay. At-least-once is the right side to fail on here
+            // — this product's own rule, from the same file that says a
+            // duplicate apology beats permanent silence.
             //
             // Signal's implementation is empty, so this costs nothing there.
-            for message in batch {
-                await channels.acknowledge(message)
+            if outcome.retiresWithoutASend || answerReachedTheWire {
+                for message in batch {
+                    await channels.acknowledge(message)
+                }
+            } else {
+                log("[daemon] not acknowledging \(batch.count) message(s): the answer never left "
+                    + "this Mac, so they stay on the bridge to be delivered again")
             }
         }
         log("[daemon] message stream finished")
+    }
+
+    /// Threads written before channels existed, keyed the way they were then.
+    ///
+    /// **The key is `recipient.description`, and that string changed.** Under
+    /// `SignalRecipient` it was `+60123821767` or `group:<id>`; under
+    /// `ChannelRecipient` it is `signal:+60123821767`. Every conversation on
+    /// disk is therefore filed under a name this build will never look up, so
+    /// the first launch of 2.0.0 resumes nothing and the owner's appliance has
+    /// forgotten a conversation he is in the middle of. The file is not damaged
+    /// — which is exactly why this is worth doing rather than shrugging at: the
+    /// history is right there and only the label is wrong.
+    ///
+    /// Signal is the only channel that could have written a legacy key, so the
+    /// mapping is unambiguous. A key that already carries a known channel is
+    /// left alone, which is what makes this safe to run on every start rather
+    /// than once behind a flag nobody would remember to remove.
+    static func migratingLegacyThreadKeys(
+        _ restored: [String: [BrainMessage]]
+    ) -> [String: [BrainMessage]] {
+        let known = Set(ChannelKind.allCases.map { "\($0.rawValue):" })
+        var out: [String: [BrainMessage]] = [:]
+        for (key, history) in restored {
+            if known.contains(where: key.hasPrefix) {
+                out[key] = history
+                continue
+            }
+            // `group:<id>` keeps its marker, because `ChannelRecipient`
+            // renders a group as `signal:group:<id>` — the channel goes in
+            // front of the whole thing, not instead of the group marker.
+            out["\(ChannelKind.signal.rawValue):\(key)"] = history
+        }
+        return out
     }
 
     public func stop() async {
@@ -742,6 +824,7 @@ public actor VoiceBridgeDaemon {
         // site while identical ones went unwatched, and the first where the fix
         // being repaired was itself an instance.
         ledger.beginExchange()
+        answerReachedTheWire = false
 
         guard let message = batch.first else { return .ignoredEmpty }
         // Non-optional now, and that is the point of `ChannelMessage`: a channel
@@ -1752,6 +1835,7 @@ public actor VoiceBridgeDaemon {
                 ),
                 to: recipient
             )
+            if case .answer = utterance { answerReachedTheWire = true }
             // **After the wire call returned, and nowhere else.**
             //
             // The in-memory gate is closed at the top of this method, before the

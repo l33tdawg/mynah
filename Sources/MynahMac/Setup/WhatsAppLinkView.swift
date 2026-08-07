@@ -45,8 +45,27 @@ struct WhatsAppLinkSheet: View {
 
             HStack {
                 Spacer()
-                if case .linked = session?.phase {
+                if case .linked(let user) = session?.phase {
                     MynahButton("Done", kind: .primary) {
+                        // **The account that was actually linked, recorded
+                        // here.**
+                        //
+                        // `ChannelSelectionStore.saveWhatsAppNumbers` existed
+                        // with no caller anywhere in the app, so the WhatsApp
+                        // allowlist could only ever be the Signal number with
+                        // its `+` stripped. An owner whose WhatsApp is on a
+                        // different SIM — which this sheet never asks about —
+                        // pairs successfully, sees "Linked", and is then refused
+                        // by the bridge's own allowlist on every message he
+                        // sends. Nothing on any screen says why.
+                        //
+                        // The JID is in the `connected` event we already have.
+                        // Written only when it parses to digits: `user` may be a
+                        // display name the owner chose, and a name is not an
+                        // identity.
+                        if let digits = Self.number(inLinkedAccount: user) {
+                            ChannelSelectionStore.saveWhatsAppNumbers([digits])
+                        }
                         onLinked()
                         onClose()
                     }
@@ -75,6 +94,21 @@ struct WhatsAppLinkSheet: View {
             // stops both ends decrypting.
             session?.cancel()
         }
+    }
+
+    /// The phone number out of what the bridge called the linked account.
+    ///
+    /// `connected` carries either a push name or a JID; only the JID identifies
+    /// anybody. Returns nil for a name, so a wrong allowlist is never written
+    /// from one — an empty allowlist falls back to the Signal number, which is
+    /// the old behaviour and right for the common case where they are the same
+    /// phone.
+    static func number(inLinkedAccount account: String?) -> String? {
+        guard let account, let at = account.firstIndex(of: "@") else { return nil }
+        // `60123821767:12@s.whatsapp.net` — Baileys appends a device id.
+        let user = account[account.startIndex..<at].split(separator: ":").first.map(String.init) ?? ""
+        let digits = user.filter(\.isNumber)
+        return digits.count >= 7 ? digits : nil
     }
 
     @ViewBuilder

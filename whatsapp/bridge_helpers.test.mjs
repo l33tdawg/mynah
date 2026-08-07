@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getMessageContent } from './bridge_helpers.js';
+import { getMessageContent, tokensMatch } from './bridge_helpers.js';
 
 const text = (body) => ({ conversation: body });
 
@@ -113,4 +113,36 @@ test('a terminal shape inside a wrapper is still found', () => {
     }),
     { description: 'choose' }
   );
+});
+
+// --- the shared secret in front of the bridge's HTTP API ---
+
+test('the right token matches and a wrong one does not', () => {
+  const token = 'a'.repeat(64);
+  assert.equal(tokensMatch(token, token), true);
+  assert.equal(tokensMatch('b'.repeat(64), token), false);
+  assert.equal(tokensMatch('', token), false);
+  assert.equal(tokensMatch(undefined, token), false);
+});
+
+test('a non-ASCII token is refused rather than throwing a 500 with a stack trace', () => {
+  // `timingSafeEqual` throws unless the buffers are the same size, and a
+  // JavaScript string length counts UTF-16 code units — so a token of the right
+  // CHARACTER count containing anything outside ASCII produced buffers of
+  // different byte lengths. The throw escaped express's middleware and an
+  // unauthenticated caller got a 500 describing the bridge's internals instead
+  // of a 401.
+  const token = 'a'.repeat(64);
+  const sameCharacterCount = 'é'.repeat(64);
+  assert.equal(sameCharacterCount.length, token.length, 'the test case no longer reproduces the mismatch');
+  assert.notEqual(Buffer.byteLength(sameCharacterCount), Buffer.byteLength(token));
+  assert.doesNotThrow(() => tokensMatch(sameCharacterCount, token));
+  assert.equal(tokensMatch(sameCharacterCount, token), false);
+});
+
+test('an empty expected token refuses everything rather than accepting everything', () => {
+  // A bridge that somehow failed to mint a token must fail closed. Two empty
+  // buffers compare equal, so without this every caller would be authorised.
+  assert.equal(tokensMatch('', ''), false);
+  assert.equal(tokensMatch('anything', ''), false);
 });
