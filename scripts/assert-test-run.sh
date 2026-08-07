@@ -102,9 +102,17 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2111   (1.9.0, sage_directory scope; was 2080 at 1.8.3)
-#   without Kokoro  2073   (2111 - 38)
-#   floor           2099   (12 under measured, 26 above the failure it must catch)
+#   measured      2130   (2.0.0, WhatsApp transport; was 2111 at 1.9.0)
+#   without Kokoro  2092   (2130 - 38)
+#   floor           2118   (12 under measured, 26 above the failure it must catch)
+#
+# 2111 to 2130 is fifteen tests for the WhatsApp Swift transport and four for
+# the menu-bar mark. The bridge's own 45 JavaScript tests are NOT in this
+# number and never will be: they run under `node --test` from
+# scripts/provision-whatsapp-bridge.sh, which is its own gate with its own
+# per-file check. Two suites in two languages, and this one counts only what
+# SwiftPM executes — a floor that tried to cover both would be a floor that
+# moves for reasons this script cannot see.
 #
 # **1.9.0 is the first time this fired rather than being raised ahead of it**,
 # and it fired exactly as designed: a green suite, 2111 executed and 0 failures,
@@ -130,7 +138,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2099}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2118}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
