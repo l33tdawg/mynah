@@ -115,6 +115,21 @@ bash scripts/provision-pandoc.sh
 bash scripts/provision-typst.sh
 bash scripts/provision-typst-packages.sh
 
+# WhatsApp: the Node runtime, and the Baileys bridge that runs on it.
+#
+# Before the tests rather than after, for the same reason the document writers
+# moved up in the CI workflow: provision-whatsapp-bridge.sh runs the bridge's
+# own 45 tests and refuses a tree that cannot ship — a native addon appearing
+# in the dependency graph, or a bridge that installs but does not start. Those
+# are answers worth having before an hour of building and notarising, not after.
+#
+# Not gated on SAGE_VOICE_REQUIRE_WHATSAPP. A release should always try to
+# carry WhatsApp; the flag in package-app.sh decides whether *missing* it is
+# fatal, and that is a different question from whether to attempt it.
+step "provision node and the WhatsApp bridge"
+bash scripts/provision-node.sh
+bash scripts/provision-whatsapp-bridge.sh
+
 step "tests"
 # Two things, and the second is the one that matters.
 #

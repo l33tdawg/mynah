@@ -116,6 +116,25 @@ TYPST_PACKAGES_ROOT="${SAGE_VOICE_TYPST_PACKAGES_ROOT:-$ROOT/vendor/typst-packag
 DIAGRAPH_VERSION="${SAGE_VOICE_DIAGRAPH_VERSION:-0.3.5}"
 REQUIRE_DOCUMENTS="${SAGE_VOICE_REQUIRE_DOCUMENTS:-1}"
 
+# WhatsApp: the Node runtime and the Baileys bridge that runs on it.
+#
+# The only interpreted runtime in this bundle, and the reason is that WhatsApp
+# has no client library for anything this app is written in — Baileys is the one
+# maintained implementation and it is TypeScript. It keeps the bundle's shape
+# anyway: one 107 MB Mach-O plus data, the same as signal-cli's 121 MB native
+# image, and the JavaScript beside it has no native addons at all, so codesign
+# seals the tree without signing anything inside it.
+#
+# NOT required by default, unlike the voice and the documents. Those are
+# downgrades an owner would notice without being told; a build without WhatsApp
+# simply has no WhatsApp, and says so on the screen that offers it. Set
+# SAGE_VOICE_REQUIRE_WHATSAPP=1 for a release that must carry it.
+NODE_ROOT="${SAGE_VOICE_NODE_ROOT:-$ROOT/vendor/node}"
+NODE_SOURCE="${SAGE_VOICE_NODE:-$NODE_ROOT/bin/node}"
+WHATSAPP_SOURCE="${SAGE_VOICE_WHATSAPP_DIR:-$ROOT/whatsapp}"
+NODE_ENTITLEMENTS="${SAGE_VOICE_NODE_ENTITLEMENTS:-$ROOT/resources/NodeRuntime.entitlements}"
+REQUIRE_WHATSAPP="${SAGE_VOICE_REQUIRE_WHATSAPP:-0}"
+
 # An ad-hoc signature cannot ship the dylib, and the failure is total.
 #
 # The hardened runtime enforces library validation, which requires a loaded
@@ -484,6 +503,60 @@ Run scripts/provision-typst-packages.sh before packaging.
 They are what draws a diagram into a PDF."
 fi
 
+# --- WhatsApp -------------------------------------------------------------
+#
+# Both halves or neither. A Node with no bridge is 107 MB of nothing; a bridge
+# with no Node is a screen that offers WhatsApp and then cannot start it.
+if [[ -x "$NODE_SOURCE" && -f "$WHATSAPP_SOURCE/bridge.js" ]]; then
+  [[ -d "$WHATSAPP_SOURCE/node_modules" ]] || die \
+"The WhatsApp bridge has no dependencies installed: $WHATSAPP_SOURCE/node_modules
+Run scripts/provision-whatsapp-bridge.sh before packaging.
+Staging bridge.js without them produces an app that fails at first import."
+
+  # Checked here as well as in the provision script, because provisioning and
+  # packaging can be hours and a `git pull` apart. A native addon that arrives
+  # in between would otherwise be discovered by Apple rather than by us.
+  NATIVE_IN_BRIDGE="$(find "$WHATSAPP_SOURCE/node_modules" -name '*.node' -type f | head -5)"
+  [[ -z "$NATIVE_IN_BRIDGE" ]] || die \
+"The WhatsApp dependency tree contains native addons:
+$NATIVE_IN_BRIDGE
+Each needs its own codesign pass inside a hardened-runtime bundle. Rerun
+scripts/provision-whatsapp-bridge.sh, which excludes them, or sign them
+deliberately here."
+
+  mkdir -p "$APP/Contents/Resources/node/bin" "$APP/Contents/Resources/whatsapp"
+  cp "$NODE_SOURCE" "$APP/Contents/Resources/node/bin/node"
+  chmod +x "$APP/Contents/Resources/node/bin/node"
+  [[ ! -f "$NODE_ROOT/LICENSE" ]] || cp "$NODE_ROOT/LICENSE" "$APP/Contents/Resources/node/LICENSE"
+  [[ ! -f "$NODE_ROOT/VERSION" ]] || cp "$NODE_ROOT/VERSION" "$APP/Contents/Resources/node/VERSION"
+
+  # The bridge and its dependencies. No tests: they are build-time proof, and
+  # 200 KB of .test.mjs inside a shipped app is 200 KB nobody will ever run.
+  for file in bridge.js bridge_helpers.js allowlist.js outbound_ids.js \
+              owner_message_gate.js event_spool.js event_socket.js \
+              package.json LICENSE.hermes PROVENANCE.md; do
+    [[ ! -f "$WHATSAPP_SOURCE/$file" ]] || cp "$WHATSAPP_SOURCE/$file" "$APP/Contents/Resources/whatsapp/$file"
+  done
+  cp -R "$WHATSAPP_SOURCE/node_modules" "$APP/Contents/Resources/whatsapp/node_modules"
+
+  # It has to actually run from where it will actually live. The staged tree is
+  # a different directory from the one the tests ran in, and a missing file
+  # shows up here as an import error rather than as a mystery on somebody's Mac
+  # a week after release. Unsigned at this point, so this proves the layout, not
+  # the entitlements — the Team ID check after signing does that half.
+  if ! "$APP/Contents/Resources/node/bin/node" \
+        -e "import('file://$APP/Contents/Resources/whatsapp/bridge_helpers.js').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})" \
+        >/dev/null 2>&1; then
+    die "The staged WhatsApp bridge cannot load its own modules from
+$APP/Contents/Resources/whatsapp
+Something in the copy above is incomplete."
+  fi
+elif [[ "$REQUIRE_WHATSAPP" == "1" || "$REQUIRE_WHATSAPP" == "true" ]]; then
+  die "Required WhatsApp support is missing.
+  node:   $NODE_SOURCE      (scripts/provision-node.sh)
+  bridge: $WHATSAPP_SOURCE  (scripts/provision-whatsapp-bridge.sh)"
+fi
+
 if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
   if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
     cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
@@ -628,6 +701,55 @@ fi
   || sign "$APP/Contents/Resources/pandoc/bin/pandoc"
 [[ ! -f "$APP/Contents/Resources/typst/bin/typst" ]] \
   || sign "$APP/Contents/Resources/typst/bin/typst"
+# The Node runtime, and this one is not like the others: it arrives ALREADY
+# signed and hardened by the Node Foundation, carrying six entitlements of its
+# own. One of them is com.apple.security.get-task-allow, a development
+# entitlement that Apple's notary service rejects outright. Shipping the
+# download unchanged would fail notarisation at the very end of a release,
+# after everything else had been signed and uploaded.
+#
+# So this re-signs rather than signs, and then checks that it worked — which is
+# not paranoia, it is the failure that actually happened on 7 August 2026.
+# resources/NodeRuntime.entitlements had a codesign flag written in a comment,
+# an XML comment may not contain two hyphens in a row, and so:
+#
+#     codesign exited 1 with "AMFIUnserializeXML: syntax error near line 24"
+#     the binary kept the Node Foundation's signature, entitlements and all
+#
+# `sign` runs under `set -e` and would have caught that exit status here. It
+# would NOT have caught a well-formed entitlements file that simply granted the
+# wrong thing, and the Team ID is the cheap way to tell a real re-sign from a
+# no-op. Both are checked, because the two failures look identical in a build
+# log that only prints "signing node".
+if [[ -f "$APP/Contents/Resources/node/bin/node" ]]; then
+  sign "$APP/Contents/Resources/node/bin/node" --entitlements "$NODE_ENTITLEMENTS"
+
+  NODE_TEAM="$(codesign -dv "$APP/Contents/Resources/node/bin/node" 2>&1 \
+    | sed -n 's/^TeamIdentifier=//p')"
+  [[ -n "$NODE_TEAM" && "$NODE_TEAM" != "HX7739G8FX" ]] || die \
+"node still carries the Node Foundation's signature (TeamIdentifier=$NODE_TEAM).
+The re-sign did not take. Check the entitlements file with:
+
+  xmllint --noout $NODE_ENTITLEMENTS
+
+**xmllint, not plutil.** plutil -lint reports OK on the file that caused this
+— verified 7 Aug 2026 — because it is lenient about exactly the fault that
+breaks codesign: an XML comment may not contain two hyphens in a row, and
+writing a codesign flag into the comment the natural way puts them there.
+xmllint says 'Double hyphen within comment' and gives the line."
+
+  NODE_GRANTED="$(codesign -d --entitlements - --xml \
+    "$APP/Contents/Resources/node/bin/node" 2>/dev/null || true)"
+  [[ "$NODE_GRANTED" != *"get-task-allow"* ]] || die \
+"node is still carrying com.apple.security.get-task-allow.
+Apple's notary service rejects it. $NODE_ENTITLEMENTS must replace Node's own
+entitlements, not add to them."
+  [[ "$NODE_GRANTED" == *"com.apple.security.cs.allow-jit"* ]] || die \
+"node was signed without com.apple.security.cs.allow-jit.
+Measured 7 Aug 2026: without it a hardened Node dies with SIGTRAP before any
+JavaScript runs, so WhatsApp would fail on every owner's Mac and on none of
+ours. See the table in scripts/provision-node.sh."
+fi
 # The daemon, and it is the process that writes the owner's calendar. Signed
 # with its own entitlements rather than none, so that the binary calling EventKit
 # carries the key it is asking about.

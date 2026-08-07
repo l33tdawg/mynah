@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the bundled Node runtime, and for nothing else.
+
+  NOTE TO WHOEVER EDITS THIS COMMENT: an XML comment may not contain two
+  hyphens in a row. Writing a codesign flag in here the natural way is enough
+  to break it, and the way it breaks is nasty. AMFI reports "Failed to parse
+  entitlements: AMFIUnserializeXML: syntax error near line 24", codesign exits
+  1, and the binary keeps whatever signature it already had. If nobody checks
+  the exit status, the build carries on and ships a Node signed by the Node
+  Foundation, with the Node Foundation's entitlements, and the sign step looks
+  like it ran. That is exactly what happened here on 7 August 2026, and it is
+  why package-app.sh now verifies the Team ID after signing this file rather
+  than trusting that codesign did anything.
+
+  To check this file, run xmllint over it (the exact command is in the failure
+  message package-app.sh prints, where a comment cannot mangle it). Use xmllint
+  and NOT plutil: plutil reports OK on a file with a double hyphen in a
+  comment, so it cannot see the one fault most likely to be introduced here.
+  xmllint says "Double hyphen within comment" and gives the line number.
+
+  Written without naming the flag, because naming it is what broke this file
+  the second time: the paragraph warning about double hyphens contained one.
+
+  WHY THIS FILE EXISTS AT ALL. The Node binary from nodejs.org is already
+  signed, hardened, and carries six entitlements of its own:
+
+      com.apple.security.cs.allow-dyld-environment-variables
+      com.apple.security.cs.allow-jit
+      com.apple.security.cs.allow-unsigned-executable-memory
+      com.apple.security.cs.disable-executable-page-protection
+      com.apple.security.cs.disable-library-validation
+      com.apple.security.get-task-allow
+
+  The last one is the reason this cannot simply be shipped as it arrives.
+  get-task-allow lets another process attach to it as a debugger, it is a
+  development entitlement, and Apple's notary service rejects it. A release
+  that staged Node unchanged would fail notarisation at the very end of the
+  build, after everything else had been signed and paid for.
+
+  The rest are wider than this app needs. Node grants them so that any Node
+  program can run: native addons that want library validation off, profilers
+  that want executable pages writable. The bridge in whatsapp/ has no native
+  addons at all, deliberately, and provision-whatsapp-bridge.sh fails if one
+  ever appears.
+
+  WHAT IS GRANTED, AND WHAT IT COST TO FIND OUT. V8 compiles JavaScript to
+  machine code at runtime, so it needs permission to map executable memory.
+  com.apple.security.cs.allow-jit is the narrow form of that permission: it
+  allows MAP_JIT, which respects W^X, and it is what V8 uses on Apple Silicon.
+  The wider com.apple.security.cs.allow-unsigned-executable-memory turns the
+  protection off rather than carving a hole in it, and is not granted.
+
+  The measurements that settled it are in the header of
+  scripts/provision-node.sh, taken with the real Developer ID identity rather
+  than an ad-hoc signature. That distinction matters: an ad-hoc signature has
+  no Team ID, so the hardened runtime is not enforced and a development build
+  will happily run a binary a signed release would kill. It is the same trap
+  resources/SignalCLI.entitlements describes from the other direction.
+-->
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>
