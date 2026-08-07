@@ -517,6 +517,16 @@ figure { margin: var(--s8) 0 0; }
 }
 .get .aside { font-size: 13px; color: var(--ink-2); }
 .get .button, .get .button:hover { text-decoration: none; }
+/* The beta gets its own row rather than trailing the aside above it. The two
+   say different things — one describes the build being offered, the other
+   offers a different build — and run together they read as one long sentence
+   about the stable one. `flex-basis: 100%` is what breaks the row in a wrapping
+   flex container. */
+.get .beta-line { flex-basis: 100%; }
+/* Belt and braces on the reveal. `hidden` is a UA `display: none`, which any
+   later `display` rule on this class would silently beat — and losing that
+   fight means every visitor is offered a beta on the days there is not one. */
+.get .beta-line[hidden] { display: none; }
 
 figcaption {
   font-size: 13px;
@@ -712,6 +722,17 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
         <span class="aside">
           Apple silicon &middot; macOS 14+ &middot; signed and notarized &middot;
           <span data-download-size></span>free and open source<span data-latest></span>
+        </span>
+        <!-- The beta, offered beside the stable download rather than instead of
+             it. Hidden until the script finds a real prerelease with a real
+             asset, so a page served with JavaScript off — or on a morning when
+             there is no beta — simply does not mention one. A visible link to a
+             beta that does not exist is the dead end this project keeps
+             paying for. -->
+        <span class="aside beta-line" data-beta-line hidden>
+          Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
+          <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
+          alongside Signal.
         </span>
       </div>
     </div>
@@ -983,6 +1004,11 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
       built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span data-latest></span>
     </span>
+    <span class="aside beta-line" data-beta-line hidden>
+      Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
+      <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
+      alongside Signal.
+    </span>
   </div>
 </section>
 
@@ -1056,9 +1082,23 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     const releases = await response.json();
     if (!Array.isArray(releases) || !releases.length) return;
 
+    /* What a Mynah disk image is called, in one place.
+       ----------------------------------------------------------------------
+       **The character class had no hyphen, and that made this unable to see a
+       prerelease at all.** `Mynah-1.9.0-macOS-arm64.dmg` matched; the moment a
+       version carried a hyphen — `Mynah-2.0.0-beta.2-macOS-arm64.dmg`, and any
+       future `-rc.1` — `[\w.]*` stopped at `2.0.0` and the rest could not be
+       reached. It cost nothing while every release was a plain triple, and it
+       would have silently hidden the beta row on the day it was needed.
+
+       One constant rather than the same literal twice, because the stable
+       lookup and the beta lookup have to agree about what an asset is called
+       forever, and two copies is how they stop agreeing. */
+    const DISK_IMAGE = /^Mynah-\d[\w.-]*-macOS-arm64\.dmg$/i;
+
     const newest = releases.find(release => !release.draft && !release.prerelease);
     const versioned = (newest?.assets || []).find(
-      asset => /^Mynah-\d[\w.]*-macOS-arm64\.dmg$/i.test(asset.name || "")
+      asset => DISK_IMAGE.test(asset.name || "")
     );
     if (versioned?.browser_download_url) {
       // Every download button, not one of them.
@@ -1078,6 +1118,47 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
           span.textContent = megabytes + " MB \u00B7 ";
         });
       }
+    }
+
+    /* The beta, offered beside the stable download.
+       ----------------------------------------------------------------------
+       Two tracks at once while 2.0 is in beta: the button above stays on the
+       newest STABLE release \u2014 `newest` skips prereleases, so nothing here
+       changes what it hands over \u2014 and this reveals a second line pointing at
+       the newest prerelease.
+
+       **Revealed rather than hidden, and that is the load-bearing direction.**
+       The markup ships `hidden`, so the row appears only once a real prerelease
+       with a real asset has been found. Written the other way round \u2014 visible
+       in the HTML and hidden by script when there is no beta \u2014 it would be
+       visible to every reader with JavaScript off, on a rate-limited network,
+       and on every morning after the beta ends. That is precisely the failure
+       this file already paid for once, when a hard-coded asset name 404'd for
+       twenty-five releases and hit only the visitors the comment promised to
+       protect. A beta link is worse than a download button in one specific way:
+       when the beta is over, the honest state is *no row at all*, and only a
+       reveal can express that by doing nothing.
+
+       So it costs a visitor with JavaScript off the knowledge that a beta
+       exists, which is the right thing to lose. */
+    const beta = releases.find(release => !release.draft && release.prerelease);
+    const betaAsset = (beta?.assets || []).find(
+      asset => DISK_IMAGE.test(asset.name || "")
+    );
+    if (beta && betaAsset?.browser_download_url) {
+      document.querySelectorAll("[data-beta]").forEach(link => {
+        link.href = betaAsset.browser_download_url;
+      });
+      // `2.0.0-beta.2` reads as machinery; `2.0 beta` is what it is. Falls back
+      // to whatever the tag says rather than to nothing, so an unexpected
+      // version string still names itself.
+      const match = /^v?(\d+\.\d+)/.exec(beta.tag_name || "");
+      document.querySelectorAll("[data-beta-version]").forEach(span => {
+        span.textContent = match ? match[1] + " beta" : (beta.tag_name || "beta");
+      });
+      document.querySelectorAll("[data-beta-line]").forEach(line => {
+        line.hidden = false;
+      });
     }
 
     /* How many copies have gone out.
