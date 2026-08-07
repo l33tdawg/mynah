@@ -70,17 +70,50 @@ public enum ChannelKind: String, Equatable, Sendable, CaseIterable, Codable {
 /// impossible.
 public struct ChannelRecipient: Equatable, Sendable, CustomStringConvertible {
     public let kind: ChannelKind
-    /// The channel's own address, in the channel's own form.
+    /// The channel's own address, in the channel's own form. **What a reply is
+    /// sent to**, and never anything else — see `identity`.
     public let address: String
+    /// The same chat, named in a way that does not change when the transport
+    /// changes how it addresses it. `nil` when the address is already stable,
+    /// which is Signal always and WhatsApp whenever the bridge could resolve it.
+    ///
+    /// **These are two different things and conflating them cost a
+    /// conversation.** WhatsApp is migrating to LID addressing: the owner's own
+    /// chat arrived on 7 August as `161228928336031@lid`, not as his number.
+    /// That form is a property of the transport at a moment in time, so keying
+    /// history on it means the same person becomes a second conversation the
+    /// day WhatsApp changes its mind — the appliance forgets mid-sentence, with
+    /// nothing on any screen to say why. It is the defect the Signal thread key
+    /// had to be migrated for, one release earlier, on the other channel.
+    ///
+    /// Replying still goes to `address`. WhatsApp may not accept the phone JID
+    /// for a chat it is addressing by LID, and the first working exchange went
+    /// out over the LID — so this must not become "resolve it and use that
+    /// everywhere", which is the obvious fix and would break sending.
+    public let identity: String?
     public let isGroup: Bool
 
-    public init(kind: ChannelKind, address: String, isGroup: Bool = false) {
+    public init(kind: ChannelKind, address: String, identity: String? = nil, isGroup: Bool = false) {
         self.kind = kind
         self.address = address
+        // Stored as nil when it says nothing new, so `addressDescription` and
+        // `description` differ only when there is a real distinction to make.
+        self.identity = identity == address ? nil : identity
         self.isGroup = isGroup
     }
 
+    /// The conversation key. Stable across a change of address form.
     public var description: String {
+        "\(kind.rawValue):\(isGroup ? "group:" : "")\(identity ?? address)"
+    }
+
+    /// What `description` would have been if the address were the identity.
+    ///
+    /// Equal to `description` unless the transport is addressing this chat by
+    /// something other than its stable name. Exists so a conversation filed
+    /// under an older address form can still be found — see
+    /// `VoiceBridgeDaemon.adoptingEarlierAddressForm`.
+    public var addressDescription: String {
         "\(kind.rawValue):\(isGroup ? "group:" : "")\(address)"
     }
 }
@@ -199,6 +232,15 @@ public struct ChannelMessage: Equatable, Sendable {
     /// such a concept. `nil` for Signal.
     public let acknowledgementToken: Int?
 
+    /// Which run of the channel's numbering `acknowledgementToken` belongs to.
+    ///
+    /// **Carried on the message because a turn outlives the thing it is a
+    /// token for.** A minute is an ordinary turn, and a spool recreated inside
+    /// that minute renumbers from 1 — so the token this message is holding then
+    /// names a different message, or none. Without the epoch travelling
+    /// alongside it, retiring this message would retire that one.
+    public let acknowledgementEpoch: String?
+
     public init(
         kind: ChannelKind,
         recipient: ChannelRecipient,
@@ -207,7 +249,8 @@ public struct ChannelMessage: Equatable, Sendable {
         text: String? = nil,
         attachments: [ChannelAttachment] = [],
         timestamp: Int64 = 0,
-        acknowledgementToken: Int? = nil
+        acknowledgementToken: Int? = nil,
+        acknowledgementEpoch: String? = nil
     ) {
         self.kind = kind
         self.recipient = recipient
@@ -217,6 +260,7 @@ public struct ChannelMessage: Equatable, Sendable {
         self.attachments = attachments
         self.timestamp = timestamp
         self.acknowledgementToken = acknowledgementToken
+        self.acknowledgementEpoch = acknowledgementEpoch
     }
 
     public var attachmentPaths: [String] { attachments.compactMap { $0.localURL?.path } }

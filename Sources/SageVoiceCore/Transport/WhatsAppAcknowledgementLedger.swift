@@ -33,9 +33,21 @@ struct WhatsAppAcknowledgementLedger: Equatable {
 
     private var hasObservedASequence = false
 
+    /// Which run of the spool's numbering these sequences belong to.
+    ///
+    /// `nil` until a bridge tells us, and a bridge that never does leaves every
+    /// sequence in one nameless epoch — which is exactly the behaviour that
+    /// shipped before this existed, and the right thing to degrade to.
+    private(set) var epoch: String?
+
+    /// How many times the spool has been recreated under us. Diagnostics only:
+    /// this should be 0 on a healthy install, and a number that climbs is worth
+    /// noticing.
+    private(set) var rebaselines = 0
+
     /// Handed to the consumer. Until it is settled, the watermark cannot pass it.
-    mutating func deliver(_ sequence: Int) {
-        observe(sequence)
+    mutating func deliver(_ sequence: Int, epoch: String? = nil) {
+        observe(sequence, epoch: epoch)
         guard sequence > watermark else { return }
         // **The stale `settled` entry has to go, and leaving it walked the
         // watermark over a live message.**
@@ -56,8 +68,20 @@ struct WhatsAppAcknowledgementLedger: Equatable {
 
     /// Finished: answered, refused by the allowlist, or unreadable. Advances the
     /// watermark across whatever contiguous run that completes, and no further.
-    mutating func settle(_ sequence: Int) {
-        observe(sequence)
+    mutating func settle(_ sequence: Int, epoch: String? = nil) {
+        // **A settle from a spool that no longer exists is dropped, and this is
+        // not hypothetical tidiness.** A turn takes up to a minute. If the spool
+        // is recreated inside that window, the answer comes back carrying a
+        // sequence from the old numbering — and against the new baseline it
+        // would be parked in `settled`, then walked over as the new spool's
+        // sequences closed the gap beneath it. The watermark would acknowledge a
+        // message of the new spool that had not arrived, which is the loss this
+        // whole type exists to prevent, reached by a third route.
+        //
+        // Dropping it costs nothing: the message it refers to is gone with its
+        // spool, and nothing can ever ask about it again.
+        if let epoch, let current = self.epoch, epoch != current { return }
+        observe(sequence, epoch: epoch)
         // **Removed before the guard, and no test can currently tell.** Said
         // plainly because the alternative is a line that reads as a fix.
         //
@@ -96,7 +120,31 @@ struct WhatsAppAcknowledgementLedger: Equatable {
     /// Anything below the first sequence seen was retired by the bridge before
     /// we connected; that is the only reason it is replaying from there. So this
     /// states a fact rather than assuming one.
-    private mutating func observe(_ sequence: Int) {
+    private mutating func observe(_ sequence: Int, epoch: String?) {
+        if let epoch, epoch != self.epoch {
+            // **A different spool, stated by the spool rather than guessed.**
+            //
+            // The numbering restarted, so every sequence held here names a
+            // message that no longer exists — and the watermark, stranded above
+            // all of them, can never advance again. What that costs is not one
+            // message: nothing is ever acknowledged, the spool never compacts,
+            // it fills to its bound and refuses inbound WhatsApp for good.
+            // Reachable by following the repair `readAck` prints.
+            //
+            // Inference was not an option. A sequence below the watermark is
+            // ambiguous — the ordinary case is our last acknowledgement failing
+            // to land and the bridge legitimately replaying — so re-baselining
+            // on that would re-answer messages already dealt with, every time
+            // the socket dropped at the wrong moment.
+            if self.epoch != nil {
+                watermark = 0
+                outstanding.removeAll()
+                settled.removeAll()
+                hasObservedASequence = false
+                rebaselines += 1
+            }
+            self.epoch = epoch
+        }
         guard !hasObservedASequence else { return }
         hasObservedASequence = true
         watermark = max(watermark, sequence - 1)

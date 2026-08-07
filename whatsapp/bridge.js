@@ -65,6 +65,7 @@ import {
 // MYNAH: the durable inbound path. See event_spool.js for why upstream's
 // GET /messages is not enough here.
 import { createEventSpool } from './event_spool.js';
+import { sweepMediaCaches } from './media_sweep.js';
 import { createEventSocket } from './event_socket.js';
 
 // Parse CLI args
@@ -368,6 +369,51 @@ const eventSpool = EVENTS_SOCKET
 const eventSocket = EVENTS_SOCKET
   ? createEventSocket({ path: EVENTS_SOCKET, spool: eventSpool, log: (line) => console.log(line) })
   : null;
+
+// MYNAH: forget the media eventually, rather than never.
+//
+// Inherited from Hermes without the gateway that used to sweep these, so until
+// now every photo, video, voice note and document the owner was sent stayed on
+// the boot disk for the life of the install — decrypted, outside the WhatsApp
+// session directory, and mentioned nowhere in the product.
+//
+// On start and then hourly. On start because a Mac that is asleep more than it
+// is awake would otherwise never reach a long interval, and hourly rather than
+// daily for the same reason: this has to make progress in the windows an
+// appliance is actually running.
+const MEDIA_CACHE_DIRS = [IMAGE_CACHE_DIR, DOCUMENT_CACHE_DIR, AUDIO_CACHE_DIR];
+const MEDIA_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+function sweepMedia() {
+  try {
+    const result = sweepMediaCaches({
+      dirs: MEDIA_CACHE_DIRS,
+      now: Date.now(),
+      warn: (line) => console.warn(line),
+    });
+    // Said only when something happened, so a healthy install does not write a
+    // line an hour — but always said when files were removed. Deleting the
+    // owner's messages in silence is not a thing this should be able to do.
+    if (result.removed > 0) {
+      console.log(`[whatsapp] removed ${result.removed} cached file(s), ` +
+        `${Math.round(result.bytes / 1048576)} MB; ${result.kept} kept`);
+    }
+    if (result.stillOver) {
+      console.warn('[whatsapp] the media cache is over its size cap and everything above it is ' +
+        'too recent to remove safely — an attachment is handed to Mynah as a path, so a file ' +
+        'younger than the safety floor may still be waiting to be read. It will come down on a ' +
+        'later sweep.');
+    }
+  } catch (error) {
+    // A sweep that throws must never take the bridge with it. Nothing here is
+    // load-bearing for answering a message.
+    console.warn(`[whatsapp] media sweep failed: ${error.message}`);
+  }
+}
+
+sweepMedia();
+// Unref'd: a housekeeping timer is not a reason for the process to stay alive.
+setInterval(sweepMedia, MEDIA_SWEEP_INTERVAL_MS).unref();
 
 /**
  * MYNAH: the one way an inbound event leaves this file.
@@ -948,6 +994,11 @@ async function startSocket() {
       const event = await extractBridgeEvent({
         msg,
         chatId,
+        // Resolved for the same reason `senderId` is, and for a second one:
+        // the consumer files the owner's conversation history under this, and
+        // a name that changes when WhatsApp changes how it addresses the chat
+        // splits one conversation into two. Only this process can resolve it.
+        chatIdentity: resolveLidToPhoneJid(normalizeWhatsAppId(chatId)),
         senderId,
         senderNumber,
         botIds,

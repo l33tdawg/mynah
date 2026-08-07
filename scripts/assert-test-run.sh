@@ -102,9 +102,9 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2241   (2.0.0, WhatsApp end to end; was 2111 at 1.9.0)
-#   without Kokoro  2203   (2241 - 38)
-#   floor           2229   (12 under measured, 26 above the failure it must catch)
+#   measured      2264   (2.0.0, WhatsApp answering on the owner's phone; was 2111 at 1.9.0)
+#   without Kokoro  2226   (2264 - 38)
+#   floor           2252   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -138,8 +138,26 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # message whose reply never left the Mac, conversation threads orphaned by a key
 # that gained a channel prefix, a WhatsApp allowlist that could only ever be the
 # Signal number, and a Signal helper started for an appliance that had turned
-# Signal off. The bridge's
-# own 49 JavaScript tests are NOT in this number and never will be: they run
+# Signal off.
+#
+# 2241 to 2264 is the first release where the number moved because the product
+# was USED rather than audited. 2.0.0-beta.1 was installed from the DMG on 7
+# August and answered two WhatsApp messages on the owner's phone; reading the
+# logs of that exchange found a defect no agent had — his chat was addressed as
+# `161228928336031@lid` and filed under that, so the day WhatsApp addresses it as
+# his number instead, the appliance starts a second conversation and forgets the
+# first mid-sentence. Twelve of the twenty-three cover that and the migration
+# that carries the existing history across. The other eleven are the four
+# findings the second audit reported and this branch shipped without: a spool
+# whose numbering restarted leaving the acknowledgement watermark stranded above
+# every sequence it would ever emit, a reconcile latch that answered the owner's
+# own button press with a log line, "this build can only do Signal" said to
+# owners whose build does WhatsApp perfectly well, and media caches that had
+# never deleted anything. Every one was mutated back; the tenth mutation survived
+# the first attempt and the test was rewritten rather than the finding waved off.
+#
+# The bridge's
+# own 86 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
 # own gate with its own per-file check. Two suites in two languages, and this
 # one counts only what SwiftPM executes — a floor that tried to cover both would
@@ -177,7 +195,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2229}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2252}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

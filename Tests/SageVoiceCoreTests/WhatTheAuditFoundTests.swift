@@ -222,7 +222,7 @@ final class WhatTheAuditFoundTests: XCTestCase {
 /// launchd — the hazard `SignalBackgroundServiceManager.isTestReachingTheRealMachine`
 /// exists for, and which took the owner's Signal down twice on 29 July.
 private struct InertBackgroundServices: SignalBackgroundServicing {
-    func enable(_ configuration: SignalServiceConfiguration) async throws {}
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {}
     func disable(because reason: String) async {}
     func state() async -> BackgroundHelperState { .absent }
 }

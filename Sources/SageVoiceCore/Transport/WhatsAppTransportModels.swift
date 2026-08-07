@@ -24,13 +24,45 @@ public struct WhatsAppIncomingMessage: Equatable, Sendable {
     /// `whatsapp/event_spool.js`.
     public let sequence: Int
 
+    /// Which run of the spool's numbering `sequence` belongs to.
+    ///
+    /// **A sequence is only meaningful inside one of these.** The spool numbers
+    /// from 1 whenever its directory is recreated, so `4312` before and `4312`
+    /// after name different messages — and the acknowledgement ledger, which
+    /// baselines from the first sequence it sees, is stranded above every new
+    /// one and can never advance again. The spool states which run it is rather
+    /// than leaving this side to infer it, because inference is not available:
+    /// a sequence below the watermark is the ordinary shape of a replay after
+    /// an acknowledgement failed to land.
+    ///
+    /// `nil` from a bridge that predates this, which is an update in progress.
+    public let spoolEpoch: String?
+
     /// WhatsApp's own id for the message. Distinct from `sequence`: this one
     /// identifies the message to WhatsApp, that one identifies it to the spool.
     public let messageID: String
 
-    /// The conversation. `60123456789@s.whatsapp.net` for a person,
-    /// `…@g.us` for a group.
+    /// The conversation, addressed the way this message was addressed.
+    /// `60123456789@s.whatsapp.net` for a person, `…@g.us` for a group, and
+    /// increasingly `<digits>@lid`. **A reply goes here** — see `chatIdentity`
+    /// for why that is not the same as where the history is filed.
     public let chatID: String
+
+    /// The same conversation, named so it does not change when WhatsApp changes
+    /// how it addresses it. `nil` from a bridge that did not send one.
+    ///
+    /// **WhatsApp's LID migration makes `chatID` a moving target.** The owner's
+    /// own chat arrived on 7 August as `161228928336031@lid`; the same chat may
+    /// arrive as his number tomorrow. Keying anything durable on the address
+    /// form means one person becomes two conversations on WhatsApp's schedule.
+    /// The bridge resolves this from `lid-mapping-*.json` in the session
+    /// directory, which is the only place the mapping exists.
+    ///
+    /// Left `nil` rather than defaulted to `chatID` so "the bridge told us" and
+    /// "we assumed" stay distinguishable — an older bridge paired with a newer
+    /// app is an ordinary state during an update, and it should degrade to
+    /// today's behaviour rather than to a confident wrong answer.
+    public let chatIdentity: String?
 
     /// Who sent it. In the Message-Yourself setup this is the owner, and it
     /// equals `chatID`.
@@ -63,8 +95,10 @@ public struct WhatsAppIncomingMessage: Equatable, Sendable {
 
     public init(
         sequence: Int,
+        spoolEpoch: String? = nil,
         messageID: String,
         chatID: String,
+        chatIdentity: String? = nil,
         senderID: String,
         senderName: String? = nil,
         isGroup: Bool = false,
@@ -75,8 +109,10 @@ public struct WhatsAppIncomingMessage: Equatable, Sendable {
         timestamp: Int64 = 0
     ) {
         self.sequence = sequence
+        self.spoolEpoch = spoolEpoch
         self.messageID = messageID
         self.chatID = chatID
+        self.chatIdentity = chatIdentity
         self.senderID = senderID
         self.senderName = senderName
         self.isGroup = isGroup

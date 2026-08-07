@@ -51,10 +51,13 @@ import {
   unlinkSync,
   writeSync,
 } from 'fs';
+import { randomBytes } from 'crypto';
 import path from 'path';
 
 const EVENTS_FILE = 'events.jsonl';
 const ACK_FILE = 'ack';
+// Which run of numbering the sequences belong to. See `readOrMintEpoch`.
+const EPOCH_FILE = 'epoch';
 
 // Past this, the spool stops accepting rather than grow without bound. It is a
 // backstop against a consumer that never acks — not a working limit. At a few
@@ -73,6 +76,9 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
 
   const eventsPath = path.join(dir, EVENTS_FILE);
   const ackPath = path.join(dir, ACK_FILE);
+  const epochPath = path.join(dir, EPOCH_FILE);
+
+  const epoch = readOrMintEpoch(epochPath, warn);
 
   let ackedThrough = readAck(ackPath, warn);
   // Acknowledgements refused as out of range, latched so a consumer repeating a
@@ -221,8 +227,9 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
         `${Math.max(0, target - nextSeq + 1)} message(s) unread. The consumer is holding a ` +
         `mark from a different spool and will keep re-sending it, so it is refused ` +
         `permanently rather than until this spool grows past it. Nothing is lost: ` +
-        `every record here is still replayed on the next connection, and the ` +
-        `consumer's mark is rebuilt from the first sequence it sees.`
+        `every record here is still replayed on the next connection, and the consumer ` +
+        `rebuilds its mark when it sees this spool's epoch (${epoch}) differs from the ` +
+        `one its numbers came from.`
       );
       return 0;
     }
@@ -278,7 +285,59 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
     return { pending: records.length, ackedThrough, nextSeq };
   }
 
-  return { append, pending, ack, stats, eventsPath, ackPath };
+  return { append, pending, ack, stats, epoch, eventsPath, ackPath, epochPath };
+}
+
+/**
+ * Which run of numbering these sequences belong to.
+ *
+ * **The consumer cannot work this out for itself, and the file used to claim it
+ * could.** The refusal in `ack()` tells whoever reads the log that "the
+ * consumer's mark is rebuilt from the first sequence it sees". That was false:
+ * `WhatsAppAcknowledgementLedger` baselines exactly once per process, so a spool
+ * recreated under a running Mynah — which is what the repair `readAck` prints
+ * produces — leaves the watermark stranded above every new sequence. It never
+ * moves again, nothing is ever acknowledged, and the spool fills to `maxUnacked`
+ * and refuses inbound WhatsApp for good.
+ *
+ * Guessing is not available. A consumer seeing a sequence below its watermark
+ * cannot tell "the spool restarted" from "my last ack never landed and the
+ * bridge is legitimately replaying" — the second is ordinary, and re-baselining
+ * on it would re-answer messages already dealt with. So the spool states which
+ * run it is rather than leaving the other end to infer it.
+ *
+ * Minted once and then kept: it identifies the numbering, not the process, so a
+ * bridge restart over the same directory must keep it. A directory that is moved
+ * aside or deleted takes it with it, which is exactly the event being detected.
+ *
+ * An unreadable epoch file is not fatal. It costs one unnecessary re-baseline at
+ * worst — at-least-once, which is this file's whole trade — and refusing to
+ * start over it would take down WhatsApp for a file that carries no messages.
+ */
+function readOrMintEpoch(epochPath, warn) {
+  if (existsSync(epochPath)) {
+    try {
+      const existing = readFileSync(epochPath, 'utf8').trim();
+      if (existing !== '') return existing;
+      warn(`spool: the epoch at ${epochPath} is empty; minting a new one. The consumer will ` +
+        `rebuild its acknowledgement mark from the next sequence it sees.`);
+    } catch (error) {
+      warn(`spool: could not read the epoch at ${epochPath} (${error.message}); minting a new ` +
+        `one. The consumer will rebuild its acknowledgement mark from the next sequence it sees.`);
+    }
+  }
+  const minted = randomBytes(8).toString('hex');
+  try {
+    writeAtomic(epochPath, `${minted}\n`);
+  } catch (error) {
+    // In memory only. Every event this run carries the same value, so the
+    // consumer stays consistent within the run; the next start mints another
+    // and re-baselines once more, which is survivable and visible.
+    warn(`spool: could not record the epoch at ${epochPath} (${error.message}). Sequence ` +
+      `numbering still works; the consumer will re-baseline once on each restart until this ` +
+      `directory is writable.`);
+  }
+  return minted;
 }
 
 /**
@@ -313,8 +372,10 @@ function readAck(ackPath, warn) {
       `the spool's acknowledgement mark at ${ackPath} could not be read (${error.message}).\n` +
       `Starting anyway would restart sequence numbering at 1 and hand the consumer numbers it\n` +
       `has already seen, which loses messages silently in both directions.\n` +
-      `Fix the permissions on that file, or move the whole spool directory aside to start clean:\n` +
-      `  mv '${ackPath}' '${ackPath}.broken'`
+      `Fix the permissions on that file, or move it aside to start clean:\n` +
+      `  mv '${ackPath}' '${ackPath}.broken'\n` +
+      `Moving just this file is deliberate: the events file beside it is what numbering resumes\n` +
+      `from, so anything unacknowledged is replayed rather than renumbered.`
     );
   }
   const trimmed = raw.trim();

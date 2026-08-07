@@ -247,7 +247,7 @@ private actor RecordingBackgroundServices: SignalBackgroundServicing {
     /// Login Items, which is the one nothing in the app could previously see.
     var reportedState: BackgroundHelperState = .absent
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         enabledConfigurations.append(configuration)
         reportedState = .running
     }

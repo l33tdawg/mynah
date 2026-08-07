@@ -161,6 +161,11 @@ public actor WhatsAppChannel: MessageChannel {
             recipient: ChannelRecipient(
                 kind: .whatsapp,
                 address: message.chatID,
+                // The name the conversation is filed under, which is not the
+                // address a reply goes to. Nil from an older bridge, and then
+                // the address is all there is — which is what shipped in
+                // 2.0.0-beta.1 and is the behaviour being corrected.
+                identity: message.chatIdentity,
                 isGroup: message.isGroup
             ),
             id: message.messageID,
@@ -179,7 +184,10 @@ public actor WhatsAppChannel: MessageChannel {
                 )
             },
             timestamp: message.timestamp,
-            acknowledgementToken: message.sequence
+            acknowledgementToken: message.sequence,
+            // The token alone is not enough to retire this safely — a spool
+            // recreated during the turn renumbers from 1 under it.
+            acknowledgementEpoch: message.spoolEpoch
         )
     }
 
@@ -279,7 +287,7 @@ public actor WhatsAppChannel: MessageChannel {
 
     public func acknowledge(_ message: ChannelMessage) async {
         guard let token = message.acknowledgementToken else { return }
-        await configuration.client.acknowledge(sequence: token)
+        await configuration.client.acknowledge(sequence: token, epoch: message.acknowledgementEpoch)
     }
 
     private func post(path: String, body: [String: Any]) async throws {

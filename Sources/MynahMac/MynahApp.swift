@@ -530,11 +530,20 @@ final class AppModel {
     /// what it would write against what is already loaded and does nothing when
     /// they match, so an unnecessary call no longer costs the owner a restart
     /// of signal-cli.
-    func reconcileAnsweringService() async {
+    /// - Parameter becauseTheOwnerAsked: this reconcile is a direct response to
+    ///   something the owner did — switching channels, linking a phone, picking
+    ///   a brain — rather than the app deciding by itself that the jobs should
+    ///   match the settings. It is the difference between retrying a build that
+    ///   already failed to start and leaving it until the next launch; see the
+    ///   latch in `SignalBackgroundServiceManager.enable`.
+    func reconcileAnsweringService(becauseTheOwnerAsked: Bool = false) async {
         switch answeringIntent() {
         case .run(let configuration):
             do {
-                try await backgroundServices.enable(configuration)
+                try await backgroundServices.enable(
+                    configuration,
+                    retryingAfterFailure: becauseTheOwnerAsked
+                )
                 answeringServiceError = nil
             } catch {
                 answeringServiceError = error.localizedDescription

@@ -486,7 +486,7 @@ private actor RecordingServices: SignalBackgroundServicing {
     private(set) var enabled: [SignalServiceConfiguration] = []
     private(set) var disableCount = 0
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         enabled.append(configuration)
     }
 
@@ -534,7 +534,7 @@ private extension BrainSetupOption {
 private actor FailingThenRunningServices: SignalBackgroundServicing {
     private(set) var disableCount = 0
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         throw Failure.launchFailed
     }
 

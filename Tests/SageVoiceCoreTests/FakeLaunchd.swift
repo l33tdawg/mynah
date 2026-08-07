@@ -67,6 +67,14 @@ actor FakeLaunchd: ProbeCommandRunning {
     /// have been.
     func refuseToStart() { startsSucceed = false }
 
+    /// The transient cause clears. Needed to show that a retry after a failure
+    /// actually brings the appliance back — without it a test can only prove
+    /// something was attempted, not that attempting it was worth allowing.
+    func allowStarts() {
+        startsSucceed = true
+        refusedLabels.removeAll()
+    }
+
     /// The same failure for one job only.
     ///
     /// Needed because "all three refuse" cannot tell the interesting case from

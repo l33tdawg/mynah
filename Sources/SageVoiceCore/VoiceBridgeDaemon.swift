@@ -610,6 +610,21 @@ public actor VoiceBridgeDaemon {
             if batch.count > 1 {
                 log("[daemon] merging \(batch.count) messages sent together into one turn")
             }
+            // **Before the turn reads the history, because the turn is what
+            // would notice it missing.** WhatsApp can change how it addresses a
+            // chat between one message and the next; this is the moment both
+            // names are in hand. Costs a dictionary lookup when there is nothing
+            // to move, which is every message after the first.
+            if Self.adoptingEarlierAddressForm(
+                of: batch[0].recipient,
+                in: &histories,
+                keepingLastTurns: configuration.historyTurnLimit
+            ) {
+                log("[daemon] \(batch[0].recipient.kind.displayName) changed how it addresses this "
+                    + "chat; carried the conversation across rather than starting a new one")
+                persistConversations()
+            }
+
             // Sequential on purpose. Two voice notes answered concurrently would
             // interleave their tool calls against one SAGE node and race on the
             // thread history — and the model is the bottleneck anyway, so there
@@ -690,6 +705,48 @@ public actor VoiceBridgeDaemon {
             out["\(ChannelKind.signal.rawValue):\(key)"] = history
         }
         return out
+    }
+
+    /// Folds a conversation filed under an older address form into the key this
+    /// recipient renders now.
+    ///
+    /// **The migration above, for a rename nobody schedules.** `migratingLegacy…`
+    /// handles one known change at a known moment. This handles the same problem
+    /// arriving whenever WhatsApp feels like it: the owner's chat was addressed
+    /// as `161228928336031@lid` on 7 August and his history is filed under that,
+    /// and the day it is addressed as his number instead, the key changes under
+    /// a conversation that did not.
+    ///
+    /// So it cannot be a one-shot at startup — there is no launch to hang it on.
+    /// It runs when a message arrives, which is the only moment both names are
+    /// known: the address it came in on, and what the bridge resolved that to.
+    ///
+    /// Returns whether anything moved, so the caller can say so once rather than
+    /// silently rewriting the owner's history.
+    @discardableResult
+    static func adoptingEarlierAddressForm(
+        of recipient: ChannelRecipient,
+        in histories: inout [String: [BrainMessage]],
+        keepingLastTurns turns: Int
+    ) -> Bool {
+        let key = recipient.description
+        let earlierKey = recipient.addressDescription
+        guard earlierKey != key,
+              let earlier = histories.removeValue(forKey: earlierKey),
+              !earlier.isEmpty
+        else { return false }
+
+        // **Both can hold turns, and the order is not arbitrary.** A chat
+        // addressed by number before WhatsApp moved it to a LID has history
+        // under both names, and the address-form key stopped being written the
+        // moment this shipped — so its turns are the older ones and go first.
+        // Appending them instead would tell the model the oldest exchange was
+        // the most recent thing said.
+        histories[key] = Self.trimmed(
+            earlier + (histories[key] ?? []),
+            keepingLastTurns: turns
+        )
+        return true
     }
 
     public func stop() async {

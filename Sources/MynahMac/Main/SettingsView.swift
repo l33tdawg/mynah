@@ -526,12 +526,53 @@ final class SettingsModel {
     /// offering a switch that installs a helper launchd cannot start would teach
     /// the owner their choices are not real. Same rule as the unlink button
     /// three rows down.
-    var canRunWhatsApp: Bool {
-        WhatsAppServiceConfiguration.inside(
+    var whatsAppAvailability: WhatsAppServiceConfiguration.Availability {
+        WhatsAppServiceConfiguration.availability(
             Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true),
             signalAccount: phone.linkedNumber,
             defaults: defaults
-        ) != nil
+        )
+    }
+
+    var canRunWhatsApp: Bool {
+        if case .ready = whatsAppAvailability { return true }
+        return false
+    }
+
+    /// What to say under the channel picker, which is not one sentence.
+    ///
+    /// **It was one sentence chosen off a Bool, and for a whole class of owner
+    /// it was false.** `canRunWhatsApp` is nil-checking a configuration that
+    /// fails to build for two unrelated reasons, and the missing-Node one got
+    /// the message: an owner with a perfectly good build and no Signal number
+    /// linked was told "This build of Mynah can only do Signal" — which is
+    /// wrong about the build and wrong about them, and named nothing they could
+    /// do. It is the first screen a WhatsApp-only owner sees.
+    var channelChoiceDetail: String { Self.channelChoiceDetail(for: whatsAppAvailability) }
+
+    /// Static so a test can ask for all three sentences.
+    ///
+    /// Through the model it could only ever get one: `whatsAppAvailability`
+    /// reads `Bundle.main`, which under XCTest is the test runner and has no
+    /// vendored Node — so every case but `.notInThisBuild` was unreachable from
+    /// a test, which is precisely how the wrong sentence shipped.
+    static func channelChoiceDetail(for availability: WhatsAppServiceConfiguration.Availability) -> String {
+        switch availability {
+        case .ready:
+            return "Everything works the same on either one — voice notes, photos, documents, "
+                + "calls. Pick both and Mynah answers each in its own thread."
+        case .notInThisBuild:
+            return "This build of Mynah can only do Signal. A build with WhatsApp carries its own "
+                + "copy of Node, and this one doesn't have it."
+        case .noNumberToAllow:
+            // The door. Pairing writes the number itself — see
+            // `WhatsAppLinkSheet.number(inLinkedAccount:)` — so the owner does
+            // not have to link Signal to use WhatsApp, which is exactly what the
+            // old sentence implied they had to do.
+            return "Mynah needs to know which number is yours before it will answer WhatsApp, and "
+                + "nothing here has told it yet. Link WhatsApp below and it takes the number from "
+                + "the account you scan with. Linking Signal would also do it."
+        }
     }
 
     /// Whether this Mac holds a WhatsApp session, and the sentence to say about
@@ -555,13 +596,40 @@ final class SettingsModel {
     /// Where the vendored bridge lives inside this bundle, or `nil` on a build
     /// that did not vendor it. The pairing sheet needs both paths and must not
     /// be offered without them.
+    ///
+    /// **Gated on the executables and nothing else, which it was not.** This
+    /// asked `inside(...)` for a whole configuration, and that also fails when
+    /// there is no number to allowlist — so the one owner who most needs to
+    /// pair, because pairing is what would give them a number, was the owner
+    /// this returned `nil` to. The allowlist is not this question.
     var whatsAppExecutables: (node: URL, bridge: URL)? {
-        guard let configuration = WhatsAppServiceConfiguration.inside(
-            Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true),
+        let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
+        switch WhatsAppServiceConfiguration.availability(
+            contents,
             signalAccount: phone.linkedNumber,
             defaults: defaults
-        ) else { return nil }
-        return (configuration.node, configuration.bridge)
+        ) {
+        case .ready(let configuration):
+            return (configuration.node, configuration.bridge)
+        case .noNumberToAllow:
+            return (
+                contents.appendingPathComponent("Resources/node/bin/node"),
+                contents.appendingPathComponent("Resources/whatsapp/bridge.js")
+            )
+        case .notInThisBuild:
+            return nil
+        }
+    }
+
+    /// Whether this bundle carries the WhatsApp bridge at all.
+    ///
+    /// Distinct from `canRunWhatsApp`, which additionally requires a number to
+    /// allowlist. The controls that *lead to* a number — the picker and the
+    /// pairing row — have to be gated on this one, or they are switched off by
+    /// the absence of the thing they exist to produce.
+    var whatsAppIsInThisBuild: Bool {
+        if case .notInThisBuild = whatsAppAvailability { return false }
+        return true
     }
 
     /// Said out loud rather than swallowed: the owner has just pressed Unlink
@@ -1218,7 +1286,7 @@ struct SettingsView: View {
             Button("Unlink", role: .destructive) {
                 Task {
                     await model.unlinkPhone()
-                    await app.reconcileAnsweringService()
+                    await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                     model.refresh()
                 }
             }
@@ -1233,7 +1301,7 @@ struct SettingsView: View {
                 app.resolveDeferredStep(id: AppModel.DeferredStep.phoneLinkID)
                 isLinkingPhone = false
                 Task {
-                    await app.reconcileAnsweringService()
+                    await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                     model.refresh()
                 }
             } onClose: {
@@ -1262,10 +1330,14 @@ struct SettingsView: View {
                     // `enable(_:)` runs interleaving inside a reentrant actor,
                     // over the same plists and the same launchctl. One can
                     // observe the other's half-finished world, conclude the
-                    // build will not start, and put it in `failedToApply`, which
-                    // suppresses every later attempt for the life of the app —
-                    // leaving the owner with no LaunchAgents at all until he
-                    // quits and reopens.
+                    // build will not start, and put it in `failedToApply`.
+                    //
+                    // That latch no longer strands the owner for the life of the
+                    // app — an explicit request clears it and tries once more —
+                    // but the race is still worth not running: two reconciles
+                    // over one launchctl is how the appliance ends up in a state
+                    // neither of them intended, and being recoverable is not a
+                    // reason to enter it.
                     //
                     // `onClose` runs on every exit from this sheet, successful
                     // or not, so one reconcile there covers both.
@@ -1276,7 +1348,7 @@ struct SettingsView: View {
                         // and a cancelled sheet must not be how WhatsApp stops
                         // working until the next launch.
                         Task {
-                            await app.reconcileAnsweringService()
+                            await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                             model.refresh()
                         }
                         isLinkingWhatsApp = false
@@ -1315,7 +1387,7 @@ struct SettingsView: View {
                         // brains.
                         Task {
                             await conversation.reconnect()
-                            await app.reconcileAnsweringService()
+                            await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                         }
                     }
                 }
@@ -1349,7 +1421,7 @@ struct SettingsView: View {
                     // and the phone end up on different models.
                     Task {
                         await conversation.reconnect()
-                        await app.reconcileAnsweringService()
+                        await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                     }
                 }
             }
@@ -2485,11 +2557,7 @@ struct SettingsView: View {
     private func channelChoiceRow(app: AppModel) -> some View {
         SettingsRow(
             "Where you message it",
-            detail: model.canRunWhatsApp
-                ? "Everything works the same on either one — voice notes, photos, documents, "
-                    + "calls. Pick both and Mynah answers each in its own thread."
-                : "This build of Mynah can only do Signal. A build with WhatsApp carries its own "
-                    + "copy of Node, and this one doesn't have it."
+            detail: model.channelChoiceDetail
         ) {
             Picker("", selection: Binding(
                 get: { model.channels },
@@ -2498,7 +2566,7 @@ struct SettingsView: View {
                     // Only on a real change. `setChannels` returns false when
                     // nothing moved, and reconciling anyway would bounce
                     // signal-cli for a picker the owner opened and closed.
-                    Task { await app.reconcileAnsweringService() }
+                    Task { await app.reconcileAnsweringService(becauseTheOwnerAsked: true) }
                 }
             )) {
                 Text("Signal").tag(ChannelSelection.signalOnly)
@@ -2522,10 +2590,16 @@ struct SettingsView: View {
             }
             .labelsHidden()
             .frame(width: 180)
-            // Disabled only when WhatsApp is unavailable AND the stored choice
+            // Disabled only when this build has no bridge AND the stored choice
             // does not involve it. A stored choice this build cannot honour has
             // to stay changeable, or it is permanent.
-            .disabled(!model.canRunWhatsApp && !model.channels.includes(.whatsapp))
+            //
+            // **`whatsAppIsInThisBuild`, not `canRunWhatsApp`.** The second is
+            // also false when no number has been allowlisted yet — and that is
+            // precisely the owner who needs to pick WhatsApp, because picking it
+            // is what reveals the pairing row that supplies the number. Gating
+            // on it closed the only way out of the state.
+            .disabled(!model.whatsAppIsInThisBuild && !model.channels.includes(.whatsapp))
         }
     }
 
@@ -2536,7 +2610,10 @@ struct SettingsView: View {
     /// then read.
     @ViewBuilder
     private func whatsAppPairingRow(app: AppModel) -> some View {
-        if model.channels.includes(.whatsapp), model.canRunWhatsApp {
+        // `whatsAppIsInThisBuild` rather than `canRunWhatsApp`: pairing is how
+        // an owner with no allowlisted number gets one, so hiding it until they
+        // have one is a locked door with the key behind it.
+        if model.channels.includes(.whatsapp), model.whatsAppIsInThisBuild {
             MynahDivider()
             SettingsRow(
                 "Your WhatsApp account",
@@ -2573,7 +2650,7 @@ struct SettingsView: View {
                         } catch {
                             model.forgetWhatsAppFailed(error)
                         }
-                        await app.reconcileAnsweringService()
+                        await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
                         model.refresh()
                     }
                 }

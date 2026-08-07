@@ -487,3 +487,105 @@ test('one bogus acknowledgement does not refuse every legitimate one beneath it'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- which run of numbering these sequences belong to ---
+
+test('the epoch survives a restart over the same directory', () => {
+  // It identifies the NUMBERING, not the process. A bridge restart continues
+  // the sequence, so re-minting here would make the consumer re-baseline on
+  // every restart — which looks exactly like working until the day it matters.
+  const dir = scratch();
+  try {
+    const first = createEventSpool({ dir });
+    first.append(message('one'));
+    const second = createEventSpool({ dir });
+    assert.equal(second.epoch, first.epoch, 'a plain restart looked like a new spool');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a spool directory that was moved aside gets a different epoch', () => {
+  // The event being detected, and the one `readAck`'s repair instructions
+  // produce. Without a way to tell, the consumer's watermark is stranded above
+  // every sequence the new spool will ever emit: nothing is acknowledged, the
+  // spool fills to maxUnacked, and inbound WhatsApp stops for good.
+  const before = scratch();
+  const after = scratch();
+  try {
+    const original = createEventSpool({ dir: before });
+    const replacement = createEventSpool({ dir: after });
+    assert.notEqual(replacement.epoch, original.epoch);
+  } finally {
+    rmSync(before, { recursive: true, force: true });
+    rmSync(after, { recursive: true, force: true });
+  }
+});
+
+test('the epoch is a value, and one the consumer can compare', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    assert.equal(typeof spool.epoch, 'string');
+    assert.ok(spool.epoch.length > 0, 'an empty epoch compares equal to a missing one');
+    assert.equal(readFileSync(spool.epochPath, 'utf8').trim(), spool.epoch);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an empty epoch file is replaced rather than read as a value', () => {
+  // What a crash between open and write leaves. Read as-is it would be the empty
+  // string, which the consumer cannot distinguish from a bridge that sends no
+  // epoch at all — so the recovery would silently stop working.
+  const dir = scratch();
+  try {
+    writeFileSync(path.join(dir, 'epoch'), '');
+    const warnings = [];
+    const spool = createEventSpool({ dir, warn: (line) => warnings.push(line) });
+    assert.ok(spool.epoch.length > 0);
+    assert.ok(warnings.some((w) => w.includes('epoch')), 'a re-mint happened in silence');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a spool whose epoch cannot be written still runs', () => {
+  // Consistent within the run, so the consumer is never confused mid-stream; it
+  // re-baselines once per restart until the directory is writable. Refusing to
+  // start would take WhatsApp down over a file that carries no messages.
+  const dir = scratch();
+  try {
+    const warnings = [];
+    chmodSync(dir, 0o500);            // readable and listable, not writable
+    const spool = createEventSpool({ dir, warn: (line) => warnings.push(line) });
+    assert.ok(spool.epoch.length > 0);
+    assert.ok(warnings.some((w) => w.includes('epoch')));
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the refusal no longer promises something the consumer cannot do', () => {
+  // The line said "the consumer's mark is rebuilt from the first sequence it
+  // sees", and the ledger baselines exactly once per process — so a spool
+  // recreated under a running Mynah wedged, while the log said it would recover.
+  const dir = scratch();
+  try {
+    const warnings = [];
+    const spool = createEventSpool({ dir, warn: (line) => warnings.push(line) });
+    spool.append(message('one'));
+    spool.ack(9000);
+
+    const refusal = warnings.find((w) => w.includes('refusing an acknowledgement'));
+    assert.ok(refusal, 'the refusal was not reported at all');
+    assert.ok(
+      !refusal.includes('rebuilt from the first sequence it sees'),
+      'the log still promises a recovery the consumer does not have'
+    );
+    assert.ok(refusal.includes(spool.epoch), 'the refusal does not say which spool this is');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

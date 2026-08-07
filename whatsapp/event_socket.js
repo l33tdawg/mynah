@@ -65,7 +65,14 @@ export function createEventSocket({ path: socketPath, spool, log = () => {} }) {
 
   function send(socket, record) {
     if (!socket || socket.destroyed) return;
-    socket.write(`${JSON.stringify(record)}\n`);
+    // MYNAH: which run of numbering this sequence belongs to.
+    //
+    // On every line rather than once at connect. A hello frame would be a
+    // second line grammar for the consumer to recognise, and it only has to be
+    // missed once — a reconnect that races it, a consumer that starts reading
+    // mid-stream — for the epoch to be silently absent while sequences keep
+    // arriving. Repeating it is ~20 bytes and cannot be missed.
+    socket.write(`${JSON.stringify({ ...record, epoch: spool.epoch })}\n`);
   }
 
   /** Called by the bridge after spool.append(). */

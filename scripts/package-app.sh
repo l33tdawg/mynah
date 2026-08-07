@@ -541,6 +541,7 @@ MIT requires the notice to travel with the copy. Rerun scripts/provision-node.sh
   # check below — which, as written, could not find it.
   for file in bridge.js bridge_helpers.js allowlist.js outbound_ids.js \
               owner_message_gate.js event_spool.js event_socket.js \
+              media_sweep.js \
               package.json LICENSE.hermes PROVENANCE.md; do
     [[ -f "$WHATSAPP_SOURCE/$file" ]] || die \
 "The WhatsApp bridge is missing a file it needs: $WHATSAPP_SOURCE/$file
@@ -566,7 +567,8 @@ Staging the rest without it produces an app that fails at first import."
     import { readFileSync } from "fs";
 
     const local = ["bridge_helpers.js", "allowlist.js", "outbound_ids.js",
-                   "owner_message_gate.js", "event_spool.js", "event_socket.js"];
+                   "owner_message_gate.js", "event_spool.js", "event_socket.js",
+                   "media_sweep.js"];
 
     // Every specifier bridge.js imports, read out of bridge.js rather than
     // listed here — a list here would be a second thing to keep in step, and

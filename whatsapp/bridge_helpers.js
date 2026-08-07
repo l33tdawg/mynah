@@ -340,6 +340,11 @@ export function appendMediaFailureNote(content, failures) {
 export async function extractBridgeEvent({
   msg,
   chatId,
+  // MYNAH: the same chat, named in a way that survives WhatsApp changing its
+  // mind about how to address it. See the note beside `chatId` in the returned
+  // object. Defaults to `chatId`, so a caller that does not resolve LIDs — the
+  // tests, and upstream's own paths — behaves exactly as before.
+  chatIdentity,
   senderId,
   senderNumber,
   botIds = [],
@@ -504,7 +509,18 @@ export async function extractBridgeEvent({
 
   return {
     messageId: msg.key.id,
+    // Where a reply is sent. Whatever form WhatsApp used, unchanged — it may
+    // not accept the other one for this chat.
     chatId,
+    // MYNAH: what to FILE the conversation under, which is not the same thing.
+    //
+    // WhatsApp is migrating to LID addressing, so the same chat can arrive as
+    // `<digits>@lid` today and as a phone JID tomorrow. The consumer keys the
+    // owner's conversation history on this, and only the bridge holds the
+    // mapping that makes the two names one chat — it is in the session
+    // directory's `lid-mapping-*.json` files and nowhere else. So it travels
+    // with the event, for the same reason `senderId` does.
+    chatIdentity: chatIdentity || chatId,
     senderId,
     senderName: msg.pushName || senderNumber,
     chatName: isGroup ? (chatId.split('@')[0]) : (msg.pushName || senderNumber),

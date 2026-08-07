@@ -136,6 +136,37 @@ struct WhatsAppServiceConfiguration: Sendable, Equatable {
         signalAccount: String?,
         defaults: UserDefaults = .standard
     ) -> WhatsAppServiceConfiguration? {
+        switch availability(contents, signalAccount: signalAccount, defaults: defaults) {
+        case .ready(let configuration): return configuration
+        case .notInThisBuild, .noNumberToAllow: return nil
+        }
+    }
+
+    /// Why WhatsApp cannot run, when it cannot.
+    ///
+    /// **`inside` returned `nil` for two unrelated reasons and the screen said
+    /// the wrong one.** Settings picked its sentence off a single Bool and told
+    /// owners "This build of Mynah can only do Signal" — false twice over for
+    /// anyone whose build is fine and who simply has no Signal number linked,
+    /// which is the ordinary state of a Mac someone bought Mynah for the
+    /// WhatsApp on. They were told to go and do the thing they chose this build
+    /// to avoid, and the picker was disabled so they could not argue.
+    ///
+    /// The two cases differ in the only way that matters: one is permanent
+    /// without a new download, and one is a step away.
+    enum Availability {
+        case ready(WhatsAppServiceConfiguration)
+        /// No vendored interpreter or bridge. Nothing the owner can do here.
+        case notInThisBuild
+        /// The build is fine; there is no number to put on the allowlist yet.
+        case noNumberToAllow
+    }
+
+    static func availability(
+        _ contents: URL,
+        signalAccount: String?,
+        defaults: UserDefaults = .standard
+    ) -> Availability {
         let node = contents.appendingPathComponent("Resources/node/bin/node")
         let bridge = contents.appendingPathComponent("Resources/whatsapp/bridge.js")
         // **Absent rather than broken.** A build made without
@@ -144,17 +175,17 @@ struct WhatsAppServiceConfiguration: Sendable, Equatable {
         // forever, writing a screenful into bridge.log each time.
         guard FileManager.default.isExecutableFile(atPath: node.path),
               FileManager.default.fileExists(atPath: bridge.path) else {
-            return nil
+            return .notInThisBuild
         }
         let numbers = ChannelSelectionStore.whatsAppNumbers(defaults, signalAccount: signalAccount)
-        guard !numbers.isEmpty else { return nil }
-        return WhatsAppServiceConfiguration(
+        guard !numbers.isEmpty else { return .noNumberToAllow }
+        return .ready(WhatsAppServiceConfiguration(
             node: node,
             bridge: bridge,
             numbers: numbers,
             port: defaultPort,
             socketPath: WhatsAppClient.defaultSocketPath()
-        )
+        ))
     }
 }
 
@@ -181,15 +212,28 @@ enum BackgroundHelperState: Equatable, Sendable {
 }
 
 protocol SignalBackgroundServicing: Sendable {
-    func enable(_ configuration: SignalServiceConfiguration) async throws
+    /// - Parameter retryingAfterFailure: the owner asked for this directly, so
+    ///   a build that already refused to start is tried once more rather than
+    ///   left until the next launch. False for every reconcile the app decides
+    ///   on by itself — see the latch in the implementation.
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws
     /// - Parameter reason: why the owner's phone is about to stop being
     ///   answered, in words that would mean something in a log six hours later.
     ///   Required rather than optional: this is the one call in the app that can
     ///   take the appliance away, and a caller that cannot say why should not be
     ///   making it.
     func disable(because reason: String) async
-    /// Asked rather than remembered. See `BackgroundHelperState`.
+    /// Asked rather than remembered — see `BackgroundHelperState`.
     func state() async -> BackgroundHelperState
+}
+
+extension SignalBackgroundServicing {
+    /// The ordinary reconcile: the app deciding by itself that the jobs and the
+    /// owner's choices should agree. Never retries a build that already refused
+    /// to start; only a direct request does that.
+    func enable(_ configuration: SignalServiceConfiguration) async throws {
+        try await enable(configuration, retryingAfterFailure: false)
+    }
 }
 
 /// Installs the two per-user services that make the phone bridge an appliance.
@@ -299,7 +343,10 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         return homeDirectory == FileManager.default.homeDirectoryForCurrentUser
     }
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(
+        _ configuration: SignalServiceConfiguration,
+        retryingAfterFailure: Bool = false
+    ) async throws {
         guard !isTestReachingTheRealMachine else {
             Self.log.error("a test reached the real launchd; refusing to install anything")
             return
@@ -419,11 +466,31 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // try again, which is the whole point — the failure this file is being
         // repaired for was transient in principle and permanent only because
         // nothing ever asked a second time.
-        guard !failedToApply.contains(installed) else {
-            Self.log.error(
-                "not running the installed build, and this build already failed to start; leaving it until the next launch"
-            )
-            return
+        if failedToApply.contains(installed) {
+            // **The owner asking is not the same event as the app reconciling,
+            // and treating them alike turned one transient failure into a dead
+            // end.** The churn this latch prevents is real, and every case it
+            // was written for is the app deciding on its own to reconcile.
+            //
+            // None of them is the owner switching to Both and pressing Link
+            // WhatsApp. That returned here, wrote nothing, started nothing, and
+            // reported it only to `mynah.log` — the setting looked saved and the
+            // helper never appeared. The throw below does name the next action
+            // ("Quit Mynah and open it again"), which is exactly the sentence
+            // this owner needed, and the guard returned before it could be said.
+            //
+            // So an explicit request gets one honest attempt. If it fails again
+            // it re-latches on the way out and the owner is told, which is the
+            // whole difference: a failure they can see beats a silence they
+            // cannot.
+            guard retryingAfterFailure else {
+                Self.log.error(
+                    "not running the installed build, and this build already failed to start; leaving it until the next launch"
+                )
+                return
+            }
+            failedToApply.remove(installed)
+            Self.log.info("the owner asked for this again after it failed; trying once more")
         }
 
         if let signalData {

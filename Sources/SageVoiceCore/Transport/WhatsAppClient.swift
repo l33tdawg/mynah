@@ -141,8 +141,8 @@ public actor WhatsAppClient {
     /// comes back, and the bridge is still holding the message meanwhile. The
     /// alternative — throwing — would push retry logic into the daemon for a
     /// case that resolves itself.
-    public func acknowledge(sequence: Int) async {
-        ledger.settle(sequence)
+    public func acknowledge(sequence: Int, epoch: String? = nil) async {
+        ledger.settle(sequence, epoch: epoch)
         await sendAcknowledgement()
     }
 
@@ -228,7 +228,7 @@ public actor WhatsAppClient {
             // socket framing itself is broken, and the bridge says so loudly
             // when its spool fills rather than dropping anything.
             if let sequence = Self.sequence(of: line) {
-                ledger.settle(sequence)
+                ledger.settle(sequence, epoch: Self.spoolEpoch(of: line))
                 Task { await self.sendAcknowledgement() }
             }
             return
@@ -265,10 +265,10 @@ public actor WhatsAppClient {
             // Through the ledger, never straight to the watermark: if the
             // owner's message is outstanding underneath this one, saying
             // `{"ack":2}` here would retire his message too.
-            ledger.settle(message.sequence)
+            ledger.settle(message.sequence, epoch: message.spoolEpoch)
             Task { await self.sendAcknowledgement() }
         case .allowed:
-            ledger.deliver(message.sequence)
+            ledger.deliver(message.sequence, epoch: message.spoolEpoch)
             continuation.yield(message)
         }
     }
@@ -276,6 +276,16 @@ public actor WhatsAppClient {
     /// Just the sequence, for a line whose event we could not read.
     static func sequence(of line: Data) -> Int? {
         (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["seq"] as? Int
+    }
+
+    /// Which run of the spool's numbering the line belongs to.
+    ///
+    /// Read separately from `decode` because it is needed on the path where
+    /// decoding failed: a line we cannot read is still settled by sequence, and
+    /// settling it against the wrong epoch is the same mistake as settling a
+    /// readable one against the wrong epoch.
+    static func spoolEpoch(of line: Data) -> String? {
+        (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["epoch"] as? String
     }
 
     /// `{"seq":12,"event":{…}}` → a message, or nil.
@@ -303,8 +313,14 @@ public actor WhatsAppClient {
 
         return WhatsAppIncomingMessage(
             sequence: sequence,
+            // At the root of the line, beside `seq` — it qualifies the sequence,
+            // not the message.
+            spoolEpoch: root["epoch"] as? String,
             messageID: (event["messageId"] as? String) ?? "",
             chatID: chatID,
+            // Absent from an older bridge, and left absent rather than filled
+            // in with `chatID` — see the property.
+            chatIdentity: event["chatIdentity"] as? String,
             senderID: senderID,
             senderName: event["senderName"] as? String,
             isGroup: (event["isGroup"] as? Bool) ?? chatID.hasSuffix("@g.us"),
