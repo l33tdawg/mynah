@@ -162,7 +162,7 @@ public actor WhatsAppChannel: MessageChannel {
 
     public func acknowledge(_ message: ChannelMessage) async {
         guard let token = message.acknowledgementToken else { return }
-        await configuration.client.acknowledge(through: token)
+        await configuration.client.acknowledge(sequence: token)
     }
 
     private func post(path: String, body: [String: Any]) async throws {

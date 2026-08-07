@@ -41,7 +41,9 @@
 import {
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
+  ftruncateSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -73,12 +75,32 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   const ackPath = path.join(dir, ACK_FILE);
 
   let ackedThrough = readAck(ackPath, warn);
-  let records = load(eventsPath, warn).filter((r) => r.seq > ackedThrough);
+  const loaded = load(eventsPath, warn);
+  let records = loaded.records.filter((r) => r.seq > ackedThrough);
+
+  // **Repair the file, not just our idea of it.**
+  //
+  // `load()` drops a torn final line from memory, which is right — it was never
+  // acknowledged to anybody. But the torn BYTES are still on disk, and `append`
+  // opens with 'a', so the next event would be written onto the end of a broken
+  // line: `{"seq":3,"eve{"seq":4,"event":…}`. That is one unreadable line where
+  // there should be two records, so the recovery destroys a message that
+  // arrived AFTER the crash — and the window is unbounded, because it lasts
+  // until the next append, which is exactly while Mynah is down.
+  //
+  // Rewriting here closes it before the first append can happen. Only for a
+  // torn tail: a corrupt line in the middle is damage that must stay visible
+  // until an ack compacts it away, and appending after it is safe anyway
+  // because the last line is intact.
+  if (loaded.torn) {
+    compact(eventsPath, records);
+  }
 
   // The next sequence continues past anything on disk INCLUDING acked-and-
-  // compacted history, so a sequence number is never reused. A consumer that
-  // reconnects with a stale idea of where it was must never be able to ack a
-  // number that now means a different message.
+  // compacted history, so a sequence number is never reused within the life of
+  // a spool directory. That stops a stale ack meaning a DIFFERENT message; it
+  // does not stop a stale ack meaning a message that has not arrived yet, which
+  // is a separate hole and is closed by the bound in `ack`.
   let nextSeq = Math.max(ackedThrough, ...records.map((r) => r.seq), 0) + 1;
 
   /**
@@ -94,18 +116,38 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
         `down or wedged. Fix that; do not raise the limit.`
       );
     }
-    const record = { seq: nextSeq++, event };
+    const record = { seq: nextSeq, event };
     // fsync, because the whole point is surviving a crash. Without it the
     // write sits in the page cache and a power cut loses precisely the
     // messages this file promised to keep.
     const line = `${JSON.stringify(record)}\n`;
     const fd = openSync(eventsPath, 'a', 0o600);
+    // Where the file ended before we touched it. If the write fails half way —
+    // a full disk is the ordinary cause — the partial line is rolled back, so
+    // the next append starts on a clean boundary rather than writing onto the
+    // end of a broken record.
+    const before = fstatSync(fd).size;
     try {
-      writeSync(fd, line);
+      writeFully(fd, line);
       fsyncSync(fd);
+    } catch (error) {
+      try {
+        ftruncateSync(fd, before);
+        fsyncSync(fd);
+      } catch (repairError) {
+        warn(
+          `spool: an append to ${eventsPath} failed part way (${error.message}) and the ` +
+          `partial line could not be rolled back (${repairError.message}). The next ` +
+          `startup will discard it as a torn tail.`
+        );
+      }
+      throw error;
     } finally {
       closeSync(fd);
     }
+    // Only now. A sequence is burned by a successful write, never by a failed
+    // one — the failed bytes are gone, so nothing can ever refer to that number.
+    nextSeq += 1;
     records.push(record);
     return record.seq;
   }
@@ -122,10 +164,30 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
    * Idempotent and monotonic: a repeated or stale ack is a no-op rather than an
    * error, because a consumer that reconnects and re-acks what it already had
    * is behaving correctly, not badly.
+   *
+   * **Bounded above as well as below, and the upper bound is the one that
+   * matters.** Below the mark is a consumer repeating itself, which is
+   * harmless. Above `nextSeq` is a consumer acknowledging messages that have
+   * not been written yet: `{"ack":57}` against a fresh spool would set the mark
+   * to 57 and then silently retire the next 57 messages as they arrived, each
+   * one filtered out by `load()` on the following start. That is the exact
+   * silent loss this file exists to prevent, arriving through the one door left
+   * open — and reachable by a consumer holding a stale mark from a spool
+   * directory that was deleted and recreated.
    */
   function ack(seq) {
     const target = Number(seq);
     if (!Number.isSafeInteger(target) || target <= ackedThrough) return 0;
+
+    if (target >= nextSeq) {
+      warn(
+        `spool: refusing an acknowledgement of ${target} — nothing above ` +
+        `${nextSeq - 1} has been written. Accepting it would retire the next ` +
+        `${target - nextSeq + 1} message(s) unread. The consumer is holding a ` +
+        `mark from a different spool; it will be corrected on the next connection.`
+      );
+      return 0;
+    }
 
     const before = records.length;
     records = records.filter((r) => r.seq > target);
@@ -169,15 +231,21 @@ function readAck(ackPath, warn) {
  * is broken. A corrupt line in the MIDDLE is different — that is damage, and it
  * is reported rather than passed over in silence, because quietly reading
  * around a hole is how a spool that has lost messages goes on looking healthy.
+ *
+ * Returns `{ records, torn }`. `torn` says the file itself needs rewriting
+ * before anything is appended to it — see the caller.
  */
 function load(eventsPath, warn) {
-  if (!existsSync(eventsPath)) return [];
+  if (!existsSync(eventsPath)) return { records: [], torn: false };
   let text;
   try {
     text = readFileSync(eventsPath, 'utf8');
   } catch (error) {
     warn(`spool: could not read ${eventsPath}: ${error.message}`);
-    return [];
+    // Not `torn`. We could not read the file, so we know nothing about its
+    // shape — rewriting it from an empty record list would turn "I could not
+    // look" into "there was nothing there", which is the whole rule.
+    return { records: [], torn: false };
   }
 
   const lines = text.split('\n');
@@ -203,14 +271,15 @@ function load(eventsPath, warn) {
       warn(
         `spool: line ${index + 1} of ${eventsPath} is unreadable (${error.message}). ` +
         `That line held a WhatsApp message and it is now lost. This is damage, ` +
-        `not routine — the file was not truncated mid-write, it was corrupted.`
+        `not routine: an interrupted append can only ever damage the LAST line, ` +
+        `and this one has intact lines after it.`
       );
     }
   });
 
   // Sorted rather than assumed sorted: append order is sequence order today,
   // and a future writer that batches would break that assumption silently.
-  return records.sort((a, b) => a.seq - b.seq);
+  return { records: records.sort((a, b) => a.seq - b.seq), torn: trailingPartial };
 }
 
 function compact(eventsPath, records) {
@@ -231,14 +300,49 @@ function writeAtomic(target, contents) {
   const temporary = `${target}.tmp`;
   const fd = openSync(temporary, 'w', 0o600);
   try {
-    writeSync(fd, contents);
+    writeFully(fd, contents);
     fsyncSync(fd);
-  } finally {
+  } catch (error) {
+    // The rename is what makes this atomic, and it must not happen. A
+    // short-written temporary renamed over the events file would replace every
+    // unacknowledged record with a truncated copy of itself — a compaction that
+    // destroys exactly the messages it was called to preserve.
     closeSync(fd);
+    try { unlinkSync(temporary); } catch { /* nothing left to clean up */ }
+    throw error;
   }
+  closeSync(fd);
   renameSync(temporary, target);
+}
+
+/**
+ * `writeSync` is not obliged to write everything you give it — it returns how
+ * many bytes it took, and on a full or slow filesystem that can be fewer than
+ * asked for. Ignoring the return value means a partial write reports success,
+ * which here means a truncated message that reads back as corruption, or a
+ * truncated compaction that loses every record after the cut.
+ *
+ * Bytes rather than the string, because a partial write is counted in bytes and
+ * message text is full of multi-byte characters — resuming at a character
+ * offset would splice the file at the wrong place.
+ *
+ * `write` is a parameter only so the tests can hand it a writer that takes
+ * three bytes at a time. Producing a genuine short write needs a full disk, and
+ * a hazard that can only be reproduced by filling a disk is a hazard nobody
+ * ever writes a test for.
+ */
+function writeFully(fd, contents, write = writeSync) {
+  const buffer = Buffer.from(contents, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    const n = write(fd, buffer, written, buffer.length - written);
+    if (!(n > 0)) {
+      throw new Error(`write stalled after ${written} of ${buffer.length} bytes`);
+    }
+    written += n;
+  }
 }
 
 // Exported for the tests, which need to build a spool file by hand to prove
 // what happens to a damaged one.
-export const _internals = { load, writeAtomic, EVENTS_FILE, ACK_FILE };
+export const _internals = { load, writeAtomic, writeFully, EVENTS_FILE, ACK_FILE };

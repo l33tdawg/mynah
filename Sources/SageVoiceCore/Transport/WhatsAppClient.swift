@@ -16,7 +16,7 @@ import Foundation
 /// **What is different, and it is the important part.** Signal's daemon pushes
 /// and forgets; this one keeps every message on disk until it is acknowledged.
 /// So `incomingMessages` is only half the contract. The other half is
-/// `acknowledge(through:)`, and nothing retires a message except that call.
+/// `acknowledge(sequence:)`, and nothing retires a message except that call.
 ///
 ///   * Never call it, and every message is redelivered on the next connection.
 ///   * Call it too early — on receipt, say — and a crash mid-turn loses the
@@ -75,12 +75,12 @@ public actor WhatsAppClient {
     private var supervisor: Task<Void, Never>?
     private var isStopped = false
 
-    /// The highest sequence this client has been told is safely dealt with.
+    /// What may be acknowledged, and what is still being answered.
     ///
-    /// Kept so a reconnection can re-send it immediately. The bridge treats a
-    /// repeated ack as a no-op, so saying it again costs nothing and saying it
-    /// once too few means a message is answered twice.
-    private var acknowledgedThrough = 0
+    /// The bridge speaks a watermark and the product does not; keeping the two
+    /// apart is `WhatsAppAcknowledgementLedger`'s whole job, and the reason it
+    /// is a separate type is written down there.
+    private var ledger = WhatsAppAcknowledgementLedger()
 
     public init(configuration: Configuration) {
         self.configuration = configuration
@@ -112,25 +112,36 @@ public actor WhatsAppClient {
         continuation.finish()
     }
 
-    /// Retires every message up to and including `sequence`.
+    /// Retires **this one message**, and nothing else.
     ///
-    /// Call this once the turn is durably recorded — not on receipt. See the
-    /// note on the type.
+    /// Named for what it does. The previous name was `acknowledge(through:)`,
+    /// which described the wire format rather than the contract and invited
+    /// exactly the bug that was found here — a caller finishing message 2 and
+    /// silently retiring message 1 along with it.
+    ///
+    /// Call it once the turn is durably recorded — not on receipt. See the note
+    /// on the type.
     ///
     /// Silent when the bridge is not connected, and that is safe rather than
-    /// sloppy: `acknowledgedThrough` is remembered and re-sent the moment a
-    /// connection comes back, and the bridge is still holding the message in
-    /// the meantime. The alternative — throwing — would push retry logic into
-    /// the daemon for a case that resolves itself.
-    public func acknowledge(through sequence: Int) async {
-        guard sequence > acknowledgedThrough else { return }
-        acknowledgedThrough = sequence
+    /// sloppy: the watermark is remembered and re-sent the moment a connection
+    /// comes back, and the bridge is still holding the message meanwhile. The
+    /// alternative — throwing — would push retry logic into the daemon for a
+    /// case that resolves itself.
+    public func acknowledge(sequence: Int) async {
+        ledger.settle(sequence)
         await sendAcknowledgement()
     }
 
+    /// For the daemon's diagnostics, and for the tests. The sequence the
+    /// watermark is waiting on is the only useful thing to print when
+    /// acknowledgement looks stuck.
+    public var acknowledgementState: (watermark: Int, outstanding: Int, blockedOn: Int?) {
+        (ledger.watermark, ledger.outstandingCount, ledger.blocking)
+    }
+
     private func sendAcknowledgement() async {
-        guard acknowledgedThrough > 0, let socket else { return }
-        let line = Data("{\"ack\":\(acknowledgedThrough)}".utf8)
+        guard ledger.watermark > 0, let socket else { return }
+        let line = Data("{\"ack\":\(ledger.watermark)}".utf8)
         do {
             try await socket.writeLine(line)
         } catch {
@@ -182,27 +193,54 @@ public actor WhatsAppClient {
 
     // MARK: Decoding
 
-    private func receive(_ line: Data) {
+    /// Internal rather than private so a test can drive it without a socket.
+    /// The acknowledgement bug this file now guards against was reachable only
+    /// through here, which is why the fifteen tests over this transport all
+    /// passed while it was live.
+    func receive(_ line: Data) {
         guard let message = Self.decode(line) else {
-            // A line we cannot read is reported, never passed over quietly. The
-            // bridge is still holding it — it goes unacknowledged, so it comes
-            // back — and a silent skip here would be the one way to lose a
-            // message that the spool cannot protect against.
+            // A line we cannot read is reported, never passed over quietly.
             let preview = String(data: line.prefix(200), encoding: .utf8) ?? "<not utf8>"
-            configuration.logger(.failure("unreadable line from the bridge, left unacknowledged: \(preview)"))
+            configuration.logger(.failure("unreadable line from the bridge: \(preview)"))
+
+            // Settled if we can at least tell which sequence it was, because it
+            // will be byte-identical on every replay: leaving it outstanding
+            // would hold the watermark down for ever, the spool would fill, and
+            // *every* later message would be refused. One line we could never
+            // have read is a smaller loss than the channel.
+            //
+            // If even the sequence is unreadable there is nothing to settle,
+            // and the watermark stalls behind it deliberately. That means the
+            // socket framing itself is broken, and the bridge says so loudly
+            // when its spool fills rather than dropping anything.
+            if let sequence = Self.sequence(of: line) {
+                ledger.settle(sequence)
+                Task { await self.sendAcknowledgement() }
+            }
             return
         }
 
         switch configuration.allowlist.decide(message) {
         case .denied(let denial):
             configuration.logger(.refused(denial))
-            // Refused, and therefore dealt with. Without this the bridge would
-            // replay a stranger's message on every reconnection for ever, and
-            // the spool would fill with mail nobody will ever answer.
-            Task { await self.acknowledge(through: message.sequence) }
+            // Refused, and therefore dealt with — otherwise the bridge replays a
+            // stranger's message on every reconnection for ever and the spool
+            // fills with mail nobody will ever answer.
+            //
+            // Through the ledger, never straight to the watermark: if the
+            // owner's message is outstanding underneath this one, saying
+            // `{"ack":2}` here would retire his message too.
+            ledger.settle(message.sequence)
+            Task { await self.sendAcknowledgement() }
         case .allowed:
+            ledger.deliver(message.sequence)
             continuation.yield(message)
         }
+    }
+
+    /// Just the sequence, for a line whose event we could not read.
+    static func sequence(of line: Data) -> Int? {
+        (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["seq"] as? Int
     }
 
     /// `{"seq":12,"event":{…}}` → a message, or nil.

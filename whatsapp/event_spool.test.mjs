@@ -7,11 +7,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 
-import { createEventSpool } from './event_spool.js';
+import { createEventSpool, _internals } from './event_spool.js';
 
 function scratch() {
   return mkdtempSync(path.join(tmpdir(), 'mynah-spool-'));
@@ -217,6 +217,97 @@ test('the spool is not world-readable — it holds message text', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The four below are regressions. Each reproduces a defect that was in this
+// file and passed the eleven tests above it — written after an audit found
+// them, and each fails if its fix is taken back out.
+
+test('a message written after a torn tail is not eaten by it', () => {
+  const dir = scratch();
+  try {
+    const spool = createEventSpool({ dir });
+    spool.append(message('one'));
+    spool.append(message('two'));
+
+    // An append interrupted by a power cut. The eleven tests above prove the
+    // torn line is dropped from MEMORY on the next start — and stop there.
+    // The bytes are still on disk, and `append` opens with 'a'.
+    appendFileSync(spool.eventsPath, '{"seq":3,"eve');
+
+    const recovered = createEventSpool({ dir });
+    recovered.append(message('three'));
+
+    // Without the repair, 'three' is written onto the end of the broken line:
+    // one unreadable record where there should have been two, and the message
+    // destroyed is the one that arrived AFTER the crash — a message the owner
+    // sent while everything was working.
+    const warnings = [];
+    const afterRestart = createEventSpool({ dir, warn: (w) => warnings.push(w) });
+    assert.deepEqual(
+      afterRestart.pending().map((r) => r.event.text),
+      ['one', 'two', 'three']
+    );
+    assert.deepEqual(warnings, [], 'the torn tail was repaired, so there is nothing left to report');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an acknowledgement of messages that have not arrived is refused', () => {
+  const dir = scratch();
+  try {
+    const warnings = [];
+    const spool = createEventSpool({ dir, warn: (w) => warnings.push(w) });
+
+    // A consumer holding a mark from a spool directory that was deleted and
+    // recreated. Nothing has been written here at all.
+    assert.equal(spool.ack(57), 0);
+    assert.equal(spool.stats().ackedThrough, 0, 'the mark must not move to a message that does not exist');
+    assert.match(warnings.join('\n'), /refusing an acknowledgement/);
+
+    // The damage this prevents: the next fifty-seven real messages arrive,
+    // are spooled, and are then filtered out as already-accepted on the next
+    // start — read by nobody, reported to nobody.
+    spool.append(message('did the ferry get booked'));
+    assert.deepEqual(
+      createEventSpool({ dir }).pending().map((r) => r.event.text),
+      ['did the ferry get booked']
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a short write is finished, not reported as a success', () => {
+  // `writeSync` returns how many bytes it took, which on a full or slow
+  // filesystem can be fewer than it was given. Ignoring that is a truncated
+  // message on disk that reads back as corruption — or, in a compaction, a
+  // truncated file renamed over the authoritative one.
+  //
+  // Injected rather than simulated with a real full disk: the hazard is the
+  // return value, and this pins the exact behaviour on it.
+  const taken = [];
+  const threeBytesAtATime = (fd, buffer, offset, length) => {
+    const n = Math.min(3, length);
+    taken.push(Buffer.from(buffer.subarray(offset, offset + n)));
+    return n;
+  };
+
+  // Multi-byte on purpose: a partial write is counted in bytes, so resuming at
+  // a character offset would splice the file mid-character.
+  const line = '{"seq":1,"event":{"text":"café ☕"}}\n';
+  _internals.writeFully(-1, line, threeBytesAtATime);
+
+  assert.ok(taken.length > 1, 'the test is worthless if it all went in one go');
+  assert.equal(Buffer.concat(taken).toString('utf8'), line);
+});
+
+test('a write that stops making progress throws rather than looping for ever', () => {
+  assert.throws(
+    () => _internals.writeFully(-1, 'anything at all', () => 0),
+    /write stalled after 0 of 15 bytes/
+  );
 });
 
 test('events acked below the mark do not reappear after a crash mid-compaction', () => {

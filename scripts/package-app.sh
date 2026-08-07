@@ -527,27 +527,75 @@ deliberately here."
   mkdir -p "$APP/Contents/Resources/node/bin" "$APP/Contents/Resources/whatsapp"
   cp "$NODE_SOURCE" "$APP/Contents/Resources/node/bin/node"
   chmod +x "$APP/Contents/Resources/node/bin/node"
-  [[ ! -f "$NODE_ROOT/LICENSE" ]] || cp "$NODE_ROOT/LICENSE" "$APP/Contents/Resources/node/LICENSE"
+  [[ -f "$NODE_ROOT/LICENSE" ]] || die \
+"Node ships in this bundle but its licence text was not staged: $NODE_ROOT/LICENSE
+MIT requires the notice to travel with the copy. Rerun scripts/provision-node.sh."
+  cp "$NODE_ROOT/LICENSE" "$APP/Contents/Resources/node/LICENSE"
   [[ ! -f "$NODE_ROOT/VERSION" ]] || cp "$NODE_ROOT/VERSION" "$APP/Contents/Resources/node/VERSION"
 
   # The bridge and its dependencies. No tests: they are build-time proof, and
   # 200 KB of .test.mjs inside a shipped app is 200 KB nobody will ever run.
+  #
+  # Every one required. This was `[[ ! -f … ]] || cp`, which silently staged
+  # nothing when a file was missing and left the gap to be found by the import
+  # check below — which, as written, could not find it.
   for file in bridge.js bridge_helpers.js allowlist.js outbound_ids.js \
               owner_message_gate.js event_spool.js event_socket.js \
               package.json LICENSE.hermes PROVENANCE.md; do
-    [[ ! -f "$WHATSAPP_SOURCE/$file" ]] || cp "$WHATSAPP_SOURCE/$file" "$APP/Contents/Resources/whatsapp/$file"
+    [[ -f "$WHATSAPP_SOURCE/$file" ]] || die \
+"The WhatsApp bridge is missing a file it needs: $WHATSAPP_SOURCE/$file
+Staging the rest without it produces an app that fails at first import."
+    cp "$WHATSAPP_SOURCE/$file" "$APP/Contents/Resources/whatsapp/$file"
   done
   cp -R "$WHATSAPP_SOURCE/node_modules" "$APP/Contents/Resources/whatsapp/node_modules"
 
-  # It has to actually run from where it will actually live. The staged tree is
-  # a different directory from the one the tests ran in, and a missing file
-  # shows up here as an import error rather than as a mystery on somebody's Mac
-  # a week after release. Unsigned at this point, so this proves the layout, not
-  # the entitlements — the Team ID check after signing does that half.
-  if ! "$APP/Contents/Resources/node/bin/node" \
-        -e "import('file://$APP/Contents/Resources/whatsapp/bridge_helpers.js').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})" \
-        >/dev/null 2>&1; then
-    die "The staged WhatsApp bridge cannot load its own modules from
+  # **It has to actually run from where it will actually live.**
+  #
+  # This checked one module, `bridge_helpers.js`, and an audit built a staged
+  # tree with node_modules and five of the seven modules deleted and watched it
+  # pass — because bridge_helpers.js imports none of them. A check that cannot
+  # fail is worse than no check: it reads as proof.
+  #
+  # So: import every local module, and import every package `bridge.js` names.
+  # Not bridge.js itself, which starts a WhatsApp connection on import. Run from
+  # inside the staged directory so bare specifiers resolve against the staged
+  # node_modules, exactly as they will on the owner's Mac. Unsigned at this
+  # point, so this proves the layout, not the entitlements — the Team ID check
+  # after signing does that half.
+  if ! ( cd "$APP/Contents/Resources/whatsapp" && "$APP/Contents/Resources/node/bin/node" --input-type=module -e '
+    import { readFileSync } from "fs";
+
+    const local = ["bridge_helpers.js", "allowlist.js", "outbound_ids.js",
+                   "owner_message_gate.js", "event_spool.js", "event_socket.js"];
+
+    // Every specifier bridge.js imports, read out of bridge.js rather than
+    // listed here — a list here would be a second thing to keep in step, and
+    // it would be wrong the first time somebody added an import.
+    const wanted = new Set();
+    let open = false;
+    for (const line of readFileSync("bridge.js", "utf8").split("\n")) {
+      if (!open && /^\s*import[\s{"\x27]/.test(line)) open = true;
+      if (!open) continue;
+      const found = line.match(/from\s+["\x27]([^"\x27]+)["\x27]|^\s*import\s+["\x27]([^"\x27]+)["\x27]/);
+      if (found) { wanted.add(found[1] || found[2]); open = false; }
+    }
+    const packages = [...wanted].filter((s) => !s.startsWith(".") && !s.startsWith("node:"));
+
+    // Without this the regex above could quietly match nothing and turn the
+    // whole check back into the no-op it was.
+    if (packages.length < 4) {
+      console.error(`only ${packages.length} package import(s) found in bridge.js; the scan is broken`);
+      process.exit(1);
+    }
+
+    let bad = 0;
+    for (const specifier of [...local.map((f) => "./" + f), ...packages]) {
+      try { await import(specifier); }
+      catch (error) { console.error(`  ${specifier}: ${error.message}`); bad += 1; }
+    }
+    if (bad) { console.error(`${bad} of ${local.length + packages.length} imports failed`); process.exit(1); }
+  ' ); then
+    die "The staged WhatsApp bridge cannot load what it needs from
 $APP/Contents/Resources/whatsapp
 Something in the copy above is incomplete."
   fi
