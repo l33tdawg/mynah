@@ -149,8 +149,9 @@ public enum BrainPrompts {
 
     SENDING WORK TO ANOTHER AGENT
     - If the owner names an agent in human terms — "send this to MacBook Pro Agent A", \
-    "ask Perplexity to research it" — call sage_directory first. It lists every agent on \
-    this Mac with its display name, registered name, provider and exact agent_id.
+    "ask Perplexity to research it" — call sage_directory first, with {"scope":"all"}: the \
+    recipient may be on another machine, and the default scope hides them. It lists display \
+    name, registered name, provider and exact agent_id.
     - Then call sage_message_send with `to` set to the exact agent_id from that list, never the \
     spoken name, and the message itself as `payload`.
     - If nobody in the list matches, say who is there and ask which they meant. Never guess \
@@ -162,9 +163,12 @@ public enum BrainPrompts {
     evidence nobody answered. NEVER say a named agent has not replied.
     - If nothing changed since your last answer, say that in one short sentence.
 
-    WHEN ASKED WHICH AGENTS EXIST
-    - sage_directory answers this. It takes no arguments and returns the active agents on \
-    this Mac. Name them; do not read out agent_ids unless asked.
+    WHEN ASKED WHICH AGENTS EXIST, OR WHO IS ON THE NETWORK
+    - sage_directory answers both. ALWAYS pass {"scope":"all"}; its default is this Mac \
+    only. Name them; do not read out agent_ids unless asked.
+    - A list is what you could SEE, not what EXISTS. If the reply carries "complete": false, \
+    a "warnings" entry, or a note that it is partial, say so — "here are the ones I can see, \
+    and I can't see all of them". NEVER turn an incomplete list into "there is nobody else".
     - NEVER answer this with sage_federation. It reports connected *other SAGEs*, which is a \
     different question — answering "no federated connections" to "what agents can you see" \
     tells the owner there is nobody here while twenty agents sit on his screen.
@@ -350,30 +354,51 @@ public enum BrainPrompts {
         // The bug that earned this: asked to send a note to "you", a 4B matched
         // the substring against two unrelated Claude registrations and piped
         // the owner's messages to strangers. `sage_find_agent` takes a name and
-        // guesses; `sage_directory` takes nothing and *lists* — display name,
-        // immutable registered name, provider and exact `agent_id` for every
-        // active agent on this Mac. A model choosing from a list cannot invent
-        // a recipient, which is the entire difference.
+        // guesses; `sage_directory` *lists* — display name, immutable
+        // registered name, provider and exact `agent_id`. A model choosing from
+        // a list cannot invent a recipient, which is the entire difference.
         //
-        // What the swap gives up, from SAGE's own description: `find_agent`
-        // also searches "caller-authorized federated contacts", and this does
-        // not — it is explicitly "a signed local roster, not … a global
-        // federated directory". No federated peers are in play on this Mac
-        // today, and `sage_pipe` still accepts a known exact `agent_id`
-        // directly, so nothing reachable becomes unreachable. If federation
-        // starts being used, `find_agent` comes back — and then it is worth
-        // re-measuring routing, because 19 tools is already past the 14 where
-        // the catalogue scored 12/12.
+        // **It does not "take nothing", and believing that cost us a wrong
+        // answer to the owner.** It takes `scope`, and the default is `local`.
+        // The prompt said "it takes no arguments and returns the active agents
+        // on this Mac", so the model read a local roster and answered a
+        // question about the *network* from it: seventeen agents listed and
+        // "No federated SAGEs connected", while a federated MYNAH sat on
+        // STUDIO-MACMINI. The prompt now always passes `{"scope":"all"}`.
+        //
+        // **This block wrote down its own expiry condition and still rotted.**
+        // What it used to say, on 2 August in `ea19d9b`: *"No federated peers
+        // are in play on this Mac today … If federation starts being used,
+        // `find_agent` comes back."* That was true when written. Federation is
+        // in play now, the named trigger fired, and nothing was watching for
+        // it — which is the point worth keeping. A comment cannot check its own
+        // condition, so accuracy here buys less than a test does.
+        //
+        // `find_agent` still does not come back: `scope:"all"` gives the
+        // federated reach that was the only thing the swap gave up, and it
+        // gives it by *listing* rather than by guessing at a name. Re-measuring
+        // routing would be worth it before adding any tool, because 19 is
+        // already past the 14 where the catalogue scored 12/12.
         "sage_directory",
         // **`sage_pipe` is gone and these two replace it, in one commit.**
         //
-        // The owner: *"message inbox outbox is the official way now"*. The pipe
-        // aliases still work and no 11.17.x removal is scheduled, so nothing
-        // breaks for an appliance that has not updated — but the messages
-        // surface is where the durability landed. **Not a 24-hour window,
-        // which is what this used to say:** that was 11.17.7's default, and
-        // 11.17.9 changed `ttl_minutes` to 0, meaning no expiry. Nothing here
-        // pins it, so sends are durable. See `SageAgentMessaging.send`.
+        // The owner: *"message inbox outbox is the official way now"*. The
+        // messages surface is where the durability landed. **Not a 24-hour
+        // window, which is what this used to say:** that was 11.17.7's default,
+        // and 11.17.9 changed `ttl_minutes` to 0, meaning no expiry. Nothing
+        // here pins it, so sends are durable. See `SageAgentMessaging.send`.
+        //
+        // **The aliases are now actually gone, and this comment predicted
+        // otherwise.** It said *"the pipe aliases still work and no 11.17.x
+        // removal is scheduled, so nothing breaks for an appliance that has not
+        // updated"*. 11.17.15 removed all four — `sage_pipe`,
+        // `sage_pipe_result`, `sage_pipe_history`, `sage_pipe_receipt_status` —
+        // observed on the owner's node on 7 August, an hour after the same kind
+        // of stale premise produced a wrong answer about the network two
+        // screens up. Nothing breaks here because the swap already happened;
+        // the surviving `sage_pipe` strings in `ToolLoop.sendingTools` and
+        // `WorkingReply` are switch arms that no longer match, and leaving them
+        // costs nothing while an un-updated node might still be in the wild.
         //
         // Swapped together deliberately. Removing `sage_pipe` first would ship
         // a build where the model cannot send to an agent at all, and adding

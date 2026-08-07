@@ -178,24 +178,73 @@ final class RecallDisciplineTests: XCTestCase {
 /// up as a result.
 ///
 /// **SAGE 11.16.4 shipped the tool, so these tests now assert the opposite of
-/// what they used to.** `sage_directory` takes no arguments and returns the
-/// active agents on this Mac — display name, registered name, provider and
-/// exact `agent_id`. The rule that survived the change is the federation ban,
-/// because that wrong answer was never about a missing capability: it was about
-/// reaching for an adjacent tool and reporting its output as though it answered
-/// the question.
+/// what they used to.** `sage_directory` lists the agents this caller may
+/// address — display name, registered name, provider and exact `agent_id`. The
+/// rule that survived the change is the federation ban, because that wrong
+/// answer was never about a missing capability: it was about reaching for an
+/// adjacent tool and reporting its output as though it answered the question.
+///
+/// **And the same wrong answer came back on 7 August, by a new route.** This
+/// used to say `sage_directory` "takes no arguments", as did the prompt. It
+/// takes `scope`, and the default is `local` — so asked what was on the
+/// *network*, Mynah read a local roster and reported "No federated SAGEs
+/// connected" while a federated peer sat on another Mac. Same sentence the ban
+/// above exists to prevent, produced this time by the *right* tool answering a
+/// narrower question than the one asked. Reported by codex; see
+/// `VoiceToolBudget.fitDirectory` for the half of the fix that is not prose.
 final class AgentEnumerationHonestyTests: XCTestCase {
 
     private var prompt: String { BrainPrompts.voiceAgentManager }
 
     func testThePromptNamesTheToolThatEnumerates() {
         XCTAssertTrue(
-            prompt.contains("sage_directory answers this"),
-            "the model is not told which tool lists the agents on this Mac"
+            prompt.contains("sage_directory answers both"),
+            "the model is not told which tool lists the agents it can address"
         )
         XCTAssertFalse(
             prompt.contains("cannot list the agents on this Mac"),
             "it can now, and a prompt that says otherwise makes it refuse a question it can answer"
+        )
+    }
+
+    /// **The bug itself.** A local-scoped read cannot answer a question about
+    /// the network, and the prompt has to say which scope to ask for — the
+    /// default is the wrong one.
+    func testThePromptDemandsTheFullScope() {
+        XCTAssertTrue(
+            prompt.contains(#"{"scope":"all"}"#),
+            "the model will take the default, which is this Mac only"
+        )
+        XCTAssertFalse(
+            prompt.contains("It takes no arguments"),
+            "this sentence is what produced 'No federated SAGEs connected' on 7 August"
+        )
+    }
+
+    /// **"I could not see everything" is not "there is nobody else".** The same
+    /// distinction as the inbox read in 1.8.5, at the prompt layer: SAGE reports
+    /// `complete: false` and `warnings`, and a model that swallows them turns a
+    /// partial roster into a confident denial.
+    func testThePromptRequiresIncompletenessToBeSpoken() {
+        XCTAssertTrue(prompt.contains(#""complete": false"#))
+        XCTAssertTrue(prompt.contains("warnings"))
+        XCTAssertTrue(
+            prompt.contains(#"NEVER turn an incomplete list into "there is nobody else""#),
+            "without this the model reports what it could see as what exists"
+        )
+    }
+
+    /// The recipient may be on another machine, and the default scope hides
+    /// them — so the send path needs the same rule as the question path.
+    func testTheSendPathAsksForTheFullScopeToo() {
+        guard let sending = prompt.range(of: "SENDING WORK TO ANOTHER AGENT"),
+              let replied = prompt.range(of: "WHEN ASKED IF ANYONE REPLIED") else {
+            return XCTFail("the sending section is not where this test thinks it is")
+        }
+        let section = String(prompt[sending.lowerBound..<replied.lowerBound])
+        XCTAssertTrue(
+            section.contains(#"{"scope":"all"}"#),
+            "a remote recipient is invisible to the default scope, so the send cannot be addressed"
         )
     }
 

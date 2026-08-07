@@ -45,13 +45,26 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// count, or a stopwatch. It shows up as a tool call that should have
     /// happened and did not.
     ///
-    /// So this is now a sprawl budget. 8,000 leaves room for the rules still
-    /// owed — `sage_forget` on correction, documents written in full — while
-    /// keeping the failure that starts the argument. When it fires, the question
-    /// to ask is not "can we afford the prefill" (yes) but "is this rule earning
-    /// its place against the ones already here", which is the question that
-    /// actually matters and the one a latency framing was hiding.
-    static let systemPromptCharacterBudget = 8_000
+    /// So this is now a sprawl budget. It leaves room for the rules still owed —
+    /// `sage_forget` on correction, documents written in full — while keeping
+    /// the failure that starts the argument. When it fires, the question to ask
+    /// is not "can we afford the prefill" (yes) but "is this rule earning its
+    /// place against the ones already here", which is the question that actually
+    /// matters and the one a latency framing was hiding.
+    ///
+    /// **8,000 to 8,300 on 7 August, for the directory-scope rule.** Asked what
+    /// was on the network, Mynah read a local-only roster and answered "No
+    /// federated SAGEs connected" while a federated peer sat on another Mac. The
+    /// rule that fixes it has two halves and both are load-bearing: always pass
+    /// `{"scope":"all"}`, and *say so* when the reply is incomplete. The second
+    /// half is what cost the 271 characters, because a model told to report
+    /// `"complete": false` has to be shown what that looks like and what to say
+    /// — a rule stated abstractly gets paraphrased away by a 4B.
+    ///
+    /// It earns its place on the test this comment sets: the rules it competes
+    /// with are guarding failures that were *reported*, and so is this one. The
+    /// owner made the call with the cost stated.
+    static let systemPromptCharacterBudget = 8_300
 
     func testTheSystemPromptStaysWithinItsPrefillBudget() {
         let count = BrainPrompts.voiceAgentManager.count
@@ -59,10 +72,14 @@ final class PromptLatencyBudgetTests: XCTestCase {
             count,
             Self.systemPromptCharacterBudget,
             """
-            The system prompt is \(count) characters, over the \(Self.systemPromptCharacterBudget) budget. \
-            That is roughly \(count / 4) tokens on every cold turn, about \(count / 4 / 130) seconds of \
-            prefill before the model has read a word of the owner's question. Cut something or move the \
-            budget deliberately — but move it in the same commit, with the reason.
+            The system prompt is \(count) characters, over the \(Self.systemPromptCharacterBudget) budget, \
+            roughly \(count / 4) tokens. **This is a sprawl budget, not a latency one** — read the comment \
+            on systemPromptCharacterBudget before reacting to that number. The prompt is byte-identical \
+            every turn and sits at the front of the prefix, so it caches and costs close to nothing in \
+            seconds. What it costs is a 4B's attention: every rule here competes with every other rule \
+            for the same limited capacity to follow any of them. So the question is not "can we afford \
+            this" but "is this rule earning its place against the ones already here". Cut something or \
+            move the budget deliberately — but move it in the same commit, with the reason.
             """
         )
     }
