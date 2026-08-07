@@ -102,14 +102,17 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2080   (1.8.3, calendar recurrence; was 2060 at 1.8.1)
-#   without Kokoro  2042   (2080 - 38)
-#   floor           2068   (12 under measured, 26 above the failure it must catch)
+#   measured      2111   (1.9.0, sage_directory scope; was 2080 at 1.8.3)
+#   without Kokoro  2073   (2111 - 38)
+#   floor           2099   (12 under measured, 26 above the failure it must catch)
 #
-# Raised here rather than when it goes red, three times running now: 2080 is six
-# tests short of 2086, where the 1.8.1 floor of 2048 trips its own rot check. A
-# floor left to rot until it fails is a floor that fails on somebody else's
-# commit.
+# **1.9.0 is the first time this fired rather than being raised ahead of it**,
+# and it fired exactly as designed: a green suite, 2111 executed and 0 failures,
+# stopped by a floor that could no longer see a missing target. 2080 to 2111 in
+# one release — thirteen tests for the directory-scope fix and eighteen from the
+# 1.8.5 work before it — spent the room the previous raise bought. Nothing was
+# wrong with the run; the gate had simply gone blind, which is the one thing it
+# is built to notice about itself.
 #
 # **1.7.5 raised it by 26 and that is the whole point of the rule.** The floor
 # was 1916, which is exactly the without-Kokoro number for this suite — so the
@@ -127,7 +130,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2068}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2099}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
