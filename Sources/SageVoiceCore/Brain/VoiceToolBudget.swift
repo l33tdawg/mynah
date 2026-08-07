@@ -179,6 +179,7 @@ public enum VoiceToolBudget {
         let allowance = budget(forTool: tool, brain: brain)
         guard result.utf8.count > allowance else { return result }
 
+        if let trimmed = fitDirectory(result, allowance: allowance) { return trimmed }
         if let trimmed = fitCountedEntries(result) { return trimmed }
 
         // Unrecognised shape: keep the head, and be explicit about the tail
@@ -249,6 +250,146 @@ public enum VoiceToolBudget {
         return "{\(stated)\"subjects\": \(domains.count), "
             + "\"largest_subjects\": {\(listed)}, "
             + "\"note\": \"truncated to the largest \(top.count) of \(domains.count) subjects\"}"
+    }
+
+    /// A recipient directory, trimmed **without losing what qualifies it**.
+    ///
+    /// `sage_directory` emits `complete`, `total` and `warnings` *after* the
+    /// unbounded `agents` array — byte 9,525 of a 9,977-byte reply on the
+    /// owner's node, measured 7 August. The generic path below keeps the head,
+    /// so on the on-device brain (2,000 bytes for a directory, ~390 per agent)
+    /// those three fields fall off at around five agents. The owner has
+    /// seventeen.
+    ///
+    /// **That is not a formatting problem.** It is the nil-versus-empty failure
+    /// of 1.8.3 and 1.8.5 one layer up: `complete: false` means *"I could not
+    /// see everything"*, and a reader that never receives it reports a partial
+    /// roster as the whole network. Which is the wrong answer that earned this
+    /// — asked what was on the network, Mynah listed seventeen local agents and
+    /// said "No federated SAGEs connected" while a federated peer sat on
+    /// another Mac. The prompt now requires those fields to be spoken aloud, so
+    /// they have to survive the budget or the rule is decorative.
+    ///
+    /// So the qualifiers go **first** and the rows are what gets cut.
+    ///
+    /// Two other things this absorbs:
+    ///
+    /// - **The session preamble.** SAGE prepends `[SAGE Auto-Connect]`
+    ///   operating instructions to the *first* tool result of a session —
+    ///   measured at 2,918 bytes ahead of this tool's JSON, and 1,488 ahead of
+    ///   `sage_status`, absent on every later call. Against a 2,000-byte
+    ///   budget the generic path hands the model boilerplate and *zero* agent
+    ///   rows. Parsing from the first brace drops it. Note `warmUpProbe` is
+    ///   deliberately tool-free, so the first real call of a session — the one
+    ///   the owner asks — is the one that pays.
+    /// - **Fields a row repeats.** `name` duplicated `display_name`, and `to`
+    ///   duplicated `agent_id`, in every row observed; an `agent_id` is 64
+    ///   characters, so the repeat is most of the row. Dropped **only when the
+    ///   two values are literally equal in that row**, never by name. A
+    ///   federated row whose `to` is a routed address that differs from its
+    ///   `agent_id` keeps both, which is the case that would otherwise become
+    ///   unsendable.
+    ///
+    /// Returns `nil` for anything that is not a directory reply.
+    static func fitDirectory(_ result: String, allowance: Int) -> String? {
+        guard let brace = result.firstIndex(of: "{"),
+              let data = String(result[brace...]).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let agents = root["agents"] as? [[String: Any]] else { return nil }
+
+        // Stated, never summed — the rule `fitCountedEntries` learned by
+        // announcing two hundred million memories. `total` is the node's count
+        // of what it found; `agents.count` is only what arrived.
+        let stated = root["total"] as? Int ?? agents.count
+
+        var qualifiers: [String] = []
+        if let complete = root["complete"] as? Bool {
+            qualifiers.append("\"complete\": \(complete)")
+        }
+        if let scope = root["scope"] as? String {
+            qualifiers.append("\"scope\": \(quoted(scope))")
+        }
+        qualifiers.append("\"total\": \(stated)")
+        if let warnings = root["warnings"] as? [String], !warnings.isEmpty {
+            qualifiers.append(
+                "\"warnings\": [\(warnings.map(quoted).joined(separator: ", "))]"
+            )
+        }
+
+        // Grown one row at a time and measured for real, rather than estimated
+        // against a running total that would have to be kept in step with the
+        // assembly below. Seventeen rows makes the cost of doing it honestly
+        // irrelevant.
+        var rows: [String] = []
+        for agent in agents {
+            let row = compactRow(agent)
+            let candidate = Self.assembled(qualifiers, rows + [row], of: stated)
+            if candidate.utf8.count > allowance, !rows.isEmpty { break }
+            rows.append(row)
+        }
+        return Self.assembled(qualifiers, rows, of: stated)
+    }
+
+    /// **Shaped like the tool's own output**, for the reason measured on
+    /// `fitCountedEntries`: a result that reads like commentary about a result
+    /// gets treated as commentary and stops being used as an answer.
+    private static func assembled(
+        _ qualifiers: [String],
+        _ rows: [String],
+        of stated: Int
+    ) -> String {
+        // The note is the model's cue to say the list is partial, and it states
+        // both numbers so the sentence it speaks can be specific.
+        let note = rows.count < stated
+            ? ", \"note\": \"showing \(rows.count) of \(stated) — this list is "
+                + "incomplete, say so\""
+            : ""
+        return "{" + qualifiers.joined(separator: ", ")
+            + ", \"agents\": [\(rows.joined(separator: ", "))]" + note + "}"
+    }
+
+    /// One row, minus any field that literally repeats another in the same row.
+    ///
+    /// Order matters: whichever key is listed first wins, so `display_name`
+    /// survives and its `name` duplicate goes, and `agent_id` survives and its
+    /// `to` duplicate goes. `scope` is kept and is now load-bearing — it is how
+    /// the model can say which of these are on other machines.
+    private static func compactRow(_ agent: [String: Any]) -> String {
+        let order = [
+            "display_name", "name", "registered_name",
+            "provider", "scope", "status", "agent_id", "to"
+        ]
+        var kept: Set<String> = []
+        var parts: [String] = []
+        for key in order {
+            guard let value = agent[key] as? String, !value.isEmpty else { continue }
+            guard kept.insert(value).inserted else { continue }
+            parts.append("\(quoted(key)): \(quoted(value))")
+        }
+        return "{\(parts.joined(separator: ", "))}"
+    }
+
+    /// A JSON string literal. Hand-rolled because everything else here builds
+    /// its output as text, and a half-escaped value would hand the model
+    /// something that no longer parses as the shape it expects.
+    private static func quoted(_ value: String) -> String {
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if scalar.value < 0x20 {
+                    out += String(format: "\\u%04x", scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out + "\""
     }
 
     /// A scalar the payload states about itself.
