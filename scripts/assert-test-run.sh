@@ -102,10 +102,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2287   (8 Aug 2026, dead roster deleted; 2294 at 2.0.0-beta.5,
-#                         2111 at 1.9.0. Unreleased: the next release re-measures)
-#   without Kokoro  2249   (2287 - 38)
-#   floor           2276   (11 under measured, 27 above the failure it must catch)
+#   measured      2298   (2.0.0-beta.6, the opening; 2294 at 2.0.0-beta.5,
+#                         2111 at 1.9.0)
+#   without Kokoro  2260   (2298 - 38)
+#   floor           2276   (22 under measured, 16 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -206,6 +206,21 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # above the floor, not the floor: it now sits 11 under rather than 18, which
 # means 27 more tests before the rot check fires rather than 20. Both numbers are
 # stated above so the next person reads them instead of subtracting.
+#
+# 2287 to 2298 is eleven for what a call opens with. His own call on 8 August
+# opened by reading his task list out, on a prompt that has said "Do not read my
+# task list out" since the day it was written — because the same paragraph also
+# asked for "the one thing that is still open between us", and the daemon had
+# been up since 06:44 with nothing said in messages, so there was no thread to
+# continue and something open in the backlog was the only thing that fitted.
+#
+# Three changes, five mutations, each killing exactly its own test. Nothing to
+# pick up now means no model call at all rather than a model asked nicely to
+# behave; the briefing runs through its own closure so its request — a page of
+# machine-written instruction — stops becoming turn zero of the call in the
+# owner's voice; and the phrase that invited it is gone. Note the headroom this
+# spends: the floor now sits 22 under, leaving 16 tests before the rot check
+# fires. The next release that adds more than sixteen has to raise it.
 #
 # The bridge's
 # own 86 JavaScript tests are NOT in this number and never will be: they run

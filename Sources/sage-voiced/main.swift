@@ -1512,6 +1512,37 @@ func runDaemon(_ arguments: [String]) -> Never {
             await daemon?.recentMessagesForCall()
         }
 
+        // **The briefing runs a turn and leaves no turn behind.**
+        //
+        // It used to go through `answer` above, which ends in
+        // `callHistory.remember(result.messages)` — so the request itself, a
+        // page of machine-written instruction starting "I'm about to join a
+        // voice call with you", became message zero of the call, attributed to
+        // the owner, and was re-sent on every turn until twelve turns pushed it
+        // out. The history is never cleared, so it rode into the next call too.
+        //
+        // `history: []` rather than `callHistory.recent()`, and that is the same
+        // point from the other side: the briefing already gets the previous
+        // call's ending handed to it as `LastCall.closing`, labelled as what it
+        // is. Feeding it the raw tail as well gave it the same facts twice with
+        // nothing to say which was older.
+        //
+        // The task-edit guard is kept for the reason the one above states: a
+        // briefing has no business writing to the list, but if it does, the
+        // watch must not read the change back to him as news.
+        await callServer.onBriefing { request in
+            let result = try await callLoop.run(transcript: request, history: [])
+            if OwnTaskEdits.wroteToTheTaskList(result.trace) {
+                await ownTaskEdits.record()
+            }
+            return result.reply
+        }
+
+        // And what he heard, which is the half worth keeping.
+        await callServer.onOpeningSpoken { opening in
+            await callHistory.open(with: opening)
+        }
+
         // Checking on things without being asked.
         //
         // Off unless the owner switched it on, and the loop is started
