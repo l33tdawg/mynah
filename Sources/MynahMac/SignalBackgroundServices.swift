@@ -122,7 +122,8 @@ struct SignalServiceConfiguration: Sendable, Equatable {
         appBundle: URL = Bundle.main.bundleURL,
         defaults: UserDefaults = .standard,
         linkedNumber: () -> String? = { SignalTooling.linkedNumber() },
-        signalCLI: () -> URL? = { SignalTooling.helper() }
+        signalCLI: () -> URL? = { SignalTooling.helper() },
+        pairedSession: URL = WhatsAppPairing.defaultSessionDirectory()
     ) -> SignalServiceConfiguration? {
         guard let brain = BrainSelectionStore.current(defaults) else {
             return nil
@@ -148,7 +149,12 @@ struct SignalServiceConfiguration: Sendable, Equatable {
         let helper = signalCLI()
 
         let whatsApp = wanted.includes(.whatsapp)
-            ? WhatsAppServiceConfiguration.inside(contents, signalAccount: account, defaults: defaults)
+            ? WhatsAppServiceConfiguration.inside(
+                contents,
+                signalAccount: account,
+                defaults: defaults,
+                pairedSession: pairedSession
+              )
             : nil
         let canRunSignal = wanted.includes(.signal) && account != nil && helper != nil
 
@@ -221,9 +227,15 @@ struct WhatsAppServiceConfiguration: Sendable, Equatable {
     static func inside(
         _ contents: URL,
         signalAccount: String?,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        pairedSession: URL = WhatsAppPairing.defaultSessionDirectory()
     ) -> WhatsAppServiceConfiguration? {
-        switch availability(contents, signalAccount: signalAccount, defaults: defaults) {
+        switch availability(
+            contents,
+            signalAccount: signalAccount,
+            defaults: defaults,
+            pairedSession: pairedSession
+        ) {
         case .ready(let configuration): return configuration
         case .notInThisBuild, .noNumberToAllow: return nil
         }
@@ -249,10 +261,16 @@ struct WhatsAppServiceConfiguration: Sendable, Equatable {
         case noNumberToAllow
     }
 
+    /// - Parameter pairedSession: where this Mac's WhatsApp session lives.
+    ///   Injectable because the allowlist can now be recovered from it, and a
+    ///   default pointing at the real directory would let a test read the
+    ///   developer's own paired account — which is how a test suite ends up
+    ///   asserting against whichever Mac it happens to run on.
     static func availability(
         _ contents: URL,
         signalAccount: String?,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        pairedSession: URL = WhatsAppPairing.defaultSessionDirectory()
     ) -> Availability {
         let node = contents.appendingPathComponent("Resources/node/bin/node")
         let bridge = contents.appendingPathComponent("Resources/whatsapp/bridge.js")
@@ -264,7 +282,11 @@ struct WhatsAppServiceConfiguration: Sendable, Equatable {
               FileManager.default.fileExists(atPath: bridge.path) else {
             return .notInThisBuild
         }
-        let numbers = ChannelSelectionStore.whatsAppNumbers(defaults, signalAccount: signalAccount)
+        let numbers = ChannelSelectionStore.whatsAppNumbers(
+            defaults,
+            signalAccount: signalAccount,
+            pairedSession: pairedSession
+        )
         guard !numbers.isEmpty else { return .noNumberToAllow }
         return .ready(WhatsAppServiceConfiguration(
             node: node,

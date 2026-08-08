@@ -306,6 +306,18 @@ final class RoundFourTests: XCTestCase {
 
     // MARK: - What Settings says about WhatsApp
 
+    /// A WhatsApp session directory that is not there.
+    ///
+    /// **Named at every `availability` call below, deliberately.** The allowlist
+    /// falls back to the session on disk so that an install whose pairing never
+    /// recorded a number repairs itself — and the default path is the real one,
+    /// so a test that omits this reads the developer's own paired account.
+    /// `testABuildWithNoNumberYetIsNotReportedAsABuildWithoutWhatsApp` did
+    /// exactly that and turned red on the Mac that has WhatsApp linked.
+    private var neverPaired: URL {
+        URL(fileURLWithPath: "/nonexistent/mynah-whatsapp-session")
+    }
+
     /// **Two unrelated failures shared one sentence, and the wrong one won.**
     ///
     /// `inside(...)` returns nil both for a build with no vendored Node and for
@@ -318,7 +330,7 @@ final class RoundFourTests: XCTestCase {
         let defaults = try emptyDefaults()
 
         switch WhatsAppServiceConfiguration.availability(
-            bundle, signalAccount: nil, defaults: defaults.suite
+            bundle, signalAccount: nil, defaults: defaults.suite, pairedSession: neverPaired
         ) {
         case .noNumberToAllow: break
         case .ready: XCTFail("a bridge was configured with nobody on its allowlist")
@@ -333,7 +345,7 @@ final class RoundFourTests: XCTestCase {
         ChannelSelectionStore.saveWhatsAppNumbers(["60123821767"], to: defaults.suite)
 
         switch WhatsAppServiceConfiguration.availability(
-            bundle, signalAccount: "+60123821767", defaults: defaults.suite
+            bundle, signalAccount: "+60123821767", defaults: defaults.suite, pairedSession: neverPaired
         ) {
         case .notInThisBuild: break
         default: XCTFail("a build with no interpreter was reported as able to run WhatsApp")
@@ -346,7 +358,7 @@ final class RoundFourTests: XCTestCase {
         let defaults = try emptyDefaults()
 
         switch WhatsAppServiceConfiguration.availability(
-            bundle, signalAccount: "+60123821767", defaults: defaults.suite
+            bundle, signalAccount: "+60123821767", defaults: defaults.suite, pairedSession: neverPaired
         ) {
         case .ready(let configuration):
             XCTAssertEqual(configuration.numbers, ["60123821767"])

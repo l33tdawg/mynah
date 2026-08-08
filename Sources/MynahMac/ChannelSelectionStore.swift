@@ -50,11 +50,27 @@ enum ChannelSelectionStore {
     /// it would produce a helper that runs, looks healthy, and answers nothing.
     static func whatsAppNumbers(
         _ defaults: UserDefaults = .standard,
-        signalAccount: String?
+        signalAccount: String?,
+        pairedSession: URL = WhatsAppPairing.defaultSessionDirectory()
     ) -> [String] {
         if let stored = defaults.string(forKey: whatsAppNumbersKey) {
             let numbers = normalise(stored.split(separator: ",").map(String.init))
             if !numbers.isEmpty { return numbers }
+        }
+        // **The account this Mac is actually logged into, ahead of the Signal
+        // guess.** Pairing records the number, and on builds up to
+        // 2.0.0-beta.4 it frequently did not — it read a field carrying the
+        // owner's display name whenever they had set one. The session on disk
+        // has held the JID the whole time, so reading it repairs those installs
+        // on the next launch rather than sending the owner to unlink and scan
+        // again.
+        //
+        // Ahead of `signalAccount` rather than behind it because it is not a
+        // guess: it is the WhatsApp account this Mac is signed in as. The Signal
+        // number is an assumption that the two are the same phone, which is
+        // usually true and is why it stays as the last resort.
+        if let paired = WhatsAppPairing.linkedNumber(sessionDirectory: pairedSession) {
+            return normalise([paired])
         }
         guard let signalAccount else { return [] }
         return normalise([signalAccount])

@@ -102,9 +102,9 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2288   (2.0.0-beta.4, either-or-both; was 2111 at 1.9.0)
-#   without Kokoro  2250   (2288 - 38)
-#   floor           2276   (12 under measured, 26 above the failure it must catch)
+#   measured      2294   (2.0.0-beta.5, either-or-both; was 2111 at 1.9.0)
+#   without Kokoro  2256   (2294 - 38)
+#   floor           2276   (18 under measured, 20 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -171,6 +171,26 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # what launchd is handed for a WhatsApp-only appliance, and five cover what the
 # window says about a Mac whose only channel is one the old code could not see.
 # Five mutations, every one reddened its own tests.
+#
+# 2288 to 2294 is the same defect's other half, found by asking what an owner
+# already stuck on beta.3 has to do. Pairing records the owner's number from the
+# `connected` event — but that event carried `name ?? id`, so on any account with
+# a push name the sheet was handed a display name, correctly refused to read a
+# phone number out of it, and stored nothing. Whether Mynah could answer WhatsApp
+# came down to whether the owner had ever set a display name. Invisible with
+# Signal linked, because the allowlist falls back to that number; fatal without.
+#
+# Six tests. One is the JID surviving an account that has a name — the assertion
+# it replaces, `.connected(user: "Dhillon")`, was the defect written down and
+# passing. Five cover the repair: the number is recovered from `me.id` in the
+# session already on disk, so an affected Mac fixes itself on launch instead of
+# being told to unlink and scan again through a button that is hidden precisely
+# because it is paired.
+#
+# **Two of these turned red on the first run for the right reason**, and it is
+# worth recording: the new fallback reads a session directory whose default is
+# the real one, so tests that did not name a path read the developer's own paired
+# WhatsApp account. Every call site in the suite now passes one explicitly.
 #
 # The bridge's
 # own 86 JavaScript tests are NOT in this number and never will be: they run

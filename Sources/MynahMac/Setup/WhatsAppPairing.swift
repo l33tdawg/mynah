@@ -29,8 +29,24 @@ enum WhatsAppPairing {
         /// A code to show. Superseded roughly every twenty seconds — WhatsApp
         /// rotates them, and the bridge emits each new one.
         case qr(String)
-        /// Paired. `user` is what WhatsApp says the account is called.
-        case connected(user: String?)
+        /// Paired.
+        ///
+        /// **Two fields, because one string could not do both jobs.** `user` is
+        /// what WhatsApp says the account is *called* — a push name where the
+        /// owner set one, the JID otherwise — and is for showing them. `jid` is
+        /// the identity, and it is the only thing here their number can be read
+        /// out of.
+        ///
+        /// This was `case connected(user: String?)` carrying `name ?? id`, and
+        /// the caller then tried to parse a phone number out of whichever of the
+        /// two it happened to get. On an account with a push name it got the
+        /// name, correctly refused to treat it as a number, and stored nothing —
+        /// so whether the appliance could answer WhatsApp depended on whether
+        /// the owner had ever set a display name in WhatsApp. Invisible on a Mac
+        /// with Signal linked, because the allowlist falls back to that number;
+        /// on a WhatsApp-only Mac there is nothing to fall back to and the
+        /// appliance does not start.
+        case connected(user: String?, jid: String?)
         /// The session on disk is no longer valid — most often because the owner
         /// removed this device from their phone. Distinct from `failed` because
         /// the fix is different: this one needs the session deleted before a
@@ -71,10 +87,11 @@ enum WhatsAppPairing {
             return .qr(qr)
         case "connected":
             let user = object["user"] as? [String: Any]
-            // `name` first: it is what the owner calls the account. The id is a
-            // JID carrying their phone number, which is a fine fallback and a
-            // poor label.
-            return .connected(user: (user?["name"] as? String) ?? (user?["id"] as? String))
+            let jid = user?["id"] as? String
+            // `name` first for the label: it is what the owner calls the
+            // account, and the JID is a poor thing to show them. The JID goes
+            // out beside it rather than instead of it — see `connected`.
+            return .connected(user: (user?["name"] as? String) ?? jid, jid: jid)
         case "error":
             let detail = object["error"] as? String ?? "the bridge failed without saying why"
             return detail == "logged_out" ? .loggedOut : .failed(detail)
@@ -122,6 +139,58 @@ enum WhatsAppPairing {
         try fileManager.removeItem(at: directory)
     }
 
+    /// The phone number out of a WhatsApp JID.
+    ///
+    /// `60123821767:12@s.whatsapp.net` — Baileys appends a device id, and
+    /// everything before the `@` up to the first `:` is the account.
+    ///
+    /// Returns nil for anything that is not a JID, which includes a push name.
+    /// **That refusal is deliberate and it is not enough on its own**: a name is
+    /// not an identity, so it must never become an allowlist entry, but the
+    /// caller then has to have been given the JID rather than the name. See
+    /// `Event.connected`.
+    static func number(inJID jid: String?) -> String? {
+        guard let jid, let at = jid.firstIndex(of: "@") else { return nil }
+        let user = jid[jid.startIndex..<at].split(separator: ":").first.map(String.init) ?? ""
+        let digits = user.filter(\.isNumber)
+        return digits.count >= 7 ? digits : nil
+    }
+
+    /// The owner's number, read out of the WhatsApp session already on this Mac.
+    ///
+    /// **This is what makes an affected install repair itself.** The number is
+    /// normally recorded when the owner presses Done on the pairing sheet — but
+    /// 2.0.0-beta.4 and earlier read it from a field that carried their *display
+    /// name* whenever they had set one, so on those builds it was frequently
+    /// never written. On a Mac with Signal linked nothing showed, because the
+    /// allowlist falls back to the Signal number; on a WhatsApp-only Mac the
+    /// appliance simply did not start, and the only route out was to unlink and
+    /// pair again — through a Link button that is hidden precisely because the
+    /// Mac *is* paired.
+    ///
+    /// `creds.json` has held `me.id` the whole time. Reading it costs one file
+    /// open and turns "unlink, scan the code again" into "open the new version".
+    ///
+    /// Best-effort throughout: this is a fallback, and a session we cannot parse
+    /// is not a reason to refuse to build a configuration.
+    static func linkedNumber(
+        sessionDirectory: URL = WhatsAppPairing.defaultSessionDirectory(),
+        fileManager: FileManager = .default
+    ) -> String? {
+        let credentials = sessionDirectory.appendingPathComponent("creds.json")
+        guard fileManager.fileExists(atPath: credentials.path),
+              let data = try? Data(contentsOf: credentials),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let me = root["me"] as? [String: Any] else {
+            return nil
+        }
+        // `id`, never `lid`. The LID is WhatsApp's opaque per-account identifier
+        // and carries no phone number — putting one on an allowlist that matches
+        // on digits produces an entry that can never match. That is the same
+        // confusion the thread key had; see `adoptingEarlierAddressForm`.
+        return number(inJID: me["id"] as? String)
+    }
+
     static func defaultSessionDirectory(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
@@ -149,7 +218,9 @@ final class WhatsAppPairingSession {
         /// Started, no code yet. WhatsApp takes a second or two to issue one.
         case waiting
         case showing(String)
-        case linked(user: String?)
+        /// `jid` travels beside `user` for the reason `Event.connected` carries
+        /// both: the sheet has to show one and record the other.
+        case linked(user: String?, jid: String?)
         case failed(String)
     }
 
@@ -265,8 +336,8 @@ final class WhatsAppPairingSession {
             phase = .waiting
         case .qr(let code):
             phase = .showing(code)
-        case .connected(let user):
-            phase = .linked(user: user)
+        case .connected(let user, let jid):
+            phase = .linked(user: user, jid: jid)
             // The bridge exits two seconds after this, having flushed the
             // credentials. Left to exit on its own rather than killed: killing
             // it in that window is how a pairing the owner watched succeed

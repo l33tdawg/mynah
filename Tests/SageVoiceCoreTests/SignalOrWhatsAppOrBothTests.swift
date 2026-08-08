@@ -295,8 +295,20 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
         )
     }
 
+    /// **`pairedSession` is passed at a path that does not exist, deliberately.**
+    /// The allowlist now falls back to the WhatsApp session on disk, and the
+    /// default is the real one — so left alone this read the developer's own
+    /// paired account and passed or failed by whether the Mac running it had
+    /// WhatsApp linked. "Nothing to derive from" has to mean nothing.
     func testWithNothingToDeriveFromThereIsNoAllowlistAtAll() throws {
-        XCTAssertEqual(ChannelSelectionStore.whatsAppNumbers(try emptyDefaults(), signalAccount: nil), [])
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                try emptyDefaults(),
+                signalAccount: nil,
+                pairedSession: URL(fileURLWithPath: "/nonexistent/whatsapp-session")
+            ),
+            []
+        )
     }
 
     // MARK: - The LaunchAgent
@@ -462,16 +474,40 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
     func testPairingIsReportedAsFinishedWithWhoItLinkedTo() {
         XCTAssertEqual(
             WhatsAppPairing.event(from: #"{"event":"connected","user":{"id":"60123821767@s.whatsapp.net","name":"Dhillon"}}"#),
-            .connected(user: "Dhillon")
+            .connected(user: "Dhillon", jid: "60123821767@s.whatsapp.net")
         )
     }
 
-    /// The name is what the owner calls the account; the id is a JID carrying
-    /// their phone number, which is a fine fallback and a poor label.
+    /// **This assertion used to be `.connected(user: "Dhillon")`, and that is
+    /// the defect written down as a test.**
+    ///
+    /// The JID was dropped whenever the account had a push name, and the sheet
+    /// then tried to read the owner's number out of whatever single string
+    /// survived. `number(inLinkedAccount:)` correctly refuses to read a number
+    /// out of "Dhillon", so nothing was stored — and whether Mynah could answer
+    /// WhatsApp came down to whether the owner had ever set a display name.
+    ///
+    /// Invisible on a Mac with Signal linked, because the allowlist falls back
+    /// to the Signal number. On a WhatsApp-only Mac there is nothing to fall
+    /// back to, so `current()` finds no number to allow, builds no
+    /// configuration, and the appliance does not start — the same silence
+    /// 2.0.0-beta.4 was cut to end, arrived at down a second road.
+    func testTheNumberSurvivesAnAccountThatHasADisplayName() {
+        guard case .connected(_, let jid)? = WhatsAppPairing.event(
+            from: #"{"event":"connected","user":{"id":"60123821767@s.whatsapp.net","name":"Dhillon"}}"#
+        ) else { return XCTFail("pairing did not report as connected") }
+        XCTAssertEqual(
+            WhatsAppLinkSheet.number(inLinkedAccount: jid), "60123821767",
+            "the owner's number is unrecoverable, so nothing goes on the allowlist"
+        )
+    }
+
+    /// The name is what the owner calls the account; with none, the JID is a
+    /// fine label as well as the identity.
     func testWithNoNameTheAccountIsStillNamed() {
         XCTAssertEqual(
             WhatsAppPairing.event(from: #"{"event":"connected","user":{"id":"60123821767@s.whatsapp.net"}}"#),
-            .connected(user: "60123821767@s.whatsapp.net")
+            .connected(user: "60123821767@s.whatsapp.net", jid: "60123821767@s.whatsapp.net")
         )
     }
 

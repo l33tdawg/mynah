@@ -45,7 +45,7 @@ struct WhatsAppLinkSheet: View {
 
             HStack {
                 Spacer()
-                if case .linked(let user) = session?.phase {
+                if case .linked(_, let jid) = session?.phase {
                     MynahButton("Done", kind: .primary) {
                         // **The account that was actually linked, recorded
                         // here.**
@@ -59,11 +59,19 @@ struct WhatsAppLinkSheet: View {
                         // by the bridge's own allowlist on every message he
                         // sends. Nothing on any screen says why.
                         //
-                        // The JID is in the `connected` event we already have.
-                        // Written only when it parses to digits: `user` may be a
-                        // display name the owner chose, and a name is not an
-                        // identity.
-                        if let digits = Self.number(inLinkedAccount: user) {
+                        // **`jid`, not the label.** This read the same string
+                        // the line above shows, which is the push name whenever
+                        // the owner has set one — so `number(inLinkedAccount:)`
+                        // correctly refused to read a number out of "Dhillon"
+                        // and stored nothing. Whether the appliance could answer
+                        // WhatsApp then came down to whether they had ever set a
+                        // display name.
+                        //
+                        // Invisible on a Mac with Signal linked, because the
+                        // allowlist falls back to that number. On a WhatsApp-only
+                        // Mac there is no fallback, so it is the difference
+                        // between an appliance that starts and one that does not.
+                        if let digits = Self.number(inLinkedAccount: jid) {
                             ChannelSelectionStore.saveWhatsAppNumbers([digits])
                         }
                         onLinked()
@@ -98,17 +106,12 @@ struct WhatsAppLinkSheet: View {
 
     /// The phone number out of what the bridge called the linked account.
     ///
-    /// `connected` carries either a push name or a JID; only the JID identifies
-    /// anybody. Returns nil for a name, so a wrong allowlist is never written
-    /// from one — an empty allowlist falls back to the Signal number, which is
-    /// the old behaviour and right for the common case where they are the same
-    /// phone.
+    /// One parser, shared with the session-file fallback that repairs installs
+    /// where this was never written — see `WhatsAppPairing.linkedNumber`. Two
+    /// copies of "which digits in a JID are the account" is how one of them ends
+    /// up including the device id.
     static func number(inLinkedAccount account: String?) -> String? {
-        guard let account, let at = account.firstIndex(of: "@") else { return nil }
-        // `60123821767:12@s.whatsapp.net` — Baileys appends a device id.
-        let user = account[account.startIndex..<at].split(separator: ":").first.map(String.init) ?? ""
-        let digits = user.filter(\.isNumber)
-        return digits.count >= 7 ? digits : nil
+        WhatsAppPairing.number(inJID: account)
     }
 
     @ViewBuilder
@@ -132,7 +135,7 @@ struct WhatsAppLinkSheet: View {
     @ViewBuilder
     private var status: some View {
         switch session?.phase {
-        case .linked(let user):
+        case .linked(let user, _):
             StatusLine(
                 user.map { "Linked to \($0). Mynah answers the thread you send yourself." }
                     ?? "Linked. Mynah answers the thread you send yourself.",

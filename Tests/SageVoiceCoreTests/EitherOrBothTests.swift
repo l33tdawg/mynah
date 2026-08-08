@@ -68,6 +68,18 @@ final class EitherOrBothTests: XCTestCase {
         return bundle
     }
 
+    /// A session directory that is not there.
+    ///
+    /// **Named at every `current()` call in this file, deliberately.** The
+    /// WhatsApp allowlist now falls back to the session on disk, and the default
+    /// path is the real one — so a test that omitted this read the developer's
+    /// own paired WhatsApp account and passed or failed by whether the Mac
+    /// running it happened to have WhatsApp linked. Two of these did exactly
+    /// that on the first run.
+    private var neverPaired: URL {
+        scratch.appendingPathComponent("never-paired", isDirectory: true)
+    }
+
     private func executable(_ name: String) throws -> URL {
         let url = scratch.appendingPathComponent(name)
         try Data(name.utf8).write(to: url)
@@ -86,7 +98,8 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleCarryingWhatsApp(),
             defaults: defaults,
             linkedNumber: { nil },
-            signalCLI: { nil }
+            signalCLI: { nil },
+            pairedSession: neverPaired
         )
 
         let made = try XCTUnwrap(
@@ -110,7 +123,8 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleCarryingWhatsApp(),
             defaults: defaults,
             linkedNumber: { nil },
-            signalCLI: { nil }
+            signalCLI: { nil },
+            pairedSession: neverPaired
         ))
         XCTAssertEqual(made.ownerNumber, "+60123821767")
     }
@@ -126,7 +140,8 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleCarryingWhatsApp(),
             defaults: defaults,
             linkedNumber: { nil },
-            signalCLI: { nil }
+            signalCLI: { nil },
+            pairedSession: neverPaired
         ))
         XCTAssertEqual(
             made.channels, .whatsAppOnly,
@@ -144,7 +159,8 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleWithoutWhatsApp(),
             defaults: defaults,
             linkedNumber: { "+60123821767" },
-            signalCLI: { cli }
+            signalCLI: { cli },
+            pairedSession: neverPaired
         ))
         XCTAssertEqual(made.channels, .signalOnly)
         XCTAssertEqual(made.account, "+60123821767")
@@ -181,7 +197,8 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleWithoutWhatsApp(),
             defaults: defaults,
             linkedNumber: { nil },
-            signalCLI: { nil }
+            signalCLI: { nil },
+            pairedSession: neverPaired
         ))
     }
 
@@ -195,8 +212,103 @@ final class EitherOrBothTests: XCTestCase {
             appBundle: try bundleCarryingWhatsApp(),
             defaults: defaults,
             linkedNumber: { nil },
-            signalCLI: { nil }
+            signalCLI: { nil },
+            pairedSession: neverPaired
         ))
+    }
+
+    // MARK: - Repairing an install that pairing never finished recording
+
+    /// Writes the part of a Baileys session that matters here.
+    private func pairedSession(jid: String) throws -> URL {
+        let session = scratch.appendingPathComponent("session", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let creds: [String: Any] = ["me": ["id": jid, "name": "Dhillon"], "registered": true]
+        try JSONSerialization.data(withJSONObject: creds)
+            .write(to: session.appendingPathComponent("creds.json"))
+        return session
+    }
+
+    /// **The one that makes an affected Mac fix itself on launch.**
+    ///
+    /// Up to 2.0.0-beta.4 the pairing sheet read the owner's number out of a
+    /// field carrying their display name whenever they had set one, so it was
+    /// frequently never stored. On a WhatsApp-only Mac that leaves no number to
+    /// allow, no configuration, and no appliance — and the Link button that
+    /// would repair it is hidden precisely because the Mac *is* paired, so the
+    /// owner has to unlink first to get back to a working state.
+    ///
+    /// `creds.json` has held the JID all along.
+    func testTheNumberIsRecoveredFromASessionPairingNeverRecorded() throws {
+        let session = try pairedSession(jid: "60123821767:12@s.whatsapp.net")
+
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                defaults, signalAccount: nil, pairedSession: session
+            ),
+            ["60123821767"],
+            "a paired Mac with no recorded number stays unable to answer anybody"
+        )
+    }
+
+    /// The account this Mac is signed in as beats the assumption that WhatsApp
+    /// and Signal are the same phone — which is usually true, and is why it is
+    /// still the last resort rather than the first.
+    func testThePairedAccountOutranksTheSignalGuess() throws {
+        let session = try pairedSession(jid: "60999888777@s.whatsapp.net")
+
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                defaults, signalAccount: "+60123821767", pairedSession: session
+            ),
+            ["60999888777"]
+        )
+    }
+
+    /// What the owner set explicitly is still what wins. The session is a
+    /// repair, not an override.
+    func testAnExplicitlyRecordedNumberIsNotOverriddenByTheSession() throws {
+        let session = try pairedSession(jid: "60999888777@s.whatsapp.net")
+        ChannelSelectionStore.saveWhatsAppNumbers(["60123821767"], to: defaults)
+
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                defaults, signalAccount: nil, pairedSession: session
+            ),
+            ["60123821767"]
+        )
+    }
+
+    /// `lid` sits beside `id` in creds.json and carries no phone number, so
+    /// reading the wrong one produces an allowlist entry that can never match —
+    /// a bridge that runs, looks healthy, and answers nobody.
+    func testTheOpaqueAccountIdIsNotMistakenForANumber() throws {
+        let session = scratch.appendingPathComponent("lid-session", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let creds: [String: Any] = ["me": ["lid": "161228928336031@lid", "name": "Dhillon"]]
+        try JSONSerialization.data(withJSONObject: creds)
+            .write(to: session.appendingPathComponent("creds.json"))
+
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                defaults, signalAccount: nil, pairedSession: session
+            ),
+            [],
+            "an identifier that is not a phone number went on the allowlist"
+        )
+    }
+
+    /// No session at all is the ordinary state before pairing, and must not
+    /// throw or invent anything.
+    func testAnAbsentSessionSaysNothing() {
+        XCTAssertEqual(
+            ChannelSelectionStore.whatsAppNumbers(
+                defaults,
+                signalAccount: nil,
+                pairedSession: scratch.appendingPathComponent("never-paired", isDirectory: true)
+            ),
+            []
+        )
     }
 
     // MARK: - What the daemon is started with
