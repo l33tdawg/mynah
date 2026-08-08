@@ -106,6 +106,15 @@ public final class CallActionQueue: @unchecked Sendable {
         public let asked: String
         public let queued: Date
         public var state: State
+        /// Written from the caller's sentence before the model ran, rather than
+        /// by the model itself. See `enqueueFromWhatWasHeard`.
+        ///
+        /// **Optional, and that is the back-compatibility story.** The
+        /// synthesised decoder throws on a missing key for a non-optional
+        /// property, and this file is durable: an entry queued by 2.0.0-beta.7
+        /// and not yet drained must still decode after an update. `nil` and
+        /// `false` mean the same thing here — the model wrote it.
+        public var preemptive: Bool?
 
         public init(
             key: String,
@@ -115,8 +124,10 @@ public final class CallActionQueue: @unchecked Sendable {
             who: String?,
             asked: String,
             queued: Date,
-            state: State = .queued
+            state: State = .queued,
+            preemptive: Bool? = nil
         ) {
+            self.preemptive = preemptive
             self.key = key
             self.generation = generation
             self.kind = kind
@@ -206,6 +217,23 @@ public final class CallActionQueue: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let live = liveCall, generation.call == live else { return nil }
+        // **The model got there, so what was written for it goes.**
+        //
+        // `enqueueFromWhatWasHeard` writes a fail-safe entry off the caller's
+        // own sentence the moment it is recognised, because the turn that would
+        // write a proper one can be cancelled by the hang-up that follows it.
+        // When the model does reach the tool, its entry is strictly better —
+        // it names the file or the agent rather than quoting a sentence — so
+        // the placeholder is dropped rather than performed alongside it.
+        //
+        // Scoped to this turn, not this call: two separate requests on one call
+        // are two entries, and only the one the model has now answered is
+        // superseded.
+        entries.removeAll {
+            $0.preemptive == true
+                && $0.state == .queued
+                && $0.generation == generation
+        }
         let entry = Entry(
             key: AgentSendJournal.newKey(),
             generation: generation,
@@ -214,6 +242,51 @@ public final class CallActionQueue: @unchecked Sendable {
             who: who,
             asked: asked,
             queued: now
+        )
+        entries.append(entry)
+        persistLocked()
+        return entry
+    }
+
+    /// **What the caller asked for, written down before anything is understood.**
+    ///
+    /// The turn that would queue this properly runs a model, and the caller can
+    /// hang up while it is still thinking — which cancels it. Measured on the
+    /// owner's own call on 8 August 2026: he asked for a file after the call,
+    /// heard "On it — let me pull that together", and rang off five seconds
+    /// later, six seconds into a turn that never emitted its tool call. Nothing
+    /// was queued and nothing ever would be.
+    ///
+    /// So the sentence is recorded first and refined later. `kind` is
+    /// `.instruction` because that is the honest reading of an unparsed
+    /// sentence: the drain runs it through the ordinary brain, which is the
+    /// same path a queued "do X afterwards" already takes.
+    ///
+    /// Returns nil when there is nothing to do — no live call, or the sentence
+    /// does not ask for anything afterwards — so the caller can log the
+    /// difference between "not asked" and "asked and recorded".
+    public func enqueueFromWhatWasHeard(
+        generation: Generation,
+        heard: String,
+        now: Date = Date()
+    ) -> Entry? {
+        guard AfterTheCall.asksForSomethingAfterwards(heard) else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let live = liveCall, generation.call == live else { return nil }
+        // One per turn. A turn is one heard sentence, so a second call here for
+        // the same generation is a retry rather than a second request.
+        guard !entries.contains(where: { $0.preemptive == true && $0.generation == generation })
+        else { return nil }
+        let entry = Entry(
+            key: AgentSendJournal.newKey(),
+            generation: generation,
+            kind: .instruction,
+            what: heard,
+            who: nil,
+            asked: heard,
+            queued: now,
+            preemptive: true
         )
         entries.append(entry)
         persistLocked()

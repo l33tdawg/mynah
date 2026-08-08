@@ -1148,6 +1148,30 @@ public actor CallTurnServer {
         lastHeard = Date()
         transcript.heard(heard)
 
+            // **Written down before it is understood, because understanding it
+            // runs a model the caller can hang up on.**
+            //
+            // The turn below is what queues an after-the-call request properly,
+            // and it is cancelled by the hang-up that so often follows the
+            // request — people ring off once they have said the thing they rang
+            // to say. Measured on the owner's call, 8 August 2026: he asked for
+            // a file after the call, heard "On it — let me pull that together",
+            // and hung up five seconds later, six seconds into a turn that had
+            // not yet emitted its tool call. Nothing was queued; the promise
+            // was the only thing that survived.
+            //
+            // His ruling on the fix: *"queue on hearing for sure"*. So the
+            // sentence goes in now and the model's own call replaces it if it
+            // gets there — see `CallActionQueue.enqueue`, which drops what was
+            // written on its behalf for the same turn.
+            if let queue = afterTheCallQueue, let call = callID {
+                let generation = CallActionQueue.Generation(call: call, turn: turnNumber)
+                if queue.enqueueFromWhatWasHeard(generation: generation, heard: heard) != nil {
+                    log("[call] noted an after-the-call request from what was said, "
+                        + "in case this turn does not finish")
+                }
+            }
+
             // Say something before thinking, not after.
             //
             // The silence while the model works is the whole of what "it feels

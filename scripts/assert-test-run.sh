@@ -102,10 +102,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2304   (2.0.0-beta.7, the beta.1-6 sweep; 2298 at beta.6,
-#                         2294 at beta.5, 2111 at 1.9.0)
-#   without Kokoro  2266   (2304 - 38)
-#   floor           2292   (12 under measured, 26 above the failure it must catch)
+#   measured      2312   (2.0.0-beta.8, queue on hearing; 2304 at beta.7,
+#                         2298 at beta.6, 2111 at 1.9.0)
+#   without Kokoro  2274   (2312 - 38)
+#   floor           2292   (20 under measured, 18 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -241,6 +241,21 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # had ten tests of headroom left, and the next release to add eleven would have
 # gone red on a green suite. CI's pair moves with it — 2238 to 2254 — because
 # raising one alone is what turned the runner red the first time.
+#
+# 2304 to 2312 is eight for the first thing the after-the-call queue was ever
+# asked to do on a real call, which it did not do. The owner asked for a file
+# after the call at 18:11:56, heard "On it — let me pull that together" at
+# 18:11:57, and hung up at 18:12:02 — six seconds into a turn that had not yet
+# emitted its tool call, and hang-up cancels the turn. Nothing queued, nothing on
+# disk, and a promise made out loud that nothing anywhere revisits.
+#
+# The design had that written down as a known gap and called it an edge case. One
+# real call showed it is the ordinary one: people ring off once they have said
+# the thing they rang to say. The request is now written from the caller's own
+# sentence the moment it is recognised, before any model runs, and the model's
+# own tool call replaces it when it gets there. Three mutations: the fail-safe
+# never writing (5 red), the replacement removed (2), the replacement scoped to
+# the call rather than the turn (1).
 #
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
