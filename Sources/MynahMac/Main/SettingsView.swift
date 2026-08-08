@@ -1388,6 +1388,13 @@ struct SettingsView: View {
                         Task {
                             await conversation.reconnect()
                             await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
+                            // The call voice is not fetched on an on-device
+                            // brain, so moving to a cloud one has to ask for it
+                            // here. Without this the owner switches, calls, and
+                            // hears the macOS robot until the next launch —
+                            // which is the complaint that made this download
+                            // every-launch in the first place.
+                            await app.installCallVoiceIfNeeded()
                         }
                     }
                 }
@@ -1422,6 +1429,9 @@ struct SettingsView: View {
                     Task {
                         await conversation.reconnect()
                         await app.reconcileAnsweringService(becauseTheOwnerAsked: true)
+                        // See the brain picker above: a cloud brain needs the
+                        // voice that an on-device one deliberately never fetched.
+                        await app.installCallVoiceIfNeeded()
                     }
                 }
             }

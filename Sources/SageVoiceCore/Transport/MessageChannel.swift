@@ -404,6 +404,17 @@ public struct ChannelSelection: Equatable, Hashable, Sendable, Codable {
     public var isEmpty: Bool { enabled.isEmpty }
     public func includes(_ kind: ChannelKind) -> Bool { enabled.contains(kind) }
 
+    /// This selection plus one more channel.
+    ///
+    /// **Adding rather than replacing, and that is the whole reason it exists.**
+    /// The setup screen offers Signal and WhatsApp side by side, so somebody who
+    /// links one and then the other must not have the first switched off by the
+    /// second. Writing `.whatsAppOnly` at that call site is the obvious thing
+    /// and it silently unlinks a channel the owner just finished setting up.
+    public func adding(_ kind: ChannelKind) -> ChannelSelection {
+        ChannelSelection(enabled.union([kind]))
+    }
+
     /// In front of the owner. "Signal and WhatsApp", not "signal, whatsapp".
     public var summary: String {
         let names = ChannelKind.allCases

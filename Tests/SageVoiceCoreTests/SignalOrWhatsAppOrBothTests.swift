@@ -525,3 +525,43 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
         XCTAssertTrue(WhatsAppPairing.isPaired(sessionDirectory: directory))
     }
 }
+
+// MARK: - Linking one channel must not unlink the other
+
+/// **The setup screen offers both, so it can add and must never replace.**
+///
+/// Reported against 2.0.0-beta.2: onboarding's Ready screen offered "Link my
+/// phone" and nothing else, so testers linked Signal because it was the only
+/// button on the screen and found WhatsApp — the whole of 2.0 — in Settings or
+/// not at all. Both are offered there now.
+///
+/// Which creates the hazard these pin. The Ready screen has no channel picker,
+/// and the stored default is Signal-only, so pairing WhatsApp there has to turn
+/// the channel on or the owner scans a code, sees "Linked", and is answered by
+/// nothing. The obvious way to write that is `.whatsAppOnly`, and it would
+/// silently switch off the Signal somebody linked on the same screen a minute
+/// earlier.
+extension SignalOrWhatsAppOrBothTests {
+
+    func testLinkingWhatsAppAfterSignalKeepsBoth() {
+        XCTAssertEqual(ChannelSelection.signalOnly.adding(.whatsapp), .both)
+    }
+
+    func testLinkingSignalAfterWhatsAppKeepsBoth() {
+        XCTAssertEqual(ChannelSelection.whatsAppOnly.adding(.signal), .both)
+    }
+
+    /// Idempotent, because the Ready screen cannot know whether this is a first
+    /// pairing or a re-pairing and must not care.
+    func testAddingAChannelAlreadyOnChangesNothing() {
+        XCTAssertEqual(ChannelSelection.both.adding(.whatsapp), .both)
+        XCTAssertEqual(ChannelSelection.whatsAppOnly.adding(.whatsapp), .whatsAppOnly)
+    }
+
+    /// The state a brand-new install is in before anything is linked. Pairing
+    /// from setup has to produce a selection that names exactly what was paired.
+    func testAddingToNothingSelectedYieldsJustThatChannel() {
+        XCTAssertEqual(ChannelSelection.none.adding(.whatsapp), .whatsAppOnly)
+        XCTAssertFalse(ChannelSelection.none.adding(.whatsapp).includes(.signal))
+    }
+}

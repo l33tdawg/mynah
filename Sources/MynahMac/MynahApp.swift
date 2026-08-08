@@ -156,13 +156,54 @@ final class AppModel {
     /// voice weeks later. 354 MB over a network that can drop is a thing that
     /// *will* fail sometimes; the requirement is that it says so and tries
     /// again next launch, both of which this now does.
+    /// **Not on a brain that cannot take a call, and that is one gate doing
+    /// three jobs.**
+    ///
+    /// `//call` is refused outright on an on-device brain — the owner's ruling,
+    /// enforced by `BrainCapabilities.holdsARealtimeCall` and stated in Settings
+    /// by `callReadinessRow`. Everything downstream of that decision ran anyway,
+    /// so an owner who will never place a call paid for one three times:
+    /// 337 MB fetched over their connection, 337 MB kept on disk for ever, and —
+    /// measured on the live daemon on 8 August — a 376 MB physical footprint,
+    /// almost all of it this model, at every start. On the one machine least
+    /// able to spare it, since it is already hosting an LLM.
+    ///
+    /// Gating here rather than at the three places that spend it is what makes
+    /// it one change: with the assets absent `KokoroSpeechSynthesizer.ifReady`
+    /// returns nil and `sage-voiced` already falls back, logging
+    /// `[call] voice: say (kokoro model not installed)`. The bandwidth, the disk
+    /// and the memory all go away by not fetching.
+    ///
+    /// **Switching to a cloud brain must still just work, and the comment at the
+    /// call site is the warning.** The trigger is ungated and every-launch on
+    /// purpose: it used to live only inside the Signal link flow, so anyone who
+    /// linked earlier never got the assets and heard the macOS robot voice —
+    /// *"i am reaching 'robot voice' instead of the nice sounding one and i am
+    /// already on deepseekv4 api"*. A tier gate re-arms exactly that for anyone
+    /// moving local → hosted, so the brain picker calls this again on the way
+    /// out, and the every-launch trigger remains the backstop. Until the fetch
+    /// finishes a call still connects, in the built-in voice; a robot is a
+    /// complaint, silence is a fault.
+    /// - Parameter brainKeepsWordsOnDevice: read at the call site rather than
+    ///   here, so a test can drive both tiers without writing to the owner's own
+    ///   defaults. `nil` — no choice recorded yet — fetches, which is what
+    ///   `callReadinessRow` also assumes: an unset choice is not evidence of a
+    ///   local model.
     /// - Parameter install: injected so a test can exercise the reporting
     ///   without starting a 354 MB download. Not optional politeness: this
     ///   codebase has already had `swift test` reach the real machine and
     ///   uninstall the owner's phone bridge, twice in one afternoon.
     func installCallVoiceIfNeeded(
+        brainKeepsWordsOnDevice: Bool? = BrainChoiceStore.current()?.keepsWordsOnDevice,
         install: @Sendable () async -> KokoroAssets.Outcome = { await KokoroAssets.installIfNeeded() }
     ) async {
+        if brainKeepsWordsOnDevice == true {
+            // Said once at debug, not at notice: this is the ordinary state of
+            // a local-brain install, and a line every launch about a thing
+            // deliberately not happening is noise that trains people to skim.
+            Self.log.debug("not fetching the call voice: //call is refused on an on-device brain")
+            return
+        }
         let outcome = await install()
         switch outcome {
         case .alreadyInstalled:
