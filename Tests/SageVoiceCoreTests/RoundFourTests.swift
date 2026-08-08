@@ -211,6 +211,80 @@ final class RoundFourTests: XCTestCase {
         XCTAssertEqual(ledger.rebaselines, 1)
     }
 
+    /// **A recreation whose first arrival is a message the allowlist refuses.**
+    ///
+    /// `WhatsAppClient` settles directly — without ever delivering — for a
+    /// message a stranger sent or one that will not parse. Until 2.0.0-beta.7
+    /// the epoch guard in `settle` fired whenever the epochs merely *differed*,
+    /// so a settle carrying a spool we had never seen was dropped before
+    /// `observe` could look at it, and the ledger went on holding a numbering
+    /// that named nothing.
+    ///
+    /// What that costs is not one message: nothing is acknowledged, the spool
+    /// never compacts, and it fills to its bound and refuses inbound WhatsApp
+    /// for good — reached whenever the first thing to arrive after a recreation
+    /// came from somebody not on the allowlist, which on a phone is most of the
+    /// time.
+    func testASpoolRecreatedUnderARefusedMessageIsStillNoticed() {
+        var ledger = WhatsAppAcknowledgementLedger()
+        ledger.deliver(56, epoch: "first")
+        ledger.settle(56, epoch: "first")
+        XCTAssertEqual(ledger.watermark, 56)
+
+        // A stranger messages first after the spool is recreated: settled, never
+        // delivered.
+        ledger.settle(1, epoch: "second")
+
+        XCTAssertEqual(ledger.rebaselines, 1, "the recreation went unnoticed")
+        XCTAssertEqual(
+            ledger.watermark, 0,
+            "the watermark is still stranded above everything the new spool will emit"
+        )
+
+        // And the next real message baselines it properly.
+        ledger.deliver(2, epoch: "second")
+        ledger.settle(2, epoch: "second")
+        XCTAssertEqual(ledger.watermark, 2)
+    }
+
+    /// **The sequence is still dropped, only the epoch is taken.** A settle
+    /// names a message in a numbering we have no baseline for; letting it set
+    /// one is the loss this type exists to prevent, and adopting the epoch does
+    /// not change that.
+    func testARefusedMessageFromANewSpoolDoesNotSetTheBaseline() {
+        var ledger = WhatsAppAcknowledgementLedger()
+        ledger.deliver(56, epoch: "first")
+        ledger.settle(56, epoch: "first")
+
+        ledger.settle(900, epoch: "second")
+
+        XCTAssertEqual(
+            ledger.watermark, 0,
+            "a settle from an unseen spool baselined the watermark at its own sequence"
+        )
+    }
+
+    /// **And a stale one is still dropped, which is the half that already
+    /// worked.** A turn in flight when the spool was recreated comes back
+    /// carrying the dead numbering, long after `deliver` adopted the new one.
+    /// Re-baselining on that would undo a healthy ledger and re-answer whatever
+    /// the new spool had already handled.
+    func testALateSettleFromTheSpoolWeLeftIsStillIgnored() {
+        var ledger = WhatsAppAcknowledgementLedger()
+        ledger.deliver(56, epoch: "first")
+        ledger.settle(56, epoch: "first")
+        ledger.deliver(1, epoch: "second")
+        ledger.settle(1, epoch: "second")
+        XCTAssertEqual(ledger.watermark, 1)
+        XCTAssertEqual(ledger.rebaselines, 1)
+
+        // The turn that was in flight across the recreation finally answers.
+        ledger.settle(57, epoch: "first")
+
+        XCTAssertEqual(ledger.rebaselines, 1, "a spool we had already left was adopted again")
+        XCTAssertEqual(ledger.watermark, 1, "the healthy watermark was reset by a dead spool")
+    }
+
     /// **The inference that was rejected, pinned so nobody adds it back.**
     ///
     /// A sequence below the watermark is the ORDINARY shape of a replay after an

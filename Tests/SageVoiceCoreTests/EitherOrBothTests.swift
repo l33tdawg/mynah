@@ -181,7 +181,8 @@ final class EitherOrBothTests: XCTestCase {
                 appBundle: try bundleCarryingWhatsApp(),
                 defaults: defaults,
                 linkedNumber: { nil },
-                signalCLI: { nil }
+                signalCLI: { nil },
+                pairedSession: neverPaired
             ),
             "an appliance with no runnable channel is not a configuration"
         )

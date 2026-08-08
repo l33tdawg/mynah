@@ -78,7 +78,10 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   const ackPath = path.join(dir, ACK_FILE);
   const epochPath = path.join(dir, EPOCH_FILE);
 
-  const epoch = readOrMintEpoch(epochPath, warn);
+  // Whether this directory already claimed an identity before we opened it.
+  // Read before minting, because `readOrMintEpoch` creates the file.
+  const epochPredatesThisOpen = existsSync(epochPath);
+  let epoch = readOrMintEpoch(epochPath, warn);
 
   let ackedThrough = readAck(ackPath, warn);
   // Acknowledgements refused as out of range, latched so a consumer repeating a
@@ -134,6 +137,45 @@ export function createEventSpool({ dir, maxUnacked = DEFAULT_MAX_UNACKED, warn =
   // does not stop a stale ack meaning a message that has not arrived yet, which
   // is a separate hole and is closed by the bound in `ack`.
   let nextSeq = Math.max(ackedThrough, ...records.map((r) => r.seq), 0) + 1;
+
+  // **An epoch names a run of NUMBERING, not a directory — and until 2.0.0-beta.7
+  // it named the directory, which is not the same thing.**
+  //
+  // The repair both `readAck` throws print is `mv ack ack.broken`. In steady
+  // state `compact()` has already unlinked the events file, so after that move
+  // the directory holds nothing but `epoch`: `ackedThrough` reads 0, there are
+  // no records to resume past, and numbering restarts at 1 — under a byte-
+  // identical epoch. The consumer therefore sees sequence 1 from what it
+  // believes is the same spool it has been talking to all along, keeps a
+  // watermark stranded far above it, and refuses every ack from then on. The
+  // spool never compacts, `event_socket` replays its whole backlog on each
+  // reconnect, and the owner's contacts are answered again each time.
+  //
+  // Two comments asserted this case was covered and it was not — one here, one
+  // in `WhatsAppAcknowledgementLedger.observe` ("Reachable by following the
+  // repair readAck prints"). It was reachable, and following it was what broke.
+  //
+  // So: numbering that starts at 1 in a directory that already claimed an
+  // identity is a new run, and says so. A genuinely fresh spool mints its epoch
+  // above and does not come through here.
+  if (nextSeq === 1 && epochPredatesThisOpen) {
+    const renumbered = randomBytes(8).toString('hex');
+    try {
+      writeAtomic(epochPath, `${renumbered}\n`);
+      epoch = renumbered;
+      warn(`spool: numbering restarted at 1 in ${dir}, which already had an epoch — the ` +
+        `acknowledgement mark was moved aside or lost. Minted a new epoch so the consumer ` +
+        `rebuilds its mark instead of stranding it above sequences that no longer exist.`);
+    } catch (error) {
+      // In memory only, like the mint above: consistent within this run, and
+      // the next start tries again. Better than keeping an identity we know is
+      // wrong.
+      epoch = renumbered;
+      warn(`spool: numbering restarted at 1 in ${dir} but the new epoch could not be written ` +
+        `(${error.message}). The consumer will re-baseline once per restart until this ` +
+        `directory is writable.`);
+    }
+  }
 
   /**
    * Writes an event to disk and returns its sequence number. Throws if the

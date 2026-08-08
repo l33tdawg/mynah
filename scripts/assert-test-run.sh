@@ -102,10 +102,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2298   (2.0.0-beta.6, the opening; 2294 at 2.0.0-beta.5,
-#                         2111 at 1.9.0)
-#   without Kokoro  2260   (2298 - 38)
-#   floor           2276   (22 under measured, 16 above the failure it must catch)
+#   measured      2304   (2.0.0-beta.7, the beta.1-6 sweep; 2298 at beta.6,
+#                         2294 at beta.5, 2111 at 1.9.0)
+#   without Kokoro  2266   (2304 - 38)
+#   floor           2292   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -222,8 +222,28 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # spends: the floor now sits 22 under, leaving 16 tests before the rot check
 # fires. The next release that adds more than sixteen has to raise it.
 #
+# 2298 to 2304 is a fourteen-agent adversarial sweep of the whole 2.0 beta line,
+# run because two earlier audits had passed this branch and the two worst defects
+# in it were then found by the owner using the product. Thirty findings raised,
+# fifteen survived refutation.
+#
+# The six tests are for the two that could lose something. Three cover a call
+# that could not have worked at all on an Anthropic brain: beta.6 started a
+# call's history at a single assistant turn, and Anthropic rejects a request
+# whose first non-system message is not the user's. Nothing normalised it and
+# there is no retry, so every //call an Anthropic owner made would have 400'd —
+# shipped four hours earlier and caught by nothing in the suite. Three cover the
+# acknowledgement ledger's epoch guard, which fired in both directions and so
+# noticed a recreated spool only through `deliver`, while `WhatsAppClient`
+# settles directly for anything the allowlist refuses.
+#
+# The floor moves 2276 to 2292 here rather than waiting to be forced: at 2304 it
+# had ten tests of headroom left, and the next release to add eleven would have
+# gone red on a green suite. CI's pair moves with it — 2238 to 2254 — because
+# raising one alone is what turned the runner red the first time.
+#
 # The bridge's
-# own 86 JavaScript tests are NOT in this number and never will be: they run
+# own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
 # own gate with its own per-file check. Two suites in two languages, and this
 # one counts only what SwiftPM executes — a floor that tried to cover both would
@@ -261,7 +281,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2276}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2292}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

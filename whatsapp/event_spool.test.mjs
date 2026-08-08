@@ -589,3 +589,60 @@ test('the refusal no longer promises something the consumer cannot do', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The repair the errors print must not strand the consumer.
+//
+// Both `readAck` throws end with `mv ack ack.broken`, and until 2.0.0-beta.7
+// following it was worse than the fault it repaired: in steady state `compact`
+// has already unlinked the events file, so the move leaves nothing but `epoch`.
+// Numbering restarted at 1 under a byte-identical epoch, so the consumer went on
+// believing it was the same spool, kept a watermark far above every sequence
+// that would ever be issued again, and refused every acknowledgement from then
+// on — replaying its whole backlog on each reconnect and re-answering the
+// owner's contacts each time.
+test('the epoch changes when the repair restarts numbering', () => {
+  const dir = scratch();
+  try {
+    const before = createEventSpool({ dir });
+    const seq = before.append(message('did the ferry get booked'));
+    before.ack(seq);
+    const oldEpoch = readFileSync(path.join(dir, 'epoch'), 'utf8').trim();
+
+    // The repair, exactly as the error message prints it.
+    rmSync(path.join(dir, 'ack'), { force: true });
+
+    const after = createEventSpool({ dir });
+    const renumbered = after.append(message('and the hotel'));
+
+    assert.equal(renumbered, 1, 'numbering did not restart, so this test is not about the bug');
+    const newEpoch = readFileSync(path.join(dir, 'epoch'), 'utf8').trim();
+    assert.notEqual(
+      newEpoch, oldEpoch,
+      'the spool kept its identity while restarting its numbering — the consumer cannot tell'
+    );
+    // And the spool reports the new one, which is what `event_socket` stamps
+    // onto every event it writes — the only copy the consumer ever sees.
+    assert.equal(after.epoch, newEpoch, 'events would still be stamped with the stale epoch');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// And an ordinary restart keeps it, which is the whole point of the epoch: a
+// bridge that stops and starts over the same directory is the common case and
+// must NOT make the consumer rebuild its mark.
+test('an ordinary restart keeps the epoch', () => {
+  const dir = scratch();
+  try {
+    const before = createEventSpool({ dir });
+    before.append(message('did the ferry get booked'));
+    const oldEpoch = readFileSync(path.join(dir, 'epoch'), 'utf8').trim();
+
+    const after = createEventSpool({ dir });
+
+    assert.equal(readFileSync(path.join(dir, 'epoch'), 'utf8').trim(), oldEpoch);
+    assert.equal(after.pending().length, 1, 'the unacknowledged event did not survive');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

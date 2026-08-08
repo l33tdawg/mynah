@@ -639,6 +639,15 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
             // where `whatsAppData` is built.
             _ = await bootout(Self.whatsAppLabel)
             try? fileManager.removeItem(at: whatsAppURL)
+            // **And the socket with it, which the Signal branch above has always
+            // done and this one did not.** `bridge.js` never unlinks its events
+            // socket — `createEventSocket`'s `stop()` has no call site and there
+            // is no exit handler — so a bridge that is turned off leaves the file
+            // behind. Settings reads that file's existence as "Connected", so
+            // the row went on claiming a live WhatsApp over a channel the owner
+            // had just switched off.
+            try? fileManager.removeItem(atPath: configuration.whatsApp?.socketPath
+                ?? WhatsAppClient.defaultSocketPath())
         }
 
         // bootout returns non-zero on a first install; that only means there

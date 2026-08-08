@@ -28,6 +28,13 @@ struct RootView: View {
                     // that answers their phone.
                     if let option = setup.selectedOption {
                         BrainSelectionStore.save(option)
+                        // **Both Settings pickers do this and the setup flow did
+                        // not**, so finishing setup on a hosted brain left the
+                        // call voice unfetched until the next launch — and
+                        // `//call` in between had nothing to speak with. Third
+                        // writer of this preference, first one without the
+                        // follow-up.
+                        Task { await app.installCallVoiceIfNeeded() }
                     }
                     app.completeSetup()
                 }

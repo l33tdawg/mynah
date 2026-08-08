@@ -37,12 +37,22 @@ enum ChannelSelectionStore {
 
     /// The WhatsApp numbers the appliance answers, in WhatsApp's own form.
     ///
-    /// Derived from the linked Signal number by default: it is the same phone in
-    /// the overwhelming majority of cases, and asking the owner to type a number
-    /// the app already knows is a setup step that exists only to be got wrong.
-    /// Stored separately the moment they say otherwise — the two accounts do come
-    /// apart, and a derivation with no override is a wrong answer with no way to
-    /// correct it.
+    /// Three sources, in this order: what the owner chose, then the WhatsApp
+    /// account this Mac is actually signed in as, then the linked Signal number
+    /// as a last resort.
+    ///
+    /// **The summary here used to say "derived from the linked Signal number by
+    /// default", and 2.0.0-beta.5 demoted that to the bottom of the list.** The
+    /// Signal number is a guess that the two accounts are the same phone —
+    /// usually right, which is why it stays — while the paired session is not a
+    /// guess at all. Leaving the old sentence at the top of a function whose
+    /// body says the opposite is the same class of untrue comment this branch
+    /// has now shipped six of.
+    ///
+    /// Asking the owner to type a number the app already knows is a setup step
+    /// that exists only to be got wrong, so nothing here is asked for; but a
+    /// derivation with no override is a wrong answer with no way to correct it,
+    /// so an explicit choice always wins.
     ///
     /// Returns `[]` when there is nothing to derive from, which
     /// `WhatsAppServiceConfiguration.inside` reads as "do not install the

@@ -1677,7 +1677,12 @@ public actor VoiceBridgeDaemon {
         // would be reading "here's the budget deck" with nothing attached. The
         // file is still on the Mac, so the sentence names the door.
         let withoutIt = await reply(
-            text + "\n\n(The file wouldn't go through Signal. It's still here on the Mac — "
+            // Named from the recipient rather than assumed, on a path that is
+            // otherwise channel-aware: an owner on WhatsApp being told his file
+            // "wouldn't go through Signal" is being told about a channel he may
+            // not even have linked.
+            text + "\n\n(The file wouldn't go through \(recipient.kind.displayName). "
+                + "It's still here on the Mac — "
                 + "ask me for it again and I'll try once more.)",
             to: recipient,
             allowSpeaking: false, as: .unprompted

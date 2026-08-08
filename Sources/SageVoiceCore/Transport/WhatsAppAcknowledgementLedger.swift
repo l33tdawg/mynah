@@ -40,6 +40,20 @@ struct WhatsAppAcknowledgementLedger: Equatable {
     /// shipped before this existed, and the right thing to degrade to.
     private(set) var epoch: String?
 
+    /// Every epoch this ledger has ever adopted, so a settle can tell a spool
+    /// it has already left from one it has not yet joined.
+    ///
+    /// **Epochs are opaque and cannot be ordered**, which is the whole reason
+    /// this set exists rather than a comparison. `settle` has to answer "is this
+    /// epoch stale or new?", and getting it backwards is expensive in both
+    /// directions: treating a new one as stale strands the watermark, and
+    /// treating a stale one as new re-baselines a healthy ledger and re-answers
+    /// messages already dealt with. Remembering is the only way to be sure.
+    ///
+    /// Unbounded in principle, one entry per spool recreation in practice — a
+    /// number the `rebaselines` counter exists to say should be 0.
+    private var seenEpochs: Set<String> = []
+
     /// How many times the spool has been recreated under us. Diagnostics only:
     /// this should be 0 on a healthy install, and a number that climbs is worth
     /// noticing.
@@ -80,7 +94,28 @@ struct WhatsAppAcknowledgementLedger: Equatable {
         //
         // Dropping it costs nothing: the message it refers to is gone with its
         // spool, and nothing can ever ask about it again.
-        if let epoch, let current = self.epoch, epoch != current { return }
+        // **And a settle from a spool we have NOT seen has to be adopted, which
+        // this used to drop with the same line.** The guard tested only that the
+        // epochs differed, so it fired in both directions — a settle carrying a
+        // *new* epoch returned before `observe` could ever look at it, and the
+        // comment above justified only the stale half.
+        //
+        // That left spool recreation survivable only through `deliver`, and
+        // `deliver` is not on every path: `WhatsAppClient` settles directly for
+        // a message the allowlist refuses or that will not parse. So a
+        // recreation whose first arrival was from a blocked sender left the
+        // ledger holding the old numbering — nothing acknowledged, the spool
+        // never compacting — until an *allowed* message happened along.
+        //
+        // The sequence is still dropped, for the reason above: it names a
+        // message in a numbering we have no baseline for, and letting it set one
+        // is the loss this type exists to prevent. Only the epoch is taken, and
+        // the next `deliver` establishes the baseline properly.
+        if let epoch, let current = self.epoch, epoch != current {
+            guard !seenEpochs.contains(epoch) else { return }
+            adopt(epoch)
+            return
+        }
         observe(sequence, epoch: epoch)
         // **Removed before the guard, and no test can currently tell.** Said
         // plainly because the alternative is a line that reads as a fix.
@@ -136,18 +171,34 @@ struct WhatsAppAcknowledgementLedger: Equatable {
             // to land and the bridge legitimately replaying — so re-baselining
             // on that would re-answer messages already dealt with, every time
             // the socket dropped at the wrong moment.
-            if self.epoch != nil {
-                watermark = 0
-                outstanding.removeAll()
-                settled.removeAll()
-                hasObservedASequence = false
-                rebaselines += 1
-            }
-            self.epoch = epoch
+            adopt(epoch)
         }
         guard !hasObservedASequence else { return }
         hasObservedASequence = true
         watermark = max(watermark, sequence - 1)
+    }
+
+    /// Takes on a spool we have not seen before, forgetting a numbering that no
+    /// longer names anything.
+    ///
+    /// One function because there are now two ways in — `observe` on a delivery
+    /// and `settle` on a message that never became one — and two copies of a
+    /// re-baseline is how the two would come to disagree about what a fresh
+    /// ledger looks like.
+    ///
+    /// The first epoch ever seen is adopted without counting as a recreation:
+    /// there was nothing to recreate, and `rebaselines` is a number somebody
+    /// reads as "how often has this gone wrong".
+    private mutating func adopt(_ epoch: String) {
+        if self.epoch != nil {
+            watermark = 0
+            outstanding.removeAll()
+            settled.removeAll()
+            hasObservedASequence = false
+            rebaselines += 1
+        }
+        self.epoch = epoch
+        seenEpochs.insert(epoch)
     }
 
     /// Diagnostics. `blocking` is the message the watermark is waiting on, which

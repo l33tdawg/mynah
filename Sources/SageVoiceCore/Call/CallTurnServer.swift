@@ -349,9 +349,21 @@ public actor CallTurnServer {
     /// caller would otherwise wait through after saying hello.
     ///
     /// So the opening is built now — greeting and briefing together, through
-    /// the same brain and tools as any other turn, so it can say what is
-    /// actually open rather than something generic. By the time the call
-    /// connects it is a buffer to hand over rather than work to start.
+    /// the same brain and tools as any other turn, so it can carry on the
+    /// conversation the owner was already having rather than say something
+    /// generic. By the time the call connects it is a buffer to hand over
+    /// rather than work to start.
+    ///
+    /// **This used to say "so it can say what is actually open".** That is the
+    /// phrasing 2.0.0-beta.6 removed and `OpeningOnTheThreadTests` now forbids:
+    /// "open" is the word the task list uses for its own rows, and asking for
+    /// what is open is how a call came to be answered by reading the backlog
+    /// out. Left uncorrected it would have talked the next person straight back
+    /// into it.
+    ///
+    /// And it only happens at all when there is a thread to carry on — see
+    /// `buildOpening`, which returns a plain hello without a model call when
+    /// nothing has been said in messages.
     ///
     /// Discarded if the call never happens. That costs one model call the owner
     /// asked for by typing //call, which is the cheapest thing in this exchange.
@@ -1866,10 +1878,27 @@ public actor CallHistory {
     /// first thing he says answers it — "I haven't picked it up yet" needs the
     /// sentence that asked whether he had.
     ///
-    /// Replaces rather than appends, so a call starts on itself. The previous
-    /// call's tail is not lost to the model: `briefingRequest` is handed
-    /// `LastCall.closing` for exactly that, and it says which is which rather
-    /// than leaving two calls to run together as one conversation.
+    /// Replaces rather than appends, so a call starts on itself rather than
+    /// running together with the last one as a single conversation.
+    ///
+    /// **On a briefed call the previous one is not lost — on a plain hello it
+    /// is, and the earlier version of this comment claimed otherwise.** It said
+    /// the tail survives because `briefingRequest` is handed `LastCall.closing`.
+    /// That is true only when a briefing runs. `buildOpening` returns before
+    /// `LastCall.load()` when there is no thread to carry on, so on that path
+    /// nothing reads the previous call and this wipes what is left of it.
+    ///
+    /// Which is the intended trade rather than an oversight, and it is worth
+    /// writing down as one: the plain path is taken precisely when nothing has
+    /// been said in messages, so what is being dropped is a call the owner has
+    /// not followed up on by any other route. Reading `LastCall` there would
+    /// mean briefing there, and briefing on an empty thread is what read his
+    /// task list out. `LastCall` is still *written* at the end of every call
+    /// either way — `rememberThisCall()` does not care which opening ran — so a
+    /// later briefed call still picks it up.
+    ///
+    /// The first thing said on the plain path is "Hey, I'm here", which nothing
+    /// needs context to answer.
     public func open(with opening: String) {
         let said = opening.trimmingCharacters(in: .whitespacesAndNewlines)
         messages = said.isEmpty ? [] : [BrainMessage(role: .assistant, content: said)]

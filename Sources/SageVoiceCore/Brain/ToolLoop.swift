@@ -1048,8 +1048,38 @@ public final class ToolLoop: @unchecked Sendable {
         let brainTools = catalogue.map(\.brainTool)
         let knownToolNames = Set(catalogue.map(\.name))
 
-        var messages: [BrainMessage] = [.system(systemPrompt)]
-        messages.append(contentsOf: history.filter { $0.role != .system })
+        // **A conversation handed to a backend must begin with a user turn.**
+        //
+        // Anthropic rejects a request whose first non-system message is an
+        // assistant one — "the first message must use the user role" — with a
+        // 400, and nothing downstream repairs it: `encodeMessages` only merges
+        // adjacent same-role turns, and there is no retry.
+        //
+        // That shape had never occurred until 2.0.0-beta.6, because every
+        // history reaching here had been through `conversationOnly`, which
+        // always left a user turn first. Then `CallHistory.open(with:)` started
+        // a call at the sentence the caller heard — one assistant turn, by
+        // itself, on purpose — and every //call on an Anthropic brain would have
+        // failed on its first request. `//call` is refused on a local brain, so
+        // that is every call an Anthropic owner can make.
+        //
+        // Hoisted rather than dropped, and rather than papered over with an
+        // invented user turn. Dropping loses the referent the opening exists to
+        // provide — the caller's first sentence answers it, and "I haven't
+        // picked it up yet" is unintelligible without it. Inventing a user turn
+        // puts words in the owner's mouth, which is the defect this history was
+        // just cleaned of. Stating it as a fact in the system prompt is what
+        // actually happened: the appliance spoke first, and then he replied.
+        let leading = history.prefix { $0.role == .assistant && !$0.content.isEmpty }
+        let spokenFirst = leading.map(\.content).joined(separator: "\n")
+        var messages: [BrainMessage] = [
+            .system(spokenFirst.isEmpty
+                ? systemPrompt
+                : systemPrompt + "\n\nYou spoke first, before they said anything. "
+                    + "This is what you said, and what they say next is a reply to "
+                    + "it:\n\n\(spokenFirst)")
+        ]
+        messages.append(contentsOf: history.dropFirst(leading.count).filter { $0.role != .system })
         // Stamped here and nowhere else. See `WhereWeAre.rightNow`.
         messages.append(.user(WhereWeAre.stamp(transcript), images: images))
         // Only appends follow, so this stays valid — it is where the stamp comes

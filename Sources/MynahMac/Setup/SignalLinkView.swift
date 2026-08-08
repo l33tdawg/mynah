@@ -619,6 +619,22 @@ final class SignalLinkModel {
             // are independent, and enrolment is one round trip where this is
             // several minutes — chaining them would hold a credential the owner
             // could already be using behind a download they cannot hear yet.
+            // **Gated on the brain, like the other call site.** `//call` is
+            // refused outright on an on-device brain — `CallInvitation` requires
+            // `brain.holdsARealtimeCall` — so a local-brain Mac that links
+            // Signal was fetching and keeping 337 MB of voice for a call it will
+            // always refuse.
+            //
+            // That was fixed once, in `AppModel.installCallVoiceIfNeeded`, and
+            // this second trigger was left ungated: the eighth time on this
+            // branch that a fix landed on one of two call sites. The owner's
+            // ruling about *when* to fetch is untouched — *"the signal part
+            // //call only comes in once you link signal - download it then"* —
+            // this only adds *whether*.
+            guard BrainChoiceStore.current()?.keepsWordsOnDevice != true else {
+                Self.voice.info("not fetching the call voice: //call is refused on an on-device brain")
+                return
+            }
             Task {
                 // Read out of main-actor isolation once, here, rather than from
                 // inside the progress callback — that closure is `@Sendable` and

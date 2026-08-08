@@ -87,9 +87,25 @@ struct PhoneStatus: Sendable, Equatable {
     var socketPath: String
 
     /// The same question on the other channel: whether the WhatsApp bridge's
-    /// events socket is there. `bridge.js` creates it once it is listening and
-    /// unlinks it on the way out, so its presence means the same thing
-    /// `isReachable` means for signal-cli.
+    /// events socket is there.
+    ///
+    /// **Weaker than `isReachable`, and the comment here used to claim they were
+    /// equivalent.** It said `bridge.js` "unlinks it on the way out". It does
+    /// not: `createEventSocket` returns a `stop()` that unlinks, `stop()` has no
+    /// call site anywhere in the bridge, and there is no SIGTERM, SIGINT or exit
+    /// handler in any of it. The only things that remove the file are the next
+    /// start's `clearStaleSocket` and `SignalBackgroundServices.enable`.
+    ///
+    /// So this answers "was a bridge started" rather than "is a bridge running".
+    /// The gap is reachable: remove Mynah from WhatsApp's Linked Devices and the
+    /// bridge exits on `loggedOut` leaving the socket behind, while `creds.json`
+    /// stays on disk — so the row reads Connected, in green, permanently, on the
+    /// one screen an owner checks when nothing is being answered.
+    ///
+    /// Turning the channel off no longer leaves it: `enable` removes the socket
+    /// on that path now. What is still outstanding is a bridge that dies on its
+    /// own, which needs a liveness check rather than a `stat` — filed rather
+    /// than bodged, because a wrong answer here is what this comment was.
     var whatsAppIsReachable: Bool = false
 
     /// Whether this Mac holds a WhatsApp session at all — WhatsApp's answer to
@@ -277,9 +293,8 @@ struct SignalPhoneLink: PhoneLinking {
     /// connected" over an appliance that was answering — the row asked about a
     /// file signal-cli would never create.
     ///
-    /// The WhatsApp equivalent is exact rather than analogous: `bridge.js`
-    /// creates its events socket once it is listening and unlinks it on the way
-    /// out, so the same `stat` means the same thing on both.
+    /// The WhatsApp equivalent is NOT exact, though this used to say it was —
+    /// the bridge never unlinks its socket. See `whatsAppIsReachable`.
     var status: PhoneStatus {
         let path = socketPath
         return PhoneStatus(

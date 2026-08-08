@@ -123,6 +123,82 @@ final class ToolLoopTests: XCTestCase {
         ToolLoop(backend: backend, mcp: tools, configuration: configuration)
     }
 
+    // MARK: What a backend is handed
+
+    /// **A conversation sent to a backend must begin with a user turn.**
+    ///
+    /// Anthropic rejects a request whose first non-system message is an
+    /// assistant one — "the first message must use the user role" — with a 400,
+    /// and nothing downstream repairs it: `encodeMessages` merges adjacent
+    /// same-role turns and no more, and there is no retry.
+    ///
+    /// The shape could not occur until 2.0.0-beta.6, because every history
+    /// reaching `run` had been through `conversationOnly`, which always left a
+    /// user turn first. Then `CallHistory.open(with:)` began starting a call at
+    /// the sentence the caller heard — one assistant turn, alone, deliberately —
+    /// and every //call on an Anthropic brain would have failed on its first
+    /// request. `//call` is refused on a local brain, so that is every call
+    /// those owners can make. Found by an adversarial sweep hours after it
+    /// shipped; nothing in the suite would have caught it.
+    func testABackendIsNeverHandedAConversationThatOpensWithTheAssistant() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "I haven't picked it up yet",
+            history: [BrainMessage.assistant("Morning. Have you picked the Cayenne up yet?")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        let conversation = sent.filter { $0.role != .system }
+        XCTAssertEqual(
+            conversation.first?.role, .user,
+            "the first non-system turn is \(conversation.first?.role.rawValue ?? "none"); Anthropic 400s on that"
+        )
+    }
+
+    /// **Hoisted, not dropped.** The opening is the thing the caller's first
+    /// sentence answers — "I haven't picked it up yet" means nothing without it
+    /// — so removing it to satisfy the role rule would trade a 400 for an
+    /// appliance that does not know what it just asked.
+    func testTheOpeningItSpokeFirstSurvivesIntoTheSystemPrompt() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "I haven't picked it up yet",
+            history: [BrainMessage.assistant("Morning. Have you picked the Cayenne up yet?")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        let system = sent.filter { $0.role == .system }.map(\.content).joined(separator: "\n")
+        XCTAssertTrue(
+            system.contains("Have you picked the Cayenne up yet?"),
+            "the sentence the caller was answering was thrown away"
+        )
+    }
+
+    /// An ordinary conversation is untouched — the hoist must not rewrite a
+    /// history that was already legal, which is every history but a call's.
+    func testAnOrdinaryConversationIsHandedOverUnchanged() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "and the ferry?",
+            history: [BrainMessage.user("what time is dinner"), BrainMessage.assistant("half seven")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        XCTAssertEqual(
+            sent.filter { $0.role != .system }.map(\.content),
+            ["what time is dinner", "half seven", WhereWeAre.stamp("and the ferry?")]
+        )
+    }
+
     // MARK: A refusal that is not true
 
     /// **The 4B's strongest wrong prior, caught and corrected.**

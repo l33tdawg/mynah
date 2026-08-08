@@ -274,7 +274,17 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
     /// runs, looks healthy and answers nobody.
     func testTheWhatsAppNumberIsDerivedFromTheSignalOneWithoutThePlus() throws {
         XCTAssertEqual(
-            ChannelSelectionStore.whatsAppNumbers(try emptyDefaults(), signalAccount: "+60123821767"),
+            ChannelSelectionStore.whatsAppNumbers(
+                try emptyDefaults(),
+                signalAccount: "+60123821767",
+                // **Named, or this test cannot reach the branch it is about.**
+                // The Signal derivation is the LAST resort: a paired session
+                // wins ahead of it. The default path is the real one, so on the
+                // Mac this is developed on the assertion was being satisfied by
+                // the developer's own WhatsApp account, which happens to carry
+                // the same digits.
+                pairedSession: URL(fileURLWithPath: "/nonexistent/never-paired")
+            ),
             ["60123821767"]
         )
     }
