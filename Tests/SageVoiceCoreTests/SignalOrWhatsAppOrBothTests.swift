@@ -380,8 +380,11 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
         )
     }
 
-    private func arguments(of plist: [String: Any]) throws -> [String] {
-        try XCTUnwrap(plist["ProgramArguments"] as? [String])
+    /// Takes an optional because `bridgePlist` returns one: it cannot be built
+    /// for a configuration that names nobody to answer. Unwrapping here rather
+    /// than at every call site keeps that a single assertion.
+    private func arguments(of plist: [String: Any]?) throws -> [String] {
+        try XCTUnwrap(XCTUnwrap(plist)["ProgramArguments"] as? [String])
     }
 
     /// The daemon defaults to Signal without the flag, so omitting it would
@@ -418,18 +421,18 @@ final class SignalOrWhatsAppOrBothTests: XCTestCase {
     /// flipped and nothing acted on.
     func testChangingTheChannelsChangesThePlistBytes() throws {
         let signalOnly = try SignalBackgroundServiceManager.plistData(
-            SignalBackgroundServiceManager.bridgePlist(
+            XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
                 signalConfiguration(channels: .signalOnly, whatsApp: nil),
                 logs: URL(fileURLWithPath: "/tmp/logs"),
                 home: URL(fileURLWithPath: "/Users/someone")
-            )
+            ))
         )
         let both = try SignalBackgroundServiceManager.plistData(
-            SignalBackgroundServiceManager.bridgePlist(
+            XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
                 signalConfiguration(channels: .both, whatsApp: whatsAppConfiguration()),
                 logs: URL(fileURLWithPath: "/tmp/logs"),
                 home: URL(fileURLWithPath: "/Users/someone")
-            )
+            ))
         )
         XCTAssertNotEqual(signalOnly, both, "turning WhatsApp on would have restarted nothing")
     }

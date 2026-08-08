@@ -7,8 +7,29 @@ import SageVoiceCore
 /// Kept as values rather than rediscovered while writing each plist so setup,
 /// Settings and relaunch all reconcile the exact same appliance.
 struct SignalServiceConfiguration: Sendable, Equatable {
-    let account: String
-    let signalCLI: URL
+    /// The Signal account signal-cli is logged into, or `nil` when Signal is not
+    /// part of this appliance.
+    ///
+    /// **Optional because a Mac can be a WhatsApp appliance and nothing else,
+    /// and this being a `String` is what stopped one working.** `current()`
+    /// below opened with `guard let account = SignalTooling.linkedNumber()`, so
+    /// an owner who chose WhatsApp, paired it, and never linked Signal produced
+    /// no configuration at all — which `AppModel.answeringIntent()` reads as
+    /// `cannotTell` and, correctly for what it thinks it is looking at, acts on
+    /// by doing nothing. No LaunchAgent was written, including the WhatsApp one,
+    /// and the only record anywhere was a line in `mynah.log`.
+    ///
+    /// Everything downstream of that guard was already channel-aware: `enable`
+    /// requires signal-cli only when Signal is on, writes the Signal plist only
+    /// when Signal is on, and boots the job out when it is off. One Signal-shaped
+    /// gate in front of all of it was the whole defect.
+    let account: String?
+
+    /// `nil` whenever `account` is, plus one reason of its own: a Mac that never
+    /// installed signal-cli. Neither is any use without the other — they are the
+    /// pair that runs the Signal helper — so they go nil together.
+    let signalCLI: URL?
+
     let bridge: URL
     let sage: URL
     let provider: String
@@ -38,8 +59,8 @@ struct SignalServiceConfiguration: Sendable, Equatable {
     /// a channel. `current()` below passes both explicitly, so nothing in
     /// production reaches these.
     init(
-        account: String,
-        signalCLI: URL,
+        account: String?,
+        signalCLI: URL?,
         bridge: URL,
         sage: URL,
         provider: String,
@@ -59,13 +80,51 @@ struct SignalServiceConfiguration: Sendable, Equatable {
         self.whatsApp = whatsApp
     }
 
+    /// Who this appliance answers, in the `+E.164` spelling the daemon's
+    /// `--allow` takes.
+    ///
+    /// **Not a synonym for `account`, and treating it as one is the bug.**
+    /// `--allow` names the *person*; `account` names the Signal account
+    /// signal-cli is logged into. Those are the same string on every appliance
+    /// shipped so far, which is exactly why one variable did both jobs — and a
+    /// WhatsApp-only Mac has an owner and no Signal account, so the conflation
+    /// left the daemon with nobody to serve.
+    ///
+    /// The WhatsApp number goes back out with a `+` the daemon then strips again
+    /// to rebuild the WhatsApp allowlist. The round trip is deliberate: one
+    /// spelling of "who this is for" crosses the plist, so two channels cannot
+    /// end up answering different people.
+    var ownerNumber: String? {
+        if let account { return account }
+        guard let first = whatsApp?.numbers.first else { return nil }
+        return "+\(first)"
+    }
+
+    /// The appliance this Mac should be running, or `nil` when it cannot tell.
+    ///
+    /// **`nil` has one meaning and it is not "the owner turned it off".**
+    /// `AppModel.answeringIntent` reads it as `cannotTell` and changes nothing,
+    /// which is why the only thing that may return `nil` here is a genuinely
+    /// unanswerable question — no brain recorded, or no channel this Mac is
+    /// equipped to run. A channel the owner asked for and cannot have is not
+    /// unanswerable: it is answered by running the other one.
+    ///
+    /// - Parameters:
+    ///   - linkedNumber: **injectable so this function can be tested at all.**
+    ///     It read `SignalTooling.linkedNumber()` directly, which reads
+    ///     `~/.local/share/signal-cli/data/accounts.json` — so every answer
+    ///     depended on whether the machine running the test had a phone linked,
+    ///     and the WhatsApp-only branch was unreachable from a test on any Mac
+    ///     that did. That is exactly how the Signal-shaped gate shipped.
+    ///   - signalCLI: same reason. `SignalTooling.helper()` searches the real
+    ///     `PATH` and Homebrew's directories.
     static func current(
         appBundle: URL = Bundle.main.bundleURL,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        linkedNumber: () -> String? = { SignalTooling.linkedNumber() },
+        signalCLI: () -> URL? = { SignalTooling.helper() }
     ) -> SignalServiceConfiguration? {
-        guard let account = SignalTooling.linkedNumber(),
-              let signalCLI = SignalTooling.helper(),
-              let brain = BrainSelectionStore.current(defaults) else {
+        guard let brain = BrainSelectionStore.current(defaults) else {
             return nil
         }
         let contents = appBundle.appendingPathComponent("Contents", isDirectory: true)
@@ -80,20 +139,48 @@ struct SignalServiceConfiguration: Sendable, Equatable {
         let vendored = contents.appendingPathComponent("Resources/SAGE.app/Contents/MacOS/sage-gui")
         let node = SageNodeChoice.resolve(vendored: vendored)
 
-        let channels = ChannelSelectionStore.current(defaults)
+        let wanted = ChannelSelectionStore.current(defaults)
+        // Read whether or not Signal is switched on: it is still the best guess
+        // at the owner's WhatsApp number when they have not paired one, and
+        // "which number is yours" does not stop being answered by a linked
+        // Signal account because the owner routes their messages elsewhere.
+        let account = linkedNumber()
+        let helper = signalCLI()
+
+        let whatsApp = wanted.includes(.whatsapp)
+            ? WhatsAppServiceConfiguration.inside(contents, signalAccount: account, defaults: defaults)
+            : nil
+        let canRunSignal = wanted.includes(.signal) && account != nil && helper != nil
+
+        // **What this Mac can actually answer on, which is not always what was
+        // asked for.** The stored selection is a wish; a channel needs an
+        // account and a helper before it is a fact, and the daemon is about to
+        // be told in `--channels` which ones to open. Handing it a channel with
+        // nothing behind it produces an appliance that reports itself healthy
+        // and answers half the people who message it.
+        //
+        // Narrowing here rather than refusing is the whole shape of the fix:
+        // one channel out of two is not none.
+        var channels = ChannelSelection.none
+        if canRunSignal { channels = channels.adding(.signal) }
+        if whatsApp != nil { channels = channels.adding(.whatsapp) }
+        // Nothing runnable is a question, not a decision — the owner asked for
+        // Signal and the account has not finished linking, or asked for WhatsApp
+        // and has not scanned the code yet. `cannotTell` leaves whatever is
+        // installed alone, which is right: this is the state a setup passes
+        // through, not one to uninstall an appliance over.
+        guard !channels.isEmpty else { return nil }
 
         return SignalServiceConfiguration(
-            account: account,
-            signalCLI: signalCLI,
+            account: canRunSignal ? account : nil,
+            signalCLI: canRunSignal ? helper : nil,
             bridge: contents.appendingPathComponent("MacOS/sage-voiced"),
             sage: node?.executable ?? vendored,
             provider: brain.backendIdentifier,
             model: brain.modelName,
             socketPath: SignalTooling.socketPath,
             channels: channels,
-            whatsApp: channels.includes(.whatsapp)
-                ? WhatsAppServiceConfiguration.inside(contents, signalAccount: account, defaults: defaults)
-                : nil
+            whatsApp: whatsApp
         )
     }
 }
@@ -356,7 +443,17 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // install at all on a Mac with no signal-cli — a state the Settings
         // picker can now produce.
         var required = [configuration.bridge, configuration.sage]
-        if configuration.channels.includes(.signal) { required.append(configuration.signalCLI) }
+        if configuration.channels.includes(.signal) {
+            // `current()` cannot produce this — it drops `.signal` from the
+            // selection when there is nothing to run it with — but a
+            // configuration built anywhere else can, and a missing helper has to
+            // be the same reported failure here as a missing one at a known
+            // path, rather than a Signal job silently not installed.
+            guard let signalCLI = configuration.signalCLI else {
+                throw Failure.missingExecutable("signal-cli")
+            }
+            required.append(signalCLI)
+        }
         for executable in required {
             guard fileManager.isExecutableFile(atPath: executable.path) else {
                 throw Failure.missingExecutable(executable.path)
@@ -402,12 +499,24 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         //
         // Symmetric with `whatsAppData`: nil means there must be no such job,
         // not "leave whatever is there".
-        let signalData = configuration.channels.includes(.signal)
-            ? try Self.plistData(Self.signalPlist(configuration, logs: logs, home: homeDirectory))
-            : nil
-        let bridgeData = try Self.plistData(
-            Self.bridgePlist(configuration, logs: logs, home: homeDirectory)
-        )
+        let signalData: Data?
+        if configuration.channels.includes(.signal),
+           let plist = Self.signalPlist(configuration, logs: logs, home: homeDirectory) {
+            signalData = try Self.plistData(plist)
+        } else {
+            signalData = nil
+        }
+        // **Refused rather than installed without an owner.** `--allow` is the
+        // one flag the daemon will not start without, and a plist missing it is
+        // a job launchd retries every thirty seconds against a process that
+        // exits immediately. `ownerNumber` is nil only for a configuration with
+        // no Signal account and no WhatsApp number, which `current()` cannot
+        // produce — and if something else does, the owner gets a sentence
+        // naming what to do rather than a helper that thrashes.
+        guard let bridgePlist = Self.bridgePlist(configuration, logs: logs, home: homeDirectory) else {
+            throw Failure.noOwnerNumber
+        }
+        let bridgeData = try Self.plistData(bridgePlist)
         // **`nil` is a state this has to install, not skip.** WhatsApp being off
         // is not "leave whatever is there alone" — it is "there must be no
         // WhatsApp helper", and a bridge left loaded after the owner switched
@@ -441,7 +550,7 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         // loaded that is not.
         let installed = InstalledBuild(
             signal: configuration.channels.includes(.signal)
-                ? Self.executableStamp(configuration.signalCLI)
+                ? configuration.signalCLI.map(Self.executableStamp)
                 : nil,
             bridge: Self.executableStamp(configuration.bridge),
             whatsApp: configuration.whatsApp.map { Self.executableStamp($0.bridge) }
@@ -1004,16 +1113,23 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
         return "\(size)-\(Int(modified))-\(inode)"
     }
 
+    /// `nil` when there is no Signal account to run, which is a whole appliance
+    /// on a Mac that only does WhatsApp. The caller reads that as "there must be
+    /// no Signal job" and boots out whatever is loaded — the same reading
+    /// `whatsAppData` gets, for the same reason.
     static func signalPlist(
         _ configuration: SignalServiceConfiguration,
         logs: URL,
         home: URL
-    ) -> [String: Any] {
-        [
+    ) -> [String: Any]? {
+        guard let account = configuration.account, let signalCLI = configuration.signalCLI else {
+            return nil
+        }
+        return [
             "Label": signalLabel,
             "ProgramArguments": [
-                configuration.signalCLI.path,
-                "-a", configuration.account,
+                signalCLI.path,
+                "-a", account,
                 "daemon",
                 "--socket=\(configuration.socketPath)",
                 "--receive-mode=on-start",
@@ -1031,25 +1147,40 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
                 "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                 // Not read by anything. It is here so that replacing the app
                 // changes these bytes, which is what makes `enable()` notice.
-                "MYNAH_BUILD_STAMP": executableStamp(configuration.signalCLI)
+                "MYNAH_BUILD_STAMP": executableStamp(signalCLI)
             ]
         ]
     }
 
+    /// `nil` when the configuration cannot say who the appliance answers.
+    ///
+    /// The daemon refuses to start without `--allow`, so a plist without one is
+    /// a job launchd retries for ever against a process that exits immediately.
+    /// See `SignalServiceConfiguration.ownerNumber` for why that is not the same
+    /// question as "is there a Signal account".
     static func bridgePlist(
         _ configuration: SignalServiceConfiguration,
         logs: URL,
         home: URL
-    ) -> [String: Any] {
+    ) -> [String: Any]? {
+        guard let owner = configuration.ownerNumber else { return nil }
         var arguments = [
             configuration.bridge.path,
             "daemon",
-            "--allow", configuration.account,
-            "--account", configuration.account,
+            "--allow", owner,
             "--provider", configuration.provider,
             "--socket", configuration.socketPath,
             "--sage", configuration.sage.path
         ]
+        // **Only when there is one, and it is not the same value as `--allow`.**
+        // This passed `--account` unconditionally from the same string, which on
+        // a WhatsApp-only appliance would tell `SignalClient` to serve an account
+        // signal-cli has never heard of. `--allow` says who Mynah answers;
+        // `--account` says which Signal account it answers them on, and a Mac
+        // with no Signal has the first and not the second.
+        if let account = configuration.account {
+            arguments += ["--account", account]
+        }
         if let model = configuration.model, !model.isEmpty {
             arguments += ["--model", model]
         }
@@ -1185,6 +1316,9 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
     enum Failure: LocalizedError {
         case missingExecutable(String)
         case launchFailed(String)
+        /// Nothing on this Mac says which number is the owner's, so there is
+        /// nobody for the appliance to answer.
+        case noOwnerNumber
 
         var errorDescription: String? {
             switch self {
@@ -1192,6 +1326,11 @@ actor SignalBackgroundServiceManager: SignalBackgroundServicing {
                 return "A required background helper is missing at \(path)."
             case .launchFailed(let label):
                 return "macOS could not start \(label)."
+            case .noOwnerNumber:
+                // Names the next action, because a message that only states the
+                // problem is the dead end this codebase keeps finding.
+                return "Mynah doesn't know which number is yours, so it can't tell the "
+                    + "appliance who to answer. Link Signal or WhatsApp in Settings."
             }
         }
     }

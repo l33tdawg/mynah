@@ -42,8 +42,14 @@ actor FakeLaunchd: ProbeCommandRunning {
     /// Puts launchd in the state where both jobs are already running the build
     /// this configuration installs — the state a reconcile should leave alone.
     func load(_ configuration: SignalServiceConfiguration) {
-        loaded[SignalBackgroundServiceManager.signalLabel] =
-            SignalBackgroundServiceManager.executableStamp(configuration.signalCLI)
+        // Only when there is one, for the same reason WhatsApp is conditional
+        // below: a WhatsApp-only appliance has no Signal helper to load, and a
+        // fake that loaded one anyway would be modelling a machine that cannot
+        // exist.
+        if let signalCLI = configuration.signalCLI {
+            loaded[SignalBackgroundServiceManager.signalLabel] =
+                SignalBackgroundServiceManager.executableStamp(signalCLI)
+        }
         loaded[SignalBackgroundServiceManager.bridgeLabel] =
             SignalBackgroundServiceManager.executableStamp(configuration.bridge)
         // Only when the configuration has one. A fake that loaded a WhatsApp job

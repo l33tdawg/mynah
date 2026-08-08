@@ -397,9 +397,9 @@ final class ApplianceIdempotenceTests: XCTestCase {
     /// which is the worst way for it to come back.
     func testTheSamePlistSerialisesToTheSameBytes() throws {
         let home = URL(fileURLWithPath: "/Users/owner", isDirectory: true)
-        let object = SignalBackgroundServiceManager.bridgePlist(
+        let object = try XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
             .fixture, logs: home.appendingPathComponent("Library/Logs/Mynah"), home: home
-        )
+        ))
         XCTAssertEqual(
             try SignalBackgroundServiceManager.plistData(object),
             try SignalBackgroundServiceManager.plistData(object)

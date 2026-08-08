@@ -8,22 +8,22 @@ final class SignalBackgroundServicesTests: XCTestCase {
         let home = URL(fileURLWithPath: "/Users/owner", isDirectory: true)
         let logs = home.appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
 
-        let signal = SignalBackgroundServiceManager.signalPlist(
+        let signal = try XCTUnwrap(SignalBackgroundServiceManager.signalPlist(
             configuration,
             logs: logs,
             home: home
-        )
+        ))
         let signalArguments = try XCTUnwrap(signal["ProgramArguments"] as? [String])
         XCTAssertTrue(signalArguments.contains("+60123456789"))
         XCTAssertTrue(signalArguments.contains("--receive-mode=on-start"))
         XCTAssertFalse(signalArguments.contains("--ignore-attachments"))
         XCTAssertEqual(signal["KeepAlive"] as? Bool, true)
 
-        let bridge = SignalBackgroundServiceManager.bridgePlist(
+        let bridge = try XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
             configuration,
             logs: logs,
             home: home
-        )
+        ))
         let bridgeArguments = try XCTUnwrap(bridge["ProgramArguments"] as? [String])
         XCTAssertEqual(value(after: "--allow", in: bridgeArguments), "+60123456789")
         XCTAssertEqual(value(after: "--account", in: bridgeArguments), "+60123456789")
@@ -43,11 +43,11 @@ final class SignalBackgroundServicesTests: XCTestCase {
             model: configuration.model,
             socketPath: configuration.socketPath
         )
-        let object = SignalBackgroundServiceManager.bridgePlist(
+        let object = try XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
             configuration,
             logs: URL(fileURLWithPath: "/tmp/logs"),
             home: URL(fileURLWithPath: "/tmp/home")
-        )
+        ))
         let data = try SignalBackgroundServiceManager.plistData(object)
         let decoded = try XCTUnwrap(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]

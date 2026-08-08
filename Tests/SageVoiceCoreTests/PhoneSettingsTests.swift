@@ -30,12 +30,15 @@ final class PhoneSettingsTests: XCTestCase {
     }
 
     /// And it names the thing that *does* work, on the row above it.
+    ///
+    /// **"link your phone" became "link it", and the channel is now named.** The
+    /// sentence had to say *which* channel the moment there were two: an owner
+    /// on Both with Signal linked and WhatsApp not was told to link their phone,
+    /// which they had. See `EitherOrBothTests`.
     func testAnUnlinkedPhoneIsPointedAtLinking() {
-        XCTAssertTrue(
-            status(reachable: false, number: nil)
-                .reachabilityDetail(helper: .absent)
-                .contains("link your phone")
-        )
+        let detail = status(reachable: false, number: nil).reachabilityDetail(helper: .absent)
+        XCTAssertTrue(detail.contains("Signal"), detail)
+        XCTAssertTrue(detail.contains("link it above"), detail)
     }
 
     /// A linked phone whose helper is *not* running is a real fault, and it
@@ -51,7 +54,7 @@ final class PhoneSettingsTests: XCTestCase {
     func testAWorkingLinkJustSaysSo() {
         let detail = status(reachable: true, number: "+6012·····89").reachabilityDetail(helper: .running)
 
-        XCTAssertEqual(detail, "The link between this Mac and your phone is up.")
+        XCTAssertEqual(detail, "The link between this Mac and Signal is up.")
     }
 
     /// Reachable with nothing linked should not happen, and if it does the
@@ -60,7 +63,7 @@ final class PhoneSettingsTests: XCTestCase {
     func testReachableWinsOverAMissingNumber() {
         XCTAssertEqual(
             status(reachable: true, number: nil).reachabilityDetail(helper: .running),
-            "The link between this Mac and your phone is up."
+            "The link between this Mac and Signal is up."
         )
     }
 

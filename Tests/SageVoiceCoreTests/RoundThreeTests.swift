@@ -128,7 +128,7 @@ final class RoundThreeTests: XCTestCase {
     /// signal-cli sits on the owner's Signal account draining messages into a
     /// socket nobody listens to — and Signal's delivery receipts go out, so the
     /// sender sees "delivered" and the owner never sees a reply.
-    func testChoosingWhatsAppOnlyDoesNotRequireSignalCli() {
+    func testChoosingWhatsAppOnlyDoesNotRequireSignalCli() throws {
         let configuration = SignalServiceConfiguration(
             account: "+60123821767",
             signalCLI: URL(fileURLWithPath: "/nonexistent/signal-cli"),
@@ -142,11 +142,11 @@ final class RoundThreeTests: XCTestCase {
         )
         // The plist for the daemon still has to be buildable — it is the job
         // that answers — and it must say which channels it answers on.
-        let plist = SignalBackgroundServiceManager.bridgePlist(
+        let plist = try XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
             configuration,
             logs: URL(fileURLWithPath: "/tmp/logs"),
             home: URL(fileURLWithPath: "/Users/someone")
-        )
+        ))
         let arguments = plist["ProgramArguments"] as? [String] ?? []
         let index = arguments.firstIndex(of: "--channels")
         XCTAssertNotNil(index)

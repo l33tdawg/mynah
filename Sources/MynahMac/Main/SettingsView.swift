@@ -78,7 +78,7 @@ enum BrainChoiceStore {
 
 /// What Mynah knows about the phone it answers.
 struct PhoneStatus: Sendable, Equatable {
-    /// Whether the messaging bridge this Mac uses is present. Not whether a
+    /// Whether the Signal link this Mac uses is present. Not whether a
     /// message has ever arrived — that is a different, and slower, question.
     var isReachable: Bool
     /// Redacted for display. The full number is never rendered.
@@ -86,12 +86,85 @@ struct PhoneStatus: Sendable, Equatable {
     /// For the diagnostics report, never for the owner.
     var socketPath: String
 
+    /// The same question on the other channel: whether the WhatsApp bridge's
+    /// events socket is there. `bridge.js` creates it once it is listening and
+    /// unlinks it on the way out, so its presence means the same thing
+    /// `isReachable` means for signal-cli.
+    var whatsAppIsReachable: Bool = false
+
+    /// Whether this Mac holds a WhatsApp session at all — WhatsApp's answer to
+    /// `linkedNumber != nil`, and the difference between "not set up yet" and
+    /// "set up and not running".
+    var whatsAppIsLinked: Bool = false
+
+    /// Which channels the owner asked for.
+    ///
+    /// **Reachability is only a fault on a channel that is meant to be
+    /// running**, and without this the row could not tell the difference. A Mac
+    /// answering WhatsApp with no Signal account was reported as unreachable,
+    /// permanently, because the only thing this type looked at was a socket
+    /// signal-cli would never create. The default matches
+    /// `ChannelSelectionStore`'s: an absent choice is the Signal every existing
+    /// install already has.
+    var channels: ChannelSelection = .signalOnly
+
     static let unknown = PhoneStatus(isReachable: false, linkedNumber: nil, socketPath: "")
+
+    /// The same reading, judged against the channels the owner actually chose.
+    ///
+    /// Applied by the caller rather than read here because `PhoneLinking` is a
+    /// `Sendable` value that reaches the filesystem and nothing else — handing
+    /// it a `UserDefaults` to read the selection from would give it a second
+    /// source of truth for a setting `SettingsModel` already holds.
+    func answering(on channels: ChannelSelection) -> PhoneStatus {
+        var copy = self
+        copy.channels = channels
+        return copy
+    }
+
+    /// Where one channel has got to. `nil` when the owner did not ask for it,
+    /// which is not a state worth reporting on.
+    ///
+    /// Split per channel because the answer differs per channel the moment
+    /// there are two of them: a Mac with WhatsApp up and no Signal number is not
+    /// "not connected", it is connected on the channel it has.
+    enum Reach: Equatable {
+        case up
+        /// Nothing to connect. Waiting will not fix it; linking will.
+        case notLinked
+        /// Linked and not answering — starting, or genuinely down.
+        case down
+    }
+
+    func reach(_ kind: ChannelKind) -> Reach? {
+        guard channels.includes(kind) else { return nil }
+        switch kind {
+        case .signal:
+            if isReachable { return .up }
+            return linkedNumber == nil ? .notLinked : .down
+        case .whatsapp:
+            if whatsAppIsReachable { return .up }
+            return whatsAppIsLinked ? .down : .notLinked
+        }
+    }
+
+    private var reaches: [(kind: ChannelKind, reach: Reach)] {
+        ChannelKind.allCases.compactMap { kind in reach(kind).map { (kind, $0) } }
+    }
+
+    /// Whether every channel the owner turned on is answering.
+    ///
+    /// The pill's tone, and deliberately not `isReachable`: that one is a fact
+    /// about signal-cli, and this is the question the row is asking.
+    var isReachableOnEveryChosenChannel: Bool {
+        let all = reaches
+        return !all.isEmpty && all.allSatisfy { $0.reach == .up }
+    }
 
     /// What "Can Mynah reach it" says, and the reason it is a function.
     ///
-    /// It had two branches for four states. Out of the view so each one can be
-    /// asserted rather than trusted.
+    /// It had two branches for four states, all four of them about Signal. Out
+    /// of the view so each one can be asserted rather than trusted.
     ///
     /// - No account linked is the state a new owner is in, and it used to be
     ///   told to turn answering off and on — advice that cannot work, because
@@ -102,17 +175,33 @@ struct PhoneStatus: Sendable, Equatable {
     ///   a JVM takes, and none of it is a fault.
     /// - Only the last branch is a problem worth acting on.
     func reachabilityDetail(helper: BackgroundHelperState?) -> String {
-        if isReachable {
-            return "The link between this Mac and your phone is up."
+        let all = reaches
+        guard !all.isEmpty else {
+            return "Nothing is switched on above, so there is no way to message Mynah yet."
         }
-        if linkedNumber == nil {
-            return "It can't yet — link your phone above first."
+        if all.allSatisfy({ $0.reach == .up }) {
+            return "The link between this Mac and \(Self.list(all.map(\.kind))) is up."
+        }
+        let notLinked = all.filter { $0.reach == .notLinked }.map(\.kind)
+        let down = all.filter { $0.reach == .down }.map(\.kind)
+        let up = all.filter { $0.reach == .up }.map(\.kind)
+
+        // Named first, because it is the one thing on this row the owner can act
+        // on — and saying "up on the other one" first would bury it.
+        if !notLinked.isEmpty {
+            let noun = notLinked.count == 1 ? "isn't linked yet" : "aren't linked yet"
+            var sentence = "\(Self.list(notLinked)) \(noun) — link \(notLinked.count == 1 ? "it" : "them") above first."
+            if !up.isEmpty {
+                sentence += " \(Self.list(up)) \(up.count == 1 ? "is" : "are") answering in the meantime."
+            }
+            return sentence
         }
         if helper == .running {
-            return "Starting up — it takes about ten seconds after Mynah opens."
+            let verb = down.count == 1 ? "takes" : "take"
+            return "Starting up — \(Self.list(down)) \(verb) about ten seconds after Mynah opens."
         }
-        return "Mynah is starting the private Signal link. If this does not change, "
-            + "turn answering off and on once."
+        return "Mynah is starting the private link to \(Self.list(down)). If this does not "
+            + "change, turn answering off and on once."
     }
 
     /// The word in the pill.
@@ -121,10 +210,25 @@ struct PhoneStatus: Sendable, Equatable {
     /// describes a fault where there is a JVM starting. launchd already tells us
     /// which of the two it is, and that answer was on screen two rows down
     /// without being used here.
+    ///
+    /// "Signal only" and "WhatsApp only" exist because with two channels chosen,
+    /// one working and one not, both of the old answers were lies.
     func reachabilityLabel(helper: BackgroundHelperState?) -> String {
-        if isReachable { return "Connected" }
-        if linkedNumber != nil, helper == .running { return "Starting" }
+        let all = reaches
+        guard !all.isEmpty else { return "Not connected" }
+        if all.allSatisfy({ $0.reach == .up }) { return "Connected" }
+        if let only = all.first(where: { $0.reach == .up }), all.count > 1 {
+            return "\(only.kind.displayName) only"
+        }
+        if all.contains(where: { $0.reach == .down }), helper == .running { return "Starting" }
         return "Not connected"
+    }
+
+    /// "Signal and WhatsApp", not "signal, whatsapp".
+    private static func list(_ kinds: [ChannelKind]) -> String {
+        let names = kinds.map(\.displayName)
+        guard let last = names.last else { return "nothing" }
+        return names.count == 1 ? last : names.dropLast().joined(separator: ", ") + " and " + last
     }
 }
 
@@ -168,12 +272,26 @@ struct SignalPhoneLink: PhoneLinking {
     var homeDirectory: String = NSHomeDirectory()
     var environment: [String: String] = ProcessInfo.processInfo.environment
 
+    /// **Both channels, asked the same way.** This reported only on signal-cli's
+    /// socket, so a Mac set up for WhatsApp alone was permanently "Not
+    /// connected" over an appliance that was answering — the row asked about a
+    /// file signal-cli would never create.
+    ///
+    /// The WhatsApp equivalent is exact rather than analogous: `bridge.js`
+    /// creates its events socket once it is listening and unlinks it on the way
+    /// out, so the same `stat` means the same thing on both.
     var status: PhoneStatus {
         let path = socketPath
         return PhoneStatus(
             isReachable: FileManager.default.fileExists(atPath: path),
             linkedNumber: redactedNumber,
-            socketPath: path
+            socketPath: path,
+            whatsAppIsReachable: FileManager.default.fileExists(
+                atPath: WhatsAppClient.defaultSocketPath()
+            ),
+            whatsAppIsLinked: WhatsAppPairing.isPaired(
+                sessionDirectory: WhatsAppPairing.defaultSessionDirectory()
+            )
         )
     }
 
@@ -476,7 +594,11 @@ final class SettingsModel {
         self.calls = calls
         self.brain = BrainChoiceStore.current(defaults: defaults)
         self.speech = SpeechFacts.detect()
-        self.phone = phoneLink.status
+        // From the injected defaults rather than the property's own initialiser,
+        // which reads `.standard` — a test with a scratch domain would otherwise
+        // judge reachability against whatever this Mac is really set to.
+        self.channels = ChannelSelectionStore.current(defaults)
+        self.phone = phoneLink.status.answering(on: ChannelSelectionStore.current(defaults))
         self.callVoice = calls.voice
         self.callSpeed = calls.speed
         self.sendsCallTranscript = calls.sendsTranscript
@@ -517,6 +639,11 @@ final class SettingsModel {
         }
         channels = selection
         ChannelSelectionStore.save(selection, to: defaults)
+        // The reachability row two groups down is judged against this, and it is
+        // re-read on a timer that has just gone to sleep. Without this the owner
+        // switches to WhatsApp and the row goes on reporting Signal's socket for
+        // up to two seconds — which is exactly when they are looking at it.
+        phone = phone.answering(on: selection)
         return true
     }
 
@@ -526,10 +653,22 @@ final class SettingsModel {
     /// offering a switch that installs a helper launchd cannot start would teach
     /// the owner their choices are not real. Same rule as the unlink button
     /// three rows down.
+    ///
+    /// **`SignalTooling.linkedNumber()`, not `phone.linkedNumber`.** The second
+    /// is redacted for display — `+60******767` — and
+    /// `ChannelSelectionStore.whatsAppNumbers` keeps the digits out of whatever
+    /// it is handed, so this derived an allowlist of `60767`: a number that is
+    /// nobody's, in a field labelled "who may talk to the appliance".
+    ///
+    /// It reached no plist, because the real one is built from
+    /// `SignalServiceConfiguration.current()` — so this was one call site away
+    /// from being a bridge that answers a stranger, or more likely nobody. Same
+    /// confusion as the one this release exists to fix, one field over: a value
+    /// for the owner to read is not a value to identify them by.
     var whatsAppAvailability: WhatsAppServiceConfiguration.Availability {
         WhatsAppServiceConfiguration.availability(
             Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true),
-            signalAccount: phone.linkedNumber,
+            signalAccount: SignalTooling.linkedNumber(),
             defaults: defaults
         )
     }
@@ -606,7 +745,7 @@ final class SettingsModel {
         let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
         switch WhatsAppServiceConfiguration.availability(
             contents,
-            signalAccount: phone.linkedNumber,
+            signalAccount: SignalTooling.linkedNumber(),
             defaults: defaults
         ) {
         case .ready(let configuration):
@@ -671,7 +810,7 @@ final class SettingsModel {
     func refresh() {
         brain = BrainChoiceStore.current(defaults: defaults)
         speech = SpeechFacts.detect()
-        phone = phoneLink.status
+        phone = phoneLink.status.answering(on: channels)
     }
 
     /// How often "Can Mynah reach it" is asked again while the screen is open.
@@ -695,7 +834,7 @@ final class SettingsModel {
     /// costs nothing when nobody is looking.
     func watchPhoneReachability() async {
         while !Task.isCancelled {
-            let latest = phoneLink.status
+            let latest = phoneLink.status.answering(on: channels)
             if latest != phone { phone = latest }
             try? await Task.sleep(for: Self.phoneWatchInterval)
         }
@@ -1025,7 +1164,16 @@ final class SettingsModel {
 
         lines.append("Transcriber \(speech.transcriberPath ?? "not found")")
         lines.append("Speech model \(speech.modelPath ?? "not found")")
-        lines.append("Messaging socket \(phone.socketPath) \(phone.isReachable ? "(present)" : "(absent)")")
+        lines.append("Channels \(channels.summary)")
+        lines.append("Signal socket \(phone.socketPath) \(phone.isReachable ? "(present)" : "(absent)")")
+        // Both, because "WhatsApp isn't answering" is now a report somebody can
+        // send, and a diagnostics file that only names Signal's socket answers
+        // the other half of the appliance with silence.
+        lines.append(
+            "WhatsApp socket \(WhatsAppClient.defaultSocketPath()) "
+                + "\(phone.whatsAppIsReachable ? "(present)" : "(absent)"), "
+                + "session \(phone.whatsAppIsLinked ? "linked" : "not linked")"
+        )
 
         // "It used the wrong voice" and "no transcript arrived" are both things
         // the owner will report, and both are answered by these two lines.
@@ -2210,55 +2358,67 @@ struct SettingsView: View {
 
     // MARK: Phone
 
+    /// **The number came out of the value slot, and that is most of the fix.**
+    ///
+    /// It was a bare number, right-aligned in mono where a *value* goes,
+    /// directly above a row about calling. Everything about that placement says
+    /// "this is the number you ring" — the owner read it that way and he was
+    /// reading the layout correctly. The words never claimed it; the position
+    /// did.
+    ///
+    /// So the number moves into a sentence, where it can be given a job, and the
+    /// value slot gets a status instead. "Nothing dials this number" is the
+    /// clause doing the work — the rest is the sentence it needed to sit in. It
+    /// also keeps the allowlist fact, which was in the old detail and is worth
+    /// not losing.
+    private var signalAccountRow: some View {
+        SettingsRow(
+            "Your Signal account",
+            detail: model.phone.linkedNumber.map {
+                "Mynah listens to the thread you send yourself, on \($0). Nothing dials "
+                    + "this number — and messages from anyone else are ignored."
+            } ?? "Mynah hasn't been told which Signal account to listen on."
+        ) {
+            if model.phone.linkedNumber != nil {
+                StatusPill("Linked", tone: .good)
+            } else {
+                // **A status is not an instruction.** "Not set" told a new owner
+                // what was wrong and nothing about what to do, and the only
+                // button that opens the QR screen was two groups away in
+                // Unfinished — which renders solely when `deferredSetupSteps` is
+                // non-empty. An owner who was never offered the step, or whose
+                // step was resolved, saw the problem stated on a row that could
+                // not fix it.
+                //
+                // Same sheet the Unfinished row opens, so linking from here
+                // clears that step too and the two cannot disagree. The pill
+                // goes rather than sitting beside the button: the detail line
+                // already says it is not set, and no other row in this window
+                // puts a status and a control in the same slot.
+                MynahButton("Link my phone", kind: .secondary) { isLinkingPhone = true }
+            }
+        }
+    }
+
     private func phoneSection(app: AppModel) -> some View {
         SettingsGroup(SettingsGroupTitle.phone) {
             channelChoiceRow(app: app)
             MynahDivider()
 
-            // **The number came out of the value slot, and that is most of the
-            // fix.**
+            // **Only when Signal is part of this appliance**, which is the same
+            // rule `whatsAppPairingRow` has had since the picker shipped and
+            // this row did not. An owner who chose WhatsApp was still shown
+            // "Mynah hasn't been told which Signal account to listen on" over a
+            // Link button — a fault, stated in the value slot, about a channel
+            // they had switched off.
             //
-            // It was a bare number, right-aligned in mono where a *value* goes,
-            // directly above a row about calling. Everything about that
-            // placement says "this is the number you ring" — the owner read it
-            // that way and he was reading the layout correctly. The words never
-            // claimed it; the position did.
-            //
-            // So the number moves into a sentence, where it can be given a job,
-            // and the value slot gets a status instead. `thread`'s wording, and
-            // "Nothing dials this number" is the clause doing the work — the
-            // rest is the sentence it needed to sit in. It also keeps the
-            // allowlist fact, which was in the old detail and is worth not
-            // losing.
-            SettingsRow(
-                "Your Signal account",
-                detail: model.phone.linkedNumber.map {
-                    "Mynah listens to the thread you send yourself, on \($0). Nothing dials "
-                        + "this number — and messages from anyone else are ignored."
-                } ?? "Mynah hasn't been told which Signal account to listen on."
-            ) {
-                if model.phone.linkedNumber != nil {
-                    StatusPill("Linked", tone: .good)
-                } else {
-                    // **A status is not an instruction.** "Not set" told a new
-                    // owner what was wrong and nothing about what to do, and the
-                    // only button that opens the QR screen was two groups away
-                    // in Unfinished — which renders solely when
-                    // `deferredSetupSteps` is non-empty. An owner who was never
-                    // offered the step, or whose step was resolved, saw the
-                    // problem stated on a row that could not fix it.
-                    //
-                    // Same sheet the Unfinished row opens, so linking from here
-                    // clears that step too and the two cannot disagree. The pill
-                    // goes rather than sitting beside the button: the detail
-                    // line already says it is not set, and no other row in this
-                    // window puts a status and a control in the same slot.
-                    MynahButton("Link my phone", kind: .secondary) { isLinkingPhone = true }
-                }
+            // The second clause keeps the way out: a Mac with Signal linked and
+            // the channel turned off still shows the row, because the unlink
+            // control lives under it and hiding it would strand the account.
+            if model.channels.includes(.signal) || model.phone.linkedNumber != nil {
+                signalAccountRow
+                MynahDivider()
             }
-            MynahDivider()
-
-            MynahDivider()
 
             // The phone group is where an owner looks for what their phone can
             // do, and until now it said only that Mynah answers. Calling was
@@ -2281,18 +2441,20 @@ struct SettingsView: View {
                 // The last sentence is checked rather than hoped:
                 // `handleCallRequest` wraps `calls.start()` in a `catch` and
                 // replies, so a failure does reach him as a message.
-                detail: "Send \(CallInvitation.command) to yourself in Signal and tap the link "
-                    + "it sends back — you talk out loud and can interrupt it mid-sentence. It "
-                    + "needs a brain that answers fast, so it is turned down on a model that "
-                    + "runs on this Mac, and this Mac has to be set up for calls. If it can't, "
-                    + "it tells you when you ask."
+                //
+                // **"in Signal" became a lie the day the picker shipped.** The
+                // command works on whichever channel the message arrives on —
+                // `ChannelSet` routes the reply back to the thread it came from
+                // — so naming one channel sent a WhatsApp-only owner to an app
+                // they had deliberately not linked.
+                detail: "Send \(CallInvitation.command) to yourself on \(model.channels.summary) "
+                    + "and tap the link it sends back — you talk out loud and can interrupt it "
+                    + "mid-sentence. It needs a brain that answers fast, so it is turned down on "
+                    + "a model that runs on this Mac, and this Mac has to be set up for calls. "
+                    + "If it can't, it tells you when you ask."
             ) { EmptyView() }
             MynahDivider()
 
-            // The advice was written for an owner who *has* a phone linked, and
-            // a new owner does not. Told to turn answering off and on, they get
-            // Not connected again, because nothing is missing except the account
-            // named two rows up — and toggling a switch cannot supply one.
             whatsAppPairingRow(app: app)
             MynahDivider()
 
@@ -2302,7 +2464,11 @@ struct SettingsView: View {
             ) {
                 StatusPill(
                     model.phone.reachabilityLabel(helper: model.helperState),
-                    tone: model.phone.isReachable ? .good : .neutral
+                    // **Every chosen channel, not signal-cli's socket.** Green
+                    // here used to mean "Signal is up", which on a WhatsApp-only
+                    // Mac could never happen and on a Both Mac was green with
+                    // WhatsApp dead.
+                    tone: model.phone.isReachableOnEveryChosenChannel ? .good : .neutral
                 )
             }
 

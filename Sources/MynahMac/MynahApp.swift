@@ -555,10 +555,17 @@ final class AppModel {
             return .stop(reason: "the owner paused answering")
         }
         guard let configuration = serviceConfiguration() else {
-            // The three inputs are the linked Signal account, the signal-cli
-            // binary and the stored brain choice. Each is a file read, and a
-            // file read can fail for reasons that have nothing to do with what
-            // the owner wants.
+            // The inputs are the stored brain choice and whichever channel the
+            // owner turned on having something behind it — a linked Signal
+            // account and signal-cli, or a paired WhatsApp and the vendored
+            // bridge. Each is a file read, and a file read can fail for reasons
+            // that have nothing to do with what the owner wants.
+            //
+            // **One channel of two is not this branch.** It used to be: the
+            // configuration required a Signal account outright, so a Mac set up
+            // for WhatsApp alone landed here every time and the reconcile that
+            // would have installed its bridge did nothing, for ever. See
+            // `SignalServiceConfiguration.current`.
             return .cannotTell(reason: "the appliance configuration could not be read")
         }
         return .run(configuration)

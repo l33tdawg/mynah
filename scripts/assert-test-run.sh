@@ -102,9 +102,9 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2264   (2.0.0, WhatsApp answering on the owner's phone; was 2111 at 1.9.0)
-#   without Kokoro  2226   (2264 - 38)
-#   floor           2252   (12 under measured, 26 above the failure it must catch)
+#   measured      2288   (2.0.0-beta.4, either-or-both; was 2111 at 1.9.0)
+#   without Kokoro  2250   (2288 - 38)
+#   floor           2276   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -156,6 +156,22 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # never deleted anything. Every one was mutated back; the tenth mutation survived
 # the first attempt and the test was rewritten rather than the finding waved off.
 #
+# 2264 to 2288 is the second defect found by USE rather than audit, and the most
+# expensive one this branch has shipped: link WhatsApp and not Signal, and the
+# whole appliance declined to install. `SignalServiceConfiguration.current()`
+# required a linked Signal account before it would return anything at all, and
+# `nil` from there is read as `cannotTell` — which by design changes nothing. No
+# LaunchAgent, no error, and a Settings row reporting an unreachable phone over an
+# appliance that was never started.
+#
+# Sixteen tests, in two halves. Seven drive `current()` itself, which had never
+# been under test at all: it read the real accounts.json and the real PATH, so on
+# any Mac with Signal linked — every Mac this is developed on — the WhatsApp-only
+# branch was unreachable from a test. Those two reads are now injected. Four cover
+# what launchd is handed for a WhatsApp-only appliance, and five cover what the
+# window says about a Mac whose only channel is one the old code could not see.
+# Five mutations, every one reddened its own tests.
+#
 # The bridge's
 # own 86 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -195,7 +211,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2252}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2276}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
