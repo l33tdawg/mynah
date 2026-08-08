@@ -292,6 +292,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
     static let readOnlyTools: Set<String> = [
         "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
         "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
+        "sage_message_history",
         "sage_scope_get", "sage_scope_list", "sage_federation", "sage_gov_status",
         "web_search", "list_notes", "read_note",
         // **Queueing is not acting, and that is the whole point of it being
@@ -1551,8 +1552,25 @@ public final class ToolLoop: @unchecked Sendable {
         // sees the photo on the turn that brought it. Only the replay loses it,
         // which is what "not carried in history" meant. Found by the 1.7.0
         // audit; the invariant had been documented and never implemented.
-        var replayable = messages
+        // **Only the conversation that actually happened is replayable.**
+        // `messages` also contains the loop's private workbench: assistant
+        // drafts rejected by a truth guard and synthetic user corrections such
+        // as `unbackedClaimCorrection`. Those are useful inside this run and
+        // poisonous on the next one. Observed in a WhatsApp thread: the private
+        // correction was stored as if the owner had typed it, the rejected
+        // draft was stored as if Mynah had delivered it, and the model then
+        // "confessed" that two genuine SAGE message ids were invented and sent
+        // both requests again.
+        //
+        // Keep prior history and the real owner turn. Keep current tool results
+        // only long enough for `conversationOnly` to lift source links onto the
+        // final answer; callers already strip tool protocol before persistence.
+        // End with exactly the sentence delivered to the owner, not whichever
+        // raw model draft happened to be last.
+        var replayable = Array(messages.prefix(through: ownTurn))
         replayable[ownTurn] = .user(transcript)
+        replayable.append(contentsOf: messages.dropFirst(ownTurn + 1).filter { $0.role == .tool })
+        replayable.append(.assistant(reply))
         return ToolLoopResult(reply: reply, trace: trace, messages: replayable)
     }
 

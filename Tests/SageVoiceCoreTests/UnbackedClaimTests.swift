@@ -150,7 +150,7 @@ final class UnbackedClaimTests: XCTestCase {
     /// having changed nothing. This is the list the guard actually depends on.
     func testTheKnownReadsAreAllRecognised() {
         for tool in ["sage_recall", "sage_backlog", "sage_inbox", "sage_list", "sage_timeline",
-                     "sage_directory", "web_search", "list_notes", "read_note"] {
+                     "sage_directory", "sage_message_history", "web_search", "list_notes", "read_note"] {
             XCTAssertFalse(trace(tools: [(tool, false)]).didSomething, tool)
         }
     }
@@ -281,4 +281,3 @@ final class UnbackedClaimTests: XCTestCase {
         XCTAssertFalse(trace.summary.contains("[UNBACKED"), trace.summary)
     }
 }
-

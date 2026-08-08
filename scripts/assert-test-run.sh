@@ -102,11 +102,12 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2313   (2.0.0-beta.9, both-channel proactive announcements;
-#                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
+#   measured      2316   (2.0.0-beta.10, sent-reply history and clean replay;
+#                         2313 at beta.9, 2312 at beta.8, 2304 at beta.7,
+#                         2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2275   (2313 - 38)
-#   floor           2292   (21 under measured, 17 above the failure it must catch)
+#   without Kokoro  2278   (2316 - 38)
+#   floor           2292   (24 under measured, 14 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -265,6 +266,13 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # both linked channels, accepting two copies. The new source-wiring guard reddens
 # both the old early return from Signal and a loop restricted to the first
 # recipient; after-the-call attachments remain single-recipient replies.
+#
+# 2313 to 2316 is the WhatsApp screenshot bug: the live model was forbidden
+# from reading sent-message history, then its private truth-guard correction
+# and rejected draft were persisted as owner-visible conversation. It falsely
+# confessed that genuine ids were invented and duplicated both sends. The three
+# tests cover outbox-without-resend, the read-only allowlist/prompt contract and
+# history containing only the real request plus delivered reply.
 #
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run

@@ -441,6 +441,55 @@ final class ToolLoopTests: XCTestCase {
 
     // MARK: Forced summary
 
+    /// Internal retries are instructions from the loop to the model, not words
+    /// the owner typed. The WhatsApp thread that exposed this persisted both
+    /// the correction and the model's rejected draft, then treated that
+    /// poisoned history as evidence that two real message ids were invented.
+    func testRetryControlMessagesAndRejectedDraftsAreNotReturnedAsConversationHistory() async throws {
+        let rejected = "Sent — message msg-real-123 was delivered."
+        let delivered = "I can’t verify that send from this thread yet."
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering(rejected),
+            ScriptedBackend.answering(delivered)
+        ])
+        let loop = makeLoop(backend: backend, tools: StubToolSource(toolNames: ["sage_recall"]))
+
+        let result = try await loop.run(transcript: "check your sent items")
+        let remembered = VoiceBridgeDaemon.conversationOnly(result.messages)
+
+        XCTAssertEqual(result.reply, delivered)
+        XCTAssertEqual(
+            remembered,
+            [.user("check your sent items"), .assistant(delivered)],
+            "only the owner’s request and the reply actually delivered to them belong in history"
+        )
+        XCTAssertFalse(result.messages.contains { $0.content == ToolLoop.unbackedClaimCorrection })
+        XCTAssertFalse(result.messages.contains { $0.content == rejected })
+    }
+
+    /// Sent-message history is the authoritative answer to "did they reply?".
+    /// Reading it must never be confused with sending the request again.
+    func testSentItemCheckReadsOutboxWithoutSendingASecondMessage() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.calling(
+                "sage_message_history",
+                arguments: ["folder": .string("outbox")]
+            ),
+            ScriptedBackend.answering("Both replies are attached to msg-real-123 and msg-real-456.")
+        ])
+        let tools = StubToolSource(
+            toolNames: ["sage_message_history", "sage_message_send"],
+            results: ["sage_message_history": #"{"messages":[{"message_id":"msg-real-123","status":"answered"},{"message_id":"msg-real-456","status":"answered"}]}"#]
+        )
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        let result = try await loop.run(transcript: "check your sent items — did they reply?")
+
+        XCTAssertEqual(result.reply, "Both replies are attached to msg-real-123 and msg-real-456.")
+        XCTAssertEqual(tools.calls.map(\.name), ["sage_message_history"])
+        XCTAssertEqual(tools.calls.first?.arguments["folder"], .string("outbox"))
+    }
+
     /// The forced-summary turn is an instruction to stop calling tools. It must
     /// not be persisted: leaving a standing "answer without tools" user turn in
     /// the history means the next thing the owner asks gets answered from
