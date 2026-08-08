@@ -1455,23 +1455,50 @@ func runDaemon(_ arguments: [String]) -> Never {
         // an address `ChannelSet.send` has nowhere to route — so every piece of
         // after-the-call work would be composed, attempted, and lost.
         //
-        // Signal first when both are on, because it is the channel that has been
-        // carrying this for months and the one the owner's number is stated in.
-        // Not a guess about preference: this is only the *fallback* thread, used
-        // for work recovered at startup that has no call to attribute it to.
-        let ownerThread: ChannelRecipient? = {
+        // **Every channel the owner can read, not the first of them.**
+        //
+        // This was one recipient, Signal first when both were on, justified as
+        // "only the *fallback* thread, used for work recovered at startup that
+        // has no call to attribute it to". True when written. Then the proactive
+        // watch was pointed at the same value — deliberately, to avoid two
+        // answers to "where does the owner read this?" — and the justification
+        // quietly stopped covering what it was being used for.
+        //
+        // What that cost, reported by the owner on 9 August 2026 with a
+        // screenshot: a daemon "listening on Signal + WhatsApp" announced two
+        // agent replies at 23:50 and they arrived on Signal only. Every
+        // unprompted message this appliance has ever sent on a both-channels Mac
+        // — agent replies, task digests, reminders — went to Signal and nowhere
+        // else, while the owner was reading WhatsApp.
+        //
+        // His ruling: **both**. He linked two channels, so an unprompted message
+        // goes to both, and the cost is that he gets it twice. Ordered rather
+        // than a set, because `first` is still the single-recipient answer the
+        // after-the-call drain needs and this is now the only place that
+        // question is answered.
+        let ownerThreads: [ChannelRecipient] = {
+            var threads: [ChannelRecipient] = []
             if selection.includes(.signal),
                let number = flags["account"] ?? allowlist.identities.compactMap({
                    if case .phoneNumber(let number) = $0 { return number }
                    return nil
                }).sorted().first {
-                return ChannelRecipient(kind: .signal, address: number)
+                threads.append(ChannelRecipient(kind: .signal, address: number))
             }
             if selection.includes(.whatsapp), let first = whatsappAllowlist?.numbers.sorted().first {
-                return ChannelRecipient(kind: .whatsapp, address: "\(first)@s.whatsapp.net")
+                threads.append(ChannelRecipient(kind: .whatsapp, address: "\(first)@s.whatsapp.net"))
             }
-            return nil
+            return threads
         }()
+
+        // The one-recipient answer, for work that is the reply to something the
+        // owner asked for rather than an announcement. A file he requested on a
+        // call arrives once; it is not news, and two copies of an attachment is
+        // a worse answer than one.
+        //
+        // Signal first when both are on, because it is the channel that has been
+        // carrying this for months and the one the owner's number is stated in.
+        let ownerThread: ChannelRecipient? = ownerThreads.first
 
         let afterTheCallDrain = AfterTheCallDrain(
             queue: afterTheCall,
@@ -1558,14 +1585,17 @@ func runDaemon(_ arguments: [String]) -> Never {
             // The owner's own thread — Note to Self, which is where every other
             // reply lands.
             //
-            // The same one the after-the-call drain uses, rather than a second
-            // resolution of the same question. It was a second resolution, and
-            // it had the same defect: a bare Signal number, which on a
+            // The same resolution the after-the-call drain uses, rather than a
+            // second answer to the same question. It was a second answer once,
+            // and it had the same defect: a bare Signal number, which on a
             // WhatsApp-only appliance is an address nothing can route, so every
             // proactive announcement would be composed and dropped. Two answers
             // to "where does the owner read this?" is how one of them stays
             // wrong after the other is fixed.
-            guard let owner = ownerThread else { return }
+            //
+            // **All of them, not the first.** An announcement is news, and news
+            // goes everywhere the owner reads. See `ownerThreads`.
+            guard !ownerThreads.isEmpty else { return }
 
             await runProactiveWatch(
                 // Logged, because a backlog read that fails silently is what
@@ -1582,9 +1612,20 @@ func runDaemon(_ arguments: [String]) -> Never {
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
                 say: { message, quotingAnotherAgent in
-                    await daemon?.announce(
-                        message, to: owner, quotingAnotherAgent: quotingAnotherAgent
-                    )
+                    // **Each channel attempted on its own.** A Signal helper
+                    // that is down must not swallow the WhatsApp copy — the
+                    // whole point of sending to both is that one of them
+                    // failing is survivable, and `announce` returns false
+                    // rather than throwing precisely so this can carry on.
+                    //
+                    // Sequential rather than concurrent: two sends a second
+                    // apart cost nothing anybody can perceive, and the daemon's
+                    // history writes are actor-isolated anyway.
+                    for owner in ownerThreads {
+                        _ = await daemon?.announce(
+                            message, to: owner, quotingAnotherAgent: quotingAnotherAgent
+                        )
+                    }
                 },
                 log: { note($0) }
             )

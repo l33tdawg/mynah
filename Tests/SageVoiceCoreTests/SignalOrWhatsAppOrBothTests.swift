@@ -614,3 +614,69 @@ extension SignalOrWhatsAppOrBothTests {
         XCTAssertFalse(ChannelSelection.none.adding(.whatsapp).includes(.signal))
     }
 }
+
+// MARK: - Unprompted messages go everywhere the owner reads
+
+extension SignalOrWhatsAppOrBothTests {
+
+    /// The daemon executable cannot be imported by this test target, so this
+    /// pins its wiring directly. Replies still follow the incoming channel and
+    /// after-the-call attachments still choose one thread; only unprompted news
+    /// is deliberately copied to every linked channel.
+    ///
+    /// Reported on 9 August 2026: with Signal and WhatsApp both linked, two
+    /// proactive replies arrived on Signal only because the watch reused the
+    /// first fallback recipient. Each assertion guards a separate recurrence:
+    /// returning from the Signal branch, announcing to one recipient, or
+    /// deriving the owner's channels in more than one place.
+    func testAProactiveAnnouncementUsesEveryLinkedOwnerThread() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let main = try String(
+            contentsOf: root.appendingPathComponent("Sources/sage-voiced/main.swift"),
+            encoding: .utf8
+        )
+
+        let derivations = main.components(
+            separatedBy: "let ownerThreads: [ChannelRecipient] = {"
+        ).count - 1
+        XCTAssertEqual(
+            derivations, 1,
+            "the owner's readable channels are derived in more than one place, so one can drift"
+        )
+
+        let resolutionStart = try XCTUnwrap(
+            main.range(of: "let ownerThreads: [ChannelRecipient] = {")
+        ).lowerBound
+        let resolutionEnd = try XCTUnwrap(
+            main.range(of: "let afterTheCallDrain", range: resolutionStart..<main.endIndex)
+        ).lowerBound
+        let resolution = String(main[resolutionStart..<resolutionEnd])
+        XCTAssertTrue(
+            resolution.contains("threads.append(ChannelRecipient(kind: .signal, address: number))"),
+            "Signal returns the first recipient instead of being collected with WhatsApp"
+        )
+        XCTAssertTrue(
+            resolution.contains("threads.append(ChannelRecipient(kind: .whatsapp"),
+            "WhatsApp is not collected as another readable owner channel"
+        )
+
+        let sayStart = try XCTUnwrap(
+            main.range(of: "say: { message, quotingAnotherAgent in")
+        ).lowerBound
+        let sayEnd = try XCTUnwrap(
+            main.range(of: "log: { note($0) }", range: sayStart..<main.endIndex)
+        ).lowerBound
+        let say = String(main[sayStart..<sayEnd])
+        XCTAssertTrue(
+            say.contains("for owner in ownerThreads {"),
+            "the proactive watch announces to one fallback thread instead of every linked channel"
+        )
+        XCTAssertTrue(
+            say.contains("message, to: owner, quotingAnotherAgent: quotingAnotherAgent"),
+            "the loop does not route each announcement through its current owner thread"
+        )
+    }
+}
