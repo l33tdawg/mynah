@@ -102,9 +102,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2294   (2.0.0-beta.5, either-or-both; was 2111 at 1.9.0)
-#   without Kokoro  2256   (2294 - 38)
-#   floor           2276   (18 under measured, 20 above the failure it must catch)
+#   measured      2287   (8 Aug 2026, dead roster deleted; 2294 at 2.0.0-beta.5,
+#                         2111 at 1.9.0. Unreleased: the next release re-measures)
+#   without Kokoro  2249   (2287 - 38)
+#   floor           2276   (11 under measured, 27 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -191,6 +192,20 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # worth recording: the new fallback reads a session directory whose default is
 # the real one, so tests that did not name a path read the developer's own paired
 # WhatsApp account. Every call site in the suite now passes one explicitly.
+#
+# **2294 down to 2287 is the only fall this number has ever taken, and it is a
+# deletion rather than a loss.** `MCPAgentDirectoryTests`' seven tests went with
+# the agent-roster path they were written for: the Agents panel was removed in
+# 3bb085b, and the boot fetch that fed it outlived it by a release — every launch
+# read `GET /v1/agents`, put the names to `sage_find_agent`, and threw the answer
+# away, because nothing had read `ApplianceRoster.phase` since the panel went.
+#
+# The floor is deliberately NOT lowered with it. 2287 still clears 2276, and the
+# one failure this floor exists to catch — losing KokoroEngineTests, 38 tests —
+# would leave 2249 and still be caught. What a deletion changes is the headroom
+# above the floor, not the floor: it now sits 11 under rather than 18, which
+# means 27 more tests before the rot check fires rather than 20. Both numbers are
+# stated above so the next person reads them instead of subtracting.
 #
 # The bridge's
 # own 86 JavaScript tests are NOT in this number and never will be: they run

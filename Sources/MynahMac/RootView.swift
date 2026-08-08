@@ -109,14 +109,16 @@ struct RootView: View {
             // and verified, so the cost of asking again is nothing and the cost
             // of never asking is a robot.
             Task { await app.installCallVoiceIfNeeded() }
-            // Who Mynah can reach, asked once, here.
+            // **`ApplianceRoster.shared.loadOnce()` used to be the next line,
+            // and it was work nobody could see the result of.**
             //
-            // The owner's ruling: *"let mynah get it from mcp or we do it at
-            // app boot"*. It used to be read on every appearance of the Agents
-            // page, unsigned — an app asking a question as nobody, repeatedly.
-            // At boot it is a startup fact instead, and opening that page a
-            // dozen times asks the node once. See `ApplianceRoster`.
-            Task { await ApplianceRoster.shared.loadOnce() }
+            // Every launch it read `GET /v1/agents` and, on the strength of
+            // that, put up to twenty names to `sage_find_agent`. Nothing ever
+            // read the answer: the Agents panel it fed went in 3bb085b and the
+            // fetch stayed behind, so the whole path ran at boot and threw its
+            // result away. On this owner's node the REST leg has answered 401
+            // since 1.7.5, which means the visible symptom of deleting it is
+            // one fewer failing request at startup.
         }
     }
 }
@@ -845,20 +847,6 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .home: return "What's on your plate"
-        // Not "Who Mynah can ask", which was the previous line and carried the
-        // exact false promise the owner objected to on the page itself: "ask"
-        // says Mynah can query these agents' memories, and it cannot — reading
-        // another agent's subjects needs a grant, and none has been given.
-        // Sending, which it *can* do, is not asking.
-        //
-        // This claims presence and nothing about capability, which leaves the
-        // asymmetry to be stated once above the roster where there is room to
-        // state both halves of it. Deliberately not "Others on your network":
-        // the page has a section by almost that name for a genuinely different
-        // set — other machines — and the roster underneath is the local half.
-        // `thread`'s call, and their reasoning: it undersells the post-scan
-        // case, and underselling is recoverable where overclaiming is what put
-        // us here.
         case .memories: return "What Mynah remembers"
         case .privacy: return "What leaves this Mac"
         case .settings: return "How Mynah is set up"

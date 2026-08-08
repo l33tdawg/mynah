@@ -71,8 +71,7 @@ final class NoTimerRacedInATaskGroupTests: XCTestCase {
     ///
     /// Looks for a task group that adds a *waiting* child, which is the
     /// signature of racing a timer. A group that fans work out and collects it —
-    /// `EnvironmentProbe`, `MCPAgentDirectory` — has no waiting child and is
-    /// not what this is about.
+    /// `EnvironmentProbe` — has no waiting child and is not what this is about.
     ///
     /// **It could not fail, twice over, and both reasons are recorded in the
     /// fixtures below.**
@@ -218,8 +217,8 @@ final class NoTimerRacedInATaskGroupTests: XCTestCase {
     }
 
     /// The shape that must stay legal: a group that fans work out and waits for
-    /// all of it. `EnvironmentProbe` and `MCPAgentDirectory` are this, and
-    /// flagging them would make the guard something people switch off.
+    /// all of it. `EnvironmentProbe` is this, and flagging it would make the
+    /// guard something people switch off.
     func testAGroupThatMerelyFansOutIsNotFlagged() {
         let fixture = """
         func probe() async -> [String] {

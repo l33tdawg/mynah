@@ -249,8 +249,10 @@ final class MemoryNodeChoiceTests: XCTestCase {
 
         // **Asked as the appliance, not looked up in a roster.**
         //
-        // This used to call `NodeAgentDirectory().roster()`, which is an
-        // unsigned `GET /v1/agents`. The first time this test was ever allowed
+        // This used to call `NodeAgentDirectory().roster()` — an unsigned
+        // `GET /v1/agents`, and a type that no longer exists: the whole roster
+        // path was deleted once nothing read its answer. The first time this
+        // test was ever allowed
         // to run — 6 August 2026, the release that stopped gating it behind a
         // variable nobody set — it failed with `AgentTrouble.locked`, because
         // that route answers **401** on this node. So the check could never have

@@ -209,9 +209,10 @@ enum MemoryTrouble: Error, Equatable, Sendable {
             // saying this falsely; this one is true, and the difference is
             // which door the answer came through.
             //
-            // The task board and the agents roster ask over *unsigned REST*,
-            // where a 401 means "you are not an operator" and says nothing
-            // about the node. This screen asks over **MCP, signed as the
+            // The task board asks over *unsigned REST*, where a 401 means "you
+            // are not an operator" and says nothing about the node. The agents
+            // roster asked the same way, which is part of why it is gone. This
+            // screen asks over **MCP, signed as the
             // appliance** — see the reader below, which drives `sage_list` and
             // `sage_recall` through `MCPClient`. When a signed request comes
             // back sealed, the vault genuinely is sealed and Mynah genuinely
@@ -431,7 +432,26 @@ actor SageMemoryStore: MemoryStoring {
     /// `sage-gui mcp` child answering as the same identity, and this codebase
     /// has already paid once for two things believing they were the appliance —
     /// the ghost key, which the node answered emptily rather than refusing.
-    /// One appliance, one connection.
+    ///
+    /// **This used to end "One appliance, one connection", and the window did
+    /// not do that.** Measured 8 August 2026: the window process had *two*
+    /// `sage-gui mcp` children — this one and `ConversationModel`'s — beside the
+    /// daemon's. A third call site, `NodeAgents`, cached its own and was never
+    /// reached; it went with the roster.
+    ///
+    /// One appliance, one *identity* — that part was always true, and it is the
+    /// part the ghost key was about. All of them carry the same
+    /// `SAGE_IDENTITY_PATH`, so nothing spurious appears on anyone's roster.
+    ///
+    /// The brain's connection is still separate on purpose, not by neglect.
+    /// Under a local brain `ConversationModel` spawns with
+    /// `localSemanticEnvironment` — `SAGE_EMBEDDING_PROVIDER` and friends — so
+    /// recall embeds against Ollama rather than SAGE's hash vectors, and this
+    /// client sets none of them. It also runs a 30s request timeout against the
+    /// 90s default, because a browse that has not answered in half a minute has
+    /// failed while a brain turn has not. Folding the two together means one
+    /// owner that knows the backend and rebuilds when it changes, which is #74
+    /// and is deliberately not a comment change.
     func toolProvider() throws -> any ToolProviding {
         try connection()
     }
@@ -661,9 +681,17 @@ actor SageMemoryStore: MemoryStoring {
     /// four seconds, and two children would mean two identities' worth of
     /// confusion on a screen that exists to say who Mynah is.
     ///
-    /// `ApplianceRoster` is the first caller. It used to read `GET /v1/agents`
-    /// unsigned, which is the one endpoint a locked node answers in full, and
-    /// therefore the one that cannot answer "who may Mynah contact".
+    /// `MCPTaskSource` is the caller that matters — the task board reads and
+    /// writes `sage_backlog` and `sage_task` through here rather than starting
+    /// a child of its own.
+    ///
+    /// `ApplianceRoster` was the first caller and is gone. It is worth keeping
+    /// the reason: it read `GET /v1/agents` **unsigned**, which is the one
+    /// endpoint a locked node answers in full and therefore the one that cannot
+    /// answer "who may *Mynah* contact" — so it came here for the verdict while
+    /// still taking its candidate names from a stranger's-eye view. The panel it
+    /// fed went in 3bb085b; the fetch outlived it by a release and answered
+    /// nobody.
     func callTool(_ tool: String, arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
         try await payload(from: tool, arguments: arguments)
     }
@@ -825,8 +853,9 @@ final class MemoriesModel {
     /// profile, approval and the writable set outright.
     ///
     /// nil means not asked yet or not answerable. The header draws nothing in
-    /// that case: a screen that has not asked must not answer, which is the same
-    /// rule `ApplianceRoster.Phase.notAsked` exists for.
+    /// that case: a screen that has not asked must not answer. `ApplianceRoster`
+    /// drew the same line with a `notAsked` phase distinct from `ready(.empty)`;
+    /// that type is deleted and the rule it encoded is not.
     private(set) var standing: ApplianceStanding?
 
     /// Topics offered in the filter, taken from what has been loaded. It is
