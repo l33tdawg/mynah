@@ -180,7 +180,11 @@ fi
 
 TEST_LOG="$(mktemp "${TMPDIR:-/tmp}/mynah-release-tests.XXXXXX")"
 trap 'rm -f "$TEST_LOG"' EXIT
-if [[ "$(uname -m)" == "arm64" ]]; then
+# `uname -m` reports x86_64 when this script was launched from a Rosetta shell,
+# even on the Apple-silicon release Mac. Testing the architecture we can launch
+# answers the real question and avoids building an arm64 bundle only to ask an
+# x86_64 XCTest runner to load it.
+if /usr/bin/arch -arm64 /usr/bin/true 2>/dev/null; then
   arch -arm64 swift test 2>&1 | tee "$TEST_LOG"
 else
   swift test 2>&1 | tee "$TEST_LOG"

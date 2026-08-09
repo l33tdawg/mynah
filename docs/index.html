@@ -517,6 +517,8 @@ figure { margin: var(--s8) 0 0; }
 }
 .get .aside { font-size: 13px; color: var(--ink-2); }
 .get .button, .get .button:hover { text-decoration: none; }
+.get .beta-line { flex-basis: 100%; }
+.get .beta-line[hidden] { display: none; }
 
 figcaption {
   font-size: 13px;
@@ -712,6 +714,11 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
         <span class="aside">
           Apple silicon &middot; macOS 14+ &middot; signed and notarized &middot;
           <span data-download-size></span>free and open source<span data-latest></span>
+        </span>
+        <span class="aside beta-line" data-beta-line hidden>
+          Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
+          <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
+          alongside Signal.
         </span>
       </div>
     </div>
@@ -983,6 +990,11 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
       built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span data-latest></span>
     </span>
+    <span class="aside beta-line" data-beta-line hidden>
+      Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
+      <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
+      alongside Signal.
+    </span>
   </div>
 </section>
 
@@ -1056,9 +1068,13 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     const releases = await response.json();
     if (!Array.isArray(releases) || !releases.length) return;
 
+    /* One release-asset spelling shared by stable and beta selection. The
+       hyphen is load-bearing for `2.0.0-beta.11`. */
+    const DISK_IMAGE = /^Mynah-\d[\w.-]*-macOS-arm64\.dmg$/i;
+
     const newest = releases.find(release => !release.draft && !release.prerelease);
     const versioned = (newest?.assets || []).find(
-      asset => /^Mynah-\d[\w.]*-macOS-arm64\.dmg$/i.test(asset.name || "")
+      asset => DISK_IMAGE.test(asset.name || "")
     );
     if (versioned?.browser_download_url) {
       // Every download button, not one of them.
@@ -1078,6 +1094,44 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
           span.textContent = megabytes + " MB \u00B7 ";
         });
       }
+    }
+
+    /* GitHub does not promise newest-first ordering. Require all four files so
+       a half-uploaded newer beta cannot displace the last installable one. */
+    function newestCompletePrerelease(candidates) {
+      const complete = release => {
+        const names = new Set((release.assets || []).map(asset => asset.name || ""));
+        const dmg = [...names].find(name => DISK_IMAGE.test(name));
+        if (!dmg) return false;
+        const stem = dmg.slice(0, -4);
+        return names.has(dmg + ".sha256")
+          && names.has(stem + ".zip")
+          && names.has(stem + ".zip.sha256");
+      };
+      const when = release => Date.parse(
+        release.published_at || release.created_at || 0
+      ) || 0;
+      return candidates
+        .filter(release => !release.draft && release.prerelease && complete(release))
+        .sort((left, right) => when(right) - when(left))[0];
+    }
+    // END newestCompletePrerelease
+
+    const beta = newestCompletePrerelease(releases);
+    const betaAsset = (beta?.assets || []).find(
+      asset => DISK_IMAGE.test(asset.name || "")
+    );
+    if (beta && betaAsset?.browser_download_url) {
+      document.querySelectorAll("[data-beta]").forEach(link => {
+        link.href = betaAsset.browser_download_url;
+      });
+      const match = /^v?(\d+\.\d+)/.exec(beta.tag_name || "");
+      document.querySelectorAll("[data-beta-version]").forEach(span => {
+        span.textContent = match ? match[1] + " beta" : (beta.tag_name || "beta");
+      });
+      document.querySelectorAll("[data-beta-line]").forEach(line => {
+        line.hidden = false;
+      });
     }
 
     /* How many copies have gone out.

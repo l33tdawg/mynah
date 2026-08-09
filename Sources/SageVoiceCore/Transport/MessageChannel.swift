@@ -205,6 +205,38 @@ public struct ChannelAttachment: Equatable, Sendable {
 
     static let imageFileExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp"]
 
+    /// A video copied into the owner's self-chat. MIME is authoritative when
+    /// present; MP4/MOV extension fallback covers transports that omit it.
+    public var isVideo: Bool {
+        if let contentType, !contentType.isEmpty {
+            let normalized = contentType.lowercased()
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if ["video/mp4", "video/quicktime", "video/x-quicktime"].contains(normalized) {
+                return true
+            }
+            if !["application/octet-stream", "binary/octet-stream"].contains(normalized) {
+                return false
+            }
+        }
+        guard let ext = Self.fileExtension(of: filename ?? localURL?.lastPathComponent) else {
+            return false
+        }
+        return Self.videoFileExtensions.contains(ext)
+    }
+
+    static let videoFileExtensions: Set<String> = ["mp4", "mov"]
+
+    /// Any video, used only to give non-MP4/MOV formats the normal actionable
+    /// attachment path instead of mistaking them for passive self-chat copies.
+    public var isAnyVideo: Bool {
+        if let contentType, contentType.lowercased().hasPrefix("video/") { return true }
+        guard let ext = Self.fileExtension(of: filename ?? localURL?.lastPathComponent) else {
+            return false
+        }
+        return Self.videoFileExtensions.union(["webm", "mkv", "avi", "m4v"]).contains(ext)
+    }
+
     private static func fileExtension(of name: String?) -> String? {
         guard let name, let dot = name.lastIndex(of: "."), dot != name.index(before: name.endIndex) else {
             return nil
@@ -285,6 +317,19 @@ public struct ChannelMessage: Equatable, Sendable {
 
     public var hasText: Bool {
         !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Textless video in a self-chat is a passive device-to-device copy, not a
+    /// request to archive or analyse it. A caption makes the same attachment an
+    /// ordinary actionable message. Mixed attachment batches are not guessed at.
+    public var isPassiveVideoCopy: Bool {
+        !recipient.isGroup
+            && !hasText
+            && !attachments.isEmpty
+            && attachments.allSatisfy(\.isVideo)
+            && attachments.allSatisfy {
+                ($0.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
     }
 
     /// Short, log-safe rendering. Deliberately does not include message text.

@@ -115,6 +115,36 @@ public final class CallActionQueue: @unchecked Sendable {
         /// and not yet drained must still decode after an update. `nil` and
         /// `false` mean the same thing here — the model wrote it.
         public var preemptive: Bool?
+        /// The exact thread that requested the call. Optional so entries written
+        /// before beta.11 still decode; those use the configured owner-channel
+        /// failover at recovery time.
+        public var recipient: Recipient?
+
+        public struct Recipient: Codable, Equatable, Sendable {
+            public let kind: ChannelKind
+            public let address: String
+            public let identity: String?
+            public let isGroup: Bool
+
+            public init(_ recipient: ChannelRecipient) {
+                kind = recipient.kind
+                address = recipient.address
+                identity = recipient.identity
+                isGroup = recipient.isGroup
+            }
+
+            public init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                kind = try values.decode(ChannelKind.self, forKey: .kind)
+                address = try values.decode(String.self, forKey: .address)
+                identity = try values.decodeIfPresent(String.self, forKey: .identity)
+                isGroup = try values.decodeIfPresent(Bool.self, forKey: .isGroup) ?? false
+            }
+
+            public var channelRecipient: ChannelRecipient {
+                ChannelRecipient(kind: kind, address: address, identity: identity, isGroup: isGroup)
+            }
+        }
 
         public init(
             key: String,
@@ -125,7 +155,8 @@ public final class CallActionQueue: @unchecked Sendable {
             asked: String,
             queued: Date,
             state: State = .queued,
-            preemptive: Bool? = nil
+            preemptive: Bool? = nil,
+            recipient: Recipient? = nil
         ) {
             self.preemptive = preemptive
             self.key = key
@@ -136,6 +167,7 @@ public final class CallActionQueue: @unchecked Sendable {
             self.asked = asked
             self.queued = queued
             self.state = state
+            self.recipient = recipient
         }
 
         /// One short line for the transcript. Bounded on purpose — see
@@ -154,6 +186,8 @@ public final class CallActionQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [Entry] = []
     private var liveCall: String?
+    private var nextCallRecipient: Entry.Recipient?
+    private var liveCallRecipient: Entry.Recipient?
 
     /// Non-optional with a defaulted path, copying `PromisedAnswerStore`'s
     /// reasoning: an optional defaulting to nil means any future construction
@@ -187,10 +221,18 @@ public final class CallActionQueue: @unchecked Sendable {
 
     /// Opens a call. Anything already on disk belongs to an earlier call or an
     /// earlier process and is not adopted by this one.
+    public func expectCall(from recipient: ChannelRecipient) {
+        lock.lock()
+        defer { lock.unlock() }
+        nextCallRecipient = Entry.Recipient(recipient)
+    }
+
     public func beginCall(_ id: String) {
         lock.lock()
         defer { lock.unlock() }
         liveCall = id
+        liveCallRecipient = nextCallRecipient
+        nextCallRecipient = nil
     }
 
     /// Closes a call without taking anything — the daemon-shutdown exit, where
@@ -199,6 +241,7 @@ public final class CallActionQueue: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         liveCall = nil
+        liveCallRecipient = nil
     }
 
     // MARK: - Writing
@@ -241,7 +284,8 @@ public final class CallActionQueue: @unchecked Sendable {
             what: what,
             who: who,
             asked: asked,
-            queued: now
+            queued: now,
+            recipient: liveCallRecipient
         )
         entries.append(entry)
         persistLocked()
@@ -286,7 +330,8 @@ public final class CallActionQueue: @unchecked Sendable {
             who: nil,
             asked: heard,
             queued: now,
-            preemptive: true
+            preemptive: true,
+            recipient: liveCallRecipient
         )
         entries.append(entry)
         persistLocked()
@@ -375,6 +420,7 @@ public final class CallActionQueue: @unchecked Sendable {
             }
         }
         liveCall = nil
+        liveCallRecipient = nil
         if !entries.isEmpty { persistLocked() }
         return (mine, abandoned)
     }

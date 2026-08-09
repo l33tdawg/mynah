@@ -42,7 +42,7 @@ public struct AfterTheCallToolSource: ToolProviding {
                 nothing can be sent or produced while the line is open. Use this when the owner \
                 asks you to send them a file, message another agent, or do a piece of work — \
                 then tell them in one line that you will do it after you hang up. The results \
-                arrive in their Signal thread once the call is over.
+                arrive in the same chat that requested the call once it is over.
                 """,
                 inputSchema: .object([
                     "type": .string("object"),
@@ -162,7 +162,7 @@ public struct AfterTheCallToolSource: ToolProviding {
     /// strongly inclined to tell.
     static let queued = """
         QUEUED FOR AFTER THE CALL. Nothing has been sent and nothing has run — this happens once \
-        the line drops, and the result lands in the owner's Signal thread. Tell them in one line \
+        the line drops, and the result lands in the chat that requested the call. Tell them in one line \
         that you will do it after you hang up, then stop. Do not say it is sent, attached, done, \
         or on its way.
         """

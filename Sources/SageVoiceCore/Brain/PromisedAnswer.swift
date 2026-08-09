@@ -51,6 +51,9 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
     /// first WhatsApp-capable build will read promises written by a
     /// Signal-only one. `.signal` is what those actually were.
     public var channel: ChannelKind
+    /// Stable conversation identity when the transport address is ephemeral
+    /// (notably WhatsApp LIDs). Optional for records written before beta.11.
+    public var identity: String?
 
     /// The first part of what he asked, so the apology can name it.
     ///
@@ -77,9 +80,13 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
 
     public static let longestQuestion = 120
 
-    public init(account: String, question: String, promisedAt: Date, channel: ChannelKind) {
+    public init(
+        account: String, question: String, promisedAt: Date, channel: ChannelKind,
+        identity: String? = nil
+    ) {
         self.account = account
         self.channel = channel
+        self.identity = identity == account ? nil : identity
         self.question = String(question.prefix(Self.longestQuestion))
         self.promisedAt = Date(timeIntervalSince1970: promisedAt.timeIntervalSince1970.rounded())
     }
@@ -99,6 +106,7 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
         question = try values.decode(String.self, forKey: .question)
         promisedAt = try values.decode(Date.self, forKey: .promisedAt)
         channel = try values.decodeIfPresent(ChannelKind.self, forKey: .channel) ?? .signal
+        identity = try values.decodeIfPresent(String.self, forKey: .identity)
     }
 }
 
@@ -164,11 +172,14 @@ public struct PromiseLedger: Sendable, Equatable {
     public mutating func promised(
         to account: String,
         channel: ChannelKind,
+        identity: String? = nil,
         question: String,
         at moment: Date
     ) -> PromisedAnswer? {
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let promise = PromisedAnswer(account: account, question: question, promisedAt: moment, channel: channel)
+        let promise = PromisedAnswer(
+            account: account, question: question, promisedAt: moment, channel: channel, identity: identity
+        )
         owed = promise
         return promise
     }

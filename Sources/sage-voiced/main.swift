@@ -1432,7 +1432,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             // was still transcribed by a cold model — 10.7s on the 6 August
             // call, against 1.2s three turns later. See
             // `CallTurnServer.warmRecognition`; the sentence is now true.
-            onCallRequested: { await callServer.prepare() },
+            onCallRequested: { recipient in
+                afterTheCall.expectCall(from: recipient)
+                await callServer.prepare()
+            },
             // What he changes himself is not news. See `OwnTaskEdits`.
             onTaskWrites: { await ownTaskEdits.record() }
         )
@@ -1491,24 +1494,27 @@ func runDaemon(_ arguments: [String]) -> Never {
             return threads
         }()
 
-        // The one-recipient answer, for work that is the reply to something the
-        // owner asked for rather than an announcement. A file he requested on a
-        // call arrives once; it is not news, and two copies of an attachment is
-        // a worse answer than one.
-        //
-        // Signal first when both are on, because it is the channel that has been
-        // carrying this for months and the one the owner's number is stated in.
-        let ownerThread: ChannelRecipient? = ownerThreads.first
-
         let afterTheCallDrain = AfterTheCallDrain(
             queue: afterTheCall,
             notesDirectory: notes.notesDirectory,
             tools: callTools,
-            deliver: { [weak daemon] text, files in
-                await daemon?.postAfterTheCall(text, attaching: files, to: ownerThread) ?? .failed
+            deliver: { [weak daemon] text, files, recipient in
+                guard let daemon else { return .failed }
+                if let recipient {
+                    return await daemon.postAfterTheCall(text, attaching: files, to: recipient)
+                }
+                return await AfterTheCallDrain.firstDelivery(to: ownerThreads) { owner in
+                    await daemon.postAfterTheCall(text, attaching: files, to: owner)
+                }
             },
-            runInstruction: { [weak daemon] text in
-                await daemon?.doAfterTheCall(text, to: ownerThread) ?? .failed
+            runInstruction: { [weak daemon] text, recipient in
+                guard let daemon else { return .failed }
+                if let recipient {
+                    return await daemon.doAfterTheCall(text, to: recipient)
+                }
+                return await AfterTheCallDrain.firstDelivery(to: ownerThreads) { owner in
+                    await daemon.doAfterTheCall(text, to: owner)
+                }
             },
             log: { note($0) }
         )

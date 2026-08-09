@@ -228,6 +228,29 @@ final class AWhatsAppMessageIsNotASignalOneTests: XCTestCase {
         XCTAssertEqual(promise.account, "+60123821767")
     }
 
+    func testAPromiseKeepsWhatsAppsStableIdentityAcrossARestart() throws {
+        let promise = PromisedAnswer(
+            account: "161228928336031@lid",
+            question: "did the agent reply?",
+            promisedAt: Date(timeIntervalSince1970: 1_786_237_200),
+            channel: .whatsapp,
+            identity: "60123821767@s.whatsapp.net"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let recovered = try decoder.decode(PromisedAnswer.self, from: encoder.encode(promise))
+        let recipient = ChannelRecipient(
+            kind: recovered.channel,
+            address: recovered.account,
+            identity: recovered.identity
+        )
+        XCTAssertEqual(recipient.address, "161228928336031@lid")
+        XCTAssertEqual(recipient.description, "whatsapp:60123821767@s.whatsapp.net")
+    }
+
     /// The account is the address alone. `ChannelRecipient.description` carries
     /// the channel name in front of it, and storing that would send the apology
     /// to a Signal account literally called "whatsapp:60…".

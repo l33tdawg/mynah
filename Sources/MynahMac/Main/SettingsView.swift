@@ -2201,7 +2201,7 @@ struct SettingsView: View {
 
             SettingsRow(
                 "Send the transcript to my chat",
-                detail: "When a call ends, what was said is posted back into your Signal thread, "
+                detail: "When a call ends, what was said is posted back into your chat, "
                     + "so there is a record of it."
             ) {
                 Toggle("", isOn: Binding(
@@ -2721,8 +2721,8 @@ struct SettingsView: View {
         SettingsRow(
             "Check on things and tell me",
             detail: "Mynah looks at what your other agents have sent and what's on its task "
-                + "list, and messages you on Signal only when something has changed. It answers "
-                + "in your own Note to Self, so nothing it sends makes your phone ring."
+                + "list, and messages every chat you linked only when something has changed. "
+                + "It uses your own self-chat, so nothing it sends makes your phone ring."
         ) {
             Toggle("", isOn: Binding(
                 get: { model.checksOnThings },

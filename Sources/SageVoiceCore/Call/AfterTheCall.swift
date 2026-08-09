@@ -132,8 +132,8 @@ public enum AfterTheCall {
         guard alreadyPromises(lowered) else { return false }
 
         // Imperatives aimed at the owner, with the appliance as the object. Not
-        // "signal" or "the chat" on their own: the reply that caused all of this
-        // said it would send the ticket "to your Signal thread", so a bare
+        // A channel name or "the chat" on their own: the reply that caused all
+        // of this said it would send the ticket "to your Signal thread", so a bare
         // channel name is present in the failure as well as in the fix.
         let handsItBack = [
             #"\b(message|text|ping|dm|ask|remind|nudge|drop|send|shoot)\s+me\b"#,

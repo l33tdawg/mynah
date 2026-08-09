@@ -84,7 +84,7 @@ public actor CallTurnServer {
     ///
     /// **A dead end with a door in it.** "Something went wrong" down a phone line
     /// leaves the caller with a working appliance and no idea what to do next, so
-    /// this names the thing that will work: the Signal thread, whose own ceiling
+    /// this names the thing that will work: the linked chat, whose own ceiling
     /// is 360 seconds — four times this one — and which can take as long as the
     /// question needs because nobody is holding a line open while it thinks.
     ///
@@ -94,7 +94,7 @@ public actor CallTurnServer {
     /// waits on.
     public static let tookTooLong = """
         Sorry — that one's taking longer than I can hold the line for. \
-        Send it to me on Signal and I'll give it the time it needs.
+        Send it to me in your chat and I'll give it the time it needs.
         """
 
     /// How long the opening briefing may take before the call opens without it.

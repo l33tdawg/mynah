@@ -102,12 +102,12 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2316   (2.0.0-beta.10, sent-reply history and clean replay;
-#                         2313 at beta.9, 2312 at beta.8, 2304 at beta.7,
+#   measured      2348   (2.0.0-beta.11, durable delivery and beta distribution;
+#                         2316 at beta.10, 2313 at beta.9, 2312 at beta.8, 2304 at beta.7,
 #                         2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2278   (2316 - 38)
-#   floor           2292   (24 under measured, 14 above the failure it must catch)
+#   without Kokoro  2310   (2348 - 38)
+#   floor           2336   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -274,6 +274,17 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # tests cover outbox-without-resend, the read-only allowlist/prompt contract and
 # history containing only the real request plus delivered reply.
 #
+# 2316 to 2348 is beta.11's delivery audit: fourteen tests make a completed
+# WhatsApp turn crash-durable without recording an answer before it reaches the
+# owner or repeating its tools on replay, including partial coalesced spools,
+# LID identity changes, interleaved announcements, attachment retries and the
+# textless MP4/MOV no-op. Ten cover exact after-call origin recovery and queue
+# retention until a report or file really delivers. Four pin ASR fallback
+# telemetry, and three require the Pages beta link and release workflow to agree
+# on a complete four-asset distribution and detach the verified DMG safely. The
+# final test prevents a Rosetta parent shell from selecting an x86 XCTest runner
+# for the arm64 release bundle.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -313,7 +324,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2292}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2336}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

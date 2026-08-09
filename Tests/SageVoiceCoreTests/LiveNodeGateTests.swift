@@ -43,6 +43,22 @@ final class LiveNodeGateTests: XCTestCase {
         )
     }
 
+    /// A Rosetta parent reports `uname -m` as x86_64 even though this Mac can
+    /// and must launch the arm64 XCTest runner. The release gate asks the
+    /// executable architecture directly; otherwise a fully green manual run
+    /// can turn into zero executed tests inside the signing pipeline.
+    func testReleaseTestingDetectsArm64CapabilityRatherThanTheParentShell() throws {
+        let release = try text("scripts/release.sh")
+        let workflow = try text(".github/workflows/release.yml")
+        for source in [release, workflow] {
+            XCTAssertTrue(source.contains("/usr/bin/arch -arm64 /usr/bin/true"))
+            XCTAssertFalse(
+                source.contains(#"[[ "$(uname -m)" == "arm64" ]]"#),
+                "a Rosetta shell can still select an x86_64 XCTest runner"
+            )
+        }
+    }
+
     /// **One name, read in one place.** Two spellings of one switch is what made
     /// the gap survive a search: three sites said `MYNAH_LIVE_NODE_TESTS` and a
     /// fourth said `SAGE_LIVE_NODE`, so finding either one made the other look

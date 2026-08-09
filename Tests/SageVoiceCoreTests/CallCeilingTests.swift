@@ -6,7 +6,7 @@ import XCTest
 /// ## What was missing
 ///
 /// The daemon has had `Configuration.turnCeilingSeconds` since 1.5.4, and the
-/// reason it exists applies with more force here: a Signal thread that goes quiet
+/// reason it exists applies with more force here: a message thread that goes quiet
 /// is a thread, while a phone line that goes quiet is somebody saying "hello? …
 /// hello?" into a live microphone while the appliance holds the call open and
 /// does nothing. This surface had no bound at all. A turn parked in something
@@ -67,7 +67,7 @@ final class CallCeilingTests: XCTestCase {
         // made — so the whole string never arrives in a single request, and a
         // test that waited on the opening words would snapshot a half-spoken
         // apology and call it delivered.
-        let door = await spoken.waitForSomethingContaining("signal", within: 10)
+        let door = await spoken.waitForSomethingContaining("chat", within: 10)
         // Read before asserting: an XCTAssert message is an autoclosure, and an
         // actor cannot be reached from inside one.
         let everythingSaid = await spoken.everything()
@@ -165,13 +165,18 @@ final class CallCeilingTests: XCTestCase {
     /// The apology has to name what to do next.
     ///
     /// A caller told "something went wrong" down a phone line is left with a
-    /// working appliance and no idea how to get their answer. The Signal thread
+    /// working appliance and no idea how to get their answer. Their linked chat
     /// is the door: its ceiling is four times this one and nobody is holding a
-    /// line open while it thinks.
+    /// line open while it thinks. The copy must not hard-code Signal because the
+    /// call may have originated from WhatsApp.
     func testTheApologyNamesTheWayThatWorks() {
         XCTAssertTrue(
-            CallTurnServer.tookTooLong.localizedCaseInsensitiveContains("signal"),
+            CallTurnServer.tookTooLong.localizedCaseInsensitiveContains("chat"),
             "a dead end with no door in it: \(CallTurnServer.tookTooLong)"
+        )
+        XCTAssertFalse(
+            CallTurnServer.tookTooLong.localizedCaseInsensitiveContains("signal"),
+            "the recovery path was hard-coded to the wrong channel: \(CallTurnServer.tookTooLong)"
         )
         // Nothing is still running to come back with — `withDeadline` cancels the
         // abandoned work on its way out — so a promise to follow up would be a

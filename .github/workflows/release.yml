@@ -161,7 +161,7 @@ jobs:
           # **The runner's graph is not the build Mac's, so this is not the
           # script's number.** vendor/onnxruntime is deliberately not staged
           # below, so Package.swift drops KokoroEngineTests and its 38 tests
-          # before the run starts: 2292 on the build Mac means 2254 here.
+          # before the run starts: 2336 on the build Mac means 2298 here.
           #
           # Twelve under the runner's own count, which is what assert-test-run.sh's
           # rot check wants — it fires at floor + 38, so a floor set further under
@@ -172,7 +172,7 @@ jobs:
           #
           # Raise both in one commit. They are one subtraction apart and setting
           # only one is how this first went red.
-          MYNAH_MIN_EXECUTED_TESTS: "2254"
+          MYNAH_MIN_EXECUTED_TESTS: "2298"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -181,7 +181,7 @@ jobs:
           # `arch -arm64` for the same reason release.sh uses it: where the
           # xctest runner resolves to x86_64 the arm64 bundle fails to load, the
           # run reports zero tests, and the command still exits 0.
-          if [[ "$(uname -m)" == "arm64" ]]; then
+          if /usr/bin/arch -arm64 /usr/bin/true 2>/dev/null; then
             arch -arm64 swift test 2>&1 | tee "$TEST_LOG"
           else
             swift test 2>&1 | tee "$TEST_LOG"
@@ -229,7 +229,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2292"
+          MYNAH_MIN_EXECUTED_TESTS: "2336"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 
@@ -242,11 +242,13 @@ jobs:
         run: |
           set -euo pipefail
           DMG="$(ls dist/Mynah-*.dmg | head -1)"
+          ZIP="$(ls dist/Mynah-*.zip | head -1)"
           PRERELEASE=""
           # A tag carrying a hyphen is a prerelease by semver convention —
           # v1.2.0-rc.1 must not land on the release page as the current build.
           [[ "${GITHUB_REF_NAME}" == *-* ]] && PRERELEASE="--prerelease"
-          gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" \
+          gh release create "$GITHUB_REF_NAME" \
+            "$DMG" "$DMG.sha256" "$ZIP" "$ZIP.sha256" \
             --title "Mynah $GITHUB_REF_NAME" \
             --generate-notes \
             $PRERELEASE
@@ -255,8 +257,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mynah-dmg
+          name: mynah-release
           path: |
             dist/Mynah-*.dmg
             dist/Mynah-*.dmg.sha256
+            dist/Mynah-*.zip
+            dist/Mynah-*.zip.sha256
           if-no-files-found: warn
