@@ -621,15 +621,15 @@ extension SignalOrWhatsAppOrBothTests {
 
     /// The daemon executable cannot be imported by this test target, so this
     /// pins its wiring directly. Replies still follow the incoming channel and
-    /// after-the-call attachments still choose one thread; only unprompted news
-    /// is deliberately copied to every linked channel.
+    /// after-the-call attachments still choose one thread; unprompted news now
+    /// follows the owner's most recently active channel.
     ///
-    /// Reported on 9 August 2026: with Signal and WhatsApp both linked, two
-    /// proactive replies arrived on Signal only because the watch reused the
-    /// first fallback recipient. Each assertion guards a separate recurrence:
-    /// returning from the Signal branch, announcing to one recipient, or
-    /// deriving the owner's channels in more than one place.
-    func testAProactiveAnnouncementUsesEveryLinkedOwnerThread() throws {
+    /// Reported on 9 August 2026: while the owner was talking in Signal, four
+    /// proactive agent replies appeared in WhatsApp because the watch copied
+    /// news to every linked channel. Each assertion guards a separate
+    /// recurrence: losing either fallback, bypassing active-thread selection,
+    /// or deriving the owner's channels in more than one place.
+    func testAProactiveAnnouncementFollowsTheActiveOwnerThread() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -670,13 +670,11 @@ extension SignalOrWhatsAppOrBothTests {
             main.range(of: "log: { note($0) }", range: sayStart..<main.endIndex)
         ).lowerBound
         let say = String(main[sayStart..<sayEnd])
-        XCTAssertTrue(
-            say.contains("for owner in ownerThreads {"),
-            "the proactive watch announces to one fallback thread instead of every linked channel"
-        )
+        XCTAssertTrue(say.contains("preferredAnnouncementRecipient"))
+        XCTAssertTrue(say.contains("let destinations = preferred.map { [$0] } ?? ownerThreads"))
         XCTAssertTrue(
             say.contains("message, to: owner, quotingAnotherAgent: quotingAnotherAgent"),
-            "the loop does not route each announcement through its current owner thread"
+            "the selected destination does not receive the announcement"
         )
     }
 }

@@ -296,6 +296,32 @@ public struct ConversationStore: @unchecked Sendable {
         }
     }
 
+    /// The owner's most recently active conversation among a set of direct
+    /// channel threads.
+    ///
+    /// **Owner turns, not thread saves, decide this.** An unprompted
+    /// announcement is itself persisted as an assistant turn. When the old
+    /// both-channels policy copied one announcement to Signal and WhatsApp, the
+    /// second copy made WhatsApp's thread the newest file even when the owner
+    /// was talking on Signal. Routing the next announcement by `savedAt` would
+    /// therefore make the mistake self-perpetuating across every restart.
+    public func mostRecentOwnerThread(matching candidates: Set<String>) -> String? {
+        threadsForDisplay()
+            .filter { candidates.contains($0.id) }
+            .compactMap { thread -> (String, Date)? in
+                guard let at = thread.turns
+                    .filter({ $0.speaker == .owner })
+                    .compactMap(\.at)
+                    .max()
+                else { return nil }
+                return (thread.id, at)
+            }
+            .max { first, second in
+                if first.1 == second.1 { return first.0 < second.0 }
+                return first.1 < second.1
+            }?.0
+    }
+
     /// Best-effort rewrite dropping whatever has aged out. Never throws: this
     /// runs during boot and a tidy-up that cannot complete must not stop the
     /// appliance from starting.

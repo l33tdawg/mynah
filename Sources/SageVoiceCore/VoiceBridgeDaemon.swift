@@ -295,6 +295,10 @@ public actor VoiceBridgeDaemon {
     /// preserve is a specific thread's, not the model in the abstract.
     private var lastAnchoredKey: String?
 
+    /// The last real owner conversation seen in this process. Proactive news
+    /// follows it instead of being copied into every linked app.
+    private var lastConversationRecipient: ChannelRecipient?
+
     /// The last "hang on" line sent to each thread.
     ///
     /// Kept so the next one can avoid repeating it. Random choice from four
@@ -894,6 +898,27 @@ public actor VoiceBridgeDaemon {
         return recent.isEmpty ? nil : recent.joined(separator: "\n")
     }
 
+    /// Where unsolicited news belongs when more than one transport is linked.
+    ///
+    /// A live recipient wins so a WhatsApp LID remains replyable. After a
+    /// restart, the newest persisted *owner* turn restores the choice. Nil is
+    /// deliberate: callers may then use every configured owner thread as a
+    /// no-history fallback rather than silently dropping news.
+    public func preferredAnnouncementRecipient(
+        among ownerThreads: [ChannelRecipient]
+    ) -> ChannelRecipient? {
+        if let live = lastConversationRecipient,
+           ownerThreads.contains(where: { $0.description == live.description }) {
+            return live
+        }
+        guard let conversations,
+              let key = conversations.mostRecentOwnerThread(
+                  matching: Set(ownerThreads.map(\.description))
+              )
+        else { return nil }
+        return ownerThreads.first(where: { $0.description == key })
+    }
+
     // MARK: One message
 
     /// Exposed so a test can drive a synthetic message without a live daemon.
@@ -1148,6 +1173,12 @@ public actor VoiceBridgeDaemon {
             log("[daemon][SECURITY] another bridge is replying on this thread; ignoring its message")
             return .ignoredSecondBridge
         }
+
+        // A valid, actionable owner message chooses the app where later news
+        // should land. Kept after the bridge-loop guard so a synced Mynah reply
+        // cannot steal the route, and after the empty/passive-video guards so a
+        // device-to-device copy is not treated as conversation.
+        lastConversationRecipient = recipient
 
         // Before the model, and before the pause check: `//call` is an explicit
         // instruction to this program, not a question for the assistant, and a

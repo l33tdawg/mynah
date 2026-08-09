@@ -5,6 +5,65 @@ import XCTest
 /// composed while a transport was unavailable.
 final class DeliveredConversationHistoryTests: XCTestCase {
 
+    func testAnOldBroadcastCannotStealTheActiveChannelAfterRestart() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("announcement-route-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationStore(fileURL: directory.appendingPathComponent("conversations.json"))
+        let signal = "signal:+60123821767"
+        let whatsapp = "whatsapp:60123821767@s.whatsapp.net"
+        let ownerSpoke = Date(timeIntervalSince1970: 100)
+
+        try store.save([
+            signal: [.user("ask Sage"), .assistant("sent")],
+        ], now: ownerSpoke)
+        // Models beta.11 copying the later reply notice into both apps. The
+        // WhatsApp copy is saved last, but neither copy is an owner turn.
+        try store.save([
+            signal: [.user("ask Sage"), .assistant("sent"), .assistant("Sage replied")],
+            whatsapp: [.assistant("Sage replied")],
+        ], now: Date(timeIntervalSince1970: 200))
+
+        XCTAssertEqual(
+            store.mostRecentOwnerThread(matching: [signal, whatsapp]),
+            signal,
+            "an assistant-only WhatsApp broadcast became the next announcement route"
+        )
+    }
+
+    func testLiveConversationSwitchesTheAnnouncementRouteBetweenApps() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("live-announcement-route-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let signalChannel = FailableChannel(kind: .signal, failures: 0)
+        let whatsappChannel = FailableChannel(kind: .whatsapp, failures: 0)
+        let daemon = VoiceBridgeDaemon(
+            channels: ChannelSet([signalChannel, whatsappChannel]),
+            transcriber: NoopAudioFileTranscriber(),
+            loop: ToolLoop(backend: AnsweringBackend(["Signal answer", "WhatsApp answer"]), mcp: NoTools()),
+            conversations: ConversationStore(fileURL: directory.appendingPathComponent("conversations.json")),
+            pause: PauseState(fileURL: directory.appendingPathComponent("paused")),
+            log: { _ in }
+        )
+        let signal = ChannelRecipient(kind: .signal, address: "+60123821767")
+        let whatsapp = ChannelRecipient(kind: .whatsapp, address: "60123821767@s.whatsapp.net")
+        let owners = [signal, whatsapp]
+
+        _ = await daemon.handle(ChannelMessage(
+            kind: .signal, recipient: signal, id: "signal-owner-turn", text: "ask from Signal"
+        ))
+        let afterSignal = await daemon.preferredAnnouncementRecipient(among: owners)
+        XCTAssertEqual(afterSignal, signal)
+
+        _ = await daemon.handle(ChannelMessage(
+            kind: .whatsapp, recipient: whatsapp, id: "whatsapp-owner-turn", text: "ask from WhatsApp"
+        ))
+        let afterWhatsApp = await daemon.preferredAnnouncementRecipient(among: owners)
+        XCTAssertEqual(afterWhatsApp, whatsapp)
+    }
+
     func testFailedWhatsAppAnswerIsNotReplayedAsConversationHistory() async throws {
         let fixture = try Fixture(answers: ["Blue.", "Green."], failures: 1)
         let message = fixture.message("do the thing", id: "wa-1", sequence: 1)

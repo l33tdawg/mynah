@@ -1458,7 +1458,8 @@ func runDaemon(_ arguments: [String]) -> Never {
         // an address `ChannelSet.send` has nowhere to route — so every piece of
         // after-the-call work would be composed, attempted, and lost.
         //
-        // **Every channel the owner can read, not the first of them.**
+        // Every direct channel the owner can read. This is the fallback set;
+        // ongoing conversation chooses one of them below.
         //
         // This was one recipient, Signal first when both were on, justified as
         // "only the *fallback* thread, used for work recovered at startup that
@@ -1474,11 +1475,10 @@ func runDaemon(_ arguments: [String]) -> Never {
         // — agent replies, task digests, reminders — went to Signal and nowhere
         // else, while the owner was reading WhatsApp.
         //
-        // His ruling: **both**. He linked two channels, so an unprompted message
-        // goes to both, and the cost is that he gets it twice. Ordered rather
-        // than a set, because `first` is still the single-recipient answer the
-        // after-the-call drain needs and this is now the only place that
-        // question is answered.
+        // The first fix broadcast to both. That solved the missing-channel case
+        // and created a worse one: while the owner talked in Signal, replies
+        // appeared in WhatsApp too. Keep the complete set here; the watch asks
+        // the daemon which one the owner actually used most recently.
         let ownerThreads: [ChannelRecipient] = {
             var threads: [ChannelRecipient] = []
             if selection.includes(.signal),
@@ -1599,9 +1599,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             // to "where does the owner read this?" is how one of them stays
             // wrong after the other is fixed.
             //
-            // **All of them, not the first.** An announcement is news, and news
-            // goes everywhere the owner reads. See `ownerThreads`.
-            guard !ownerThreads.isEmpty else { return }
+            // A new install has no conversation evidence, so it still has a
+            // lossless fallback. Once the owner has spoken, news follows that
+            // direct thread instead of mirroring across apps.
+            guard !ownerThreads.isEmpty, let daemon else { return }
 
             await runProactiveWatch(
                 // Logged, because a backlog read that fails silently is what
@@ -1618,17 +1619,12 @@ func runDaemon(_ arguments: [String]) -> Never {
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
                 say: { message, quotingAnotherAgent in
-                    // **Each channel attempted on its own.** A Signal helper
-                    // that is down must not swallow the WhatsApp copy — the
-                    // whole point of sending to both is that one of them
-                    // failing is survivable, and `announce` returns false
-                    // rather than throwing precisely so this can carry on.
-                    //
-                    // Sequential rather than concurrent: two sends a second
-                    // apart cost nothing anybody can perceive, and the daemon's
-                    // history writes are actor-isolated anyway.
-                    for owner in ownerThreads {
-                        _ = await daemon?.announce(
+                    let preferred = await daemon.preferredAnnouncementRecipient(
+                        among: ownerThreads
+                    )
+                    let destinations = preferred.map { [$0] } ?? ownerThreads
+                    for owner in destinations {
+                        _ = await daemon.announce(
                             message, to: owner, quotingAnotherAgent: quotingAnotherAgent
                         )
                     }
