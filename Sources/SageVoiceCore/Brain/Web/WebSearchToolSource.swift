@@ -56,6 +56,7 @@ public final class WebSearchToolSource: ToolProviding {
     private let backends: [WebSearchBackend]
     private let resultCount: Int
     private let snippetCharacters: Int
+    private let pageReader: WebPageReading
     /// Injected so a test can exercise the fall-through without spending the
     /// real bound. See `WebSearchFallthroughTests`.
     private let giveUpOnAProviderAfter: TimeInterval
@@ -70,12 +71,14 @@ public final class WebSearchToolSource: ToolProviding {
         resultCount: Int = WebSearchToolSource.defaultResultCount,
         snippetCharacters: Int = WebSearchToolSource.defaultSnippetCharacters,
         giveUpOnAProviderAfter: TimeInterval = WebSearchToolSource.secondsBeforeGivingUpOnAProvider,
+        pageReader: WebPageReading = WebPageReader(),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.backends = backends
         self.resultCount = resultCount
         self.snippetCharacters = snippetCharacters
         self.giveUpOnAProviderAfter = giveUpOnAProviderAfter
+        self.pageReader = pageReader
         self.log = log
     }
 
@@ -147,7 +150,8 @@ public final class WebSearchToolSource: ToolProviding {
                 // it, qwen reaches for the internet to answer questions about
                 // the owner's own memory, which SAGE holds and the web does not.
                 description: """
-                Search the public internet and return the top results with short summaries. \
+                Search the public internet and return top results with summaries. Use url to \
+                read an exact page instead of searching again. \
                 Use this for current events, facts about the outside world, people or \
                 organisations you were not told about, prices, documentation, or anything \
                 that may have changed recently. Do NOT use this for the owner's own notes, \
@@ -158,10 +162,13 @@ public final class WebSearchToolSource: ToolProviding {
                     "properties": .object([
                         "query": .object([
                             "type": .string("string"),
-                            "description": .string("What to search for, as you would type it into a search engine.")
+                            "description": .string("Words to search for.")
+                        ]),
+                        "url": .object([
+                            "type": .string("string"),
+                            "description": .string("Exact public http(s) page to read.")
                         ])
-                    ]),
-                    "required": .array([.string("query")])
+                    ])
                 ])
             )
         ]
@@ -172,10 +179,21 @@ public final class WebSearchToolSource: ToolProviding {
             throw CompositeToolSource.Failure.unknownTool(name)
         }
 
+        let explicitURL = (arguments["url"]?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let query = (arguments["query"]?.stringValue ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Accept a URL in `query` too. Small local models sometimes keep the
+        // familiar field even after choosing the page-reading branch; making
+        // that harmless is cheaper than another search and another model turn.
+        let pageText = !explicitURL.isEmpty ? explicitURL : query
+        if let url = URL(string: pageText), url.scheme == "https" || url.scheme == "http" {
+            log("[web_search] reading page without spending search quota: \(url.host ?? "unknown")")
+            return try await pageReader.read(url: url)
+        }
         guard !query.isEmpty else {
-            return "No search query was given, so nothing was searched."
+            return "No search query or page URL was given, so nothing was looked up."
         }
 
         do {

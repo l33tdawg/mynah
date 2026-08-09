@@ -7,6 +7,49 @@ import Foundation
 /// model they are tokens spent on nothing.
 enum HTMLText {
 
+    /// Extracts the useful prose from a whole page rather than a search
+    /// snippet. Prefer an article/main element, then remove the chrome and code
+    /// that otherwise consume the tool-result budget before the article begins.
+    static func readablePage(_ html: String, limit: Int) -> String {
+        let outline = headingOutline(in: html)
+        let preferred = firstCapture(
+            in: html,
+            pattern: #"<(?:article|main)\b[^>]*>([\s\S]*?)</(?:article|main)>"#
+        ) ?? html
+        var content = preferred
+        for element in ["script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form"] {
+            content = content.replacingOccurrences(
+                of: #"<\#(element)\b[^>]*>[\s\S]*?</\#(element)>"#,
+                with: " ",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        content = content.replacingOccurrences(
+            of: #"</?(?:p|div|section|h[1-6]|li|br|tr)\b[^>]*>"#,
+            with: "\n",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        let body = plain(content)
+        let prefix = outline.isEmpty ? "" : "Page outline: \(outline)\n\n"
+        let remaining = max(0, limit - prefix.count)
+        let boundedBody = body.count > remaining
+            ? WebSearchToolSource.truncate(body, to: remaining)
+            : body
+        return prefix + boundedBody
+    }
+
+    /// A server-rendered shell can expose its headings in metadata while the
+    /// article body still exists only after JavaScript runs. The outline is
+    /// useful, but it is not proof that the page itself was readable; the page
+    /// reader uses this distinction to decide whether to render externally.
+    static func hasBodyBeyondOutline(_ text: String) -> Bool {
+        guard text.hasPrefix("Page outline:") else { return !text.isEmpty }
+        guard let divider = text.range(of: "\n\n") else { return false }
+        return !text[divider.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+    }
+
     /// Tags stripped, entities decoded, whitespace collapsed.
     static func plain(_ html: String) -> String {
         let withoutTags = html.replacingOccurrences(
@@ -82,5 +125,40 @@ enum HTMLText {
         text
             .replacingOccurrences(of: "\\s+", with: " ", options: [.regularExpression])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstCapture(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+
+    /// Carries headings from the whole document ahead of the bounded body.
+    /// Long round-ups otherwise lose every item below the first few thousand
+    /// characters when the tool loop applies its on-device context ceiling.
+    private static func headingOutline(in text: String) -> String {
+        var headings: [String] = []
+        if let regex = try? NSRegularExpression(
+            pattern: #"<h[1-4]\b[^>]*>([\s\S]*?)</h[1-4]>"#,
+            options: [.caseInsensitive]
+        ) {
+            let range = NSRange(text.startIndex..., in: text)
+            headings += regex.matches(in: text, range: range).compactMap { match in
+                guard let captured = Range(match.range(at: 1), in: text) else { return nil }
+                return plain(String(text[captured]))
+            }
+        }
+        headings += text.split(separator: "\n").compactMap { line in
+            let value = line.trimmingCharacters(in: .whitespaces)
+            guard value.hasPrefix("#") else { return nil }
+            let heading = value.drop(while: { $0 == "#" || $0 == " " })
+            return heading.isEmpty ? nil : plain(String(heading))
+        }
+
+        var seen = Set<String>()
+        let unique = headings.filter { !$0.isEmpty && seen.insert($0).inserted }
+        let joined = unique.joined(separator: " · ")
+        return joined.count > 1_500 ? WebSearchToolSource.truncate(joined, to: 1_500) : joined
     }
 }

@@ -70,7 +70,8 @@ extension PrivacyClaim {
     static let memories = "Kept on this Mac, in a folder only you can read."
 
     static let webSearch = "When a question needs the internet, the words Mynah searches for go "
-        + "to a search engine. The rest of what you said does not."
+        + "to a search engine. If a result page needs a browser to be readable, its public address "
+        + "goes to Jina Reader. The rest of what you said does not."
 
     /// Calling, stated as what leaves rather than as a feature.
     ///
