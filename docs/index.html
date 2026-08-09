@@ -1142,18 +1142,28 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
        So it costs a visitor with JavaScript off the knowledge that a beta
        exists, which is the right thing to lose. */
     /* GitHub does not promise that prereleases are returned newest-first.
-       It currently places beta.10 after beta.3, so `find` kept the site pinned
-       to beta.9 even after beta.10 and all four assets were published. Sort by
-       publication time ourselves, then take the newest complete beta. */
-    const betas = releases
-      .filter(release => !release.draft && release.prerelease)
-      .sort((left, right) => {
-        const when = release => Date.parse(release.published_at || release.created_at || 0) || 0;
-        return when(right) - when(left);
-      });
-    const beta = betas.find(release =>
-      (release.assets || []).some(asset => DISK_IMAGE.test(asset.name || ""))
-    );
+       Require the DMG, ZIP and both checksums before a newer beta can displace
+       the last complete one; publication is several uploads, not an atomic
+       operation, and the page can be fetched between any two of them. */
+    function newestCompletePrerelease(candidates) {
+      const complete = release => {
+        const names = new Set((release.assets || []).map(asset => asset.name || ""));
+        const dmg = [...names].find(name => DISK_IMAGE.test(name));
+        if (!dmg) return false;
+        const stem = dmg.slice(0, -4);
+        return names.has(dmg + ".sha256")
+          && names.has(stem + ".zip")
+          && names.has(stem + ".zip.sha256");
+      };
+      const when = release => Date.parse(
+        release.published_at || release.created_at || 0
+      ) || 0;
+      return candidates
+        .filter(release => !release.draft && release.prerelease && complete(release))
+        .sort((left, right) => when(right) - when(left))[0];
+    }
+
+    const beta = newestCompletePrerelease(releases);
     const betaAsset = (beta?.assets || []).find(
       asset => DISK_IMAGE.test(asset.name || "")
     );
