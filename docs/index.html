@@ -1140,7 +1140,44 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
        spelling of an asset name is written down. */
     const DISK_IMAGE = /^Mynah-\d[\w.-]*-macOS-arm64\.dmg$/i;
 
-    const newest = releases.find(release => !release.draft && !release.prerelease);
+    /* The stable download, chosen the careful way.
+       ----------------------------------------------------------------------
+       **This was `releases.find(r => !r.draft && !r.prerelease)`, which takes
+       the first match in ARRAY order.** GitHub does not promise releases come
+       back newest-first — measured on 15 Aug 2026 against l33tdawg/sage, the
+       API returned v11.17.5 at element 0 while v11.18.11 was really newest. On
+       a scrambled response that `find` would hand a visitor 1.9.0 from the 2.0
+       download button and nothing would look wrong.
+
+       The completeness check matters for the same reason it did for the beta
+       row it is inherited from: publishing is several uploads, not an atomic
+       operation, and the page can be fetched between any two of them. A
+       release whose ZIP pair has not landed yet is not yet installable, so the
+       last complete one stays up until it is.
+
+       This care used to live only in the beta selector. When the beta row was
+       retired the careful path went with it and left the careless one running
+       the only button on the page, which is exactly backwards. */
+    function newestCompleteRelease(candidates) {
+      const complete = release => {
+        const names = new Set((release.assets || []).map(asset => asset.name || ""));
+        const dmg = [...names].find(name => DISK_IMAGE.test(name));
+        if (!dmg) return false;
+        const stem = dmg.slice(0, -4);
+        return names.has(dmg + ".sha256")
+          && names.has(stem + ".zip")
+          && names.has(stem + ".zip.sha256");
+      };
+      const when = release => Date.parse(
+        release.published_at || release.created_at || 0
+      ) || 0;
+      return candidates
+        .filter(release => !release.draft && !release.prerelease && complete(release))
+        .sort((left, right) => when(right) - when(left))[0];
+    }
+    // END newestCompleteRelease
+
+    const newest = newestCompleteRelease(releases);
     const versioned = (newest?.assets || []).find(
       asset => DISK_IMAGE.test(asset.name || "")
     );
