@@ -153,7 +153,8 @@ public actor WhatsAppChannel: MessageChannel {
     }
 
     static func translate(_ message: WhatsAppIncomingMessage) -> ChannelMessage {
-        ChannelMessage(
+        let words = Self.ownersWords(in: message)
+        return ChannelMessage(
             kind: .whatsapp,
             // The chat, never the sender. In a group they differ, and replying
             // to the sender would take the answer out of the conversation it
@@ -170,7 +171,7 @@ public actor WhatsAppChannel: MessageChannel {
             ),
             id: message.messageID,
             senderDisplayName: message.senderName,
-            text: message.body.isEmpty ? nil : message.body,
+            text: words,
             attachments: message.mediaPaths.enumerated().map { index, path in
                 ChannelAttachment(
                     // WhatsApp gives one id for the message, not one per file.
@@ -179,7 +180,7 @@ public actor WhatsAppChannel: MessageChannel {
                     id: message.mediaPaths.count > 1 ? "\(message.messageID)-\(index)" : message.messageID,
                     contentType: Self.contentType(for: message.mediaType, path: path),
                     filename: (path as NSString).lastPathComponent,
-                    caption: message.body.isEmpty ? nil : message.body,
+                    caption: words,
                     localURL: URL(fileURLWithPath: path)
                 )
             },
@@ -189,6 +190,34 @@ public actor WhatsAppChannel: MessageChannel {
             // recreated during the turn renumbers from 1 under it.
             acknowledgementEpoch: message.spoolEpoch
         )
+    }
+
+    /// What the owner actually typed, which is not always what arrived in
+    /// `body`.
+    ///
+    /// **An uncaptioned video used to arrive carrying `[video received]`** — a
+    /// sentence the bridge wrote, in the one field that means "the owner's
+    /// words". `ChannelMessage.isPassiveVideoCopy` asks whether a video came
+    /// with any text, so that single string kept the guard from ever firing on
+    /// WhatsApp: it was dead from the day it shipped, and every mp4 the owner
+    /// moved between his own devices was filed as a note called "video
+    /// received" and answered at length.
+    ///
+    /// Fixed in `bridge_helpers.js`, which no longer writes it, and fixed again
+    /// here — for the reason `WhatsAppSenderAllowlist` gives for existing at
+    /// all. The bridge is a separate process this app launches, and an older
+    /// one left running by a stale LaunchAgent is an ordinary state during an
+    /// update. Whether the owner said anything should not depend on which
+    /// bridge answered.
+    ///
+    /// Only the video placeholder is dropped. `[document received]` is
+    /// load-bearing: an uncaptioned PDF with no text has no transcript, and a
+    /// message with no transcript is retired *before* it is filed, so removing
+    /// it would lose the file the owner sent to be kept.
+    static func ownersWords(in message: WhatsAppIncomingMessage) -> String? {
+        guard !message.body.isEmpty else { return nil }
+        if message.mediaType == "video", message.body == "[video received]" { return nil }
+        return message.body
     }
 
     /// WhatsApp names a *category* — `ptt`, `image`, `document` — where Signal

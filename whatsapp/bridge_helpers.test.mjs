@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getMessageContent, tokensMatch } from './bridge_helpers.js';
+import { extractBridgeEvent, getMessageContent, tokensMatch } from './bridge_helpers.js';
 
 const text = (body) => ({ conversation: body });
 
@@ -145,4 +145,82 @@ test('an empty expected token refuses everything rather than accepting everythin
   // buffers compare equal, so without this every caller would be authorised.
   assert.equal(tokensMatch('', ''), false);
   assert.equal(tokensMatch('anything', ''), false);
+});
+
+// An uncaptioned video is not a message the owner typed.
+//
+// `body` means the owner's words — the app's `WhatsAppIncomingMessage` says so
+// beside the field: "Empty for a message that is only an attachment". The
+// placeholder wrote a sentence there anyway, and the app's passive-video guard,
+// which asks whether an mp4 arrived with any text, therefore never fired on
+// WhatsApp once. Every video the owner moved between his own devices was filed
+// as a note called "video received" and answered: five in six minutes on 15
+// August 2026, each one a 5 MB copy of the same clip.
+
+const videoMessage = (extra = {}) => ({
+  key: { id: 'video-1', remoteJid: '60123456789@s.whatsapp.net', fromMe: true },
+  messageTimestamp: 1786771465,
+  message: { videoMessage: { mimetype: 'video/mp4', ...extra } },
+});
+
+test('an uncaptioned video leaves the body empty, so the app can see it is textless', async () => {
+  const event = await extractBridgeEvent({
+    msg: videoMessage(),
+    chatId: '60123456789@s.whatsapp.net',
+    senderId: '60123456789@s.whatsapp.net',
+    senderNumber: '60123456789',
+  });
+  assert.equal(event.body, '');
+  assert.equal(event.hasMedia, true);
+  assert.equal(event.mediaType, 'video');
+});
+
+test('a captioned video keeps the caption, because that is a message', async () => {
+  const event = await extractBridgeEvent({
+    msg: videoMessage({ caption: 'what is he playing' }),
+    chatId: '60123456789@s.whatsapp.net',
+    senderId: '60123456789@s.whatsapp.net',
+    senderNumber: '60123456789',
+  });
+  assert.equal(event.body, 'what is he playing');
+});
+
+test('a video that could not be downloaded still says so', async () => {
+  // The failure note is written before the placeholder is skipped, so silence
+  // is only ever the answer to a video that actually arrived.
+  const event = await extractBridgeEvent({
+    msg: videoMessage(),
+    chatId: '60123456789@s.whatsapp.net',
+    senderId: '60123456789@s.whatsapp.net',
+    senderNumber: '60123456789',
+    downloadMedia: async () => { throw new Error('expired media URL'); },
+  });
+  assert.equal(event.body, '[video could not be downloaded]');
+});
+
+test('every other attachment keeps its placeholder', async () => {
+  // Not symmetry for its own sake: a document with an empty body has no
+  // transcript, and the app retires a message with no transcript BEFORE it
+  // files the attachment. Dropping this would lose the PDF the owner sent to
+  // be kept. A gif keeps it too — WhatsApp sends one as an mp4, but it is sent
+  // to be watched rather than copied between devices.
+  const document = await extractBridgeEvent({
+    msg: {
+      key: { id: 'doc-1', remoteJid: '60123456789@s.whatsapp.net' },
+      messageTimestamp: 1786771465,
+      message: { documentMessage: { mimetype: 'application/pdf', fileName: 'ferry.pdf' } },
+    },
+    chatId: '60123456789@s.whatsapp.net',
+    senderId: '60123456789@s.whatsapp.net',
+    senderNumber: '60123456789',
+  });
+  assert.equal(document.body, '[document received]');
+
+  const gif = await extractBridgeEvent({
+    msg: videoMessage({ gifPlayback: true }),
+    chatId: '60123456789@s.whatsapp.net',
+    senderId: '60123456789@s.whatsapp.net',
+    senderNumber: '60123456789',
+  });
+  assert.equal(gif.body, '[gif received]');
 });

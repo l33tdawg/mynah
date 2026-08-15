@@ -503,7 +503,24 @@ export async function extractBridgeEvent({
   // downloaded]" rather than claiming the media arrived.
   body = appendMediaFailureNote(body, mediaFailures);
 
-  if (hasMedia && !body) {
+  // **A video gets no placeholder.** `body` is what the owner typed, and the
+  // app's wire model says so in as many words: "Empty for a message that is
+  // only an attachment". Standing a sentence in that field told the app he had
+  // typed one, and the only guard that reads it — the passive-video copy, which
+  // exists so an mp4 moved between his own devices is not treated as an
+  // instruction — could therefore never fire on WhatsApp. It had been dead
+  // since the day it shipped. What the owner saw was every uncaptioned video
+  // filed as a note called "video received" and answered at length: five of
+  // them in six minutes on 15 August, each a 5MB copy of the same clip.
+  //
+  // Other types keep it. An uncaptioned document with an empty body is dropped
+  // as an empty message before it is ever filed, so for those the placeholder
+  // is load-bearing rather than a lie. A gif keeps it too: WhatsApp sends one
+  // as an mp4, but it is sent to be watched, not copied between devices.
+  //
+  // A failed download has already put its own note in `body` above, so a video
+  // that did not arrive still says so.
+  if (hasMedia && !body && mediaType !== 'video') {
     body = `[${mediaType} received]`;
   }
 

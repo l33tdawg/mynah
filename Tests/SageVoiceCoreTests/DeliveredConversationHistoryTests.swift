@@ -651,6 +651,110 @@ final class DeliveredConversationHistoryTests: XCTestCase {
             "a textless video from a group was discarded as though it were a self-chat copy"
         )
     }
+
+    /// The guard above was dead on WhatsApp from the day it shipped.
+    ///
+    /// The bridge stood `[video received]` in `body` for any uncaptioned
+    /// attachment — a sentence it wrote itself, in the field that means "what
+    /// the owner typed". `isPassiveVideoCopy` asks whether a video came with
+    /// text, so it answered no every time, and every mp4 the owner moved
+    /// between his own devices was filed as a note called "video received" and
+    /// answered at length: five in six minutes on 15 August 2026.
+    ///
+    /// `bridge_helpers.js` no longer writes it. This tests the second half of
+    /// the fix — that an older bridge still sending it cannot revive the bug.
+    func testTheBridgesUncaptionedVideoPlaceholderIsNotOwnerText() {
+        let translated = WhatsAppChannel.translate(WhatsAppIncomingMessage(
+            sequence: 1,
+            messageID: "video",
+            chatID: "161228928336031@lid",
+            senderID: "161228928336031@lid",
+            body: "[video received]",
+            hasMedia: true,
+            mediaType: "video",
+            mediaPaths: ["/tmp/vid-1786771465.mp4"]
+        ))
+
+        XCTAssertNil(translated.text, "a sentence the bridge wrote was carried as the owner's words")
+        XCTAssertNil(translated.attachments.first?.caption, "the same placeholder came back as a caption")
+        XCTAssertTrue(
+            translated.isPassiveVideoCopy,
+            "an uncaptioned WhatsApp video was still not recognised as a device-to-device copy"
+        )
+
+        // Only the video placeholder. An uncaptioned document with an empty
+        // body has no transcript at all, and a message with no transcript is
+        // retired before `keepAttachments` runs — so dropping this one would
+        // lose the PDF the owner sent precisely so it would be kept.
+        let document = WhatsAppChannel.translate(WhatsAppIncomingMessage(
+            sequence: 2,
+            messageID: "doc",
+            chatID: "161228928336031@lid",
+            senderID: "161228928336031@lid",
+            body: "[document received]",
+            hasMedia: true,
+            mediaType: "document",
+            mediaPaths: ["/tmp/doc-1786771465.pdf"]
+        ))
+        XCTAssertEqual(document.text, "[document received]")
+
+        // And a caption is a message, whatever it happens to say.
+        let captioned = WhatsAppChannel.translate(WhatsAppIncomingMessage(
+            sequence: 3,
+            messageID: "captioned",
+            chatID: "161228928336031@lid",
+            senderID: "161228928336031@lid",
+            body: "[video received]",
+            hasMedia: true,
+            mediaType: "document",
+            mediaPaths: ["/tmp/vid-1786771466.mp4"]
+        ))
+        XCTAssertEqual(captioned.text, "[video received]")
+    }
+
+    /// End to end: the brain is never woken and nothing is filed.
+    ///
+    /// Both halves matter. The owner saw the reply, but the note is what made
+    /// it absurd — Mynah reading back a list of his documents with five copies
+    /// of the same clip in it, each one 5 MB, none of them asked for.
+    func testAnUncaptionedWhatsAppVideoWakesNothingAndFilesNothing() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("passive-video-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let video = directory.appendingPathComponent("vid-1786771465.mp4")
+        try Data("not really an mp4".utf8).write(to: video)
+
+        let notes = directory.appendingPathComponent("notes")
+        let channel = FailableChannel(failures: 0)
+        let brain = AnsweringBackend(["Okay."])
+        let daemon = VoiceBridgeDaemon(
+            channels: ChannelSet([channel]), transcriber: NoopAudioFileTranscriber(),
+            loop: ToolLoop(backend: brain, mcp: NoTools()),
+            notes: NotesToolSource(directory: notes, exporter: nil),
+            pendingDeliveries: PendingDeliveryStore(fileURL: directory.appendingPathComponent("pending.json")),
+            pause: PauseState(fileURL: directory.appendingPathComponent("paused")), log: { _ in }
+        )
+
+        let outcome = await daemon.handle(WhatsAppChannel.translate(WhatsAppIncomingMessage(
+            sequence: 1,
+            messageID: "video",
+            chatID: "161228928336031@lid",
+            senderID: "161228928336031@lid",
+            body: "[video received]",
+            hasMedia: true,
+            mediaType: "video",
+            mediaPaths: [video.path]
+        )))
+
+        XCTAssertEqual(outcome, .ignoredPassiveVideo)
+        XCTAssertEqual(brain.recordedRequests.count, 0, "a device-to-device copy woke the brain")
+        XCTAssertEqual(channel.sendCount, 0, "the owner was answered about a video he only moved")
+        let kept = (try? FileManager.default.contentsOfDirectory(
+            atPath: notes.appendingPathComponent(SignalAttachmentStore.subdirectory).path
+        )) ?? []
+        XCTAssertTrue(kept.isEmpty, "the copy was filed anyway: \(kept)")
+    }
 }
 
 private extension DeliveredConversationHistoryTests {
