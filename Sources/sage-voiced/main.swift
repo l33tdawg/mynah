@@ -374,11 +374,15 @@ func makeToolSource(
             label: "SAGE MCP",
             // See `ScopedRecall`: 11.16.4 refuses recall with no domain, and
             // the model leaves it out. The ritual keeps the raw client.
-            // Two decorators, and the order matters only in that neither cares:
-            // one rewrites `sage_task` arguments, the other fills in
-            // `sage_recall`'s domain. Both exist because a rule in the prompt is
-            // followed most of the time, and "most of the time" fails silently.
-            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
+            // Three decorators, and the order matters only in that none cares:
+            // one rewrites `sage_task` arguments, one fills in `sage_recall`'s
+            // domain, and one keeps `sage_timeline` inside the 31 days an
+            // app-v23 node will answer. All three exist because a rule in the
+            // prompt is followed most of the time, and "most of the time" fails
+            // silently.
+            provider: BoundedTimeline(
+                wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp)))
+            ),
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])
@@ -1648,10 +1652,18 @@ func runDaemon(_ arguments: [String]) -> Never {
                         among: ownerThreads
                     )
                     let destinations = preferred.map { [$0] } ?? ownerThreads
+                    // Several messages rather than one with its end missing.
+                    // The owner: "if needed we should just summarize it or send
+                    // multiple messages / use more than 1 turn to send it".
+                    // Split per recipient rather than once outside this loop
+                    // only because it is pure and cheap; the parts are
+                    // identical either way.
                     for owner in destinations {
-                        _ = await daemon.announce(
-                            message, to: owner, quotingAnotherAgent: quotingAnotherAgent
-                        )
+                        for part in AnnouncementParts.split(message) {
+                            _ = await daemon.announce(
+                                part, to: owner, quotingAnotherAgent: quotingAnotherAgent
+                            )
+                        }
                     }
                 },
                 log: { note($0) }

@@ -110,16 +110,41 @@ final class ProactiveWatchTests: XCTestCase {
         XCTAssertTrue(report.message?.contains("sent work (research)") ?? false, report.message ?? "")
     }
 
-    func testAnotherAgentsWordsAreCappedRatherThanRelayedWhole() async {
-        let long = String(repeating: "a", count: 900)
+    /// **This asserted the opposite until 2.1.1, and the owner overruled it.**
+    ///
+    /// It pinned a 160-character cut, on the reasoning that *"an unbounded relay
+    /// would let an agent elsewhere push whatever it liked into the owner's
+    /// Signal thread, unprompted"*. He reported what that cost in practice:
+    /// *"messages that come via the hook bus whatever thing seem truncated and i
+    /// always have to ask mynah to resend me the full thing"*.
+    ///
+    /// The safety half of the old reasoning does not survive either, and
+    /// `RelayedAgentTextTests` is where that is argued: a cap does not stop an
+    /// injection, it truncates one, and what actually makes a relay safe is the
+    /// frame that file asserts. The old cap was never applied to `intent` on the
+    /// same line anyway.
+    ///
+    /// Length is now decided at delivery by `AnnouncementParts`, which sends a
+    /// long message as several rather than one with its end missing.
+    func testAnotherAgentsWordsAreRelayedWholeAndSplitAtDelivery() async {
+        // Long enough to have been cut three times over by the old 160, and
+        // long enough that delivery genuinely has to split it — a 900-character
+        // message, which is what this fixture used to be, now fits in one.
+        let long = String(repeating: "alpha ", count: 600).trimmingCharacters(in: .whitespaces)
         let node = ScriptedNode(messages: [message("p1", body: long)])
 
         let report = await ProactiveWatch(source: node).check(against: seeded())
 
-        // An unbounded relay would let an agent elsewhere push whatever it
-        // liked into the owner's Signal thread, unprompted.
-        XCTAssertLessThan(report.message?.count ?? .max, 260)
-        XCTAssertTrue(report.message?.hasSuffix("…”") ?? false, report.message ?? "")
+        let relayed = try! XCTUnwrap(report.message)
+        XCTAssertTrue(relayed.contains(long), "the relay is cut again")
+        XCTAssertFalse(relayed.hasSuffix("…”"), "the relay is cut again: \(relayed.suffix(40))")
+
+        // And the owner receives it in readable pieces rather than one wall.
+        let parts = AnnouncementParts.split(relayed)
+        XCTAssertGreaterThan(parts.count, 1)
+        for part in parts {
+            XCTAssertLessThanOrEqual(part.count, AnnouncementParts.perMessage + 20)
+        }
     }
 
     func testTheSenderIsAlwaysNamed() async {
@@ -639,3 +664,4 @@ final class TaskTitleCannotForgeStructureTests: XCTestCase {
         XCTAssertEqual(ProactiveWatch.ending("Book the hotel"), "Book the hotel.")
     }
 }
+

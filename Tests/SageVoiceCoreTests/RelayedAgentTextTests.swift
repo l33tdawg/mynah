@@ -14,7 +14,13 @@ import XCTest
 ///
 ///  - `sage_turn`'s `pipe_results`, a reply from an agent Mynah sent work to;
 ///  - the proactive watch's inbox excerpt, which is another agent's message
-///    quoted up to `ProactiveWatch.excerptCharacters`.
+///    quoted in full and split across messages by `AnnouncementParts`.
+///
+/// That second one was cut at 160 characters until 2.1.1, and this file is why
+/// removing the cut is not a safety regression: what makes a relay safe is the
+/// frame asserted below, not its length. A 160-character instruction is exactly
+/// as dangerous as an uncut one, and the old cap was never applied to `intent`
+/// on the same line anyway.
 ///
 /// Both arrived in the model's context indistinguishable from Mynah's own prior
 /// output, carrying the authority Mynah's own output carries. An agent on the

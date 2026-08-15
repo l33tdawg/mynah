@@ -216,13 +216,17 @@ public struct ProactiveReport: Sendable, Equatable {
 ///    turn on every check and could hallucinate on any of them.
 public struct ProactiveWatch: Sendable {
 
-    /// How much of another agent's message travels unprompted.
+    /// How much of a *task title* travels in a digest line.
     ///
-    /// Attributed and short. This text was written by something that is not
-    /// Mynah — `UntrustedAgentContent` exists to keep that fact attached — and
-    /// an unbounded relay would let an agent elsewhere push whatever it liked
-    /// into the owner's Signal thread. Enough to know whether to go and read it
-    /// is the right amount.
+    /// A title is a phrase by nature, so 160 characters is a guard against a
+    /// pathological one rather than a budget anything real spends.
+    ///
+    /// **This used to bound relayed agent messages too**, and one constant
+    /// doing two jobs is why the two questions kept being answered together.
+    /// They are different questions: a title is a phrase this appliance wrote,
+    /// and a relayed message is another agent's mail, which is now not cut at
+    /// all — see `AnnouncementParts`, which splits a long one across messages
+    /// rather than truncating it.
     public static let excerptCharacters = 160
 
     /// Items named in one message before it stops counting.
@@ -480,17 +484,27 @@ public struct ProactiveWatch: Sendable {
         let opening = item.expectsAResult
             ? "\(item.content.sender) sent work"
             : "\(item.content.sender) sent a message"
-        let about = item.intent.map { " (\($0))" } ?? ""
+        // Bounded now, and it never was. `intent` is written by the same remote
+        // agent as the payload and went out unbounded while the payload was cut
+        // at 160 characters — so the cap that existed for safety was being
+        // applied to one of the two attacker-controlled fields on the same line.
+        let about = item.intent.map { " (\(Self.excerpt($0)))" } ?? ""
         guard !excerpt.isEmpty else { return "\(opening)\(about)." }
         return "\(opening)\(about): “\(excerpt)”"
     }
 
+    /// Flattened to one line, and **no longer cut**.
+    ///
+    /// The name is now a small lie and is kept because every caller and test
+    /// says `excerpt`; what it does is normalise whitespace so a payload full
+    /// of blank lines cannot break the digest's shape. Deciding how much of it
+    /// the owner sees is `AnnouncementParts`' job, one layer out, where the
+    /// answer is "all of it, over as many messages as that takes".
     static func excerpt(_ body: String) -> String {
-        let flat = body
+        body
             .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard flat.count > Self.excerptCharacters else { return flat }
-        return flat.prefix(Self.excerptCharacters).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     /// One message, however many things happened.

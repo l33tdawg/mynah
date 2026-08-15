@@ -673,8 +673,17 @@ extension SignalOrWhatsAppOrBothTests {
         XCTAssertTrue(say.contains("preferredAnnouncementRecipient"))
         XCTAssertTrue(say.contains("let destinations = preferred.map { [$0] } ?? ownerThreads"))
         XCTAssertTrue(
-            say.contains("message, to: owner, quotingAnotherAgent: quotingAnotherAgent"),
+            say.contains("to: owner, quotingAnotherAgent: quotingAnotherAgent"),
             "the selected destination does not receive the announcement"
+        )
+        // What reaches that destination is the announcement, in as many parts
+        // as it takes — see `AnnouncementParts`. Asserted separately from the
+        // recipient above so that a change to how it is *sent* cannot silently
+        // pass while a change to *where* fails, which is the defect this whole
+        // test exists for.
+        XCTAssertTrue(
+            say.contains("for part in AnnouncementParts.split(message)"),
+            "the announcement is no longer split, so a long one reaches the owner cut short"
         )
     }
 }
