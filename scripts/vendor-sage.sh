@@ -15,7 +15,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
-TAG="${SAGE_RELEASE_TAG:-latest}"
+# Pinned, not `latest`. Two reasons, and the second one is why this line
+# changed: a release should vendor the same brain today and in six months,
+# and `latest` silently did not even mean latest. This script keeps an
+# existing vendored SAGE rather than re-fetching (see the message below),
+# so once vendor/SAGE.app was staged, `latest` resolved to whatever was
+# already on disk forever. Mynah 2.0.0 shipped 11.17.15 that way, five
+# releases behind, and nothing anywhere said so. Bump this deliberately.
+TAG="${SAGE_RELEASE_TAG:-v11.18.11}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
