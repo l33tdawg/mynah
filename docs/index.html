@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mynah — A Local AI Assistant for Mac, Reachable on Signal</title>
-<meta name="description" content="Tell it once. Reach it anywhere. Mynah runs on your Mac, remembers across conversations, and answers in your Signal Note to Self.">
+<title>Mynah — A Local AI Assistant for Mac, Reachable on Signal and WhatsApp</title>
+<meta name="description" content="Tell it once. Reach it anywhere. Mynah runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
 <meta name="theme-color" content="#F4F4F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)">
 
@@ -15,14 +15,14 @@
 <meta property="og:site_name" content="Mynah">
 <meta property="og:url" content="https://l33tdawg.github.io/mynah/">
 <meta property="og:title" content="Mynah — Tell it once. Reach it anywhere.">
-<meta property="og:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal.">
+<meta property="og:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
 <meta property="og:image" content="https://l33tdawg.github.io/mynah/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Mynah — a personal AI that lives on your Mac">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mynah — Tell it once. Reach it anywhere.">
-<meta name="twitter:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal.">
+<meta name="twitter:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
 <meta name="twitter:image" content="https://l33tdawg.github.io/mynah/og.png">
 <style>
 /* ---------------------------------------------------------------------------
@@ -517,16 +517,6 @@ figure { margin: var(--s8) 0 0; }
 }
 .get .aside { font-size: 13px; color: var(--ink-2); }
 .get .button, .get .button:hover { text-decoration: none; }
-/* The beta gets its own row rather than trailing the aside above it. The two
-   say different things — one describes the build being offered, the other
-   offers a different build — and run together they read as one long sentence
-   about the stable one. `flex-basis: 100%` is what breaks the row in a wrapping
-   flex container. */
-.get .beta-line { flex-basis: 100%; }
-/* Belt and braces on the reveal. `hidden` is a UA `display: none`, which any
-   later `display` rule on this class would silently beat — and losing that
-   fight means every visitor is offered a beta on the days there is not one. */
-.get .beta-line[hidden] { display: none; }
 
 figcaption {
   font-size: 13px;
@@ -713,7 +703,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 
       <p class="standfirst">
         Mynah runs on your Mac, remembers across conversations, and answers in
-        your Signal Note to Self. <strong>Local by default. No Mynah account.</strong>
+        your Signal Note to Self or your WhatsApp. <strong>Local by default. No Mynah account.</strong>
       </p>
 
       <div class="get">
@@ -722,17 +712,6 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
         <span class="aside">
           Apple silicon &middot; macOS 14+ &middot; signed and notarized &middot;
           <span data-download-size></span>free and open source<span data-latest></span>
-        </span>
-        <!-- The beta, offered beside the stable download rather than instead of
-             it. Hidden until the script finds a real prerelease with a real
-             asset, so a page served with JavaScript off — or on a morning when
-             there is no beta — simply does not mention one. A visible link to a
-             beta that does not exist is the dead end this project keeps
-             paying for. -->
-        <span class="aside beta-line" data-beta-line hidden>
-          Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
-          <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
-          alongside Signal.
         </span>
       </div>
     </div>
@@ -745,6 +724,75 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     </div>
   </div>
 </header>
+
+<!-- ===================================================================== -->
+
+<!-- Why upgrade, for somebody arriving on 1.9. Every claim here is a thing
+     2.0 actually added, not a thing 1.x already did: voice calls and the
+     after-the-call queue both shipped in 1.8, so they are described as what
+     changed about them rather than as new arrivals. -->
+
+<section>
+  <p class="eyebrow">New in 2.0</p>
+  <h2 class="title1 column">Now it answers on WhatsApp too.</h2>
+
+  <div class="cards">
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H7l-4 3V7Z"/>
+          <path d="M12 13h7a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-3l-4 3v-3a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"/>
+        </svg>
+      </div>
+      <h3 class="title3">Signal, WhatsApp, or both</h3>
+      <p>
+        The same route either way &mdash; voice notes, documents back, research,
+        memories, calls. Choose one at setup, or link both and reply wherever
+        you happen to be.
+      </p>
+    </div>
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z"/>
+          <path d="M3 7.5 12 12l9-4.5M12 12v9"/>
+        </svg>
+      </div>
+      <h3 class="title3">Nothing extra to install</h3>
+      <p>
+        The WhatsApp bridge and the runtime it needs ship inside the signed app.
+        You link it from setup by scanning a code, the way you link WhatsApp Web.
+      </p>
+    </div>
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A15 15 0 0 1 4 5a1 1 0 0 1 1-1Z"/>
+        </svg>
+      </div>
+      <h3 class="title3">Calls that carry on</h3>
+      <p>
+        Send <code>//call</code> and it opens on what you were last talking
+        about, instead of starting cold. Ask for something mid-call and it is
+        written down as you say it, then sent once you hang up.
+      </p>
+    </div>
+    <div class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3Z"/>
+          <path d="M9 12l2 2 4-4"/>
+        </svg>
+      </div>
+      <h3 class="title3">Nothing dropped in between</h3>
+      <p>
+        A message is written to disk before it is answered, so a restart
+        mid-thought does not lose it &mdash; and anything Mynah owes you
+        finds you on whichever channel you are actually using.
+      </p>
+    </div>
+  </div>
+</section>
 
 <!-- ===================================================================== -->
 
@@ -968,7 +1016,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     <div class="row">
       <div class="text">
         <p class="title3">Speech and voice</p>
-        <p>Processed on your Mac. Signal carries your encrypted messages and attachments.</p>
+        <p>Processed on your Mac. Signal and WhatsApp carry your encrypted messages and attachments.</p>
       </div>
       <span class="pill stays">Stays here</span>
     </div>
@@ -993,9 +1041,9 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 
 <section>
   <p class="eyebrow">Get started</p>
-  <h2 class="title1 column">Give it a Mac and your Signal. That is it.</h2>
+  <h2 class="title1 column">Give it a Mac and Signal or WhatsApp. That is it.</h2>
   <p class="lede">
-    Apple silicon, macOS 14 or later, and your Signal account.
+    Apple silicon, macOS 14 or later, and a Signal or WhatsApp account.
   </p>
   <div class="get">
     <a class="button" data-download href="https://github.com/l33tdawg/mynah/releases/latest">Download Mynah</a>
@@ -1003,11 +1051,6 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
       <span data-download-size></span>signed and notarized &middot; free and open source &middot;
       <a href="https://github.com/l33tdawg/mynah">source</a> &middot;
       built on <a href="https://github.com/l33tdawg/sage">SAGE</a><span data-latest></span>
-    </span>
-    <span class="aside beta-line" data-beta-line hidden>
-      Or try <a data-beta href="https://github.com/l33tdawg/mynah/releases">the
-      <span data-beta-version>2.0 beta</span></a> &mdash; adds WhatsApp
-      alongside Signal.
     </span>
   </div>
 </section>
@@ -1035,8 +1078,9 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     </p>
 
     <p class="legal faint">
-      Signal is a trademark of the Signal Foundation. Mynah is not affiliated with
-      it and uses your own account, as a linked device.
+      Signal is a trademark of the Signal Foundation; WhatsApp is a trademark
+      of Meta Platforms, Inc. Mynah is affiliated with neither and uses your
+      own accounts, as a linked device.
     </p>
   </div>
 </footer>
@@ -1091,9 +1135,9 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
        reached. It cost nothing while every release was a plain triple, and it
        would have silently hidden the beta row on the day it was needed.
 
-       One constant rather than the same literal twice, because the stable
-       lookup and the beta lookup have to agree about what an asset is called
-       forever, and two copies is how they stop agreeing. */
+       The hyphen stays in the class now the beta row is gone: a future
+       `-rc.1` hits exactly the same wall, and this is the only place the
+       spelling of an asset name is written down. */
     const DISK_IMAGE = /^Mynah-\d[\w.-]*-macOS-arm64\.dmg$/i;
 
     const newest = releases.find(release => !release.draft && !release.prerelease);
@@ -1118,69 +1162,6 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
           span.textContent = megabytes + " MB \u00B7 ";
         });
       }
-    }
-
-    /* The beta, offered beside the stable download.
-       ----------------------------------------------------------------------
-       Two tracks at once while 2.0 is in beta: the button above stays on the
-       newest STABLE release \u2014 `newest` skips prereleases, so nothing here
-       changes what it hands over \u2014 and this reveals a second line pointing at
-       the newest prerelease.
-
-       **Revealed rather than hidden, and that is the load-bearing direction.**
-       The markup ships `hidden`, so the row appears only once a real prerelease
-       with a real asset has been found. Written the other way round \u2014 visible
-       in the HTML and hidden by script when there is no beta \u2014 it would be
-       visible to every reader with JavaScript off, on a rate-limited network,
-       and on every morning after the beta ends. That is precisely the failure
-       this file already paid for once, when a hard-coded asset name 404'd for
-       twenty-five releases and hit only the visitors the comment promised to
-       protect. A beta link is worse than a download button in one specific way:
-       when the beta is over, the honest state is *no row at all*, and only a
-       reveal can express that by doing nothing.
-
-       So it costs a visitor with JavaScript off the knowledge that a beta
-       exists, which is the right thing to lose. */
-    /* GitHub does not promise that prereleases are returned newest-first.
-       Require the DMG, ZIP and both checksums before a newer beta can displace
-       the last complete one; publication is several uploads, not an atomic
-       operation, and the page can be fetched between any two of them. */
-    function newestCompletePrerelease(candidates) {
-      const complete = release => {
-        const names = new Set((release.assets || []).map(asset => asset.name || ""));
-        const dmg = [...names].find(name => DISK_IMAGE.test(name));
-        if (!dmg) return false;
-        const stem = dmg.slice(0, -4);
-        return names.has(dmg + ".sha256")
-          && names.has(stem + ".zip")
-          && names.has(stem + ".zip.sha256");
-      };
-      const when = release => Date.parse(
-        release.published_at || release.created_at || 0
-      ) || 0;
-      return candidates
-        .filter(release => !release.draft && release.prerelease && complete(release))
-        .sort((left, right) => when(right) - when(left))[0];
-    }
-
-    const beta = newestCompletePrerelease(releases);
-    const betaAsset = (beta?.assets || []).find(
-      asset => DISK_IMAGE.test(asset.name || "")
-    );
-    if (beta && betaAsset?.browser_download_url) {
-      document.querySelectorAll("[data-beta]").forEach(link => {
-        link.href = betaAsset.browser_download_url;
-      });
-      // `2.0.0-beta.2` reads as machinery; `2.0 beta` is what it is. Falls back
-      // to whatever the tag says rather than to nothing, so an unexpected
-      // version string still names itself.
-      const match = /^v?(\d+\.\d+)/.exec(beta.tag_name || "");
-      document.querySelectorAll("[data-beta-version]").forEach(span => {
-        span.textContent = match ? match[1] + " beta" : (beta.tag_name || "beta");
-      });
-      document.querySelectorAll("[data-beta-line]").forEach(line => {
-        line.hidden = false;
-      });
     }
 
     /* How many copies have gone out.
