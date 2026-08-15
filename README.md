@@ -294,7 +294,10 @@ prompt names a tool the allowlist does not carry.
   text to summarise and never as instructions. That raises the bar; it does not
   close the hole. What actually contains it is that the reply goes back to a
   person who can read it. Search runs on a session with cookies disabled, and
-  can be switched off entirely with `--no-web`.
+  can be switched off entirely with `--no-web`. When the exact result page is a
+  JavaScript shell, Mynah sends that public URL—not the surrounding
+  conversation—to Jina Reader for browser-rendered text instead of repeatedly
+  spending search quota on narrower snippets.
 
 The rest of SAGE's catalogue is deliberately withheld, each with a stated reason
 in `BrainPrompts.swift` — `sage_turn`, `sage_inception` and `sage_red_pill`

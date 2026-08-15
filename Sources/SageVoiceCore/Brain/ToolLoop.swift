@@ -292,6 +292,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
     static let readOnlyTools: Set<String> = [
         "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
         "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
+        "sage_message_history",
         "sage_scope_get", "sage_scope_list", "sage_federation", "sage_gov_status",
         "web_search", "list_notes", "read_note",
         // **Queueing is not acting, and that is the whole point of it being
@@ -1048,8 +1049,38 @@ public final class ToolLoop: @unchecked Sendable {
         let brainTools = catalogue.map(\.brainTool)
         let knownToolNames = Set(catalogue.map(\.name))
 
-        var messages: [BrainMessage] = [.system(systemPrompt)]
-        messages.append(contentsOf: history.filter { $0.role != .system })
+        // **A conversation handed to a backend must begin with a user turn.**
+        //
+        // Anthropic rejects a request whose first non-system message is an
+        // assistant one — "the first message must use the user role" — with a
+        // 400, and nothing downstream repairs it: `encodeMessages` only merges
+        // adjacent same-role turns, and there is no retry.
+        //
+        // That shape had never occurred until 2.0.0-beta.6, because every
+        // history reaching here had been through `conversationOnly`, which
+        // always left a user turn first. Then `CallHistory.open(with:)` started
+        // a call at the sentence the caller heard — one assistant turn, by
+        // itself, on purpose — and every //call on an Anthropic brain would have
+        // failed on its first request. `//call` is refused on a local brain, so
+        // that is every call an Anthropic owner can make.
+        //
+        // Hoisted rather than dropped, and rather than papered over with an
+        // invented user turn. Dropping loses the referent the opening exists to
+        // provide — the caller's first sentence answers it, and "I haven't
+        // picked it up yet" is unintelligible without it. Inventing a user turn
+        // puts words in the owner's mouth, which is the defect this history was
+        // just cleaned of. Stating it as a fact in the system prompt is what
+        // actually happened: the appliance spoke first, and then he replied.
+        let leading = history.prefix { $0.role == .assistant && !$0.content.isEmpty }
+        let spokenFirst = leading.map(\.content).joined(separator: "\n")
+        var messages: [BrainMessage] = [
+            .system(spokenFirst.isEmpty
+                ? systemPrompt
+                : systemPrompt + "\n\nYou spoke first, before they said anything. "
+                    + "This is what you said, and what they say next is a reply to "
+                    + "it:\n\n\(spokenFirst)")
+        ]
+        messages.append(contentsOf: history.dropFirst(leading.count).filter { $0.role != .system })
         // Stamped here and nowhere else. See `WhereWeAre.rightNow`.
         messages.append(.user(WhereWeAre.stamp(transcript), images: images))
         // Only appends follow, so this stays valid — it is where the stamp comes
@@ -1521,8 +1552,25 @@ public final class ToolLoop: @unchecked Sendable {
         // sees the photo on the turn that brought it. Only the replay loses it,
         // which is what "not carried in history" meant. Found by the 1.7.0
         // audit; the invariant had been documented and never implemented.
-        var replayable = messages
+        // **Only the conversation that actually happened is replayable.**
+        // `messages` also contains the loop's private workbench: assistant
+        // drafts rejected by a truth guard and synthetic user corrections such
+        // as `unbackedClaimCorrection`. Those are useful inside this run and
+        // poisonous on the next one. Observed in a WhatsApp thread: the private
+        // correction was stored as if the owner had typed it, the rejected
+        // draft was stored as if Mynah had delivered it, and the model then
+        // "confessed" that two genuine SAGE message ids were invented and sent
+        // both requests again.
+        //
+        // Keep prior history and the real owner turn. Keep current tool results
+        // only long enough for `conversationOnly` to lift source links onto the
+        // final answer; callers already strip tool protocol before persistence.
+        // End with exactly the sentence delivered to the owner, not whichever
+        // raw model draft happened to be last.
+        var replayable = Array(messages.prefix(through: ownTurn))
         replayable[ownTurn] = .user(transcript)
+        replayable.append(contentsOf: messages.dropFirst(ownTurn + 1).filter { $0.role == .tool })
+        replayable.append(.assistant(reply))
         return ToolLoopResult(reply: reply, trace: trace, messages: replayable)
     }
 

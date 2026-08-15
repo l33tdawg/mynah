@@ -565,7 +565,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             guard !available.isEmpty else {
                 return "NOTHING WAS SENT. There is no file saved under \"\(asked)\", and nothing has been "
                     + "saved on this Mac yet. Tell the owner there is nothing to send, and that anything "
-                    + "they send you on Signal is kept and can be asked for later."
+                    + "they send you in a linked chat is kept and can be asked for later."
             }
             return "NOTHING WAS SENT. There is no file saved under \"\(asked)\". What is saved: "
                 + "\(available.joined(separator: ", ")). Ask the owner which of those they meant, or say "
@@ -594,7 +594,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             if delivery == .attachedToReply,
                let bytes = stored.sizeInBytes(of: file),
                bytes > Self.maximumAttachmentBytes {
-                refused.append("\(file.lastPathComponent) is \(Self.megabytes(bytes)) and too big for Signal")
+                refused.append("\(file.lastPathComponent) is \(Self.megabytes(bytes)) and too big to attach")
                 continue
             }
             sending.append(file)
@@ -603,7 +603,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
         guard !sending.isEmpty else {
             log("[notes] refused to send \(match.slug): \(refused.joined(separator: "; "))")
             return "NOTHING WAS SENT — \(refused.joined(separator: "; ")). Tell the owner plainly that the "
-                + "file is too large to send over Signal and is still saved on the Mac, so they can open it there."
+                + "file is too large to attach and is still saved on the Mac, so they can open it there."
         }
 
         for file in sending { deliver(file) }

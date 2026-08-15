@@ -28,6 +28,13 @@ struct RootView: View {
                     // that answers their phone.
                     if let option = setup.selectedOption {
                         BrainSelectionStore.save(option)
+                        // **Both Settings pickers do this and the setup flow did
+                        // not**, so finishing setup on a hosted brain left the
+                        // call voice unfetched until the next launch — and
+                        // `//call` in between had nothing to speak with. Third
+                        // writer of this preference, first one without the
+                        // follow-up.
+                        Task { await app.installCallVoiceIfNeeded() }
                     }
                     app.completeSetup()
                 }
@@ -109,14 +116,16 @@ struct RootView: View {
             // and verified, so the cost of asking again is nothing and the cost
             // of never asking is a robot.
             Task { await app.installCallVoiceIfNeeded() }
-            // Who Mynah can reach, asked once, here.
+            // **`ApplianceRoster.shared.loadOnce()` used to be the next line,
+            // and it was work nobody could see the result of.**
             //
-            // The owner's ruling: *"let mynah get it from mcp or we do it at
-            // app boot"*. It used to be read on every appearance of the Agents
-            // page, unsigned — an app asking a question as nobody, repeatedly.
-            // At boot it is a startup fact instead, and opening that page a
-            // dozen times asks the node once. See `ApplianceRoster`.
-            Task { await ApplianceRoster.shared.loadOnce() }
+            // Every launch it read `GET /v1/agents` and, on the strength of
+            // that, put up to twenty names to `sage_find_agent`. Nothing ever
+            // read the answer: the Agents panel it fed went in 3bb085b and the
+            // fetch stayed behind, so the whole path ran at boot and threw its
+            // result away. On this owner's node the REST leg has answered 401
+            // since 1.7.5, which means the visible symptom of deleting it is
+            // one fewer failing request at startup.
         }
     }
 }
@@ -242,6 +251,7 @@ struct ReadyStage: View {
     let onFinished: () -> Void
 
     @State private var isLinkingPhone = false
+    @State private var isLinkingWhatsApp = false
 
     /// What the node says about the appliance's own key, or nothing yet.
     ///
@@ -361,6 +371,49 @@ struct ReadyStage: View {
             // The same flow, in the same sheet Settings uses. Nothing about
             // linking changed — only when it is asked for.
             ReadyPhoneLinkSheet { isLinkingPhone = false }
+        }
+        .sheet(isPresented: $isLinkingWhatsApp) {
+            if let executables = whatsAppExecutables {
+                WhatsAppLinkSheet(
+                    node: executables.node,
+                    bridge: executables.bridge,
+                    // Two Baileys processes on one auth state invalidate each
+                    // other's keys and both ends stop decrypting silently, so
+                    // the running bridge is stopped for the duration and the
+                    // reconcile below puts every managed job back. Same
+                    // arrangement as Settings; see `WhatsAppPairingSession`.
+                    stopBackgroundBridge: {
+                        await SignalBackgroundServiceManager.shared.disable(
+                            because: "pairing WhatsApp during setup, which cannot share the "
+                                + "session with the running bridge"
+                        )
+                    },
+                    // **Turning the channel on is this screen's job and not
+                    // Settings'.** In Settings the pairing row only exists once
+                    // WhatsApp has been chosen in the picker, so pairing implies
+                    // the choice. There is no picker here, and the stored
+                    // default is Signal-only — so without this an owner scans
+                    // the code, sees "Linked", and is answered by nothing,
+                    // because the daemon was never told to read that channel.
+                    //
+                    // Added to whatever is already selected rather than
+                    // replacing it: somebody who linked Signal on this same
+                    // screen a minute ago must not have it switched off by
+                    // pairing the other one.
+                    onLinked: {
+                        let current = ChannelSelectionStore.current()
+                        ChannelSelectionStore.save(current.adding(.whatsapp))
+                    },
+                    onClose: {
+                        // On close rather than only on success: an abandoned
+                        // pairing still left every job booted out, and a
+                        // cancelled sheet must not be how the appliance stops
+                        // working until the next launch.
+                        Task { await app.reconcileAnsweringService(becauseTheOwnerAsked: true) }
+                        isLinkingWhatsApp = false
+                    }
+                )
+            }
         }
         // Asked here rather than trusted from earlier in the flow: the mask is
         // stamped by consensus when the key registers, which may only just have
@@ -597,17 +650,69 @@ struct ReadyStage: View {
                         Text("Talk to it from your phone as well")
                             .mynahFont(.title3)
                             .foregroundStyle(Palette.ink.primary)
-                        Text("Link Signal and you can send Mynah a voice note from anywhere and "
-                             + "it answers out loud. You don't need it to use Mynah here, and "
-                             + "it's in Settings whenever you want it.")
+                        // **Two corrections in one sentence, both reported from
+                        // the 2.0.0-beta.2 beta.**
+                        //
+                        // WhatsApp shipped in 2.0 and this screen never
+                        // mentioned it — testers linked Signal here because it
+                        // was the only offer on the screen, and found the other
+                        // half in Settings or not at all.
+                        //
+                        // And "it answers out loud" stopped being true before
+                        // that: `ReplyStyle.spokenRepliesAreAvailable` is false,
+                        // so a voice note is transcribed and answered in
+                        // writing. The owner restated the rule on 8 August —
+                        // *"the only voice we support is voice notes -> text…
+                        // the only time it will talk to you is with //call"*.
+                        // A setup screen promising a spoken reply is the highest
+                        // -stakes place to be wrong, because it is where trust
+                        // is established.
+                        Text("Send Mynah a voice note or a message from anywhere and it answers in "
+                             + "the same thread. You don't need this to use Mynah here, and both "
+                             + "are in Settings whenever you want them.")
                             .mynahFont(.callout)
                             .foregroundStyle(Palette.ink.secondary)
                             .mynahProse()
                     }
                     Spacer(minLength: s4)
-                    MynahButton("Link my phone", kind: .secondary) { isLinkingPhone = true }
+                    VStack(alignment: .trailing, spacing: s3) {
+                        MynahButton("Link Signal", kind: .secondary) { isLinkingPhone = true }
+                        // Offered only when this build carries the bridge —
+                        // `whatsAppIsInThisBuild`'s reason, not
+                        // `canRunWhatsApp`'s: an owner with no allowlisted
+                        // number yet is exactly who needs this button, because
+                        // pairing is what produces the number.
+                        if whatsAppExecutables != nil {
+                            MynahButton("Link WhatsApp", kind: .secondary) {
+                                isLinkingWhatsApp = true
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Where the vendored bridge lives, or `nil` on a build without it.
+    ///
+    /// Deliberately does not ask for a whole `WhatsAppServiceConfiguration`:
+    /// that also fails when no number has been allowlisted, which is the state
+    /// every owner is in at this exact moment in setup. Gating the button on it
+    /// would hide it from everyone who has just finished installing — the same
+    /// locked-door-with-the-key-behind-it this screen's Settings equivalent was
+    /// found to have.
+    private var whatsAppExecutables: (node: URL, bridge: URL)? {
+        let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
+        switch WhatsAppServiceConfiguration.availability(contents, signalAccount: nil) {
+        case .ready(let configuration):
+            return (configuration.node, configuration.bridge)
+        case .noNumberToAllow:
+            return (
+                contents.appendingPathComponent("Resources/node/bin/node"),
+                contents.appendingPathComponent("Resources/whatsapp/bridge.js")
+            )
+        case .notInThisBuild:
+            return nil
         }
     }
 
@@ -749,20 +854,6 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .home: return "What's on your plate"
-        // Not "Who Mynah can ask", which was the previous line and carried the
-        // exact false promise the owner objected to on the page itself: "ask"
-        // says Mynah can query these agents' memories, and it cannot — reading
-        // another agent's subjects needs a grant, and none has been given.
-        // Sending, which it *can* do, is not asking.
-        //
-        // This claims presence and nothing about capability, which leaves the
-        // asymmetry to be stated once above the roster where there is room to
-        // state both halves of it. Deliberately not "Others on your network":
-        // the page has a section by almost that name for a genuinely different
-        // set — other machines — and the roster underneath is the local half.
-        // `thread`'s call, and their reasoning: it undersells the post-scan
-        // case, and underselling is recoverable where overclaiming is what put
-        // us here.
         case .memories: return "What Mynah remembers"
         case .privacy: return "What leaves this Mac"
         case .settings: return "How Mynah is set up"

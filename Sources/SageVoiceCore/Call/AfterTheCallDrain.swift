@@ -23,6 +23,23 @@ public enum AfterTheCallDelivery: Equatable, Sendable {
 /// this is ever started.
 public struct AfterTheCallDrain: Sendable {
 
+    /// Tries configured owner channels in order for a legacy queue record that
+    /// predates persisted origin routing. Stops at the first channel that
+    /// actually reached the owner; a failed preferred channel must not prevent
+    /// a working linked channel from carrying the recovery report.
+    public static func firstDelivery(
+        to recipients: [ChannelRecipient],
+        attempt: @Sendable (ChannelRecipient) async -> AfterTheCallDelivery
+    ) async -> AfterTheCallDelivery {
+        var bestOutcome: AfterTheCallDelivery = .failed
+        for recipient in recipients {
+            let outcome = await attempt(recipient)
+            if outcome == .sent { return .sent }
+            if outcome == .sentWithoutTheFiles { bestOutcome = outcome }
+        }
+        return bestOutcome
+    }
+
     private let queue: CallActionQueue
     private let tools: any ToolProviding
     /// **Its own `NotesToolSource`, not the daemon's.**
@@ -42,16 +59,16 @@ public struct AfterTheCallDrain: Sendable {
     /// against a live listing and keeps the 95 MB Signal ceiling, with a
     /// private buffer nothing else can reach into.
     private let notes: NotesToolSource
-    private let deliver: @Sendable (String, [URL]) async -> AfterTheCallDelivery
-    private let runInstruction: @Sendable (String) async -> AfterTheCallDelivery
+    private let deliver: @Sendable (String, [URL], ChannelRecipient?) async -> AfterTheCallDelivery
+    private let runInstruction: @Sendable (String, ChannelRecipient?) async -> AfterTheCallDelivery
     private let log: @Sendable (String) -> Void
 
     public init(
         queue: CallActionQueue,
         notesDirectory: URL,
         tools: any ToolProviding,
-        deliver: @escaping @Sendable (String, [URL]) async -> AfterTheCallDelivery,
-        runInstruction: @escaping @Sendable (String) async -> AfterTheCallDelivery,
+        deliver: @escaping @Sendable (String, [URL], ChannelRecipient?) async -> AfterTheCallDelivery,
+        runInstruction: @escaping @Sendable (String, ChannelRecipient?) async -> AfterTheCallDelivery,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.queue = queue
@@ -64,6 +81,26 @@ public struct AfterTheCallDrain: Sendable {
         self.deliver = deliver
         self.runInstruction = runInstruction
         self.log = log
+    }
+
+    /// Source-compatible seam for callers that do not need to observe routing.
+    /// Production uses the recipient-aware initializer above.
+    public init(
+        queue: CallActionQueue,
+        notesDirectory: URL,
+        tools: any ToolProviding,
+        deliver: @escaping @Sendable (String, [URL]) async -> AfterTheCallDelivery,
+        runInstruction: @escaping @Sendable (String) async -> AfterTheCallDelivery,
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
+        self.init(
+            queue: queue,
+            notesDirectory: notesDirectory,
+            tools: tools,
+            deliver: { text, files, _ in await deliver(text, files) },
+            runInstruction: { text, _ in await runInstruction(text) },
+            log: log
+        )
     }
 
     // MARK: - Entry points
@@ -108,12 +145,13 @@ public struct AfterTheCallDrain: Sendable {
                 try await perform(entry)
             } catch {
                 log("[call] a queued action failed: \(error)")
-                _ = await deliver(
+                let outcome = await deliver(
                     "I couldn't \(entry.spokenLine) after our call. \(error.localizedDescription)",
-                    []
+                    [], recipient(for: entry)
                 )
-                // Left in the queue on purpose: an entry that disappears is an
-                // outcome nobody learned.
+                // A delivered refusal is a confirmed outcome. A refusal that
+                // did not reach the owner is still owed.
+                if outcome != .failed { queue.remove(entry) }
             }
         }
     }
@@ -125,8 +163,8 @@ public struct AfterTheCallDrain: Sendable {
         case .file: try await sendTheFile(entry)
         case .agent: try await messageTheAgent(entry)
         case .instruction:
-            let outcome = await runInstruction(entry.what)
-            if outcome != .failed { queue.remove(entry) }
+            let outcome = await runInstruction(entry.what, recipient(for: entry))
+            if outcome == .sent { queue.remove(entry) }
         }
     }
 
@@ -145,15 +183,15 @@ public struct AfterTheCallDrain: Sendable {
             guard !files.isEmpty else {
                 // The size gate refused it, or the export vanished between the
                 // match and the send.
-                _ = await deliver(
+                let outcome = await deliver(
                     "I couldn't send \(entry.what) after our call — it's still here on the Mac, "
-                        + "but Signal wouldn't take it. Ask me for it here and I'll try again.",
-                    []
+                        + "but it couldn't be delivered. Ask me for it here and I'll try again.",
+                    [], recipient(for: entry)
                 )
-                queue.remove(entry)
+                if outcome != .failed { queue.remove(entry) }
                 return
             }
-            let outcome = await deliver("Here's \(entry.what), as you asked on the call.", files)
+            let outcome = await deliver("Here's \(entry.what), as you asked on the call.", files, recipient(for: entry))
             // `.sentWithoutTheFiles` is NOT done. The owner has been told, and
             // the entry stays so the next call reports it rather than the
             // appliance quietly considering the promise kept.
@@ -199,23 +237,23 @@ public struct AfterTheCallDrain: Sendable {
             // owner read himself referred to as "the owner" and be instructed to
             // invoke a tool. On a call there is nobody left to ask, so this
             // message is the entire recovery.
-            _ = await deliver(
+            let outcome = await deliver(
                 "You asked me to send \(entry.what) after the call, but I couldn't tell which one "
                     + "you meant — I have \(Self.list(candidates)). Say which and I'll send it.",
-                []
+                [], recipient(for: entry)
             )
-            queue.remove(entry)
+            if outcome != .failed { queue.remove(entry) }
 
         case .nothing(let available):
             if await theBrainCanFindIt(entry) { return }
             let door = available.isEmpty
                 ? "I don't have any saved files yet."
                 : "What I do have: \(Self.list(available))."
-            _ = await deliver(
+            let outcome = await deliver(
                 "You asked me to send \(entry.what) after the call and I couldn't find it. \(door)",
-                []
+                [], recipient(for: entry)
             )
-            queue.remove(entry)
+            if outcome != .failed { queue.remove(entry) }
         }
     }
 
@@ -241,10 +279,19 @@ public struct AfterTheCallDrain: Sendable {
             If nothing there is actually the thing they asked for, tell them plainly that you \
             could not find it and name what you do have — do not send a different file instead, \
             and do not say you have sent something you have not.
-            """)
-        guard outcome != .failed else { return false }
-        queue.remove(entry)
-        return true
+            """, recipient(for: entry))
+        switch outcome {
+        case .sent:
+            queue.remove(entry)
+            return true
+        case .sentWithoutTheFiles:
+            // The brain found the request and told the owner the attachment
+            // failed. Do not follow that with a contradictory canned
+            // "ambiguous/missing" report, and do not discharge the file.
+            return true
+        case .failed:
+            return false
+        }
     }
 
     private func messageTheAgent(_ entry: CallActionQueue.Entry) async throws {
@@ -257,7 +304,9 @@ public struct AfterTheCallDrain: Sendable {
         // The entry's own key, minted at enqueue. A re-drain presents the same
         // key and SAGE returns the original message_id instead of sending twice.
         _ = try await messaging.send(entry.what, to: address, intent: nil, retrying: entry.key)
-        let outcome = await deliver("I've sent your message to \(address.displayName).", [])
+        let outcome = await deliver(
+            "I've sent your message to \(address.displayName).", [], recipient(for: entry)
+        )
         if outcome != .failed { queue.remove(entry) }
     }
 
@@ -268,12 +317,16 @@ public struct AfterTheCallDrain: Sendable {
             let outcome = await deliver(
                 "On an earlier call you asked me to \(entry.spokenLine), and I didn't get to it — "
                     + "I was restarted before I could. Ask me here and I'll do it now.",
-                []
+                [], recipient(for: entry)
             )
             // Cleared only once the owner has actually been told. A report that
             // failed to send is still owed.
             if outcome != .failed { queue.remove(entry) }
         }
+    }
+
+    private func recipient(for entry: CallActionQueue.Entry) -> ChannelRecipient? {
+        entry.recipient?.channelRecipient
     }
 
     private static func list(_ names: [String]) -> String {

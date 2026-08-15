@@ -237,6 +237,18 @@ final class CompositeToolSourceTests: XCTestCase {
         XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains(WebSearchToolSource.toolName))
     }
 
+    /// Replies to messages we sent live in the durable outbox, not `sage_inbox`.
+    /// The live agent must be able to inspect that outbox when the owner asks.
+    func testTheVoiceAllowlistIncludesSentMessageHistory() {
+        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains("sage_message_history"))
+        XCTAssertTrue(BrainPrompts.voiceAgentManager.contains("sage_message_history"))
+        XCTAssertTrue(BrainPrompts.voiceAgentManager.contains(#"{"folder":"outbox"}"#))
+        XCTAssertFalse(
+            BrainPrompts.voiceAgentManager.contains("no tool fetches"),
+            "the prompt still tells the model not to use the only authoritative reply lookup"
+        )
+    }
+
     /// **A send tool the model reached for as a read tool.**
     ///
     /// `sage_pipe_result` returns *your* result to an agent that asked you for

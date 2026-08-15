@@ -397,9 +397,9 @@ final class ApplianceIdempotenceTests: XCTestCase {
     /// which is the worst way for it to come back.
     func testTheSamePlistSerialisesToTheSameBytes() throws {
         let home = URL(fileURLWithPath: "/Users/owner", isDirectory: true)
-        let object = SignalBackgroundServiceManager.bridgePlist(
+        let object = try XCTUnwrap(SignalBackgroundServiceManager.bridgePlist(
             .fixture, logs: home.appendingPathComponent("Library/Logs/Mynah"), home: home
-        )
+        ))
         XCTAssertEqual(
             try SignalBackgroundServiceManager.plistData(object),
             try SignalBackgroundServiceManager.plistData(object)
@@ -486,7 +486,7 @@ private actor RecordingServices: SignalBackgroundServicing {
     private(set) var enabled: [SignalServiceConfiguration] = []
     private(set) var disableCount = 0
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         enabled.append(configuration)
     }
 
@@ -534,7 +534,7 @@ private extension BrainSetupOption {
 private actor FailingThenRunningServices: SignalBackgroundServicing {
     private(set) var disableCount = 0
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         throw Failure.launchFailed
     }
 

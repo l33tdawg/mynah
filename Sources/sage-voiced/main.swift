@@ -955,6 +955,55 @@ func runDaemon(_ arguments: [String]) -> Never {
         account: flags["account"]
     ))
 
+    // **Which channels this daemon answers on.**
+    //
+    // Defaults to Signal alone, and that default is load-bearing rather than
+    // conservative: every launchd job written by every shipped version so far
+    // passes no `--channels`, and an upgrade that quietly changed what those
+    // jobs mean would either start a WhatsApp bridge nobody paired or stop
+    // answering Signal. The app writes this flag explicitly when the owner
+    // chooses; a daemon started by hand gets what it has always got.
+    let selection: ChannelSelection
+    do {
+        selection = try ChannelSelection(commaSeparated: flags["channels"] ?? "signal")
+    } catch {
+        exit(fail("bad --channels: \(error)"))
+    }
+
+    // WhatsApp identifies people by digits with no `+`, so the Signal allowlist
+    // cannot be used as-is. Derived from it by default rather than demanded
+    // separately, because the number is nearly always the same one and a daemon
+    // that refuses to start until the owner types it twice is a dead end with no
+    // door. Said out loud below, so a derivation that is wrong for somebody with
+    // two numbers is visible rather than silent — and `--whatsapp-allow`
+    // overrides it.
+    var whatsappAllowlist: WhatsAppSenderAllowlist?
+    if selection.includes(.whatsapp) {
+        let raw = flags["whatsapp-allow"]
+            ?? allowlist.identities
+                .compactMap { identity -> String? in
+                    // Phone numbers only. A Signal service id is a UUID and
+                    // means nothing to WhatsApp; letting one through would make
+                    // an allowlist entry that can never match, which
+                    // `WhatsAppSenderAllowlist.Failure.notANumber` exists to say
+                    // out loud rather than accept.
+                    guard case .phoneNumber(let number) = identity else { return nil }
+                    return number.hasPrefix("+") ? String(number.dropFirst()) : number
+                }
+                .joined(separator: ",")
+        do {
+            whatsappAllowlist = try WhatsAppSenderAllowlist(commaSeparated: raw)
+        } catch {
+            exit(fail("""
+                bad WhatsApp allowlist: \(error)
+
+                Pass --whatsapp-allow with your own WhatsApp number: country code first, \
+                no '+', no spaces. Without --whatsapp-allow it is derived from --allow by \
+                dropping the '+', which needs at least one E.164 entry there.
+                """))
+        }
+    }
+
     // The owner's node, then ours, then the conventional path.
     //
     // Normally the flag is set: the launchd job carries the path the app
@@ -1116,7 +1165,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             print("backend: \(backend.displayDescription)")
             print("mcp:     \(info.name) \(info.version), \(tools.count) tools")
             print("allow:   \(allowlist.identities.count) identity(ies), Note-to-Self only")
-            print("ready — send yourself a Signal message.")
+            print("ready — send yourself a \(selection.summary) message.")
         } catch {
             return fail("startup failed: \(error)\n\(mcp.stderrLog)")
         }
@@ -1308,8 +1357,40 @@ func runDaemon(_ arguments: [String]) -> Never {
                 log: { note($0) }
             )
 
+        // **Built here, not at the top, because a `ChannelSet` starts pumping
+        // the moment it exists.** Its per-channel tasks begin draining each
+        // channel's stream in `init`, and anything they drain before the daemon
+        // is reading is held in a 256-deep buffer rather than answered. Close to
+        // the daemon it feeds, so the two cannot drift apart.
+        var enabledChannels: [any MessageChannel] = []
+        if selection.includes(.signal) {
+            enabledChannels.append(SignalChannel(client: signal))
+        }
+        if selection.includes(.whatsapp), let whatsappAllowlist {
+            note("[daemon] WhatsApp allowlist: \(whatsappAllowlist.description)")
+            enabledChannels.append(WhatsAppChannel(configuration: .init(
+                client: WhatsAppClient(configuration: .init(
+                    allowlist: whatsappAllowlist,
+                    socketPath: flags["whatsapp-socket"] ?? WhatsAppClient.defaultSocketPath(),
+                    logger: { event in note("[whatsapp] \(event)") }
+                )),
+                sendPort: flags["whatsapp-port"].flatMap(Int.init) ?? 39930
+            )))
+        }
+        // Refused rather than started. A daemon with no channel answers nobody
+        // and reports nothing wrong — it looks like a healthy appliance that the
+        // owner is somehow unable to reach, which is the most expensive kind of
+        // failure to diagnose from the outside.
+        guard !enabledChannels.isEmpty else {
+            return fail("""
+                --channels selected nothing, so there is no way to reach this appliance.
+                Pass --channels signal, --channels whatsapp, or --channels signal,whatsapp.
+                """)
+        }
+        let channels = ChannelSet(enabledChannels)
+
         let daemon = VoiceBridgeDaemon(
-            signal: signal,
+            channels: channels,
             transcriber: transcriber,
             loop: loop,
             configuration: daemonConfiguration,
@@ -1351,7 +1432,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             // was still transcribed by a cold model — 10.7s on the 6 August
             // call, against 1.2s three turns later. See
             // `CallTurnServer.warmRecognition`; the sentence is now true.
-            onCallRequested: { await callServer.prepare() },
+            onCallRequested: { recipient in
+                afterTheCall.expectCall(from: recipient)
+                await callServer.prepare()
+            },
             // What he changes himself is not news. See `OwnTaskEdits`.
             onTaskWrites: { await ownTaskEdits.record() }
         )
@@ -1369,20 +1453,68 @@ func runDaemon(_ arguments: [String]) -> Never {
         // The owner's own thread is resolved now rather than at drain time, so
         // that work recovered at startup — before any call has been placed in
         // this process — still has somewhere to be reported.
-        let ownerThread: SignalRecipient? = (flags["account"] ?? allowlist.identities.compactMap {
-            if case .phoneNumber(let number) = $0 { return number }
-            return nil
-        }.sorted().first).map { SignalRecipient.account($0) }
+        // **On whichever channel this daemon actually has.** This resolved a
+        // Signal number unconditionally, which on a WhatsApp-only appliance is
+        // an address `ChannelSet.send` has nowhere to route — so every piece of
+        // after-the-call work would be composed, attempted, and lost.
+        //
+        // Every direct channel the owner can read. This is the fallback set;
+        // ongoing conversation chooses one of them below.
+        //
+        // This was one recipient, Signal first when both were on, justified as
+        // "only the *fallback* thread, used for work recovered at startup that
+        // has no call to attribute it to". True when written. Then the proactive
+        // watch was pointed at the same value — deliberately, to avoid two
+        // answers to "where does the owner read this?" — and the justification
+        // quietly stopped covering what it was being used for.
+        //
+        // What that cost, reported by the owner on 9 August 2026 with a
+        // screenshot: a daemon "listening on Signal + WhatsApp" announced two
+        // agent replies at 23:50 and they arrived on Signal only. Every
+        // unprompted message this appliance has ever sent on a both-channels Mac
+        // — agent replies, task digests, reminders — went to Signal and nowhere
+        // else, while the owner was reading WhatsApp.
+        //
+        // The first fix broadcast to both. That solved the missing-channel case
+        // and created a worse one: while the owner talked in Signal, replies
+        // appeared in WhatsApp too. Keep the complete set here; the watch asks
+        // the daemon which one the owner actually used most recently.
+        let ownerThreads: [ChannelRecipient] = {
+            var threads: [ChannelRecipient] = []
+            if selection.includes(.signal),
+               let number = flags["account"] ?? allowlist.identities.compactMap({
+                   if case .phoneNumber(let number) = $0 { return number }
+                   return nil
+               }).sorted().first {
+                threads.append(ChannelRecipient(kind: .signal, address: number))
+            }
+            if selection.includes(.whatsapp), let first = whatsappAllowlist?.numbers.sorted().first {
+                threads.append(ChannelRecipient(kind: .whatsapp, address: "\(first)@s.whatsapp.net"))
+            }
+            return threads
+        }()
 
         let afterTheCallDrain = AfterTheCallDrain(
             queue: afterTheCall,
             notesDirectory: notes.notesDirectory,
             tools: callTools,
-            deliver: { [weak daemon] text, files in
-                await daemon?.postAfterTheCall(text, attaching: files, to: ownerThread) ?? .failed
+            deliver: { [weak daemon] text, files, recipient in
+                guard let daemon else { return .failed }
+                if let recipient {
+                    return await daemon.postAfterTheCall(text, attaching: files, to: recipient)
+                }
+                return await AfterTheCallDrain.firstDelivery(to: ownerThreads) { owner in
+                    await daemon.postAfterTheCall(text, attaching: files, to: owner)
+                }
             },
-            runInstruction: { [weak daemon] text in
-                await daemon?.doAfterTheCall(text, to: ownerThread) ?? .failed
+            runInstruction: { [weak daemon] text, recipient in
+                guard let daemon else { return .failed }
+                if let recipient {
+                    return await daemon.doAfterTheCall(text, to: recipient)
+                }
+                return await AfterTheCallDrain.firstDelivery(to: ownerThreads) { owner in
+                    await daemon.doAfterTheCall(text, to: owner)
+                }
             },
             log: { note($0) }
         )
@@ -1413,6 +1545,37 @@ func runDaemon(_ arguments: [String]) -> Never {
             await daemon?.recentMessagesForCall()
         }
 
+        // **The briefing runs a turn and leaves no turn behind.**
+        //
+        // It used to go through `answer` above, which ends in
+        // `callHistory.remember(result.messages)` — so the request itself, a
+        // page of machine-written instruction starting "I'm about to join a
+        // voice call with you", became message zero of the call, attributed to
+        // the owner, and was re-sent on every turn until twelve turns pushed it
+        // out. The history is never cleared, so it rode into the next call too.
+        //
+        // `history: []` rather than `callHistory.recent()`, and that is the same
+        // point from the other side: the briefing already gets the previous
+        // call's ending handed to it as `LastCall.closing`, labelled as what it
+        // is. Feeding it the raw tail as well gave it the same facts twice with
+        // nothing to say which was older.
+        //
+        // The task-edit guard is kept for the reason the one above states: a
+        // briefing has no business writing to the list, but if it does, the
+        // watch must not read the change back to him as news.
+        await callServer.onBriefing { request in
+            let result = try await callLoop.run(transcript: request, history: [])
+            if OwnTaskEdits.wroteToTheTaskList(result.trace) {
+                await ownTaskEdits.record()
+            }
+            return result.reply
+        }
+
+        // And what he heard, which is the half worth keeping.
+        await callServer.onOpeningSpoken { opening in
+            await callHistory.open(with: opening)
+        }
+
         // Checking on things without being asked.
         //
         // Off unless the owner switched it on, and the loop is started
@@ -1426,14 +1589,20 @@ func runDaemon(_ arguments: [String]) -> Never {
         // stop Signal working.
         let watchTask = Task { [weak daemon] in
             // The owner's own thread — Note to Self, which is where every other
-            // reply lands. `--account` when it was given, otherwise the number
-            // they allowlisted, which for this appliance is the same person by
-            // definition: it refuses to serve anyone else.
-            let owner = flags["account"] ?? allowlist.identities.compactMap {
-                if case .phoneNumber(let number) = $0 { return number }
-                return nil
-            }.sorted().first
-            guard let owner else { return }
+            // reply lands.
+            //
+            // The same resolution the after-the-call drain uses, rather than a
+            // second answer to the same question. It was a second answer once,
+            // and it had the same defect: a bare Signal number, which on a
+            // WhatsApp-only appliance is an address nothing can route, so every
+            // proactive announcement would be composed and dropped. Two answers
+            // to "where does the owner read this?" is how one of them stays
+            // wrong after the other is fixed.
+            //
+            // A new install has no conversation evidence, so it still has a
+            // lossless fallback. Once the owner has spoken, news follows that
+            // direct thread instead of mirroring across apps.
+            guard !ownerThreads.isEmpty, let daemon else { return }
 
             await runProactiveWatch(
                 // Logged, because a backlog read that fails silently is what
@@ -1450,9 +1619,15 @@ func runDaemon(_ arguments: [String]) -> Never {
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
                 say: { message, quotingAnotherAgent in
-                    await daemon?.announce(
-                        message, to: .account(owner), quotingAnotherAgent: quotingAnotherAgent
+                    let preferred = await daemon.preferredAnnouncementRecipient(
+                        among: ownerThreads
                     )
+                    let destinations = preferred.map { [$0] } ?? ownerThreads
+                    for owner in destinations {
+                        _ = await daemon.announce(
+                            message, to: owner, quotingAnotherAgent: quotingAnotherAgent
+                        )
+                    }
                 },
                 log: { note($0) }
             )

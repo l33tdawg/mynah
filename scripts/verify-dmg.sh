@@ -20,10 +20,45 @@ echo "== disk image"
 hdiutil verify "$DMG" >/dev/null || die "hdiutil rejected the image"
 
 MOUNT="$(mktemp -d)"
-cleanup() { hdiutil detach "$MOUNT" -quiet 2>/dev/null || true; rm -rf "$MOUNT"; }
+DEVICE=""
+cleanup() {
+  local original_status=$?
+  local detached=0
+  trap - EXIT
+
+  if [[ -n "$DEVICE" ]]; then
+    # Spotlight and Gatekeeper can keep a freshly inspected image busy for a
+    # moment. Retry the exact device, not a path which may already have been
+    # reused; reserve force for the final attempt.
+    for attempt in 1 2 3; do
+      if [[ "$attempt" -eq 3 ]]; then
+        hdiutil detach "$DEVICE" -force -quiet 2>/dev/null && detached=1 && break
+      else
+        hdiutil detach "$DEVICE" -quiet 2>/dev/null && detached=1 && break
+      fi
+      sleep 1
+    done
+  fi
+
+  # Never recurse into a live read-only volume. This exact mistake made the
+  # beta.10 release command exit non-zero after every verification had passed.
+  if /sbin/mount | grep -F " on $MOUNT (" >/dev/null 2>&1; then
+    echo "error: could not detach $DEVICE; leaving mounted image at $MOUNT" >&2
+    exit 1
+  fi
+  rm -rf "$MOUNT"
+  [[ "$detached" -eq 1 || -z "$DEVICE" ]] || original_status=1
+  exit "$original_status"
+}
+
 trap cleanup EXIT
-hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null \
+ATTACH_OUTPUT="$(hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT")" \
   || die "could not mount $DMG"
+DEVICE="$(awk '$1 ~ /^\/dev\/disk[0-9]+$/ { print $1; exit }' <<<"$ATTACH_OUTPUT")"
+case "$DEVICE" in
+  /dev/disk[0-9]*) ;;
+  *) die "mounted $DMG but could not identify its device" ;;
+esac
 
 APP="$MOUNT/Mynah.app"
 [[ -d "$APP" ]] || die "no Mynah.app inside the image"

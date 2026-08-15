@@ -140,6 +140,21 @@ final class AfterTheCallTests: XCTestCase {
         )
     }
 
+    func testReachableCallGuidanceNamesTheOriginatingChatRatherThanSignal() async throws {
+        let queue = try temporaryQueue().0
+        let tools = try await AfterTheCallToolSource(queue: queue).listTools()
+        let description = try XCTUnwrap(tools.first?.description).lowercased()
+        let queued = AfterTheCallToolSource.queued.lowercased()
+        let ceiling = CallTurnServer.tookTooLong.lowercased()
+
+        XCTAssertTrue(description.contains("same chat that requested the call"), description)
+        XCTAssertTrue(queued.contains("chat that requested the call"), queued)
+        XCTAssertTrue(ceiling.contains("your chat"), ceiling)
+        XCTAssertFalse(description.contains("signal"), description)
+        XCTAssertFalse(queued.contains("signal"), queued)
+        XCTAssertFalse(ceiling.contains("signal"), ceiling)
+    }
+
     // MARK: - The orphaned turn
 
     /// **The bug that survives the obvious design.**
@@ -254,6 +269,51 @@ final class AfterTheCallTests: XCTestCase {
             "work left by a dead process is not surfaced at startup, so the only reader is the "
                 + "end of the NEXT call — a door that opens only if the owner rings back"
         )
+    }
+
+    func testQueuePersistsTheExactOriginatingWhatsAppThread() throws {
+        let (queue, url) = try temporaryQueue()
+        let origin = ChannelRecipient(
+            kind: .whatsapp,
+            address: "161228928336031@lid",
+            identity: "60123821767@s.whatsapp.net"
+        )
+        queue.expectCall(from: origin)
+        queue.beginCall("A")
+        _ = queue.enqueue(
+            generation: generation("A"), kind: .file, what: "the deck", who: nil, asked: "send it"
+        )
+
+        let recovered = try XCTUnwrap(CallActionQueue(fileURL: url).everything().first?.recipient)
+        XCTAssertEqual(recovered.channelRecipient, origin)
+        XCTAssertEqual(recovered.channelRecipient.description, "whatsapp:60123821767@s.whatsapp.net")
+        XCTAssertEqual(recovered.channelRecipient.address, "161228928336031@lid")
+    }
+
+    func testLegacyQueueEntryWithoutRecipientStillDecodes() throws {
+        let (queue, url) = try temporaryQueue()
+        queue.beginCall("A")
+        _ = queue.enqueue(
+            generation: generation("A"), kind: .file, what: "the deck", who: nil, asked: "send it"
+        )
+
+        let recovered = try XCTUnwrap(CallActionQueue(fileURL: url).everything().first)
+        XCTAssertNil(recovered.recipient)
+    }
+
+    func testLegacyRecoveryFailsOverToTheNextLinkedChannel() async {
+        let signal = ChannelRecipient(kind: .signal, address: "+60123821767")
+        let whatsapp = ChannelRecipient(kind: .whatsapp, address: "60123821767@s.whatsapp.net")
+        let attempts = RecipientAttempts()
+
+        let outcome = await AfterTheCallDrain.firstDelivery(to: [signal, whatsapp]) { recipient in
+            await attempts.record(recipient)
+            return recipient.kind == .signal ? .sentWithoutTheFiles : .sent
+        }
+
+        XCTAssertEqual(outcome, .sent)
+        let attemptedRecipients = await attempts.values
+        XCTAssertEqual(attemptedRecipients, [signal, whatsapp])
     }
 
     // MARK: - Changing your mind
@@ -488,5 +548,13 @@ final class AfterTheCallTests: XCTestCase {
             "the after-call work is not claimed between the turn being stopped and the transcript "
                 + "being posted, so what was queued never reaches the owner's thread"
         )
+    }
+}
+
+private actor RecipientAttempts {
+    private(set) var values: [ChannelRecipient] = []
+
+    func record(_ recipient: ChannelRecipient) {
+        values.append(recipient)
     }
 }

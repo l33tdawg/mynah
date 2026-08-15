@@ -123,6 +123,82 @@ final class ToolLoopTests: XCTestCase {
         ToolLoop(backend: backend, mcp: tools, configuration: configuration)
     }
 
+    // MARK: What a backend is handed
+
+    /// **A conversation sent to a backend must begin with a user turn.**
+    ///
+    /// Anthropic rejects a request whose first non-system message is an
+    /// assistant one — "the first message must use the user role" — with a 400,
+    /// and nothing downstream repairs it: `encodeMessages` merges adjacent
+    /// same-role turns and no more, and there is no retry.
+    ///
+    /// The shape could not occur until 2.0.0-beta.6, because every history
+    /// reaching `run` had been through `conversationOnly`, which always left a
+    /// user turn first. Then `CallHistory.open(with:)` began starting a call at
+    /// the sentence the caller heard — one assistant turn, alone, deliberately —
+    /// and every //call on an Anthropic brain would have failed on its first
+    /// request. `//call` is refused on a local brain, so that is every call
+    /// those owners can make. Found by an adversarial sweep hours after it
+    /// shipped; nothing in the suite would have caught it.
+    func testABackendIsNeverHandedAConversationThatOpensWithTheAssistant() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "I haven't picked it up yet",
+            history: [BrainMessage.assistant("Morning. Have you picked the Cayenne up yet?")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        let conversation = sent.filter { $0.role != .system }
+        XCTAssertEqual(
+            conversation.first?.role, .user,
+            "the first non-system turn is \(conversation.first?.role.rawValue ?? "none"); Anthropic 400s on that"
+        )
+    }
+
+    /// **Hoisted, not dropped.** The opening is the thing the caller's first
+    /// sentence answers — "I haven't picked it up yet" means nothing without it
+    /// — so removing it to satisfy the role rule would trade a 400 for an
+    /// appliance that does not know what it just asked.
+    func testTheOpeningItSpokeFirstSurvivesIntoTheSystemPrompt() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "I haven't picked it up yet",
+            history: [BrainMessage.assistant("Morning. Have you picked the Cayenne up yet?")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        let system = sent.filter { $0.role == .system }.map(\.content).joined(separator: "\n")
+        XCTAssertTrue(
+            system.contains("Have you picked the Cayenne up yet?"),
+            "the sentence the caller was answering was thrown away"
+        )
+    }
+
+    /// An ordinary conversation is untouched — the hoist must not rewrite a
+    /// history that was already legal, which is every history but a call's.
+    func testAnOrdinaryConversationIsHandedOverUnchanged() async throws {
+        let backend = ScriptedBackend([ScriptedBackend.answering("Right, noted.")])
+        let tools = StubToolSource(toolNames: ["sage_recall"])
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        _ = try await loop.run(
+            transcript: "and the ferry?",
+            history: [BrainMessage.user("what time is dinner"), BrainMessage.assistant("half seven")]
+        )
+
+        let sent = try XCTUnwrap(backend.requests.first).messages
+        XCTAssertEqual(
+            sent.filter { $0.role != .system }.map(\.content),
+            ["what time is dinner", "half seven", WhereWeAre.stamp("and the ferry?")]
+        )
+    }
+
     // MARK: A refusal that is not true
 
     /// **The 4B's strongest wrong prior, caught and corrected.**
@@ -364,6 +440,55 @@ final class ToolLoopTests: XCTestCase {
     }
 
     // MARK: Forced summary
+
+    /// Internal retries are instructions from the loop to the model, not words
+    /// the owner typed. The WhatsApp thread that exposed this persisted both
+    /// the correction and the model's rejected draft, then treated that
+    /// poisoned history as evidence that two real message ids were invented.
+    func testRetryControlMessagesAndRejectedDraftsAreNotReturnedAsConversationHistory() async throws {
+        let rejected = "Sent — message msg-real-123 was delivered."
+        let delivered = "I can’t verify that send from this thread yet."
+        let backend = ScriptedBackend([
+            ScriptedBackend.answering(rejected),
+            ScriptedBackend.answering(delivered)
+        ])
+        let loop = makeLoop(backend: backend, tools: StubToolSource(toolNames: ["sage_recall"]))
+
+        let result = try await loop.run(transcript: "check your sent items")
+        let remembered = VoiceBridgeDaemon.conversationOnly(result.messages)
+
+        XCTAssertEqual(result.reply, delivered)
+        XCTAssertEqual(
+            remembered,
+            [.user("check your sent items"), .assistant(delivered)],
+            "only the owner’s request and the reply actually delivered to them belong in history"
+        )
+        XCTAssertFalse(result.messages.contains { $0.content == ToolLoop.unbackedClaimCorrection })
+        XCTAssertFalse(result.messages.contains { $0.content == rejected })
+    }
+
+    /// Sent-message history is the authoritative answer to "did they reply?".
+    /// Reading it must never be confused with sending the request again.
+    func testSentItemCheckReadsOutboxWithoutSendingASecondMessage() async throws {
+        let backend = ScriptedBackend([
+            ScriptedBackend.calling(
+                "sage_message_history",
+                arguments: ["folder": .string("outbox")]
+            ),
+            ScriptedBackend.answering("Both replies are attached to msg-real-123 and msg-real-456.")
+        ])
+        let tools = StubToolSource(
+            toolNames: ["sage_message_history", "sage_message_send"],
+            results: ["sage_message_history": #"{"messages":[{"message_id":"msg-real-123","status":"answered"},{"message_id":"msg-real-456","status":"answered"}]}"#]
+        )
+        let loop = makeLoop(backend: backend, tools: tools)
+
+        let result = try await loop.run(transcript: "check your sent items — did they reply?")
+
+        XCTAssertEqual(result.reply, "Both replies are attached to msg-real-123 and msg-real-456.")
+        XCTAssertEqual(tools.calls.map(\.name), ["sage_message_history"])
+        XCTAssertEqual(tools.calls.first?.arguments["folder"], .string("outbox"))
+    }
 
     /// The forced-summary turn is an instruction to stop calling tools. It must
     /// not be persisted: leaving a standing "answer without tools" user turn in

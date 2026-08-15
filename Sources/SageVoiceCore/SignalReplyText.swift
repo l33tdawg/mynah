@@ -39,9 +39,24 @@ public enum SignalReplyText {
     /// part with a rule in it and because nothing else in a daemon that holds a
     /// socket open can be tested.
     public static func styles(forPrefix prefix: String) -> [String] {
+        SignalChannel.styles(for: emphasis(forPrefix: prefix))
+    }
+
+    /// The same rule, said in the form both channels can render.
+    ///
+    /// **`styles` returns signal-cli's `0:8:BOLD`, which means nothing to
+    /// WhatsApp** — WhatsApp wants the run wrapped in asterisks in the text
+    /// itself. Handing the Signal form to a shared reply path would have put a
+    /// literal `0:8:BOLD` in front of every WhatsApp answer, or dropped the bold
+    /// silently, depending on which end noticed first. So the daemon describes
+    /// the run and each channel spells it: see `ChannelEmphasis`.
+    ///
+    /// `styles` stays, in terms of this, because `SignalChannel` still has to
+    /// produce the wire form and its tests are about that string.
+    public static func emphasis(forPrefix prefix: String) -> [ChannelEmphasis] {
         let marker = prefix.trimmingCharacters(in: .whitespaces)
         guard !marker.isEmpty else { return [] }
-        return ["0:\(marker.utf16.count):BOLD"]
+        return [ChannelEmphasis(utf16Offset: 0, utf16Length: marker.utf16.count, style: .bold)]
     }
 
     public static func spacingOutLists(in text: String) -> String {

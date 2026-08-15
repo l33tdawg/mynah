@@ -116,6 +116,25 @@ TYPST_PACKAGES_ROOT="${SAGE_VOICE_TYPST_PACKAGES_ROOT:-$ROOT/vendor/typst-packag
 DIAGRAPH_VERSION="${SAGE_VOICE_DIAGRAPH_VERSION:-0.3.5}"
 REQUIRE_DOCUMENTS="${SAGE_VOICE_REQUIRE_DOCUMENTS:-1}"
 
+# WhatsApp: the Node runtime and the Baileys bridge that runs on it.
+#
+# The only interpreted runtime in this bundle, and the reason is that WhatsApp
+# has no client library for anything this app is written in — Baileys is the one
+# maintained implementation and it is TypeScript. It keeps the bundle's shape
+# anyway: one 107 MB Mach-O plus data, the same as signal-cli's 121 MB native
+# image, and the JavaScript beside it has no native addons at all, so codesign
+# seals the tree without signing anything inside it.
+#
+# NOT required by default, unlike the voice and the documents. Those are
+# downgrades an owner would notice without being told; a build without WhatsApp
+# simply has no WhatsApp, and says so on the screen that offers it. Set
+# SAGE_VOICE_REQUIRE_WHATSAPP=1 for a release that must carry it.
+NODE_ROOT="${SAGE_VOICE_NODE_ROOT:-$ROOT/vendor/node}"
+NODE_SOURCE="${SAGE_VOICE_NODE:-$NODE_ROOT/bin/node}"
+WHATSAPP_SOURCE="${SAGE_VOICE_WHATSAPP_DIR:-$ROOT/whatsapp}"
+NODE_ENTITLEMENTS="${SAGE_VOICE_NODE_ENTITLEMENTS:-$ROOT/resources/NodeRuntime.entitlements}"
+REQUIRE_WHATSAPP="${SAGE_VOICE_REQUIRE_WHATSAPP:-0}"
+
 # An ad-hoc signature cannot ship the dylib, and the failure is total.
 #
 # The hardened runtime enforces library validation, which requires a loaded
@@ -484,6 +503,110 @@ Run scripts/provision-typst-packages.sh before packaging.
 They are what draws a diagram into a PDF."
 fi
 
+# --- WhatsApp -------------------------------------------------------------
+#
+# Both halves or neither. A Node with no bridge is 107 MB of nothing; a bridge
+# with no Node is a screen that offers WhatsApp and then cannot start it.
+if [[ -x "$NODE_SOURCE" && -f "$WHATSAPP_SOURCE/bridge.js" ]]; then
+  [[ -d "$WHATSAPP_SOURCE/node_modules" ]] || die \
+"The WhatsApp bridge has no dependencies installed: $WHATSAPP_SOURCE/node_modules
+Run scripts/provision-whatsapp-bridge.sh before packaging.
+Staging bridge.js without them produces an app that fails at first import."
+
+  # Checked here as well as in the provision script, because provisioning and
+  # packaging can be hours and a `git pull` apart. A native addon that arrives
+  # in between would otherwise be discovered by Apple rather than by us.
+  NATIVE_IN_BRIDGE="$(find "$WHATSAPP_SOURCE/node_modules" -name '*.node' -type f | head -5)"
+  [[ -z "$NATIVE_IN_BRIDGE" ]] || die \
+"The WhatsApp dependency tree contains native addons:
+$NATIVE_IN_BRIDGE
+Each needs its own codesign pass inside a hardened-runtime bundle. Rerun
+scripts/provision-whatsapp-bridge.sh, which excludes them, or sign them
+deliberately here."
+
+  mkdir -p "$APP/Contents/Resources/node/bin" "$APP/Contents/Resources/whatsapp"
+  cp "$NODE_SOURCE" "$APP/Contents/Resources/node/bin/node"
+  chmod +x "$APP/Contents/Resources/node/bin/node"
+  [[ -f "$NODE_ROOT/LICENSE" ]] || die \
+"Node ships in this bundle but its licence text was not staged: $NODE_ROOT/LICENSE
+MIT requires the notice to travel with the copy. Rerun scripts/provision-node.sh."
+  cp "$NODE_ROOT/LICENSE" "$APP/Contents/Resources/node/LICENSE"
+  [[ ! -f "$NODE_ROOT/VERSION" ]] || cp "$NODE_ROOT/VERSION" "$APP/Contents/Resources/node/VERSION"
+
+  # The bridge and its dependencies. No tests: they are build-time proof, and
+  # 200 KB of .test.mjs inside a shipped app is 200 KB nobody will ever run.
+  #
+  # Every one required. This was `[[ ! -f … ]] || cp`, which silently staged
+  # nothing when a file was missing and left the gap to be found by the import
+  # check below — which, as written, could not find it.
+  for file in bridge.js bridge_helpers.js allowlist.js outbound_ids.js \
+              owner_message_gate.js event_spool.js event_socket.js \
+              media_sweep.js \
+              package.json LICENSE.hermes PROVENANCE.md; do
+    [[ -f "$WHATSAPP_SOURCE/$file" ]] || die \
+"The WhatsApp bridge is missing a file it needs: $WHATSAPP_SOURCE/$file
+Staging the rest without it produces an app that fails at first import."
+    cp "$WHATSAPP_SOURCE/$file" "$APP/Contents/Resources/whatsapp/$file"
+  done
+  cp -R "$WHATSAPP_SOURCE/node_modules" "$APP/Contents/Resources/whatsapp/node_modules"
+
+  # **It has to actually run from where it will actually live.**
+  #
+  # This checked one module, `bridge_helpers.js`, and an audit built a staged
+  # tree with node_modules and five of the seven modules deleted and watched it
+  # pass — because bridge_helpers.js imports none of them. A check that cannot
+  # fail is worse than no check: it reads as proof.
+  #
+  # So: import every local module, and import every package `bridge.js` names.
+  # Not bridge.js itself, which starts a WhatsApp connection on import. Run from
+  # inside the staged directory so bare specifiers resolve against the staged
+  # node_modules, exactly as they will on the owner's Mac. Unsigned at this
+  # point, so this proves the layout, not the entitlements — the Team ID check
+  # after signing does that half.
+  if ! ( cd "$APP/Contents/Resources/whatsapp" && "$APP/Contents/Resources/node/bin/node" --input-type=module -e '
+    import { readFileSync } from "fs";
+
+    const local = ["bridge_helpers.js", "allowlist.js", "outbound_ids.js",
+                   "owner_message_gate.js", "event_spool.js", "event_socket.js",
+                   "media_sweep.js"];
+
+    // Every specifier bridge.js imports, read out of bridge.js rather than
+    // listed here — a list here would be a second thing to keep in step, and
+    // it would be wrong the first time somebody added an import.
+    const wanted = new Set();
+    let open = false;
+    for (const line of readFileSync("bridge.js", "utf8").split("\n")) {
+      if (!open && /^\s*import[\s{"\x27]/.test(line)) open = true;
+      if (!open) continue;
+      const found = line.match(/from\s+["\x27]([^"\x27]+)["\x27]|^\s*import\s+["\x27]([^"\x27]+)["\x27]/);
+      if (found) { wanted.add(found[1] || found[2]); open = false; }
+    }
+    const packages = [...wanted].filter((s) => !s.startsWith(".") && !s.startsWith("node:"));
+
+    // Without this the regex above could quietly match nothing and turn the
+    // whole check back into the no-op it was.
+    if (packages.length < 4) {
+      console.error(`only ${packages.length} package import(s) found in bridge.js; the scan is broken`);
+      process.exit(1);
+    }
+
+    let bad = 0;
+    for (const specifier of [...local.map((f) => "./" + f), ...packages]) {
+      try { await import(specifier); }
+      catch (error) { console.error(`  ${specifier}: ${error.message}`); bad += 1; }
+    }
+    if (bad) { console.error(`${bad} of ${local.length + packages.length} imports failed`); process.exit(1); }
+  ' ); then
+    die "The staged WhatsApp bridge cannot load what it needs from
+$APP/Contents/Resources/whatsapp
+Something in the copy above is incomplete."
+  fi
+elif [[ "$REQUIRE_WHATSAPP" == "1" || "$REQUIRE_WHATSAPP" == "true" ]]; then
+  die "Required WhatsApp support is missing.
+  node:   $NODE_SOURCE      (scripts/provision-node.sh)
+  bridge: $WHATSAPP_SOURCE  (scripts/provision-whatsapp-bridge.sh)"
+fi
+
 if [[ "$BUNDLE_WHISPER_CPP" == "1" || "$BUNDLE_WHISPER_CPP" == "true" ]]; then
   if [[ -x "$WHISPER_CLI_SOURCE" ]]; then
     cp "$WHISPER_CLI_SOURCE" "$APP/Contents/MacOS/whisper-cli"
@@ -555,6 +678,96 @@ if [[ -x "$APP/Contents/Resources/pandoc/bin/pandoc" ]]; then
     || die "pandoc is GPL 2.0-or-later and ships in this bundle, but its licence text was not staged.
 Put the licence at resources/licences/GPL-2.0.txt."
 fi
+# **The npm tree, which nobody was looking at.**
+#
+# Every check above enumerates a binary this repository vendors on purpose:
+# signal-cli, espeak-ng, pandoc, Graphviz. `cp -R node_modules` stages 1,200
+# packages nobody enumerated, and one of them — libsignal, a direct dependency
+# of Baileys and imported in-process by the bridge — is GPL-3.0. It had shipped
+# in every build carrying WhatsApp, while NOTICE, the About screen and this
+# script all said the WhatsApp side was MIT.
+#
+# So this is a scan rather than a list. A list is what failed: it named what
+# somebody remembered, and the dependency arrived through a transitive edge that
+# nobody chose. Anything in the staged tree whose licence is not on the
+# permissive set has to be named in KNOWN_COPYLEFT below, which is a line
+# somebody has to write deliberately after reading NOTICE.
+#
+# Run against the STAGED copy, not `whatsapp/node_modules`. What ships is the
+# only thing with an obligation attached, and the two differ the moment
+# provisioning changes.
+if [[ -d "$APP/Contents/Resources/whatsapp/node_modules" ]]; then
+  # name@version : licence. Adding a line here is a statement that NOTICE and
+  # About.swift describe this package and that its licence text is staged.
+  KNOWN_COPYLEFT="libsignal@6.0.0 : GPL-3.0"
+
+  FOUND_COPYLEFT="$(
+    "$APP/Contents/Resources/node/bin/node" -e '
+      const fs = require("fs"), path = require("path");
+      // Names, not SPDX parsing: this decides whether a human has to look, and
+      // erring towards "look" is free. Anything unrecognised — including a
+      // licence given as an object rather than a string, which older packages
+      // do — comes out as something to be named.
+      const permissive = /^(MIT|ISC|BSD|Apache|Unlicense|CC0|CC-BY|0BSD|Python|BlueOak|WTFPL|Zlib)/i;
+      const found = [];
+      const seen = new Set();
+      (function walk(dir, depth) {
+        if (depth > 6) return;
+        let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const child = path.join(dir, entry.name);
+          if (entry.name === "node_modules") { walk(child, depth + 1); continue; }
+          const manifest = path.join(child, "package.json");
+          if (fs.existsSync(manifest)) {
+            try {
+              const p = JSON.parse(fs.readFileSync(manifest, "utf8"));
+              const licence = typeof (p.license ?? p.licenses) === "string"
+                ? (p.license ?? p.licenses)
+                : Array.isArray(p.licenses) && typeof p.licenses[0]?.type === "string"
+                  ? p.licenses[0].type
+                  : "UNDECLARED";
+              const key = `${p.name}@${p.version} : ${licence}`;
+              if (!permissive.test(licence) && !seen.has(key)) { seen.add(key); found.push(key); }
+            } catch {}
+          }
+          if (entry.name.startsWith("@")) walk(child, depth);
+        }
+      })(process.argv[1], 0);
+      // Sorted, so the diff between two builds is readable.
+      console.log(found.sort().join("\n"));
+    ' "$APP/Contents/Resources/whatsapp/node_modules"
+  )" || die "the licence scan of the staged npm tree could not run"
+
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    grep -qxF "$package" <<< "$KNOWN_COPYLEFT" || die \
+"a package with a non-permissive licence ships in this bundle and nothing declares it:
+
+    $package
+
+Every build that carries WhatsApp conveys this file to whoever installs Mynah,
+which is what makes it an obligation rather than a detail. Do one of:
+
+  * Name it in KNOWN_COPYLEFT in this script, AND describe it in NOTICE and in
+    Sources/MynahMac/Main/About.swift, AND stage its licence text under
+    resources/licences/. That is the path libsignal took — read those three
+    places for the shape.
+  * Remove the dependency and rerun scripts/provision-whatsapp-bridge.sh.
+
+Do not silence this by widening the permissive pattern above. The pattern
+decides whether a person looks, and every package it waves through is one
+nobody read."
+  done <<< "$FOUND_COPYLEFT"
+
+  # libsignal is GPL-3.0 and in-tree, so the licence text has to travel with it.
+  # The same file signal-cli needs, required again here rather than assumed: the
+  # two obligations are independent, and a build that drops signal-cli would
+  # otherwise take this check away with it.
+  [[ -f "$APP/Contents/Resources/licences/GPL-3.0.txt" ]] \
+    || die "libsignal is GPL 3.0 and ships in this bundle's npm tree, but its licence text was not staged."
+fi
+
 # The Graphviz inside the diagram plugin. A WASM file is still a binary somebody
 # else wrote, and EPL 2.0 asks for the same conveyance as any other copyleft.
 if [[ -d "$APP/Contents/Resources/typst/packages/local/diagraph" ]]; then
@@ -628,6 +841,55 @@ fi
   || sign "$APP/Contents/Resources/pandoc/bin/pandoc"
 [[ ! -f "$APP/Contents/Resources/typst/bin/typst" ]] \
   || sign "$APP/Contents/Resources/typst/bin/typst"
+# The Node runtime, and this one is not like the others: it arrives ALREADY
+# signed and hardened by the Node Foundation, carrying six entitlements of its
+# own. One of them is com.apple.security.get-task-allow, a development
+# entitlement that Apple's notary service rejects outright. Shipping the
+# download unchanged would fail notarisation at the very end of a release,
+# after everything else had been signed and uploaded.
+#
+# So this re-signs rather than signs, and then checks that it worked — which is
+# not paranoia, it is the failure that actually happened on 7 August 2026.
+# resources/NodeRuntime.entitlements had a codesign flag written in a comment,
+# an XML comment may not contain two hyphens in a row, and so:
+#
+#     codesign exited 1 with "AMFIUnserializeXML: syntax error near line 24"
+#     the binary kept the Node Foundation's signature, entitlements and all
+#
+# `sign` runs under `set -e` and would have caught that exit status here. It
+# would NOT have caught a well-formed entitlements file that simply granted the
+# wrong thing, and the Team ID is the cheap way to tell a real re-sign from a
+# no-op. Both are checked, because the two failures look identical in a build
+# log that only prints "signing node".
+if [[ -f "$APP/Contents/Resources/node/bin/node" ]]; then
+  sign "$APP/Contents/Resources/node/bin/node" --entitlements "$NODE_ENTITLEMENTS"
+
+  NODE_TEAM="$(codesign -dv "$APP/Contents/Resources/node/bin/node" 2>&1 \
+    | sed -n 's/^TeamIdentifier=//p')"
+  [[ -n "$NODE_TEAM" && "$NODE_TEAM" != "HX7739G8FX" ]] || die \
+"node still carries the Node Foundation's signature (TeamIdentifier=$NODE_TEAM).
+The re-sign did not take. Check the entitlements file with:
+
+  xmllint --noout $NODE_ENTITLEMENTS
+
+**xmllint, not plutil.** plutil -lint reports OK on the file that caused this
+— verified 7 Aug 2026 — because it is lenient about exactly the fault that
+breaks codesign: an XML comment may not contain two hyphens in a row, and
+writing a codesign flag into the comment the natural way puts them there.
+xmllint says 'Double hyphen within comment' and gives the line."
+
+  NODE_GRANTED="$(codesign -d --entitlements - --xml \
+    "$APP/Contents/Resources/node/bin/node" 2>/dev/null || true)"
+  [[ "$NODE_GRANTED" != *"get-task-allow"* ]] || die \
+"node is still carrying com.apple.security.get-task-allow.
+Apple's notary service rejects it. $NODE_ENTITLEMENTS must replace Node's own
+entitlements, not add to them."
+  [[ "$NODE_GRANTED" == *"com.apple.security.cs.allow-jit"* ]] || die \
+"node was signed without com.apple.security.cs.allow-jit.
+Measured 7 Aug 2026: without it a hardened Node dies with SIGTRAP before any
+JavaScript runs, so WhatsApp would fail on every owner's Mac and on none of
+ours. See the table in scripts/provision-node.sh."
+fi
 # The daemon, and it is the process that writes the owner's calendar. Signed
 # with its own entitlements rather than none, so that the binary calling EventKit
 # carries the key it is asking about.

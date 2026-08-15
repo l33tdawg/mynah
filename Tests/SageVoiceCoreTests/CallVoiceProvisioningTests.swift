@@ -112,3 +112,84 @@ final class CallVoiceProvisioningTests: XCTestCase {
         XCTAssertEqual(attempts.count, 2, "a failed fetch was never tried again")
     }
 }
+
+// MARK: - Not paid for on a brain that cannot take a call
+
+/// **The owner's rule, restated 8 August 2026: "if user is using local model,
+/// all these voice calling and stuff is disabled - it's too slow", and "//call
+/// only works with api models".**
+///
+/// The refusal was already right. Everything downstream of it ran anyway, so an
+/// owner who can never place a call paid for one three times over: 337 MB
+/// fetched, 337 MB kept, and — measured on the live daemon that day — a 376 MB
+/// physical footprint at every start, almost all of it this model. On the one
+/// machine least able to spare it, since it is already hosting an LLM.
+///
+/// One gate covers all three: with the assets absent
+/// `KokoroSpeechSynthesizer.ifReady` returns nil and `sage-voiced` falls back to
+/// the built-in voice, logging `[call] voice: say (kokoro model not installed)`.
+extension CallVoiceProvisioningTests {
+
+    func testAnOnDeviceBrainDoesNotFetchAVoiceItCanNeverUse() async {
+        let asked = Counter()
+        await makeApp().installCallVoiceIfNeeded(brainKeepsWordsOnDevice: true) {
+            _ = asked.tick()
+            return .alreadyInstalled
+        }
+        XCTAssertEqual(
+            asked.count, 0,
+            "337 MB was fetched for //call, which is refused outright on this brain"
+        )
+    }
+
+    func testACloudBrainStillFetchesIt() async {
+        let asked = Counter()
+        await makeApp().installCallVoiceIfNeeded(brainKeepsWordsOnDevice: false) {
+            _ = asked.tick()
+            return .alreadyInstalled
+        }
+        XCTAssertEqual(asked.count, 1, "a brain that can take calls was left without a voice")
+    }
+
+    /// **The regression this gate re-arms, and the one that would reach the
+    /// owner as a robot.**
+    ///
+    /// The download is ungated and every-launch on purpose: it used to live only
+    /// inside the Signal link flow, so anybody who linked before that code
+    /// existed never got the assets and heard the macOS built-in voice — *"i am
+    /// reaching 'robot voice' instead of the nice sounding one and i am already
+    /// on deepseekv4 api"*. A tier gate reintroduces exactly that shape for
+    /// anyone moving local → hosted, so the brain picker asks again on the way
+    /// out. This pins the sequence rather than the call site, because a future
+    /// picker that forgets to ask is the same bug.
+    func testSwitchingFromALocalBrainToACloudOneFetchesTheVoice() async {
+        let app = makeApp()
+        let asked = Counter()
+        let install: @Sendable () async -> KokoroAssets.Outcome = {
+            _ = asked.tick()
+            return .installed(byteCount: 354_000_000)
+        }
+
+        await app.installCallVoiceIfNeeded(brainKeepsWordsOnDevice: true, install: install)
+        XCTAssertEqual(asked.count, 0)
+
+        // The owner switches to a cloud provider. SettingsView's brain pickers
+        // call this again immediately afterwards, rather than leaving it to the
+        // next launch.
+        await app.installCallVoiceIfNeeded(brainKeepsWordsOnDevice: false, install: install)
+        XCTAssertEqual(asked.count, 1, "the owner switched to a cloud brain and got no voice")
+    }
+
+    /// An unset choice is not evidence of a local model — the same assumption
+    /// `callReadinessRow` makes when it defaults to `.hosted`. Getting this
+    /// backwards would leave a fresh install with no voice until it happened to
+    /// record a brain.
+    func testNoRecordedBrainChoiceStillFetches() async {
+        let asked = Counter()
+        await makeApp().installCallVoiceIfNeeded(brainKeepsWordsOnDevice: nil) {
+            _ = asked.tick()
+            return .alreadyInstalled
+        }
+        XCTAssertEqual(asked.count, 1)
+    }
+}

@@ -350,10 +350,11 @@ final class MynahIdentityTests: XCTestCase {
     /// The same guard, over the whole product rather than one file.
     ///
     /// The test above reads `Sources/sage-voiced/main.swift` and nothing else,
-    /// so the app's three spawn sites — `ConversationModel`, `NodeAgents`,
-    /// `MemoriesView` — were never checked by anything. All three do pin today;
-    /// the point is that nothing was watching, and a fourth added tomorrow would
-    /// pass CI while signing as whatever the launch directory implies.
+    /// so the app's spawn sites — `ConversationModel` and `MemoriesView`, and
+    /// `NodeAgents` until it was deleted — were never checked by anything. They
+    /// all pin today; the point is that nothing was watching, and one added
+    /// tomorrow would pass CI while signing as whatever the launch directory
+    /// implies.
     ///
     /// That is not hypothetical. It is the mistake this file already records
     /// twice: `runBrain` pinned and `runDaemon` did not, and separately

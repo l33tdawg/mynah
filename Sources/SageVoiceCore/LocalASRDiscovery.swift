@@ -196,7 +196,7 @@ public actor LocalASRRuntime {
         guard !backends.isEmpty else {
             throw AudioTranscriberError.allBackendsFailed(startupFailures)
         }
-        return CascadingAudioFileTranscriber(backends)
+        return CascadingAudioFileTranscriber(backends, log: log)
     }
 }
 
@@ -259,9 +259,14 @@ struct ManagedWhisperKitTranscriber: AudioFileTranscribing {
 
 public struct CascadingAudioFileTranscriber: AudioFileTranscribing {
     private let transcribers: [AudioFileTranscribing]
+    private let log: @Sendable (String) -> Void
 
-    public init(_ transcribers: [AudioFileTranscribing]) {
+    public init(
+        _ transcribers: [AudioFileTranscribing],
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.transcribers = transcribers
+        self.log = log
     }
 
     public func transcribe(audioFile: URL, options: AudioTranscriptionOptions) async throws -> String {
@@ -270,9 +275,12 @@ public struct CascadingAudioFileTranscriber: AudioFileTranscribing {
         }
 
         var errors: [String] = []
-        for transcriber in transcribers {
+        let started = Date()
+        for (index, transcriber) in transcribers.enumerated() {
             do {
-                return try await transcriber.transcribe(audioFile: audioFile, options: options)
+                let text = try await transcriber.transcribe(audioFile: audioFile, options: options)
+                reportRescue(ifNeeded: errors, succeedingAt: index, started: started)
+                return text
             } catch {
                 errors.append(AudioTranscriberError.describe(error))
             }
@@ -286,14 +294,34 @@ public struct CascadingAudioFileTranscriber: AudioFileTranscribing {
         }
 
         var errors: [String] = []
-        for transcriber in transcribers {
+        let started = Date()
+        for (index, transcriber) in transcribers.enumerated() {
             do {
-                return try await transcriber.transcribeWithTiming(audioFile: audioFile, options: options)
+                let result = try await transcriber.transcribeWithTiming(audioFile: audioFile, options: options)
+                reportRescue(ifNeeded: errors, succeedingAt: index, started: started)
+                return result
             } catch {
                 errors.append(AudioTranscriberError.describe(error))
             }
         }
         throw AudioTranscriberError.allBackendsFailed(errors)
+    }
+
+    /// A successful fallback used to erase the only evidence that another
+    /// backend had failed first. On the owner's real call that made a rescued
+    /// 4.5-second recognition indistinguishable from an ordinary 1.0-second
+    /// turn, leaving the Mac-lag investigation with a hole in its instrument.
+    private func reportRescue(ifNeeded errors: [String], succeedingAt index: Int, started: Date) {
+        guard !errors.isEmpty else { return }
+        let failures = errors.enumerated().map { offset, error in
+            "backend \(offset + 1): \(error)"
+        }.joined(separator: "; ")
+        log(String(
+            format: "[asr] rescued by backend %d after %.1fs (%@)",
+            index + 1,
+            Date().timeIntervalSince(started),
+            failures
+        ))
     }
 }
 

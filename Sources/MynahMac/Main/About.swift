@@ -96,6 +96,25 @@ enum MynahAbout {
             sourceOffer: "Bundled unmodified. Its source is at the link above, "
                 + "and is available from us on request."
         ),
+        // **Named because it is GPL-3.0 and it ships.** Everything else in the
+        // WhatsApp column of this list is MIT, and this entry used to be absent
+        // — which made the screen say, by omission, that the whole WhatsApp side
+        // was permissive. It is not, and the owner is the one who would be
+        // conveying it.
+        //
+        // The source offer is the obligation, not the courtesy: GPL-3.0 needs
+        // the corresponding source to be available for as long as the build is
+        // distributed. See NOTICE for why conveying it does not make Mynah
+        // itself copyleft — the bridge is a separate process.
+        Attribution(
+            name: "libsignal",
+            role: "The encryption WhatsApp itself uses, inside the WhatsApp "
+                + "bridge. It arrives as a dependency of Baileys.",
+            licence: "GPL 3.0",
+            url: URL(string: "https://www.npmjs.com/package/libsignal")!,
+            sourceOffer: "Bundled unmodified, in Contents/Resources/whatsapp/node_modules. "
+                + "Its complete source is at the link above, and is available from us on request."
+        ),
         Attribution(
             name: "WhisperKit",
             role: "Turns your voice notes into words on this Mac's Neural Engine, "

@@ -84,7 +84,7 @@ public actor CallTurnServer {
     ///
     /// **A dead end with a door in it.** "Something went wrong" down a phone line
     /// leaves the caller with a working appliance and no idea what to do next, so
-    /// this names the thing that will work: the Signal thread, whose own ceiling
+    /// this names the thing that will work: the linked chat, whose own ceiling
     /// is 360 seconds — four times this one — and which can take as long as the
     /// question needs because nobody is holding a line open while it thinks.
     ///
@@ -94,7 +94,7 @@ public actor CallTurnServer {
     /// waits on.
     public static let tookTooLong = """
         Sorry — that one's taking longer than I can hold the line for. \
-        Send it to me on Signal and I'll give it the time it needs.
+        Send it to me in your chat and I'll give it the time it needs.
         """
 
     /// How long the opening briefing may take before the call opens without it.
@@ -129,6 +129,35 @@ public actor CallTurnServer {
     /// opened a call with "last we talked, you were heading to bed" on an
     /// evening whose actual last exchange had been about tonkatsu shops.
     private var recentMessages: @Sendable () async -> String?
+
+    /// Runs the opening briefing, kept apart from `answer` on purpose.
+    ///
+    /// **`answer` remembers, and the briefing must not be remembered.** The
+    /// daemon's `answer` closure ends in `callHistory.remember(result.messages)`,
+    /// so running the briefing through it made the *request* — a machine-written
+    /// instruction beginning "I'm about to join a voice call with you" — message
+    /// zero of the conversation, attributed to the owner, who never said it. It
+    /// was then re-sent on every turn until twelve turns pushed it out, and
+    /// carried into the next call because the history is never cleared between
+    /// them.
+    ///
+    /// What the caller *heard* is kept, through `onOpening`. That part has to
+    /// stay: the first thing anybody says on a call answers the opening, and
+    /// "I haven't picked it up yet" is unintelligible without the sentence that
+    /// asked.
+    ///
+    /// Falls back to `answer` when nothing has been handed over, so a server
+    /// built without a daemon still opens.
+    private var brief: (@Sendable (String) async throws -> String)?
+
+    /// Handed the opening the caller actually hears, briefed or plain, so the
+    /// conversation can start where they started.
+    ///
+    /// Called from `openTheCall` rather than from `buildOpening`, and that is
+    /// deliberate: `//call` may be pressed several times before anybody picks
+    /// up, and seeding at build time would reset the history once per press —
+    /// including, if a call were already up, in the middle of it.
+    private var onOpening: (@Sendable (String) async -> Void)?
 
     /// See `onTurnSpoken`. Does nothing until the daemon that owns the model
     /// hands it something, which is the same shape as `recentMessages`.
@@ -243,6 +272,18 @@ public actor CallTurnServer {
         recentMessages = provide
     }
 
+    /// How to run the opening briefing without it becoming part of the call.
+    /// See `brief`.
+    public func onBriefing(_ run: @escaping @Sendable (String) async throws -> String) {
+        brief = run
+    }
+
+    /// Where the sentence the caller heard goes, so the conversation starts
+    /// there. See `onOpening`.
+    public func onOpeningSpoken(_ note: @escaping @Sendable (String) async -> Void) {
+        onOpening = note
+    }
+
     /// Where finished transcripts are posted.
     public func onTranscript(_ deliver: @escaping @Sendable (String) async -> Void) {
         deliverTranscript = deliver
@@ -308,9 +349,21 @@ public actor CallTurnServer {
     /// caller would otherwise wait through after saying hello.
     ///
     /// So the opening is built now — greeting and briefing together, through
-    /// the same brain and tools as any other turn, so it can say what is
-    /// actually open rather than something generic. By the time the call
-    /// connects it is a buffer to hand over rather than work to start.
+    /// the same brain and tools as any other turn, so it can carry on the
+    /// conversation the owner was already having rather than say something
+    /// generic. By the time the call connects it is a buffer to hand over
+    /// rather than work to start.
+    ///
+    /// **This used to say "so it can say what is actually open".** That is the
+    /// phrasing 2.0.0-beta.6 removed and `OpeningOnTheThreadTests` now forbids:
+    /// "open" is the word the task list uses for its own rows, and asking for
+    /// what is open is how a call came to be answered by reading the backlog
+    /// out. Left uncorrected it would have talked the next person straight back
+    /// into it.
+    ///
+    /// And it only happens at all when there is a thread to carry on — see
+    /// `buildOpening`, which returns a plain hello without a model call when
+    /// nothing has been said in messages.
     ///
     /// Discarded if the call never happens. That costs one model call the owner
     /// asked for by typing //call, which is the cheapest thing in this exchange.
@@ -399,6 +452,34 @@ public actor CallTurnServer {
         // The briefing is best-effort. A call that opens with a plain hello is
         // fine; a call that opens with nothing because a tool timed out is not.
         var opening = greeting
+
+        // **No thread to carry on means no brain turn at all.**
+        //
+        // The briefing exists to continue the conversation the owner was
+        // already having — *"most likely i'm calling you to continue the
+        // conversation"*, *"skip the open items on task list - look at what we
+        // were last talking about via text"*. With nothing said in messages
+        // there is no thread, and asking the model anyway is how his task list
+        // got read out on 8 August 2026: no traffic since the daemon started at
+        // 06:44, so `recentMessages` was nil, and a model told to say what is
+        // still open with nothing to continue found something open in the
+        // backlog instead.
+        //
+        // The request has forbidden that in so many words since it was written
+        // — "Do not read my task list out" — and being forbidden did not stop
+        // it, because the same paragraph also asked for the one thing still
+        // open. Deciding it here costs a model call and a tool round trip less
+        // on exactly the calls where the briefing has nothing to add, and it
+        // cannot be talked out of.
+        //
+        // The fallback is the one the request itself names: "just say hello and
+        // ask what I need".
+        guard let recent = await recentMessages(),
+              !recent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            log("[call] nothing said in messages to pick up on; opening with a plain hello")
+            return await preparedGreeting(opening, started: started)
+        }
+
         let previous = LastCall.load()
         let request = CallTurnServer.briefingRequest(
             now: Date(),
@@ -407,7 +488,7 @@ public actor CallTurnServer {
             // surviving only until the next one is the same bug again.
             sinceLastCall: (lastCallEnded ?? previous?.ended).map { Date().timeIntervalSince($0) },
             lastCall: previous,
-            recentMessages: await recentMessages()
+            recentMessages: recent
         )
         // **The other call site of the same closure, and it had no ceiling.**
         //
@@ -428,18 +509,31 @@ public actor CallTurnServer {
         // holds one worth saying. Waiting the full 90 here would mean the caller
         // arrives to silence in the one place the appliance is supposed to be
         // ready and waiting.
-        let brief = answer
+        // `brief` when the daemon handed one over, `answer` otherwise. The
+        // difference is only whether the request lands in the conversation —
+        // see `brief`.
+        let ask = brief ?? answer
         let briefing = try? await withDeadline(
             CallTurnServer.openingCeilingSeconds,
             label: "call opening"
         ) {
-            try await brief(request)
+            try await ask(request)
         }
         if let briefing, !briefing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             opening = briefing
         } else {
             log("[call] the briefing did not arrive in time; opening with the plain line")
         }
+        return await preparedGreeting(opening, started: started)
+    }
+
+    /// Synthesises whatever the call will open with, briefed or plain.
+    ///
+    /// Shared by both paths so a plain hello is prepared exactly the way a
+    /// briefing is: cancelled at the same point, logged in the same line, and
+    /// recorded in `preparedOpening` — which `openTheCall` hands on to the
+    /// transcript and to the conversation.
+    private func preparedGreeting(_ opening: String, started: Date) async -> Data? {
         guard !Task.isCancelled else { return nil }
 
         guard let audio = try? await synthesizer.synthesize(
@@ -537,14 +631,15 @@ public actor CallTurnServer {
             \(context)
 
             I'm about to join a voice call with you. Greet me in a few words,
-            then pick up where our messages left off — say the one thing that is
-            still open between us, or ask what I want to do about it.
+            then pick up where our messages left off — carry on the last thing
+            we were talking about, or ask me what I want to do about it.
 
             Two or three short sentences, spoken aloud — no lists, no markdown.
-            Do not read my task list out and do not summarise everything we
-            said; take the last thread and carry it on. If there is genuinely
-            nothing to pick up, just say hello and ask what I need. Let the time
-            of day and how long it's been sound natural rather than announced.
+            Do not read my task list out, and do not go looking for one: if the
+            messages above give you nothing to carry on, say hello and ask what
+            I need. That is a complete answer. Do not summarise everything we
+            said either; take the last thread and continue it. Let the time of
+            day and how long it's been sound natural rather than announced.
             """
     }
 
@@ -1053,6 +1148,30 @@ public actor CallTurnServer {
         lastHeard = Date()
         transcript.heard(heard)
 
+            // **Written down before it is understood, because understanding it
+            // runs a model the caller can hang up on.**
+            //
+            // The turn below is what queues an after-the-call request properly,
+            // and it is cancelled by the hang-up that so often follows the
+            // request — people ring off once they have said the thing they rang
+            // to say. Measured on the owner's call, 8 August 2026: he asked for
+            // a file after the call, heard "On it — let me pull that together",
+            // and hung up five seconds later, six seconds into a turn that had
+            // not yet emitted its tool call. Nothing was queued; the promise
+            // was the only thing that survived.
+            //
+            // His ruling on the fix: *"queue on hearing for sure"*. So the
+            // sentence goes in now and the model's own call replaces it if it
+            // gets there — see `CallActionQueue.enqueue`, which drops what was
+            // written on its behalf for the same turn.
+            if let queue = afterTheCallQueue, let call = callID {
+                let generation = CallActionQueue.Generation(call: call, turn: turnNumber)
+                if queue.enqueueFromWhatWasHeard(generation: generation, heard: heard) != nil {
+                    log("[call] noted an after-the-call request from what was said, "
+                        + "in case this turn does not finish")
+                }
+            }
+
             // Say something before thinking, not after.
             //
             // The silence while the model works is the whole of what "it feels
@@ -1355,7 +1474,10 @@ public actor CallTurnServer {
         if let prepared = await preparation?.value {
             try? await send(.replyAudio(prepared), over: writer)
             log("[call] opened with the prepared briefing")
-            if let opening = preparedOpening { transcript.said(opening) }
+            if let opening = preparedOpening {
+                transcript.said(opening)
+                await onOpening?(opening)
+            }
             preparation = nil
             return
         }
@@ -1372,6 +1494,7 @@ public actor CallTurnServer {
         try? await send(.replyAudio(CallTurnServer.samples(fromWAV: audio.wav)), over: writer)
         log("[call] greeted: \(greeting)")
         transcript.said(greeting)
+        await onOpening?(greeting)
     }
 
     static let greetings = [
@@ -1768,6 +1891,41 @@ public actor CallHistory {
             VoiceBridgeDaemon.conversationOnly(conversation),
             keepingLastTurns: turns
         )
+    }
+
+    /// Starts a call at the sentence the caller actually heard.
+    ///
+    /// **The opening is kept and the briefing that produced it is not.** The
+    /// request that writes an opening is a machine-written instruction the owner
+    /// never spoke; storing it made it message zero of the conversation, in his
+    /// voice, re-sent on every turn. What he hears has to stay, because the
+    /// first thing he says answers it — "I haven't picked it up yet" needs the
+    /// sentence that asked whether he had.
+    ///
+    /// Replaces rather than appends, so a call starts on itself rather than
+    /// running together with the last one as a single conversation.
+    ///
+    /// **On a briefed call the previous one is not lost — on a plain hello it
+    /// is, and the earlier version of this comment claimed otherwise.** It said
+    /// the tail survives because `briefingRequest` is handed `LastCall.closing`.
+    /// That is true only when a briefing runs. `buildOpening` returns before
+    /// `LastCall.load()` when there is no thread to carry on, so on that path
+    /// nothing reads the previous call and this wipes what is left of it.
+    ///
+    /// Which is the intended trade rather than an oversight, and it is worth
+    /// writing down as one: the plain path is taken precisely when nothing has
+    /// been said in messages, so what is being dropped is a call the owner has
+    /// not followed up on by any other route. Reading `LastCall` there would
+    /// mean briefing there, and briefing on an empty thread is what read his
+    /// task list out. `LastCall` is still *written* at the end of every call
+    /// either way — `rememberThisCall()` does not care which opening ran — so a
+    /// later briefed call still picks it up.
+    ///
+    /// The first thing said on the plain path is "Hey, I'm here", which nothing
+    /// needs context to answer.
+    public func open(with opening: String) {
+        let said = opening.trimmingCharacters(in: .whitespacesAndNewlines)
+        messages = said.isEmpty ? [] : [BrainMessage(role: .assistant, content: said)]
     }
 
     public func forget() {

@@ -252,7 +252,31 @@ enum MynahMenuBarIcon {
     static let image: NSImage = render(side: 16)
 
     static func render(side: CGFloat) -> NSImage {
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+        // **`flipped: true`, and the bird was upside down in the menu bar until
+        // it was.** *"btw the mynah icon is upside down in task bar"* — 7 August
+        // 2026, with a screenshot.
+        //
+        // `MynahBird` is a SwiftUI `Shape`, so its points are in SwiftUI's
+        // convention, y increasing downward: the drawing above puts the crown at
+        // y=248 and runs the shoulders off at y=1000. `flipped: false` asks for
+        // AppKit's own space, where y increases *upward*, so every point landed
+        // mirrored about the horizontal axis — shoulders along the top, crown at
+        // the bottom, beak pointing down.
+        //
+        // It survived because this is the only place the shape crosses out of
+        // SwiftUI. `MynahMark` draws the identical `MynahBird` in the sidebar
+        // and the setup screens and is correct; `scripts/make-icon.sh` draws the
+        // Dock icon through SwiftUI and is correct. With every other copy right,
+        // there was nothing to compare the wrong one against, and at 16pt in a
+        // menu bar an inverted silhouette reads as a slightly odd glyph rather
+        // than as a bird facing the floor.
+        //
+        // Measured rather than reasoned about, because "which way does this
+        // coordinate space go" is exactly the question everyone answers
+        // confidently and wrongly: row coverage from top to bottom was
+        // [0.76, 0.44, 0.47, 0.38, 0.005] before, and is the reverse of that
+        // now. TheMenuBarBirdIsTheRightWayUpTests holds those numbers.
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { rect in
             let path = MynahBird().path(in: rect)
             NSColor.black.setFill()
             NSBezierPath(cgPath: path.cgPath).fill()

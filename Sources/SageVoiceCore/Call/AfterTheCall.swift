@@ -36,6 +36,58 @@ public enum AfterTheCall {
         + "written down, so it won't happen on its own. Message me in the chat once we hang up "
         + "and I'll do it straight away."
 
+    /// **Whether the caller just asked for something to happen after the call.**
+    ///
+    /// Read off the caller's own sentence, before any model runs, because the
+    /// model is exactly what may not get there in time.
+    ///
+    /// Measured on the owner's call, 8 August 2026 18:11 — the first time this
+    /// feature was ever exercised on a real call:
+    ///
+    ///     18:11:56 heard: ...make a markdown file and then send it back to me
+    ///              after this call is done.
+    ///     18:11:57 said "On it — let me pull that together." after 3.1s
+    ///     18:12:02 the call ended mid-answer; stopping that turn
+    ///     18:12:02 cancelled: heard in 1.6s, thought in 6.2s+, spoke in ?
+    ///
+    /// Nothing was queued. He hung up five seconds after the filler, while the
+    /// model was still thinking, so the turn was cancelled before it could emit
+    /// `after_the_call` — and the appliance had already said "On it". A promise
+    /// followed by permanent silence, which is the failure this whole feature
+    /// exists to prevent, reached through the one door it left open.
+    ///
+    /// **And hanging up there is the normal case, not the exotic one.** People
+    /// ring off when they have said the thing they rang to say. A queue that
+    /// only fills when the caller waits out the answer is a queue that mostly
+    /// does not fill.
+    ///
+    /// So this is a fail-safe, not a parser. It is allowed to be wrong in the
+    /// generous direction: a spurious entry is one item the drain runs through
+    /// the ordinary brain and the owner sees the result of, while a missed one
+    /// is silence. The model's own `after_the_call` call replaces whatever this
+    /// wrote — see `CallActionQueue.enqueue` — so on the calls where the model
+    /// does get there, this costs nothing at all.
+    ///
+    /// Deliberately not a general intent classifier. It matches the shape of
+    /// the owner's own ruling — *"you can request to say send me this file
+    /// after the call or do xyz"* — which is a time reference to the end of
+    /// this call, and nothing else.
+    static func asksForSomethingAfterwards(_ heard: String) -> Bool {
+        let text = heard.lowercased()
+        // "after that" is deliberately absent: it usually refers to a step in
+        // what is being discussed rather than to the end of the call.
+        let afterwards = [
+            "after this call", "after the call", "after our call",
+            "after we hang up", "after you hang up", "after we're done",
+            "after we are done", "after this is done", "after this",
+            "once we hang up", "once we're done", "once we are done",
+            "once this call", "when we hang up", "when we're done",
+            "when this call is done", "at the end of the call",
+            "afterwards", "after the fact"
+        ]
+        return afterwards.contains { text.contains($0) }
+    }
+
     /// Adds the promise unless the reply already makes it.
     ///
     /// The check is deliberately loose. Over-promising costs a redundant
@@ -80,8 +132,8 @@ public enum AfterTheCall {
         guard alreadyPromises(lowered) else { return false }
 
         // Imperatives aimed at the owner, with the appliance as the object. Not
-        // "signal" or "the chat" on their own: the reply that caused all of this
-        // said it would send the ticket "to your Signal thread", so a bare
+        // A channel name or "the chat" on their own: the reply that caused all
+        // of this said it would send the ticket "to your Signal thread", so a bare
         // channel name is present in the failure as well as in the fix.
         let handsItBack = [
             #"\b(message|text|ping|dm|ask|remind|nudge|drop|send|shoot)\s+me\b"#,

@@ -220,7 +220,8 @@ final class PrivacyClaimTests: XCTestCase {
     /// name the condition.
     func testTheTranscriptClaimSaysItIsSwitchable() {
         XCTAssertTrue(PrivacyClaim.callTranscript.lowercased().contains("if you have"))
-        XCTAssertTrue(PrivacyClaim.callTranscript.lowercased().contains("signal"))
+        XCTAssertTrue(PrivacyClaim.callTranscript.lowercased().contains("your chat"))
+        XCTAssertFalse(PrivacyClaim.callTranscript.lowercased().contains("signal"))
     }
 
     // MARK: The vocabulary these share with everything else

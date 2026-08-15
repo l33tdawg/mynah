@@ -158,9 +158,10 @@ public enum BrainPrompts {
     an agent_id, and never send to one whose name merely looks similar.
 
     WHEN ASKED IF ANYONE REPLIED
-    - Replies are delivered to you as messages here, above. Read them there; no tool fetches \
-    them. sage_inbox does not hold replies to work you sent, so an empty inbox is not \
-    evidence nobody answered. NEVER say a named agent has not replied.
+    - Call sage_message_history with {"folder":"outbox"} to check sent ids and replies. \
+    sage_inbox does not hold replies to work you sent.
+    - Report only that result; never invent ids or resend. If it fails, say you cannot verify; \
+    NEVER say a named agent has not replied.
     - If nothing changed since your last answer, say that in one short sentence.
 
     WHEN ASKED WHICH AGENTS EXIST, OR WHO IS ON THE NETWORK
@@ -410,15 +411,21 @@ public enum BrainPrompts {
         // the model already has from the inbox, so an adapter would be a
         // passthrough with a typed wrapper around nothing.
         //
-        // The other three stay out and stay reachable programmatically:
+        // Two other tools stay out and stay reachable programmatically:
         // `sage_message_status` answers "was this delivered" about an id the
-        // model does not hold, `sage_message_history` and
-        // `sage_messages_receive` are bulk reads that duplicate `sage_inbox`.
+        // model does not hold, and `sage_messages_receive` duplicates
+        // `sage_inbox`.
         // Same reasoning as `sage_pipe_result`, one comment down: a tool whose
         // name answers the owner's question but whose behaviour does not is the
-        // trap, and three more of those is how a catalogue rots.
+        // trap, and two more of those is how a catalogue rots.
         "sage_message_send",
         "sage_message_reply",
+        // The exception that proved the old "duplicates inbox" claim false:
+        // replies to messages Mynah sent are retained against the durable
+        // outbox item. `sage_inbox` cannot return them. Without this read the
+        // model guessed that two genuine sends never happened, confessed to
+        // inventing their ids, and the retry guard sent both a second time.
+        "sage_message_history",
         "sage_federation",
         // Added for 11.16.x, and only these two of the thirteen it exposes that
         // this list does not.

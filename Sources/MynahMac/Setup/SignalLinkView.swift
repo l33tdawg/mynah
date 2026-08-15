@@ -619,6 +619,22 @@ final class SignalLinkModel {
             // are independent, and enrolment is one round trip where this is
             // several minutes — chaining them would hold a credential the owner
             // could already be using behind a download they cannot hear yet.
+            // **Gated on the brain, like the other call site.** `//call` is
+            // refused outright on an on-device brain — `CallInvitation` requires
+            // `brain.holdsARealtimeCall` — so a local-brain Mac that links
+            // Signal was fetching and keeping 337 MB of voice for a call it will
+            // always refuse.
+            //
+            // That was fixed once, in `AppModel.installCallVoiceIfNeeded`, and
+            // this second trigger was left ungated: the eighth time on this
+            // branch that a fix landed on one of two call sites. The owner's
+            // ruling about *when* to fetch is untouched — *"the signal part
+            // //call only comes in once you link signal - download it then"* —
+            // this only adds *whether*.
+            guard BrainChoiceStore.current()?.keepsWordsOnDevice != true else {
+                Self.voice.info("not fetching the call voice: //call is refused on an on-device brain")
+                return
+            }
             Task {
                 // Read out of main-actor isolation once, here, rather than from
                 // inside the progress callback — that closure is `@Sendable` and
@@ -875,7 +891,11 @@ final class SignalLinkModel {
 // MARK: - QR rendering
 
 /// Turns the linking URI into a square, with CoreImage and nothing else.
-private enum LinkCodeRenderer {
+///
+/// Internal rather than private since 2.0.0: WhatsApp is linked by QR too, and
+/// a second renderer would be a second set of decisions about correction level
+/// and scaling for the same phone camera at the same arm's length.
+enum LinkCodeRenderer {
 
     /// `CIContext` is expensive to build and safe to share; one per app rather
     /// than one per code.
@@ -905,9 +925,14 @@ private enum LinkCodeRenderer {
 /// Mynah where a literal white is right and a surface token would be wrong: it
 /// is a scan target, not a surface, and an inverted code is a code some phones
 /// quietly refuse.
-private struct LinkCodeSquare: View {
+struct LinkCodeSquare: View {
     let uri: String
     var isSpent: Bool = false
+    /// Which app the owner is meant to point at it. Only VoiceOver reads this,
+    /// which is exactly why it must not keep saying Signal on the WhatsApp
+    /// screen — the one owner who cannot see which sheet they are on is the one
+    /// being told the wrong thing.
+    var appName: String = "Signal"
 
     @State private var rendered: NSImage?
 
@@ -933,14 +958,14 @@ private struct LinkCodeSquare: View {
         .opacity(isSpent ? 0.16 : 1)
         .mynahAnimation(Motion.fade, value: isSpent)
         .task(id: uri) { rendered = LinkCodeRenderer.image(for: uri) }
-        .accessibilityLabel("The linking square. Point Signal's camera at it.")
+        .accessibilityLabel("The linking square. Point \(appName)'s camera at it.")
         .accessibilityHidden(rendered == nil)
     }
 }
 
 /// What sits where the square goes before the owner has asked for one, and while
 /// the helper is starting.
-private struct LinkCodePlaceholder<Content: View>: View {
+struct LinkCodePlaceholder<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {

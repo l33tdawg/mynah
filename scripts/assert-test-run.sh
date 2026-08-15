@@ -102,9 +102,203 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2111   (1.9.0, sage_directory scope; was 2080 at 1.8.3)
-#   without Kokoro  2073   (2111 - 38)
-#   floor           2099   (12 under measured, 26 above the failure it must catch)
+#   measured      2348   (2.0.0-beta.11, durable delivery and beta distribution;
+#                         2316 at beta.10, 2313 at beta.9, 2312 at beta.8, 2304 at beta.7,
+#                         2298 at beta.6,
+#                         2111 at 1.9.0)
+#   without Kokoro  2310   (2348 - 38)
+#   floor           2336   (12 under measured, 26 above the failure it must catch)
+#
+# 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
+# menu-bar mark, eighteen for the channel abstraction that lets Signal and
+# WhatsApp run together, and nine for the acknowledgement ledger.
+#
+# 2157 to 2214 is the half that makes the feature reachable from the running app
+# rather than only from a test: one for merging across channels, thirty-seven for
+# the choice itself (`ChannelSet`'s routing, what is remembered between launches,
+# the third LaunchAgent, and pairing read as a line of text), and nineteen for
+# the places where "the same route" still had a Signal-shaped assumption in it —
+# a log scrub that could not see a WhatsApp number, a voice note filed as a
+# document, an attachment note that said Signal whatever it was, and a promise
+# that would have been apologised for down the wrong channel. Every one of those
+# nineteen was put back and reddened exactly its own test before this number
+# moved.
+#
+# 2214 to 2231 is a 43-agent adversarial audit of the branch, which confirmed 21
+# defects — five of them critical, three of those in code written the same day by
+# the hand that was fixing the previous round. Eight tests cover the third
+# LaunchAgent (installed, removed, restarted when the allowlist changes, and not
+# reported as running when it never started); nine cover what the audit found,
+# including an acknowledgement ledger that walked its watermark over a redelivered
+# message, a loopback API with no authentication in front of it, and a refused
+# sender's phone number written into a log. Every one was mutated back before this
+# number moved; two of the mutations survived the first attempt, and the tests
+# were rewritten rather than the finding waved off.
+#
+# 2231 to 2241 is the SECOND audit of the same branch, which confirmed 27 more —
+# five critical, and five of the total introduced by round two's own repairs. The
+# ten here cover the ones a value can reach: the acknowledgement that destroyed a
+# message whose reply never left the Mac, conversation threads orphaned by a key
+# that gained a channel prefix, a WhatsApp allowlist that could only ever be the
+# Signal number, and a Signal helper started for an appliance that had turned
+# Signal off.
+#
+# 2241 to 2264 is the first release where the number moved because the product
+# was USED rather than audited. 2.0.0-beta.1 was installed from the DMG on 7
+# August and answered two WhatsApp messages on the owner's phone; reading the
+# logs of that exchange found a defect no agent had — his chat was addressed as
+# `161228928336031@lid` and filed under that, so the day WhatsApp addresses it as
+# his number instead, the appliance starts a second conversation and forgets the
+# first mid-sentence. Twelve of the twenty-three cover that and the migration
+# that carries the existing history across. The other eleven are the four
+# findings the second audit reported and this branch shipped without: a spool
+# whose numbering restarted leaving the acknowledgement watermark stranded above
+# every sequence it would ever emit, a reconcile latch that answered the owner's
+# own button press with a log line, "this build can only do Signal" said to
+# owners whose build does WhatsApp perfectly well, and media caches that had
+# never deleted anything. Every one was mutated back; the tenth mutation survived
+# the first attempt and the test was rewritten rather than the finding waved off.
+#
+# 2264 to 2288 is the second defect found by USE rather than audit, and the most
+# expensive one this branch has shipped: link WhatsApp and not Signal, and the
+# whole appliance declined to install. `SignalServiceConfiguration.current()`
+# required a linked Signal account before it would return anything at all, and
+# `nil` from there is read as `cannotTell` — which by design changes nothing. No
+# LaunchAgent, no error, and a Settings row reporting an unreachable phone over an
+# appliance that was never started.
+#
+# Sixteen tests, in two halves. Seven drive `current()` itself, which had never
+# been under test at all: it read the real accounts.json and the real PATH, so on
+# any Mac with Signal linked — every Mac this is developed on — the WhatsApp-only
+# branch was unreachable from a test. Those two reads are now injected. Four cover
+# what launchd is handed for a WhatsApp-only appliance, and five cover what the
+# window says about a Mac whose only channel is one the old code could not see.
+# Five mutations, every one reddened its own tests.
+#
+# 2288 to 2294 is the same defect's other half, found by asking what an owner
+# already stuck on beta.3 has to do. Pairing records the owner's number from the
+# `connected` event — but that event carried `name ?? id`, so on any account with
+# a push name the sheet was handed a display name, correctly refused to read a
+# phone number out of it, and stored nothing. Whether Mynah could answer WhatsApp
+# came down to whether the owner had ever set a display name. Invisible with
+# Signal linked, because the allowlist falls back to that number; fatal without.
+#
+# Six tests. One is the JID surviving an account that has a name — the assertion
+# it replaces, `.connected(user: "Dhillon")`, was the defect written down and
+# passing. Five cover the repair: the number is recovered from `me.id` in the
+# session already on disk, so an affected Mac fixes itself on launch instead of
+# being told to unlink and scan again through a button that is hidden precisely
+# because it is paired.
+#
+# **Two of these turned red on the first run for the right reason**, and it is
+# worth recording: the new fallback reads a session directory whose default is
+# the real one, so tests that did not name a path read the developer's own paired
+# WhatsApp account. Every call site in the suite now passes one explicitly.
+#
+# **2294 down to 2287 is the only fall this number has ever taken, and it is a
+# deletion rather than a loss.** `MCPAgentDirectoryTests`' seven tests went with
+# the agent-roster path they were written for: the Agents panel was removed in
+# 3bb085b, and the boot fetch that fed it outlived it by a release — every launch
+# read `GET /v1/agents`, put the names to `sage_find_agent`, and threw the answer
+# away, because nothing had read `ApplianceRoster.phase` since the panel went.
+#
+# The floor is deliberately NOT lowered with it. 2287 still clears 2276, and the
+# one failure this floor exists to catch — losing KokoroEngineTests, 38 tests —
+# would leave 2249 and still be caught. What a deletion changes is the headroom
+# above the floor, not the floor: it now sits 11 under rather than 18, which
+# means 27 more tests before the rot check fires rather than 20. Both numbers are
+# stated above so the next person reads them instead of subtracting.
+#
+# 2287 to 2298 is eleven for what a call opens with. His own call on 8 August
+# opened by reading his task list out, on a prompt that has said "Do not read my
+# task list out" since the day it was written — because the same paragraph also
+# asked for "the one thing that is still open between us", and the daemon had
+# been up since 06:44 with nothing said in messages, so there was no thread to
+# continue and something open in the backlog was the only thing that fitted.
+#
+# Three changes, five mutations, each killing exactly its own test. Nothing to
+# pick up now means no model call at all rather than a model asked nicely to
+# behave; the briefing runs through its own closure so its request — a page of
+# machine-written instruction — stops becoming turn zero of the call in the
+# owner's voice; and the phrase that invited it is gone. Note the headroom this
+# spends: the floor now sits 22 under, leaving 16 tests before the rot check
+# fires. The next release that adds more than sixteen has to raise it.
+#
+# 2298 to 2304 is a fourteen-agent adversarial sweep of the whole 2.0 beta line,
+# run because two earlier audits had passed this branch and the two worst defects
+# in it were then found by the owner using the product. Thirty findings raised,
+# fifteen survived refutation.
+#
+# The six tests are for the two that could lose something. Three cover a call
+# that could not have worked at all on an Anthropic brain: beta.6 started a
+# call's history at a single assistant turn, and Anthropic rejects a request
+# whose first non-system message is not the user's. Nothing normalised it and
+# there is no retry, so every //call an Anthropic owner made would have 400'd —
+# shipped four hours earlier and caught by nothing in the suite. Three cover the
+# acknowledgement ledger's epoch guard, which fired in both directions and so
+# noticed a recreated spool only through `deliver`, while `WhatsAppClient`
+# settles directly for anything the allowlist refuses.
+#
+# The floor moves 2276 to 2292 here rather than waiting to be forced: at 2304 it
+# had ten tests of headroom left, and the next release to add eleven would have
+# gone red on a green suite. CI's pair moves with it — 2238 to 2254 — because
+# raising one alone is what turned the runner red the first time.
+#
+# 2304 to 2312 is eight for the first thing the after-the-call queue was ever
+# asked to do on a real call, which it did not do. The owner asked for a file
+# after the call at 18:11:56, heard "On it — let me pull that together" at
+# 18:11:57, and hung up at 18:12:02 — six seconds into a turn that had not yet
+# emitted its tool call, and hang-up cancels the turn. Nothing queued, nothing on
+# disk, and a promise made out loud that nothing anywhere revisits.
+#
+# The design had that written down as a known gap and called it an edge case. One
+# real call showed it is the ordinary one: people ring off once they have said
+# the thing they rang to say. The request is now written from the caller's own
+# sentence the moment it is recognised, before any model runs, and the model's
+# own tool call replaces it when it gets there. Three mutations: the fail-safe
+# never writing (5 red), the replacement removed (2), the replacement scoped to
+# the call rather than the turn (1).
+#
+# 2312 to 2313 is the regression the owner found by reading WhatsApp while both
+# channels were linked. The proactive watch reused the after-the-call fallback,
+# which deliberately chose Signal first, so every unprompted agent reply, task
+# digest and reminder went to Signal only. The owner ruled that news goes to
+# both linked channels, accepting two copies. The new source-wiring guard reddens
+# both the old early return from Signal and a loop restricted to the first
+# recipient; after-the-call attachments remain single-recipient replies.
+#
+# 2313 to 2316 is the WhatsApp screenshot bug: the live model was forbidden
+# from reading sent-message history, then its private truth-guard correction
+# and rejected draft were persisted as owner-visible conversation. It falsely
+# confessed that genuine ids were invented and duplicated both sends. The three
+# tests cover outbox-without-resend, the read-only allowlist/prompt contract and
+# history containing only the real request plus delivered reply.
+#
+# 2316 to 2348 is beta.11's delivery audit: fourteen tests make a completed
+# WhatsApp turn crash-durable without recording an answer before it reaches the
+# owner or repeating its tools on replay, including partial coalesced spools,
+# LID identity changes, interleaved announcements, attachment retries and the
+# textless MP4/MOV no-op. Ten cover exact after-call origin recovery and queue
+# retention until a report or file really delivers. Four pin ASR fallback
+# telemetry, and three require the Pages beta link and release workflow to agree
+# on a complete four-asset distribution and detach the verified DMG safely. The
+# final test prevents a Rosetta parent shell from selecting an x86 XCTest runner
+# for the arm64 release bundle.
+#
+# The bridge's
+# own 88 JavaScript tests are NOT in this number and never will be: they run
+# under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
+# own gate with its own per-file check. Two suites in two languages, and this
+# one counts only what SwiftPM executes — a floor that tried to cover both would
+# be a floor that moves for reasons this script cannot see.
+#
+# **The nine are the ones worth naming.** An audit of this release found that
+# `WhatsAppClient` acknowledged a refused message by sending the bridge a
+# cumulative watermark, which retired the owner's still-unanswered message along
+# with it — the exact loss the whole durable path was built to prevent. Fifteen
+# tests over that transport passed while it was live, because reaching the
+# acknowledgement path needed a running socket and none of them had one. The
+# nine drive it without one.
 #
 # **1.9.0 is the first time this fired rather than being raised ahead of it**,
 # and it fired exactly as designed: a green suite, 2111 executed and 0 failures,
@@ -130,7 +324,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2099}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2336}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

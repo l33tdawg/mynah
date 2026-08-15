@@ -33,7 +33,7 @@ actor InertAppliance: SignalBackgroundServicing {
     private(set) var disableCount = 0
     private(set) var reasons: [String] = []
 
-    func enable(_ configuration: SignalServiceConfiguration) async throws {
+    func enable(_ configuration: SignalServiceConfiguration, retryingAfterFailure: Bool) async throws {
         enabledCount += 1
     }
 

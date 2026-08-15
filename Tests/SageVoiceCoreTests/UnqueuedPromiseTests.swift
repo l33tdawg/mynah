@@ -374,6 +374,53 @@ final class UnqueuedPromiseTests: XCTestCase {
         return root
     }
 
+    private func notesDirectory(with files: [String: UInt64]) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mynah-drain-branches-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for (name, size) in files {
+            let url = root.appendingPathComponent(name)
+            XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data()))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: size)
+            try handle.close()
+        }
+        return root
+    }
+
+    private func assertReportDeliveryControlsRemoval(
+        title: String,
+        notesDirectory: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        for reportOutcome in [AfterTheCallDelivery.failed, .sent] {
+            let queue = try temporaryQueue()
+            queue.beginCall("call-1")
+            let entry = try XCTUnwrap(queue.enqueue(
+                generation: .init(call: "call-1", turn: 1), kind: .file,
+                what: title, who: nil, asked: "send \(title)"
+            ), file: file, line: line)
+            let drain = AfterTheCallDrain(
+                queue: queue,
+                notesDirectory: notesDirectory,
+                tools: AfterTheCallToolSource(queue: queue),
+                deliver: { _, _ in reportOutcome },
+                runInstruction: { _ in .failed }
+            )
+
+            await drain.drain(mine: [entry], abandoned: [])
+
+            XCTAssertEqual(
+                queue.everything().map(\.key),
+                reportOutcome == .failed ? [entry.key] : [],
+                "the branch did not make removal depend on its owner-facing report",
+                file: file,
+                line: line
+            )
+        }
+    }
+
     /// **The matcher cannot join "ticket" to "booking", and must not try.**
     ///
     /// Four widening rules and none of them get there, because none of them can:
@@ -451,6 +498,32 @@ final class UnqueuedPromiseTests: XCTestCase {
         XCTAssertTrue(instruction.contains("could not find it"), instruction)
     }
 
+    func testABrainResolvedFileWhoseAttachmentFailedStaysQueuedWithoutACannedContradiction() async throws {
+        let queue = try temporaryQueue()
+        queue.beginCall("call-1")
+        let entry = try XCTUnwrap(queue.enqueue(
+            generation: .init(call: "call-1", turn: 1), kind: .file,
+            what: "the ferry ticket", who: nil, asked: "the ferry ticket"
+        ))
+        let watcher = DrainWatcher()
+        let drain = AfterTheCallDrain(
+            queue: queue,
+            notesDirectory: try notesDirectoryLikeTheOwners(),
+            tools: AfterTheCallToolSource(queue: queue),
+            deliver: { text, files in
+                await watcher.delivered(text, files)
+                return .sent
+            },
+            runInstruction: { _ in .sentWithoutTheFiles }
+        )
+
+        await drain.drain(mine: [entry], abandoned: [])
+
+        XCTAssertEqual(queue.everything().map(\.key), [entry.key])
+        let cannedReports = await watcher.messages
+        XCTAssertTrue(cannedReports.isEmpty, "a truthful attachment failure was contradicted")
+    }
+
     /// A turn that could not run at all still owes the owner an explanation, and
     /// the old message is exactly that. The fallback adds a path; it does not
     /// remove the floor.
@@ -476,6 +549,68 @@ final class UnqueuedPromiseTests: XCTestCase {
         XCTAssertEqual(messages.count, 1)
         XCTAssertTrue(messages[0].contains("couldn't find it"), messages[0])
         XCTAssertTrue(messages[0].contains("What I do have"), messages[0])
+    }
+
+    func testAnUndeliveredMissingFileReportStaysQueuedOnItsOriginatingThread() async throws {
+        let queue = try temporaryQueue()
+        let origin = ChannelRecipient(
+            kind: .whatsapp,
+            address: "161228928336031@lid",
+            identity: "60123821767@s.whatsapp.net"
+        )
+        queue.expectCall(from: origin)
+        queue.beginCall("call-1")
+        let entry = try XCTUnwrap(queue.enqueue(
+            generation: .init(call: "call-1", turn: 1), kind: .file,
+            what: "a file that does not exist", who: nil, asked: "send the missing file"
+        ))
+
+        let recipientWatcher = RecipientWatcher()
+        let drain = AfterTheCallDrain(
+            queue: queue,
+            notesDirectory: try notesDirectoryLikeTheOwners(),
+            tools: AfterTheCallToolSource(queue: queue),
+            deliver: { _, _, recipient in
+                await recipientWatcher.saw(recipient)
+                return .failed
+            },
+            runInstruction: { _, recipient in
+                await recipientWatcher.saw(recipient)
+                return .failed
+            }
+        )
+        await drain.drain(mine: [entry], abandoned: [])
+
+        XCTAssertEqual(queue.everything().map(\.key), [entry.key])
+        let recipients = await recipientWatcher.recipients
+        XCTAssertFalse(recipients.isEmpty)
+        XCTAssertTrue(recipients.allSatisfy { $0 == origin })
+    }
+
+    func testAnExactFileRefusalIsRemovedOnlyAfterItsReportDelivers() async throws {
+        let notes = try notesDirectory(with: [
+            "oversized-deck.md": UInt64(NotesToolSource.maximumAttachmentBytes + 1)
+        ])
+        guard case .one = StoredFiles(directory: notes).match(title: "oversized deck") else {
+            return XCTFail("test fixture no longer reaches the exact-match refusal branch")
+        }
+        try await assertReportDeliveryControlsRemoval(title: "oversized deck", notesDirectory: notes)
+    }
+
+    func testAnAmbiguousFileReportIsRemovedOnlyAfterItDelivers() async throws {
+        let notes = try notesDirectory(with: ["q3-budget.md": 1, "q3-forecast.md": 1])
+        guard case .several = StoredFiles(directory: notes).match(title: "q3") else {
+            return XCTFail("test fixture no longer reaches the ambiguous-match branch")
+        }
+        try await assertReportDeliveryControlsRemoval(title: "q3", notesDirectory: notes)
+    }
+
+    func testAMissingFileReportIsRemovedOnlyAfterItDelivers() async throws {
+        let notes = try notesDirectory(with: ["something-else.md": 1])
+        guard case .nothing = StoredFiles(directory: notes).match(title: "missing deck") else {
+            return XCTFail("test fixture no longer reaches the missing-match branch")
+        }
+        try await assertReportDeliveryControlsRemoval(title: "missing deck", notesDirectory: notes)
     }
 
     /// **The fast path stays fast.** A title the matcher resolves outright is
@@ -531,6 +666,14 @@ private actor DrainWatcher {
 
     func instructed(_ text: String) {
         instructions.append(text)
+    }
+}
+
+private actor RecipientWatcher {
+    private(set) var recipients: [ChannelRecipient?] = []
+
+    func saw(_ recipient: ChannelRecipient?) {
+        recipients.append(recipient)
     }
 }
 

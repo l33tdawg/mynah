@@ -70,7 +70,8 @@ extension PrivacyClaim {
     static let memories = "Kept on this Mac, in a folder only you can read."
 
     static let webSearch = "When a question needs the internet, the words Mynah searches for go "
-        + "to a search engine. The rest of what you said does not."
+        + "to a search engine. If a result page needs a browser to be readable, its public address "
+        + "goes to Jina Reader. The rest of what you said does not."
 
     /// Calling, stated as what leaves rather than as a feature.
     ///
@@ -95,7 +96,7 @@ extension PrivacyClaim {
     /// may not be thinking about, and it is switchable — so it is named here and
     /// the switch is named with it.
     static let callTranscript = "If you have transcripts turned on, what was said in a call is "
-        + "posted back into your Signal thread when it ends."
+        + "posted back into your chat when it ends."
 
     /// The page's opening, and the reason it is a destination rather than a
     /// section. Composed from nothing — it is the frame the claims sit in.
@@ -251,7 +252,7 @@ struct PrivacyView: View {
                 MynahDivider()
                 PrivacyRow("After a call", detail: PrivacyClaim.callTranscript) {
                     StatusPill(
-                        sendsCallTranscript ? "Posted to Signal" : "Turned off",
+                        sendsCallTranscript ? "Posted to chat" : "Turned off",
                         tone: sendsCallTranscript ? .neutral : .good
                     )
                 }

@@ -31,7 +31,29 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
     /// Who is waiting. An account, never a group — group messages are refused at
     /// the security boundary in front of the daemon, so a promise can only ever
     /// be owed to a one-to-one thread.
+    ///
+    /// The channel's own address and nothing else: an E.164 number for Signal, a
+    /// JID for WhatsApp. It used to be `recipient.description`, which was the
+    /// same string back when there was one channel; it is now prefixed with the
+    /// channel name, and storing that would send the apology to a Signal account
+    /// literally called "whatsapp:60…".
     public var account: String
+
+    /// Which channel the promise was made on.
+    ///
+    /// **The apology has to go back where the question came from.** Without
+    /// this, a promise made on WhatsApp is apologised for on Signal — to an
+    /// address that is not a Signal account, so the send fails, so the record is
+    /// never cleared, so the appliance tries again on every boot from then on.
+    ///
+    /// Defaults to `.signal` when absent from the file, which is not a
+    /// convenience: this record is durable and survives an app update, so the
+    /// first WhatsApp-capable build will read promises written by a
+    /// Signal-only one. `.signal` is what those actually were.
+    public var channel: ChannelKind
+    /// Stable conversation identity when the transport address is ephemeral
+    /// (notably WhatsApp LIDs). Optional for records written before beta.11.
+    public var identity: String?
 
     /// The first part of what he asked, so the apology can name it.
     ///
@@ -58,10 +80,33 @@ public struct PromisedAnswer: Codable, Equatable, Sendable {
 
     public static let longestQuestion = 120
 
-    public init(account: String, question: String, promisedAt: Date) {
+    public init(
+        account: String, question: String, promisedAt: Date, channel: ChannelKind,
+        identity: String? = nil
+    ) {
         self.account = account
+        self.channel = channel
+        self.identity = identity == account ? nil : identity
         self.question = String(question.prefix(Self.longestQuestion))
         self.promisedAt = Date(timeIntervalSince1970: promisedAt.timeIntervalSince1970.rounded())
+    }
+
+    /// Hand-written for one reason: `channel` may be missing.
+    ///
+    /// A promise on disk from a Signal-only build has no `channel` key, and the
+    /// synthesised decoder throws on that — which `outstanding()` turns into
+    /// `nil`, silently discarding a promise the owner is still owed. The one
+    /// upgrade where this feature matters most is the one it would have failed.
+    ///
+    /// Everything else is left synthesised, including `encode(to:)`: a
+    /// hand-written encoder is where a new field gets forgotten.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        account = try values.decode(String.self, forKey: .account)
+        question = try values.decode(String.self, forKey: .question)
+        promisedAt = try values.decode(Date.self, forKey: .promisedAt)
+        channel = try values.decodeIfPresent(ChannelKind.self, forKey: .channel) ?? .signal
+        identity = try values.decodeIfPresent(String.self, forKey: .identity)
     }
 }
 
@@ -115,22 +160,31 @@ public struct PromiseLedger: Sendable, Equatable {
         owed = nil
     }
 
-    /// A working line reached Signal. Returns the promise to write down.
+    /// A working line reached the owner. Returns the promise to write down.
     ///
     /// `nil` when there is nothing to promise about: no record is better than a
     /// record whose apology cannot name what was asked.
+    ///
+    /// `channel` has no default, deliberately. Defaulting it to `.signal` would
+    /// make a forgotten call site compile and then apologise down the wrong
+    /// channel — a routing decision silently guessed is the shape of defect this
+    /// file already documents twice.
     public mutating func promised(
         to account: String,
+        channel: ChannelKind,
+        identity: String? = nil,
         question: String,
         at moment: Date
     ) -> PromisedAnswer? {
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let promise = PromisedAnswer(account: account, question: question, promisedAt: moment)
+        let promise = PromisedAnswer(
+            account: account, question: question, promisedAt: moment, channel: channel, identity: identity
+        )
         owed = promise
         return promise
     }
 
-    /// An answer reached Signal. Returns the promise it discharges, if any.
+    /// An answer reached the owner. Returns the promise it discharges, if any.
     ///
     /// `nil` when this run owes nothing — which is the case that matters, and
     /// the one both defects got wrong. A run that has promised nobody anything
