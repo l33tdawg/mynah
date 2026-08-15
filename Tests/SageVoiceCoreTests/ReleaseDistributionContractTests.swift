@@ -151,4 +151,47 @@ final class ReleaseDistributionContractTests: XCTestCase {
             "the beta selector came back without its row"
         )
     }
+
+    /// The vendored brain is a decision, not whatever was staged first.
+    ///
+    /// Mynah 2.0.0 shipped SAGE 11.17.15 while 11.18.11 was current. Vendoring
+    /// was a manual instruction in docs/RELEASE.md, so release.sh packaged
+    /// whatever `vendor/` happened to hold — here, a copy staged five SAGE
+    /// releases earlier — and no step printed a version, so nothing contradicted
+    /// it for the whole beta line.
+    ///
+    /// Two things must hold together, and either alone is inert. release.sh has
+    /// to call vendor-sage.sh, or the check never runs; and vendor-sage.sh has
+    /// to ask for an exact tag, because its version comparison is skipped
+    /// entirely when the tag is `latest` — which is not a version anything can
+    /// be compared against. Reverting either one restores the silent drift, so
+    /// both are asserted here.
+    func testTheReleaseVendorsThePinnedSAGEBeforeItSpendsAnything() throws {
+        let release = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("scripts/release.sh"),
+            encoding: .utf8
+        )
+        let vendored = try XCTUnwrap(
+            release.range(of: "bash scripts/vendor-sage.sh"),
+            "release.sh never vendors SAGE; it packages whatever is left in vendor/"
+        ).lowerBound
+        let tests = try XCTUnwrap(release.range(of: "step \"tests\"")).lowerBound
+        XCTAssertLessThan(
+            vendored, tests,
+            "a mismatched SAGE would not be caught until the suite had already been paid for"
+        )
+
+        let vendor = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("scripts/vendor-sage.sh"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            vendor.contains("SAGE_RELEASE_TAG:-latest"),
+            "the SAGE tag defaults to `latest` again, which disables the version check entirely"
+        )
+        XCTAssertTrue(
+            vendor.contains("SAGE_RELEASE_TAG:-v"),
+            "vendor-sage.sh no longer pins an explicit SAGE tag"
+        )
+    }
 }

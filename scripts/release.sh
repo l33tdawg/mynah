@@ -77,6 +77,28 @@ fi
 # run in a working repo this block is close to free. On a genuinely clean
 # checkout it is the slowest part of the release, mostly because espeak-ng is
 # built from source rather than downloaded.
+# The brain, first, because this is the cheapest possible place to fail.
+#
+# **This step did not exist, and Mynah 2.0.0 shipped SAGE 11.17.15 because of
+# it.** Vendoring was a manual instruction in docs/RELEASE.md, so the release
+# packaged whatever happened to be sitting in vendor/ — on this checkout, a copy
+# staged five SAGE releases earlier. Nothing printed a version, so nothing ever
+# contradicted it, and the beta line plus 2.0.0 all went out on it.
+#
+# vendor-sage.sh already had the guard: it compares the staged bundle against
+# SAGE_RELEASE_TAG and exits 1 naming the exact command to fix it. That check was
+# skipped entirely while the tag defaulted to `latest`, which is a version nobody
+# can be compared against. With the tag pinned it is live, and calling the script
+# from here is what turns "whatever is in vendor/" back into "the pinned version,
+# or a hard stop".
+#
+# It is first in the block, not merely somewhere in it, because a mismatch should
+# cost seconds rather than being discovered after espeak-ng has been built from
+# source. The script keeps a matching staged copy rather than re-fetching, so the
+# common case is close to free.
+step "vendor the SAGE brain"
+bash scripts/vendor-sage.sh
+
 step "provision signed speech assets"
 bash scripts/provision-asr-assets.sh
 
