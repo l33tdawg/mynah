@@ -157,16 +157,27 @@ public enum ProactiveSchedule {
     /// effect, including switching the whole thing off.
     public static let tick: TimeInterval = 60
 
+    /// - Parameter wokenByMessage: the message wake bus says work was durably
+    ///   inserted for this appliance. See `MessageWakeBus`.
+    ///
+    ///   **It skips the interval and nothing else.** The owner's switch and
+    ///   their quiet hours are above it deliberately: the appliance being told
+    ///   promptly is worth having, and it is worth exactly nothing if the price
+    ///   is a phone lighting up at 3am because another agent answered something.
+    ///   Nothing is lost by holding it — the latch is not cleared by a tick that
+    ///   declines, so the wake survives until morning and is acted on then.
     public static func isDue(
         now: Date,
         lastChecked: Date?,
         preferences: ProactivePreferences,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        wokenByMessage: Bool = false
     ) -> Bool {
         guard preferences.isOn else { return false }
         // Asleep. Nothing is lost — the ledger is untouched, so whatever
         // arrives overnight is still new in the morning.
         guard !preferences.isQuiet(at: now, calendar: calendar) else { return false }
+        if wokenByMessage { return true }
         guard let lastChecked else { return true }
         let elapsed = now.timeIntervalSince(lastChecked)
         // A negative interval means the Mac's clock went backwards, which would

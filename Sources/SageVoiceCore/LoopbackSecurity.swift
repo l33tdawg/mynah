@@ -66,6 +66,36 @@ public enum LoopbackSecurity {
         )
     }
 
+    /// A `URLSession` for a response that is *meant* to stay open.
+    ///
+    /// Same refusal of redirects, same absence of cookies and credentials. The
+    /// one difference is the whole reason it exists: `makeSession(timeout:)`
+    /// sets `timeoutIntervalForResource`, which is a ceiling on the *total*
+    /// life of a transfer, and an event stream that is behaving perfectly has
+    /// no total life. Dialling the message wake bus through it would tear a
+    /// healthy stream down on a fixed clock and redial forever, which reads in
+    /// a log exactly like a node that keeps dropping the connection.
+    ///
+    /// `idleTimeout` still applies, and still means what it says — no bytes for
+    /// this long. SAGE writes a heartbeat comment every fifteen seconds
+    /// precisely so a silent-but-live stream is distinguishable from a dead
+    /// one, so this wants to be comfortably longer than that and no longer.
+    public static func makeStreamingSession(idleTimeout: TimeInterval) -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = idleTimeout
+        configuration.timeoutIntervalForResource = .greatestFiniteMagnitude
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        // A stream read byte-by-byte must not sit in a buffer waiting to be
+        // economical about wake-ups; the point of the bus is promptness.
+        configuration.networkServiceType = .responsiveData
+        return URLSession(
+            configuration: configuration,
+            delegate: RedirectBlocker.shared,
+            delegateQueue: nil
+        )
+    }
+
     /// Post-hoc check for callers using a session we do not own.
     ///
     /// If the response came back from anywhere other than the loopback URL we

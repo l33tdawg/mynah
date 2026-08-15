@@ -102,12 +102,12 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2348   (2.0.0-beta.11, durable delivery and beta distribution;
-#                         2316 at beta.10, 2313 at beta.9, 2312 at beta.8, 2304 at beta.7,
-#                         2298 at beta.6,
+#   measured      2407   (2.1.0, the message wake bus;
+#                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
+#                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2310   (2348 - 38)
-#   floor           2336   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2369   (2407 - 38)
+#   floor           2395   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -285,6 +285,54 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # final test prevents a Rosetta parent shell from selecting an x86 XCTest runner
 # for the arm64 release bundle.
 #
+# 2348 to 2407 is 2.1.0's message wake bus, and the split is worth reading
+# because only ten of the forty-nine are about the network at all.
+#
+# Ten of them exist because of one defect, and they are the ones to read
+# first. The client was reading the event stream through Foundation's
+# `AsyncBytes.lines`, which does not yield an empty line — and in server-sent
+# events the empty line is the dispatch. Against the owner's live node the
+# frame arrived, was assembled, and was never delivered: `id`, `event` and
+# `data` at t=0.01s, then nothing until a heartbeat at t=15s. The node was
+# perfect and the feature was inert. Six tests now cover a byte splitter that
+# keeps blank lines, and four drive the whole client against a stubbed stream
+# through a `URLProtocol`; putting `.lines` back reddens three of them. Nothing
+# over the reader alone could have caught it, because a reader test feeds it
+# the blank line the transport was eating.
+#
+# Twenty-one cover the two halves that can be wrong invisibly. The signing
+# derivation is pinned against message-byte vectors — not signature vectors, and
+# that distinction cost the first version of these tests: CryptoKit's Ed25519 is
+# hedged, so signing identical bytes twice yields two different signatures and a
+# pinned signature hex is a pinned random number. The message is the actual
+# contract with the node's `internal/auth/ed25519.go` and is deterministic. The
+# SSE reader is tested for the two failures a happy-path check cannot see — a
+# heartbeat comment mistaken for an event, and a dispatch that never fires —
+# rather than for the frames it will usually get right.
+#
+# Six cover what a wake is allowed to override, which is the part with a cost to
+# the owner rather than to the appliance: it skips the poll interval, and it
+# does not skip the proactive switch or quiet hours. Mutating the guard above
+# quiet hours reddens one of them, which is the point of writing it that way.
+#
+# Four are source scans, because `main.swift` is an executable target and cannot
+# be imported — the precedent AfterTheCallTests already set. Without them the
+# whole feature can be perfect and unreachable: nothing else in this file fails
+# if the daemon never constructs the bus, never latches its wakes, never hands
+# the latch to the watch, or never cancels the stream on shutdown. A fifth
+# asserts the window does NOT dial it, because the node grants one wake lease
+# per agent and a second consumer would lock the daemon out for five minutes at
+# a time.
+#
+# One deserves naming for what it did not catch. The explicit
+# `if line.hasPrefix(":")` comment guard in the SSE reader turns out to be
+# redundant — a comment line's field name parses as empty and the `default:`
+# case ignores it anyway — so mutating that line away leaves the suite green.
+# That was found by mutating rather than assumed, the code now says so where a
+# reader will see it, and the test was rewritten to pin the observable contract
+# instead of pretending to guard one line. A test that claims a guarantee it
+# does not hold is worse than no test.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -324,7 +372,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2336}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2395}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

@@ -1587,6 +1587,30 @@ func runDaemon(_ arguments: [String]) -> Never {
         //
         // Detached like the call server: a node that will not answer must not
         // stop Signal working.
+        //
+        // The wake bus rides alongside it rather than inside it, because their
+        // lifetimes genuinely differ: the watch wakes every minute and sleeps,
+        // while the bus holds one connection open for as long as the node will
+        // keep it. Both are cancelled together below.
+        //
+        // Only the daemon dials it, never the window. The node grants one wake
+        // lease per agent and refuses a second consumer for five minutes, and
+        // the daemon is the process that acts on what it learns — a window that
+        // took the lease would lock the daemon out of it while being unable to
+        // announce anything itself.
+        let wakeLatch = MessageWakeLatch()
+        let wakeTask = Task {
+            // Nil when there is no appliance key to sign with, which is a fresh
+            // install before enrolment. The watch below still runs; it checks on
+            // the owner's interval, exactly as every build before this one did.
+            guard let bus = MessageWakeBus(log: { note($0) }) else {
+                note("[wake] no appliance key yet; the periodic check is the whole mechanism")
+                return
+            }
+            await bus.run { _ in await wakeLatch.wake() }
+        }
+        defer { wakeTask.cancel() }
+
         let watchTask = Task { [weak daemon] in
             // The owner's own thread — Note to Self, which is where every other
             // reply lands.
@@ -1618,6 +1642,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                     guard let ritual else { return [] }
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
+                wakeLatch: wakeLatch,
                 say: { message, quotingAnotherAgent in
                     let preferred = await daemon.preferredAnnouncementRecipient(
                         among: ownerThreads
@@ -1894,6 +1919,11 @@ func runProactiveWatch(
     /// thing off; everything else here behaves exactly as it did before.
     calendar: CalendarSync? = nil,
     arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
+    /// Set by `MessageWakeBus` when the node reports canonical inbox work was
+    /// durably inserted for this appliance. `nil` on a node with no wake bus,
+    /// and on any build that has not started one, where this loop behaves
+    /// exactly as it did before: it checks on the owner's interval.
+    wakeLatch: MessageWakeLatch? = nil,
     /// The second argument says whether the text quotes an agent that is not
     /// Mynah, which decides how it is written into the thread's history rather
     /// than how it reads on the phone. See
@@ -1955,11 +1985,25 @@ func runProactiveWatch(
             }
         }
 
+        // Read, not taken. A tick that declines — switched off, or inside quiet
+        // hours — must leave the wake set for the tick that does not.
+        let wokenByMessage = await wakeLatch?.isWoken() ?? false
+        if wokenByMessage {
+            log("[watch] the node says a message is waiting; checking now")
+        }
+
         guard ProactiveSchedule.isDue(
             now: Date(),
             lastChecked: ledger.lastCheckedAt,
-            preferences: preferences
+            preferences: preferences,
+            wokenByMessage: wokenByMessage
         ) else { continue }
+
+        // Cleared by the check that actually ran, and unconditionally: if the
+        // node was unreachable for this one, the wake stream was down too, and
+        // reconnecting re-reads the durable state — so still-pending work
+        // arrives as a fresh wake rather than being lost here.
+        await wakeLatch?.clear()
 
         // Taken once per check, and taken *before* the check so a turn landing
         // mid-round-trip sets it for the next one rather than being swallowed
