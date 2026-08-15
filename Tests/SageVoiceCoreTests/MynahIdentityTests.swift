@@ -72,11 +72,19 @@ final class MynahIdentityTests: XCTestCase {
             homeDirectory: home,
             log: { _ in }
         )
-        XCTAssertEqual(environment.count, 1, "the child environment gained something unreviewed")
+        XCTAssertEqual(environment.count, 2, "the child environment gained something unreviewed")
         XCTAssertEqual(
             environment[MynahIdentity.environmentVariable],
             identityPath(environment: [:], homeDirectory: home)
         )
+        // The second key, added deliberately and reviewed here rather than
+        // slipped past the count above. SAGE 11.18.13 gives `sage-gui mcp` an
+        // opt-in wake adapter on the same signed route `MessageWakeBus` holds,
+        // and the node grants one wake lease per agent — so a child that armed
+        // it would lock the daemon out of its own mail for five minutes at a
+        // time. Off by default upstream; said out loud here because
+        // `MCPClient` merges this over the inherited parent environment.
+        XCTAssertEqual(environment["SAGE_CLAUDE_CHANNEL"], "0")
     }
 
     /// An identity is only useful as a grant target if the node can tell it

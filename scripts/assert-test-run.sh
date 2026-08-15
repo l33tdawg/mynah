@@ -102,12 +102,13 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2407   (2.1.0, the message wake bus;
+#   measured      2438   (2.1.1, three defects the owner found by using 2.1.0;
+#                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2369   (2407 - 38)
-#   floor           2395   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2400   (2438 - 38)
+#   floor           2426   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -333,6 +334,36 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # instead of pretending to guard one line. A test that claims a guarantee it
 # does not hold is worse than no test.
 #
+# 2407 to 2438 is 2.1.1, and all three defects in it were found by the owner
+# USING 2.1.0 rather than by anyone reading the code — which is the third
+# release running where that is true, and the reason the note at the bottom of
+# this file about preferring his reports still stands.
+#
+# Fifteen cover a relayed agent message arriving whole. It was cut at 160
+# characters and his report was that he "always" had to ask for the rest, so the
+# excerpt was buying nothing and costing a question every time. Ten of the
+# fifteen are `AnnouncementParts`, which sends a long message as several rather
+# than one with its end missing — his instruction, and splitting rather than
+# summarising because `ProactiveWatch`'s own third rule is that nothing is
+# invented. Two existing tests changed sides here: one pinned the 160-character
+# cut and now pins the opposite, with the old reasoning quoted in place so the
+# reversal is readable rather than mysterious.
+#
+# **The security half of that old cap did not survive review, and that is worth
+# recording.** Its stated reason was that an unbounded relay lets a remote agent
+# push whatever it likes into the owner's thread. A cap does not stop an
+# injection, it truncates one, and `intent` sat on the same line, written by the
+# same remote agent, with no bound at all. What actually makes a relay safe is
+# the frame `RelayedAgentTextTests` asserts, which is untouched.
+#
+# Sixteen cover `sage_timeline`, from a 43-second turn in bridge.log where the
+# appliance was refused twice by its own memory and answered out of four web
+# searches instead. The node caps a timeline at 31 days and its own tool schema
+# offers a full year as the example, so the model copied what it was shown. Four
+# of the sixteen exist because narrowing a range silently would be worse than
+# the refusal it replaces: a month reported as a year is a confident false
+# statement produced by us.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -372,7 +403,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2395}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2426}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

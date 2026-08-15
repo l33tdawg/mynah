@@ -702,7 +702,7 @@ public enum MynahIdentity {
                 log("[identity] ignoring \(name)=\(expanded): Mynah signs only as itself")
                 continue
             }
-            return [environmentVariable: expanded]
+            return [environmentVariable: expanded] .merging(wakeChannelOff) { current, _ in current }
         }
         // Back up, adopt, mint — in that order, and never just the middle one.
         // This used to call `migrateApplianceKeyIfNeeded` alone, so on a fresh
@@ -712,6 +712,26 @@ public enum MynahIdentity {
             environment: environment,
             homeDirectory: homeDirectory,
             log: log
-        ).path]
+        ).path].merging(wakeChannelOff) { current, _ in current }
     }
+
+    /// Keeps the node's own MCP wake adapter out of Mynah's wake lease.
+    ///
+    /// SAGE 11.18.13 wires an opt-in "Claude channel" in `sage-gui mcp` to the
+    /// same signed `GET /v1/messages/wake` route `MessageWakeBus` holds open. It
+    /// is default-off and gated on `SAGE_CLAUDE_CHANNEL`, and Mynah does not set
+    /// it — but `MCPClient` merges these over the *parent* environment so the
+    /// child inherits whatever the daemon was launched with, and an operator who
+    /// armed it in their own shell would arm it here too.
+    ///
+    /// That is not a harmless duplicate. The node grants **one wake lease per
+    /// agent**: two consumers signing as `74140c2d` means whichever loses is
+    /// refused with a 409 for up to five minutes at a time, and the one that
+    /// loses is as likely to be the daemon — the only one of the two that can
+    /// actually tell the owner anything.
+    ///
+    /// Set explicitly rather than removed, because the merge is over an
+    /// inherited environment and deleting a key from this dictionary would not
+    /// delete it from the child's.
+    static let wakeChannelOff = ["SAGE_CLAUDE_CHANNEL": "0"]
 }
