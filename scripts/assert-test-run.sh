@@ -102,13 +102,14 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2438   (2.1.1, three defects the owner found by using 2.1.0;
+#   measured      2456   (2.2.0, answering the exact agent rather than the label;
+#                         2438 at 2.1.1, three defects the owner found by using 2.1.0;
 #                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2400   (2438 - 38)
-#   floor           2426   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2418   (2456 - 38)
+#   floor           2444   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -364,6 +365,32 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # the refusal it replaces: a month reported as a year is a confident false
 # statement produced by us.
 #
+# 2438 to 2456 is 2.2.0, and thirteen of the eighteen are about the difference
+# between a name and an identity. SAGE 11.18.12 puts the exact signing agent on
+# every inbox item; Mynah kept only the label it is announced under. Two agents
+# can share a display name, an operator can change one, and before .12 a local
+# message carried the sender's *provider* — so every codex/* agent read
+# identically. `SageAgentIdentity` already records what that class of confusion
+# cost once: "how the owner's messages once reached strangers".
+#
+# One of the thirteen is worth more than the rest and was not written from the
+# Go source. It pins a payload captured verbatim off the owner's live 11.18.13
+# node, and it caught a real bug on the way in: `source_chain_id` is present but
+# EMPTY on a local item, while `source_chain` appears only on a foreign one.
+# Keying off the first alone addressed every local sender as `<id>@`. Reading
+# the handler had not revealed that; one live message did.
+#
+# The remaining five are a 120-character log receipt, and they are here because
+# that truncation produced a WRONG BUG REPORT sent to another team. A
+# sage_timeline refusal read in bridge.log as "...App-v23 governed timelines are
+# li" and was reported upstream as an error arriving without its number. The
+# node's sentence ends "limited to 31 days per request"; the model had all of
+# it, because the error path returns the failure text unbudgeted. Only this log
+# line was short, and 120 happened to stop one word before the only number in
+# it. A failed receipt now gets 400 characters where a success keeps 120: a
+# receipt for a success is a confirmation, a receipt for a failure is the only
+# surviving record of why.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -403,7 +430,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2426}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2444}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
