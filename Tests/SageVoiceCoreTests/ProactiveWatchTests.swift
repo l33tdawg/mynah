@@ -428,9 +428,18 @@ final class ProactiveScheduleTests: XCTestCase {
         let preferences = ProactivePreferences(isOn: true, everyMinutes: 1)
 
         XCTAssertEqual(preferences.clampedMinutes, ProactivePreferences.fastest)
+
+        // **Derived from the floor rather than written as a number.** This read
+        // "-5 * 60", which was comfortably inside a floor of 15 and became
+        // exactly ON a floor of 5 — so lowering the floor turned a passing test
+        // red for a reason that had nothing to do with what it checks. One
+        // minute under the floor is inside it whatever the floor becomes, and
+        // is still well past the 1 minute the file asked for, which is the
+        // thing being disproved.
+        let justInsideTheFloor = Double(ProactivePreferences.fastest - 1) * -60
         XCTAssertFalse(ProactiveSchedule.isDue(
             now: at(12),
-            lastChecked: at(12).addingTimeInterval(-5 * 60),
+            lastChecked: at(12).addingTimeInterval(justInsideTheFloor),
             preferences: preferences
         ))
     }

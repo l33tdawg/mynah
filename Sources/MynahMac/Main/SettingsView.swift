@@ -987,7 +987,16 @@ final class SettingsModel {
     /// The intervals offered. Not a free-text field: the useful range is narrow,
     /// and the two ends of it — a phone that buzzes all day, and a check so rare
     /// it might as well be off — are both worse than any option here.
-    static let checkIntervals = [15, 30, 60, 120, 240]
+    /// What the picker offers, and it has to agree with
+    /// `ProactivePreferences.fastest` — a choice below the floor is silently
+    /// clamped, so offering one would be a control that lies.
+    ///
+    /// **Five was added when the floor moved from fifteen.** Without this line
+    /// that change is inert: the constant permits five and no surface offers
+    /// it, which is the half-change this codebase keeps paying for. The owner
+    /// asked for five after watching the appliance do it by accident for an
+    /// evening — see `ProactivePreferences.fastest` for the measurement.
+    static let checkIntervals = [5, 15, 30, 60, 120, 240]
 
     static func intervalName(_ minutes: Int) -> String {
         switch minutes {

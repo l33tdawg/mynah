@@ -646,3 +646,57 @@ final class ToolResultBudgetTests: XCTestCase {
         )
     }
 }
+
+/// The proactive check interval, where a constant and a picker have to agree.
+///
+/// **This exists because lowering the floor alone did nothing.** The owner
+/// asked for five-minute checks; `ProactivePreferences.fastest` moved from 15
+/// to 5 and was committed — and the change was inert, because
+/// `SettingsModel.checkIntervals` still read [15, 30, 60, 120, 240] and there
+/// was no way to select five. A constant that permits something no surface
+/// offers is the half-change this codebase keeps paying for, and nothing in the
+/// suite could see it.
+final class ProactiveIntervalChoiceTests: XCTestCase {
+
+    /// Every offered choice must survive the clamp. An option the model of the
+    /// screen accepts and `clampedMinutes` silently raises is a control that
+    /// lies to the owner about what he just chose.
+    func testEveryOfferedIntervalSurvivesTheClamp() {
+        for minutes in SettingsModel.checkIntervals {
+            XCTAssertEqual(
+                ProactivePreferences(everyMinutes: minutes).clampedMinutes,
+                minutes,
+                "the picker offers \(minutes) minutes and the clamp changes it"
+            )
+        }
+    }
+
+    /// And the floor itself must be reachable, or lowering it changes nothing.
+    /// Mutate `checkIntervals` back to [15, …] and this reddens — which is the
+    /// failure that shipped unnoticed.
+    func testTheFastestIntervalIsActuallyOffered() {
+        XCTAssertTrue(
+            SettingsModel.checkIntervals.contains(ProactivePreferences.fastest),
+            """
+            the floor is \(ProactivePreferences.fastest) minutes and the picker \
+            offers \(SettingsModel.checkIntervals) — so the fastest setting \
+            cannot be chosen and lowering the floor did nothing
+            """
+        )
+    }
+
+    /// Ascending, because the picker renders them in order and a list that
+    /// jumps reads as a bug in the screen.
+    func testTheChoicesAreInOrder() {
+        XCTAssertEqual(SettingsModel.checkIntervals, SettingsModel.checkIntervals.sorted())
+    }
+
+    /// Five reads as "Every 5 minutes" rather than falling into the hours
+    /// branch — the naming switches at 60 and five is the first value below it
+    /// that anyone has offered.
+    @MainActor func testFiveMinutesIsNamedInMinutes() {
+        XCTAssertEqual(SettingsModel.intervalName(5), "Every 5 minutes")
+        XCTAssertEqual(SettingsModel.intervalName(60), "Every hour")
+        XCTAssertEqual(SettingsModel.intervalName(120), "Every 2 hours")
+    }
+}
