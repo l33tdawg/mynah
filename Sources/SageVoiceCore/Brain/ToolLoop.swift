@@ -377,14 +377,39 @@ public struct ToolLoopTrace: Sendable, Equatable {
     ]
 
     /// What each acting call actually returned, short enough for one line.
+    ///
+    /// **A failure gets more room than a success, and it cost a wrong diagnosis
+    /// to learn why.** On 15 August 2026 a `sage_timeline` refusal was read out
+    /// of `bridge.log` as
+    ///
+    ///     Timeline range too large: App-v23 governed timelines are li
+    ///
+    /// and reported upstream — to SAGE, in writing — as an error that "arrives
+    /// without the number, so a model cannot correct itself on the retry". That
+    /// was false. The node's message ends *"limited to 31 days per request;
+    /// choose a narrower range"*, and the model had all of it: the error path in
+    /// `execute` returns `"Error: \(error)"` without going through
+    /// `VoiceToolBudget.fit`, so only this line was ever short. 120 characters
+    /// happened to cut the sentence one word before the only number in it.
+    ///
+    /// A receipt for a successful send is a confirmation and one line is
+    /// plenty. A receipt for a failure is the *only* record of why, and it is
+    /// what somebody reads months later when nothing else survives — so it gets
+    /// the room to carry its own reason.
+    public static let receiptCharacters = 120
+    public static let failedReceiptCharacters = 400
+
     public var receipts: [String] {
         toolCalls
             .filter { Self.sendingTools.contains($0.name) || $0.failed }
             .map { call in
-                let head = call.result
-                    .prefix(120)
+                let room = call.failed ? Self.failedReceiptCharacters : Self.receiptCharacters
+                let flat = call.result
                     .replacingOccurrences(of: "\n", with: " ")
                     .trimmingCharacters(in: .whitespaces)
+                let head = flat.count > room
+                    ? String(flat.prefix(room)) + "…"
+                    : flat
                 return "\(call.name) -> \(head.isEmpty ? "(nothing)" : head)"
             }
     }
