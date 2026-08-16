@@ -102,14 +102,15 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2456   (2.2.0, answering the exact agent rather than the label;
+#   measured      2460   (2.3.0, a five-minute check the owner can choose;
+#                         2456 at 2.2.0, answering the exact agent rather than the label;
 #                         2438 at 2.1.1, three defects the owner found by using 2.1.0;
 #                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2418   (2456 - 38)
-#   floor           2444   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2422   (2460 - 38)
+#   floor           2448   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -391,6 +392,26 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # receipt for a success is a confirmation, a receipt for a failure is the only
 # surviving record of why.
 #
+# 2456 to 2460 is four tests holding a constant and a picker to each other,
+# and they exist because lowering the constant alone did NOTHING.
+#
+# The owner asked for five-minute proactive checks after watching the appliance
+# do it by accident for an evening. ProactivePreferences.fastest moved 15 -> 5
+# and was committed. That change was inert: SettingsModel.checkIntervals still
+# read [15, 30, 60, 120, 240], so the floor permitted five and no surface
+# offered it. A whole release would have shipped changing nothing anyone could
+# reach, and 2456 tests could not see it — because each half was correct on its
+# own and nothing asserted they agreed.
+#
+# So: every offered choice must survive clampedMinutes, and the floor itself
+# must appear in the picker. Reverting checkIntervals reddens the second one.
+#
+# A fifth test moved rather than being added. testAnAbsurdIntervalIsClamped-
+# RatherThanObeyed asserted a check five minutes old was not due — comfortably
+# inside a floor of 15, exactly ON a floor of 5 — so lowering the floor turned
+# it red for a reason unrelated to what it checks. Its fixture is now derived
+# from the constant rather than written as a number.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -430,7 +451,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2444}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2448}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

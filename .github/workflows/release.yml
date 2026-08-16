@@ -172,7 +172,7 @@ jobs:
           #
           # Raise both in one commit. They are one subtraction apart and setting
           # only one is how this first went red.
-          MYNAH_MIN_EXECUTED_TESTS: "2406"
+          MYNAH_MIN_EXECUTED_TESTS: "2410"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -229,7 +229,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2444"
+          MYNAH_MIN_EXECUTED_TESTS: "2448"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 
