@@ -1647,7 +1647,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                     return await ritual.collectArrivedReplies().map(\.spokenDescription)
                 },
                 wakeLatch: wakeLatch,
-                say: { message, quotingAnotherAgent in
+                say: { message, quotingAnotherAgent, senders in
                     let preferred = await daemon.preferredAnnouncementRecipient(
                         among: ownerThreads
                     )
@@ -1661,7 +1661,8 @@ func runDaemon(_ arguments: [String]) -> Never {
                     for owner in destinations {
                         for part in AnnouncementParts.split(message) {
                             _ = await daemon.announce(
-                                part, to: owner, quotingAnotherAgent: quotingAnotherAgent
+                                part, to: owner,
+                                quotingAnotherAgent: quotingAnotherAgent, senders: senders
                             )
                         }
                     }
@@ -1938,9 +1939,11 @@ func runProactiveWatch(
     wakeLatch: MessageWakeLatch? = nil,
     /// The second argument says whether the text quotes an agent that is not
     /// Mynah, which decides how it is written into the thread's history rather
-    /// than how it reads on the phone. See
-    /// `VoiceBridgeDaemon.announce(_:to:quotingAnotherAgent:)`.
-    say: @escaping @Sendable (String, Bool) async -> Void,
+    /// than how it reads on the phone. The third carries the exact identities
+    /// behind those quoted words, and goes only into the stored copy — see
+    /// `ProactiveReport.relayedSenders` for why the owner is not shown them.
+    /// See `VoiceBridgeDaemon.announce(_:to:quotingAnotherAgent:senders:)`.
+    say: @escaping @Sendable (String, Bool, [AgentAddress]) async -> Void,
     log: @escaping @Sendable (String) -> Void
 ) async {
     let watch = ProactiveWatch(source: source)
@@ -1992,7 +1995,7 @@ func runProactiveWatch(
                 try? ledger.save(to: ledgerURL)
                 for nudge in nudges {
                     log("[watch] reminder due: \(nudge.key)")
-                    await say(nudge.text, false)
+                    await say(nudge.text, false, [])
                 }
             }
         }
@@ -2059,12 +2062,12 @@ func runProactiveWatch(
         // the morning. That bug shipped once and the owner read it twice.
         for reply in await arrivedReplies() {
             log("[watch] a reply came back; telling the owner")
-            await say(reply, true)
+            await say(reply, true, [])
         }
 
         guard let message = report.message else { continue }
         log("[watch] something changed; telling the owner")
-        await say(message, report.relaysAnotherAgent)
+        await say(message, report.relaysAnotherAgent, report.relayedSenders)
     }
 }
 

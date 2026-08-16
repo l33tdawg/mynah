@@ -25,6 +25,40 @@ public struct AgentAddress: Sendable, Equatable, Identifiable {
         self.displayName = displayName
         self.isForeign = isForeign
     }
+
+    /// The sender of a message the node handed us, as a recipient to answer.
+    ///
+    /// **This is the one address that does not need `sage_find_agent`, and the
+    /// reason is worth stating rather than assuming.** The type exists to stop
+    /// an address being conjured from a name somebody typed. `sender_agent` is
+    /// the opposite of that: SAGE puts it on every inbox item as the exact,
+    /// authenticated identity that signed the message — its own words are that
+    /// it is *"the authoritative exact local identity"* while display,
+    /// registered-name and provider labels are *"optional presentation
+    /// metadata"* and *"no label establishes authorization"*. Resolving a name
+    /// to reach that agent would be strictly worse: it asks a mutable label to
+    /// reproduce an id the node already told us exactly.
+    ///
+    /// **Only available since SAGE 11.18.12.** Before it, `sender_agent` was
+    /// emitted for *foreign* items and omitted for local ones, so on an older
+    /// node the local case has no exact identity to carry and this returns nil.
+    /// Nil means "ask the node" — never "invent one from the label".
+    ///
+    /// Named for where the id came from rather than what it is for, because a
+    /// bare `init` here would read exactly like the forgery the type refuses.
+    static func asAttributedByTheNode(
+        senderAgent: String,
+        displayName: String,
+        isForeign: Bool
+    ) -> AgentAddress? {
+        let exact = senderAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !exact.isEmpty else { return nil }
+        return AgentAddress(
+            wire: exact,
+            displayName: displayName.isEmpty ? exact : displayName,
+            isForeign: isForeign
+        )
+    }
 }
 
 // MARK: - What comes back
@@ -114,6 +148,37 @@ public struct AgentInboxItem: Sendable, Equatable, Identifiable {
     public let arrived: Date?
     /// Pipeline work expects a reply; a task notice does not.
     public let expectsAResult: Bool
+
+    /// Who to answer, exactly — not the label they are announced under.
+    ///
+    /// **`content.sender` is a name and this is an identity, and the difference
+    /// has already cost the owner once.** The label is chosen by the node for
+    /// display and can change; two agents from one provider used to announce
+    /// identically, and a reply addressed by name is how his messages once
+    /// reached strangers. Anything *sending* must use this; anything *speaking*
+    /// should use the label, because reading a 64-character hex string to
+    /// somebody is not an answer.
+    ///
+    /// Nil on a node before SAGE 11.18.12, which omitted `sender_agent` on
+    /// local items — and nil is a real answer meaning "ask the node", never a
+    /// licence to rebuild it from the label.
+    public let replyTo: AgentAddress?
+
+    public init(
+        id: String,
+        content: UntrustedAgentContent,
+        intent: String?,
+        arrived: Date?,
+        expectsAResult: Bool,
+        replyTo: AgentAddress? = nil
+    ) {
+        self.id = id
+        self.content = content
+        self.intent = intent
+        self.arrived = arrived
+        self.expectsAResult = expectsAResult
+        self.replyTo = replyTo
+    }
 }
 
 /// A message the owner sent, as far as the node is concerned.

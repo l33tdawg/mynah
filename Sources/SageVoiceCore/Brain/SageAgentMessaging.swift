@@ -211,6 +211,35 @@ public struct SageAgentMessaging: AgentMessaging {
         let trust: UntrustedAgentContent.Trust =
             (declared == "external_untrusted" || isForeign) ? .anotherSageEntirely : .anotherAgentHere
 
+        // **The exact identity that signed it, since SAGE 11.18.12.**
+        //
+        // Before .12 this key was written only for *foreign* items; .12's #216
+        // put it on every one, alongside the display and registered names, and
+        // said why in the tool's own description: `sender_agent` is "the
+        // authoritative exact local sender" while the labels are "optional
+        // presentation metadata" and "no label establishes authorization".
+        //
+        // `from_network` is checked second for the federated shape, where the
+        // node addresses an agent as `id@chain` and that whole string is the
+        // exact `to`. Reading only `sender_agent` there would hand back a bare
+        // id that reaches nobody once it leaves this SAGE.
+        let exactSender = string(raw, "sender_agent") ?? string(raw, "from_agent")
+        // Both spellings, because the node writes both and they are not
+        // interchangeable in when they appear: `source_chain` is set only on a
+        // foreign item, while `source_chain_id` is on every item and is empty
+        // for a local one. Verified against a live 11.18.13 inbox payload,
+        // which carried `"source_chain_id": ""` on a local message — so reading
+        // only that one would build `id@` for every local sender.
+        let chain = (string(raw, "source_chain") ?? string(raw, "source_chain_id"))
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let replyTo = exactSender.flatMap {
+            AgentAddress.asAttributedByTheNode(
+                senderAgent: isForeign && chain != nil ? "\($0)@\(chain!)" : $0,
+                displayName: sender,
+                isForeign: isForeign
+            )
+        }
+
         return AgentInboxItem(
             id: id,
             content: UntrustedAgentContent(
@@ -248,7 +277,8 @@ public struct SageAgentMessaging: AgentMessaging {
             //    opposite direction.
             expectsAResult: (raw["requires_reply"] as? Bool)
                 ?? (raw["requires_result"] as? Bool)
-                ?? false
+                ?? false,
+            replyTo: replyTo
         )
     }
 

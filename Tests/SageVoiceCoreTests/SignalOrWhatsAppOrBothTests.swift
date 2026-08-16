@@ -663,9 +663,12 @@ extension SignalOrWhatsAppOrBothTests {
             "WhatsApp is not collected as another readable owner channel"
         )
 
-        let sayStart = try XCTUnwrap(
-            main.range(of: "say: { message, quotingAnotherAgent in")
-        ).lowerBound
+        // Anchored on the closure's opening rather than its full parameter list,
+        // which has now gained a third argument twice. What this test is about
+        // is which recipients the block reaches, not its signature — an anchor
+        // that breaks every time a parameter is added is a test that gets
+        // "fixed" by whoever is in a hurry.
+        let sayStart = try XCTUnwrap(main.range(of: "say: { message,")).lowerBound
         let sayEnd = try XCTUnwrap(
             main.range(of: "log: { note($0) }", range: sayStart..<main.endIndex)
         ).lowerBound
@@ -673,8 +676,12 @@ extension SignalOrWhatsAppOrBothTests {
         XCTAssertTrue(say.contains("preferredAnnouncementRecipient"))
         XCTAssertTrue(say.contains("let destinations = preferred.map { [$0] } ?? ownerThreads"))
         XCTAssertTrue(
-            say.contains("to: owner, quotingAnotherAgent: quotingAnotherAgent"),
+            say.contains("to: owner,"),
             "the selected destination does not receive the announcement"
+        )
+        XCTAssertTrue(
+            say.contains("quotingAnotherAgent: quotingAnotherAgent"),
+            "the relay marking is dropped, so another agent's words are stored as Mynah's own"
         )
         // What reaches that destination is the announcement, in as many parts
         // as it takes — see `AnnouncementParts`. Asserted separately from the

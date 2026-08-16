@@ -182,16 +182,35 @@ public struct ProactiveReport: Sendable, Equatable {
     /// `VoiceBridgeDaemon.announce(_:to:quotingAnotherAgent:)`.
     public let relaysAnotherAgent: Bool
 
+    /// The exact identities quoted in `message`, for the *stored* copy only.
+    ///
+    /// **Two audiences, one string, which is the trap this codebase keeps
+    /// falling into — so they are separated here rather than in the sentence.**
+    /// The owner reads the announcement on his phone and must never be shown a
+    /// 64-character hex id; the model reads the same announcement out of the
+    /// thread's history on every later turn, and without the id its only handle
+    /// on the sender is a display label. Ask it to "reply to them" and it is
+    /// back to matching a mutable name — the exact mistake that once sent the
+    /// owner's messages to strangers.
+    ///
+    /// `VoiceBridgeDaemon.relayed(_:from:)` is where the split is made real:
+    /// the phone gets the plain sentence, the stored turn gets the frame with
+    /// these attached. Empty on a node before SAGE 11.18.12, and empty is a
+    /// true answer — the node did not say who, so neither do we.
+    public let relayedSenders: [AgentAddress]
+
     public init(
         message: String?,
         ledger: ProactiveLedger,
         sawTasks: [WatchedTask]? = nil,
-        relaysAnotherAgent: Bool = false
+        relaysAnotherAgent: Bool = false,
+        relayedSenders: [AgentAddress] = []
     ) {
         self.message = message
         self.ledger = ledger
         self.sawTasks = sawTasks
         self.relaysAnotherAgent = relaysAnotherAgent
+        self.relayedSenders = relayedSenders
     }
 }
 
@@ -350,7 +369,11 @@ public struct ProactiveWatch: Sendable {
             // Mynah's business, on the surface whose whole job is his list. The
             // injection risk is answered where it lives, by not letting a title
             // forge structure — see `ending(_:)`.
-            relaysAnotherAgent: !newMessages.isEmpty
+            relaysAnotherAgent: !newMessages.isEmpty,
+            // Only the messages actually quoted in this digest, and deduplicated
+            // by exact id rather than by label — two agents can share a display
+            // name, which is the whole reason the id is being carried.
+            relayedSenders: Self.exactSenders(of: newMessages)
         )
     }
 
@@ -477,6 +500,17 @@ public struct ProactiveWatch: Sendable {
         case "done", "completed": return "done"
         default: return status
         }
+    }
+
+    /// The exact identities behind the messages this digest quotes.
+    ///
+    /// Order preserved so the frame reads in the same order as the lines above
+    /// it, and deduplicated on `wire` — one agent that sent three messages is
+    /// one identity to reply to, and listing it three times is noise in a place
+    /// the model has to parse.
+    static func exactSenders(of messages: [AgentInboxItem]) -> [AgentAddress] {
+        var seen = Set<String>()
+        return messages.compactMap(\.replyTo).filter { seen.insert($0.wire).inserted }
     }
 
     static func line(forMessage item: AgentInboxItem) -> String {
