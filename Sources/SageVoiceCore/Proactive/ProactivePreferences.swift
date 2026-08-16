@@ -47,9 +47,26 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
     public var quietFrom: Int
     public var quietUntil: Int
 
-    /// Fifteen minutes is as often as this will go. Below that the appliance is
-    /// polling a node rather than checking in.
-    public static let fastest = 15
+    /// Five minutes is as often as this will go.
+    ///
+    /// **This was fifteen, and the sentence defending it was "below that the
+    /// appliance is polling a node rather than checking in."** That reads well
+    /// and was never measured. What settled it was the appliance accidentally
+    /// doing five for an evening and the owner preferring it — his words, on
+    /// seeing it in his own log: *"every 5 mins is even better bro"*.
+    ///
+    /// The accident is worth recording, because it is the only evidence either
+    /// number ever had. SAGE hands out a five-minute wake lease; when it
+    /// expires the stream reconnects, and 11.18.14 re-announces any still-
+    /// pending work on reconnect. With a row stranded under another claimant,
+    /// that drove a check every five minutes for hours. Nothing suffered: a
+    /// check is three local reads, the ledger stops anything being said twice,
+    /// and no duplicate reached his phone. The old floor was protecting against
+    /// a cost that did not exist.
+    ///
+    /// It is still a floor rather than a default — `everyMinutes` defaults to
+    /// 60 and is the owner's to choose. This only decides how low he may go.
+    public static let fastest = 5
     public static let slowest = 24 * 60
 
     public init(
