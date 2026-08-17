@@ -181,6 +181,86 @@ public struct AgentInboxItem: Sendable, Equatable, Identifiable {
     }
 }
 
+/// What one read of the inbox saw: the items, and the payload-free scalars the
+/// node reported beside them.
+///
+/// **This exists because `[AgentInboxItem]` has nowhere to put a fact that is
+/// not an item, and on 17 August 2026 that cost the owner a message.** Another
+/// Mynah on a federated node wrote to this appliance; the wake bus stayed
+/// healthy all day and said `pending: true` every five minutes; nothing was
+/// ever announced. The message was there and was held under another session's
+/// claim, so this appliance could not take it — and `sage_inbox` says so, in
+/// `claimed_elsewhere_count`, which the parser read and dropped on the floor
+/// because there was no return value with room for it. The log could therefore
+/// only ever say "nothing waiting", which was false, instead of "woken, nothing
+/// claimable — held by another session", which was the truth and names what to
+/// look at next.
+///
+/// Nothing here decides anything. SAGE's own guidance is that taking over work
+/// another session holds means judging the prior claimant dead first, and this
+/// appliance has no basis for that judgement. It reports the state.
+public struct AgentInboxRead: Sendable, Equatable {
+
+    /// Unfinished work held by *another* session under this same agent
+    /// identity — `claimed_elsewhere_count` and `claimed_elsewhere_state`.
+    ///
+    /// **Three cases and not an `Int?`, because the node draws exactly this
+    /// distinction and the tool's own description insists on it: the count is
+    /// *"an exact payload-free scalar for unfinished work held by another
+    /// session"* and *"an unavailable probe is explicit and never presented as
+    /// zero"*.** An optional would collapse "nobody is holding anything" into
+    /// "I could not find out", which is this project's oldest defect wearing a
+    /// new hat — the same shape as the unreadable backlog that emptied the
+    /// owner's calendar on 6 August.
+    public enum ClaimedElsewhere: Sendable, Equatable {
+
+        /// The node did not mention it at all — an older node, or a reply shape
+        /// that changed. **Absence is "this node does not say", never zero.**
+        case notReported
+
+        /// The node's exact count. Zero here *is* a real zero: it looked, and
+        /// no other session is holding anything.
+        case exactly(Int)
+
+        /// The node looked and could not answer, in its own words. Carried
+        /// verbatim so a log line can name the state rather than paraphrase it.
+        case probeUnavailable(state: String)
+
+        /// The fact as one clause for a log line, or nil when there is nothing
+        /// to say.
+        ///
+        /// Here rather than at the call site so the wording of the unavailable
+        /// case cannot drift into a number. A caller that writes its own
+        /// sentence is free to; a caller in a hurry gets the honest one.
+        public var forLog: String? {
+            switch self {
+            case .notReported:
+                // Silence, deliberately. A node that does not report this would
+                // otherwise print the same non-fact on every check forever.
+                return nil
+            case .exactly(0):
+                return "none held by another session"
+            case .exactly(let count):
+                return "\(count) held by another session"
+            case .probeUnavailable(let state):
+                return "the node could not say whether another session is holding "
+                    + "anything (\(state))"
+            }
+        }
+    }
+
+    /// What this read may act on — exactly what `inbox(limit:)` returns.
+    public let items: [AgentInboxItem]
+
+    /// What it may not, and must still report.
+    public let claimedElsewhere: ClaimedElsewhere
+
+    public init(items: [AgentInboxItem], claimedElsewhere: ClaimedElsewhere) {
+        self.items = items
+        self.claimedElsewhere = claimedElsewhere
+    }
+}
+
 /// A message the owner sent, as far as the node is concerned.
 public struct SentAgentMessage: Sendable, Equatable {
     public let messageID: String

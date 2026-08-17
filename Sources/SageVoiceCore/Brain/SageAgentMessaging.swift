@@ -139,6 +139,20 @@ public struct SageAgentMessaging: AgentMessaging {
     // MARK: Reading
 
     public func inbox(limit: Int) async throws -> [AgentInboxItem] {
+        try await inboxRead(limit: limit).items
+    }
+
+    /// The same single read, carrying the scalars the node reports beside the
+    /// items.
+    ///
+    /// **One `sage_inbox` call, and that is load-bearing rather than tidy.**
+    /// Every call to `sage_inbox` atomically *claims* the rows it returns under
+    /// the caller's session, and the claim is a durable row with no expiry — so
+    /// a second read "just to see the counters" would either strand a message
+    /// under a session that is about to exit, or come back empty because the
+    /// first read already took it. `inbox(limit:)` is this, minus the part it
+    /// does not need.
+    public func inboxRead(limit: Int) async throws -> AgentInboxRead {
         let reply: String
         do {
             // The node caps this at 20; asking for more is not an error there
@@ -154,7 +168,62 @@ public struct SageAgentMessaging: AgentMessaging {
         guard let root = Self.object(in: reply), Self.isAnInbox(root) else {
             throw AgentMessagingTrouble.unreadableInbox(Self.condensed(reply))
         }
-        return (root["items"] as? [[String: Any]] ?? []).compactMap(Self.item(from:))
+        return AgentInboxRead(
+            items: (root["items"] as? [[String: Any]] ?? []).compactMap(Self.item(from:)),
+            claimedElsewhere: Self.claimedElsewhere(in: root)
+        )
+    }
+
+    /// What the node said about work another session is holding.
+    ///
+    /// **The order of these three checks is the whole guard.** The tool's own
+    /// description is that `claimed_elsewhere_count` is *"an exact payload-free
+    /// scalar"* and that *"an unavailable probe is explicit and never presented
+    /// as zero"* — which means a node that cannot answer says so in
+    /// `claimed_elsewhere_state`, and whatever number sits beside that state is
+    /// not an answer. So the state is read first and, when it reads as a
+    /// failure, wins outright. Reading the count first would turn "I could not
+    /// look" into "nobody is holding anything" — the exact substitution this
+    /// type exists to prevent, and the one that has already emptied a calendar
+    /// and silenced an inbox in this codebase.
+    ///
+    /// **Unavailability is recognised by shape, not by a list of literals.**
+    /// The node's vocabulary here is not published in its schema and its
+    /// neighbours in the binary (`temporarily_unavailable`,
+    /// `read_confirmation_error`) suggest a family rather than a fixed word, so
+    /// matching an exhaustive whitelist of *good* states would be a guess that
+    /// fails silently in the wrong direction on the next release. A state that
+    /// announces trouble is refused; anything else is allowed to carry its
+    /// count. A false "could not say" is a visible, harmless line in a log; a
+    /// false zero is the incident.
+    ///
+    /// A state with no number is also `probeUnavailable` — the node spoke, and
+    /// no number is still no number.
+    static func claimedElsewhere(in root: [String: Any]) -> AgentInboxRead.ClaimedElsewhere {
+        // Trimmed and emptied to nil the same way every other string here is:
+        // a state of whitespace is a state the node did not send.
+        let state = string(root, "claimed_elsewhere_state")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        if let state, readsAsTrouble(state) { return .probeUnavailable(state: state) }
+        // `as? Int` and not a `Double` fallback: `JSONSerialization` hands back
+        // an `NSNumber` that bridges for any integral value, and a count that
+        // arrives fractional is a shape change rather than a number to round.
+        if let count = root["claimed_elsewhere_count"] as? Int { return .exactly(count) }
+        if let state { return .probeUnavailable(state: state) }
+        return .notReported
+    }
+
+    /// Whether a node's state word is announcing that it could not answer.
+    ///
+    /// `unavail` rather than `avail` on purpose: "available" must not match, and
+    /// "temporarily_unavailable" must.
+    private static func readsAsTrouble(_ state: String) -> Bool {
+        let lowered = state.lowercased()
+        return lowered.contains("unavail")
+            || lowered.contains("error")
+            || lowered.contains("unknown")
+            || lowered.contains("fail")
     }
 
     /// Whether the node's reply is an inbox at all — the question the old

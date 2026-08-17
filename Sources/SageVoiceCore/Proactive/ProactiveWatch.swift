@@ -22,8 +22,72 @@ public struct WatchedTask: Sendable, Equatable, Codable {
 public protocol ProactiveSource: Sendable {
     /// Messages from the owner's other agents.
     func waitingMessages(limit: Int) async throws -> [AgentInboxItem]
+
+    /// The same single read, carrying what the node said *beside* the items.
+    ///
+    /// **A list has nowhere to put a fact that is not an item, and on 17 August
+    /// 2026 that cost the owner a message.** A Mynah on a federated node wrote
+    /// to this appliance; the wake bus said `pending: true` every five minutes
+    /// all day; nothing was announced. The message was real and was held under
+    /// another session's claim, so this appliance could not take it — and
+    /// `sage_inbox` says exactly that, in `claimed_elsewhere_count`, which the
+    /// parser read and then had nowhere to put. So the only sentence the log
+    /// could form was "0 waiting", which is what a healthy quiet inbox says too.
+    ///
+    /// **A separate call rather than a wider return type on the one above**, so
+    /// that every existing conformance keeps compiling untouched — this is a
+    /// patch release on a shipped build. Both are one read: see
+    /// `SageProactiveSource`, where they share a private one.
+    ///
+    /// Nothing here decides anything. SAGE's own guidance is that taking work
+    /// another session holds means judging the prior claimant dead first, and
+    /// this appliance has no basis for that judgement. It reports the state.
+    func waitingInbox(limit: Int) async throws -> AgentInboxRead
+
     /// The appliance's own open tasks.
     func openTasks() async throws -> [WatchedTask]
+
+    /// Where a line about the check that used this source goes.
+    ///
+    /// Machinery only — which read answered, which one did not, and why. Never
+    /// anything the owner said, was told, or is about to be told: what he hears
+    /// is decided by `ProactiveReport.message` and nothing here changes it.
+    ///
+    /// **On the source rather than on `ProactiveWatch`, because this is where a
+    /// sink already is.** The daemon builds its source as
+    /// `SageProactiveSource(tools: mcp, log: { note($0) })`, so a watch that
+    /// notes through the source reaches `bridge.log` in the build that ships,
+    /// with no second wire for anybody to forget. A logger added to
+    /// `ProactiveWatch.init` instead would have defaulted to silence at both of
+    /// its call sites, and a diagnostic fix that ships inert is the same defect
+    /// wearing the fix's clothes.
+    ///
+    /// **Anything that wraps a source has to forward this to what it wraps.**
+    /// The default below is silence, so a decorator that forgets compiles
+    /// perfectly and takes the log out with it — which is precisely the failure
+    /// this method exists to end.
+    func note(_ line: String)
+}
+
+public extension ProactiveSource {
+    /// Silent unless a source says otherwise, so a stub stays a stub and no
+    /// existing conformance has to be edited to keep compiling.
+    func note(_ line: String) {}
+
+    /// The items, and `notReported` — which is the honest answer for a source
+    /// that does not carry the scalars: *this source did not say*, and never
+    /// "nobody is holding anything". `ClaimedElsewhere.forLog` is nil for that
+    /// case, so the line falls back to exactly what it printed before rather
+    /// than to an invented zero. Wrong in the visible direction, which is the
+    /// only direction this codebase allows a doubt to fall.
+    ///
+    /// **Anything that wraps a source has to forward this, exactly as it must
+    /// forward `note`.** The default compiles perfectly and silently downgrades
+    /// the log line back to the one that was misleading on 17 August.
+    func waitingInbox(limit: Int) async throws -> AgentInboxRead {
+        let items = try await waitingMessages(limit: limit)
+        return AgentInboxRead(items: items, claimedElsewhere: .notReported)
+    }
 }
 
 // MARK: - What it has already said
@@ -298,8 +362,69 @@ public struct ProactiveWatch: Sendable {
         //
         // Nil, not empty, and the two halves fail independently: a reachable
         // inbox is still worth reporting when the backlog is down.
-        let messages = try? await source.waitingMessages(limit: 20)
-        let tasks = try? await source.openTasks()
+        //
+        // **`try?` was the other half of the same fault and it outlived the
+        // first fix by nine days.** Nil is the right answer to give the owner,
+        // and it was also the only answer anybody got: the error went nowhere.
+        // On 17 August a Mynah on a federated node messaged this appliance, the
+        // daemon ran its check every five minutes all day, and `bridge.log`
+        // carried 197 outbox dumps and not one line about an inbox read — so a
+        // full day of healthy-looking log could not answer the first question
+        // anybody asks, which is whether the read worked at all.
+        //
+        // What the owner is told is unchanged: a failed check still says
+        // nothing and still forgets nothing. It just stops being *silent* about
+        // having failed.
+        let messages: [AgentInboxItem]?
+        do {
+            let read = try await source.waitingInbox(limit: 20)
+            messages = read.items
+            // Logged on success too, and that is the point. "0 waiting" and
+            // "could not read" are the two answers somebody has to tell apart
+            // tomorrow, and the failure line alone cannot do it — an absence
+            // would then mean either a healthy quiet inbox or a check that
+            // never ran, which is the ambiguity this whole file exists to kill.
+            //
+            // **And a third answer, which is the one that went missing.** "0
+            // waiting" was true and useless on 17 August: a message was there,
+            // held under another session's claim, so this appliance could not
+            // take it and the count it *can* act on was honestly zero. The
+            // node reports that separately, and the clause is what lets
+            // `bridge.log` say "woken, nothing claimable — held by another
+            // session" instead of leaving it to read as a quiet day.
+            //
+            // **On this line rather than on a second one at the point the check
+            // decides to stay quiet.** The watch is not told it was woken —
+            // `wokenByMessage` lives in `ProactiveSchedule`, and the daemon
+            // already writes "[watch] the node says a message is waiting;
+            // checking now" immediately above this, in the same log. Wake then
+            // verdict already read as a pair, so the fact belongs on the read
+            // that established it, where it cannot drift out of agreement with
+            // the count beside it. One read, one line.
+            //
+            // Silent on a node that does not report the field: `forLog` is nil
+            // for `.notReported`, so an older node's line is exactly what it
+            // was. An absent clause never means zero.
+            source.note("[watch] inbox: \(read.items.count) waiting"
+                + (read.claimedElsewhere.forLog.map { "; \($0)" } ?? ""))
+        } catch {
+            messages = nil
+            source.note("[watch] inbox: could not read — \(Self.reason(error))"
+                + "; nothing said, nothing forgotten")
+        }
+        // Failures only on this half. The task-side reads already leave a trace
+        // when they succeed — the calendar mirror logs what it mirrored, and a
+        // change to the list is what the digest itself is made of — so a second
+        // per-tick count here would be noise. The hole was the same one: an
+        // error that reached nothing.
+        let tasks: [WatchedTask]?
+        do {
+            tasks = try await source.openTasks()
+        } catch {
+            tasks = nil
+            source.note("[watch] tasks: could not read — \(Self.reason(error))"
+                + "; nothing said, nothing forgotten")
+        }
 
         var updated = ledger
 
@@ -490,6 +615,25 @@ public struct ProactiveWatch: Sendable {
         return oneLine.count > excerptCharacters
             ? String(oneLine.prefix(excerptCharacters)).trimmingCharacters(in: .whitespaces) + "…"
             : oneLine
+    }
+
+    /// An error made fit for one log line.
+    ///
+    /// **`"\(error)"` and deliberately not `localizedDescription`.**
+    /// `AgentMessagingTrouble` renders that as the sentence written for the
+    /// owner's phone — *"Your SAGE node answered, but Mynah couldn't read the
+    /// reply"* — and a log full of reassurance written for somebody else is how
+    /// a fault stays undiagnosed. The case name and its payload are what can be
+    /// acted on: `refused("… Active agent required …")` names the next step,
+    /// the owner sentence does not.
+    ///
+    /// Flattened and bounded because this shares a file with lines read by eye,
+    /// and a JSON blob across forty lines buries whatever came after it.
+    static func reason(_ error: any Error, limit: Int = 300) -> String {
+        let flat = "\(error)"
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return flat.count <= limit ? flat : String(flat.prefix(limit)) + "…"
     }
 
     static func readable(_ status: String) -> String {

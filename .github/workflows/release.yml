@@ -140,10 +140,11 @@ jobs:
       # The two numbers are runner numbers rather than the script's defaults,
       # and each is derived rather than guessed.
       #
-      # 1777 executed instead of 1815, because without vendor/onnxruntime
+      # 2463 executed instead of 2501, because without vendor/onnxruntime
       # Package.swift leaves the KokoroEngine targets out of the graph
-      # altogether — measured locally at exactly 1777 with those three targets
-      # absent, so the floor sits 17 under it.
+      # altogether — counted in the 2.3.1 build-Mac log as exactly 38
+      # KokoroEngineTests cases, so the floor sits 12 under it, which is
+      # assert-test-run.sh's own FLOOR_SITS_UNDER rather than a rule of thumb.
       #
       # 27 skipped instead of 21, because ten further tests reach for
       # voices-v1.0.bin and a runner has it in neither of the two places they
@@ -161,7 +162,7 @@ jobs:
           # **The runner's graph is not the build Mac's, so this is not the
           # script's number.** vendor/onnxruntime is deliberately not staged
           # below, so Package.swift drops KokoroEngineTests and its 38 tests
-          # before the run starts: 2336 on the build Mac means 2298 here.
+          # before the run starts: 2501 on the build Mac means 2463 here.
           #
           # Twelve under the runner's own count, which is what assert-test-run.sh's
           # rot check wants — it fires at floor + 38, so a floor set further under
@@ -172,7 +173,7 @@ jobs:
           #
           # Raise both in one commit. They are one subtraction apart and setting
           # only one is how this first went red.
-          MYNAH_MIN_EXECUTED_TESTS: "2410"
+          MYNAH_MIN_EXECUTED_TESTS: "2451"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -229,7 +230,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2448"
+          MYNAH_MIN_EXECUTED_TESTS: "2489"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

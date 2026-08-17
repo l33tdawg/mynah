@@ -102,15 +102,16 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2460   (2.3.0, a five-minute check the owner can choose;
+#   measured      2501   (2.3.1, the agent message the owner was never told about;
+#                         2460 at 2.3.0, a five-minute check the owner can choose;
 #                         2456 at 2.2.0, answering the exact agent rather than the label;
 #                         2438 at 2.1.1, three defects the owner found by using 2.1.0;
 #                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2422   (2460 - 38)
-#   floor           2448   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2463   (2501 - 38)
+#   floor           2489   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -412,6 +413,38 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # it red for a reason unrelated to what it checks. Its fixture is now derived
 # from the constant rather than written as a number.
 #
+# 2460 to 2501 is 2.3.1, and all forty-one are about one message the owner was
+# never told about. Another Mynah, on a federated node, messaged this appliance on
+# 17 August. The wake bus was healthy the whole day — a [wake] and a [watch] every
+# five minutes, 105 checks — and he heard nothing.
+#
+# Six hold `sage-voiced check` to reading the inbox ONCE, and they are the ones
+# to read first because the diagnostic was destroying the evidence. It read twice:
+# once itself, to print "inbox: N waiting", and then again through
+# ProactiveWatch.check. sage_inbox CLAIMS what it returns, so the second read got
+# the same item back under `own_claimed_unfinished`, which is in neither `count`
+# nor `items` — and the tool printed "inbox: 1 waiting … it would say nothing"
+# about one message. It could never have reported a genuinely waiting one. Worse,
+# claims are per-session and outlive the process, so running the support tool
+# STRANDED the message under a dead CLI session that the daemon then had to read
+# as claimed elsewhere.
+#
+# Twelve are for an inbox read leaving a trace. `try? await
+# source.waitingMessages(limit: 20)` made a failing inbox and an empty one the
+# same event, and the daemon logged the OUTBOX count on every one of those 105
+# checks while never once logging an inbox result. That is why this took a live
+# probe rather than a log read, and it is the defect class this project treats as
+# its worst: silence indistinguishable from success.
+#
+# Twenty-three are for `claimed_elsewhere_count` and `claimed_elsewhere_state`,
+# which the node sends and SageAgentMessaging parsed and dropped. Without them a
+# wake with nothing claimable reads in bridge.log exactly like a broken bus — and
+# codex/sage confirmed on 17 August that wake `pending` is existence-only across
+# pending OR claimed-unfinished rows, so a stranded claim keeps it true until
+# completion or expiry. The state is now reported and deliberately NOT acted on:
+# breaking a claim requires judging the prior claimant dead, and this appliance
+# has no basis to judge that.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -451,7 +484,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2448}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2489}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

@@ -1798,6 +1798,121 @@ func runCalendar(_ arguments: [String]) -> Never {
 
 // MARK: - check
 
+/// Asks the node once and answers everybody from that one answer.
+///
+/// **`sage_inbox` claims what it hands back, and `check` used to call it
+/// twice.** Every row returned under `items` is atomically claimed for the
+/// caller's opaque session, and the claim is a durable row in
+/// `message_fetch_receipts` with no expiry column — released only by a
+/// completion or an explicit `sage_message_handoff`. So the first read took the
+/// claim, and the second read — the one inside `ProactiveWatch.check` — got the
+/// same row back under `own_claimed_unfinished`, which never contributes to
+/// `count` or `items`. The diagnostic printed *"inbox: 1 waiting"* and then
+/// *"it would say nothing"* about the very message it had just claimed, which
+/// is how a real message from another Mynah on 17 August reached this appliance
+/// and was never spoken.
+///
+/// One read, memoised, and the two statements are then made of the same facts:
+/// the summary and the verdict cannot disagree because there is nothing left
+/// for them to disagree about.
+///
+/// Failures are memoised too. Replaying the error is the point — a retry here
+/// would be a second claim, which is exactly what this exists to prevent.
+///
+/// This does **not** make the read harmless: `sage_inbox` offers no passive
+/// mode, so the one remaining read still claims. The command says so on screen.
+/// The non-claiming surface is `sage_message_history(folder: "inbox")`, and
+/// moving to it is more than a patch release should carry.
+///
+/// Both callers ask for 20, the node's own cap, so a memo that ignores the
+/// limit cannot under-report here.
+actor OneReadProactiveSource: ProactiveSource {
+    private let underlying: any ProactiveSource
+    private var inbox: Task<AgentInboxRead, Error>?
+    private var tasks: Result<[WatchedTask], Error>?
+
+    init(_ underlying: any ProactiveSource) {
+        self.underlying = underlying
+    }
+
+    /// **Forwarded, and the memo is of this — the richer read — not of the
+    /// items.**
+    ///
+    /// `ProactiveSource` gives this a default implementation that answers
+    /// `.notReported`, which is honest for a stub and false for anything
+    /// wrapping a source that does report. A wrapper that simply omits it
+    /// compiles, keeps every other test green, and throws away
+    /// `claimed_elsewhere_count` on its way past — so `check` would print "0
+    /// waiting" against the exact state 17 August left behind, which is what a
+    /// quiet inbox prints too. The wrapper's own doc calls that hazard out one
+    /// protocol up; obeying it is this method.
+    ///
+    /// Memoising the read rather than the items is what keeps the two answers
+    /// one `sage_inbox` call, and therefore one claim.
+    func waitingInbox(limit: Int) async throws -> AgentInboxRead {
+        try await read(limit: limit)
+    }
+
+    func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
+        try await read(limit: limit).items
+    }
+
+    /// The one read both of the above are made of.
+    ///
+    /// **A private third method rather than either public one calling the
+    /// other**, for the reason `SageProactiveSource.read` gives: the protocol's
+    /// default implements `waitingInbox` in terms of `waitingMessages`, so a
+    /// `waitingMessages` that called `waitingInbox` would become unbounded
+    /// recursion the day somebody deletes the override above — a crash no
+    /// compiler can see. This shape cannot recurse; deleting the override
+    /// costs the clause and nothing else.
+    ///
+    /// Failures are memoised too. Replaying the error is the point — a retry
+    /// here would be a second claim, which is exactly what this exists to
+    /// prevent.
+    ///
+    /// **Held as a `Task` rather than a `Result`, so both halves of that
+    /// guarantee hold by construction instead of by care.** A task replays its
+    /// failure forever, so "failures are memoised too" cannot be edited away by
+    /// a plausible-looking tidy-up — `if case .success = outcome` over a
+    /// `Result` memo restores the retry, and therefore the second claim, while
+    /// every test in the suite stays green. And the task is stored before the
+    /// first suspension, so two callers arriving together share the one call;
+    /// with a `Result` written *after* the await, both would find an empty memo
+    /// across it and take a claim apiece. `openTasks` below stays a `Result`: a
+    /// second `sage_backlog` costs a round trip, not a claim.
+    private func read(limit: Int) async throws -> AgentInboxRead {
+        if let inbox { return try await inbox.value }
+        let read = Task { try await underlying.waitingInbox(limit: limit) }
+        inbox = read
+        return try await read.value
+    }
+
+    /// The watch's line about this check, through to whatever the wrapped
+    /// source logs to.
+    ///
+    /// The protocol's default is silence, so a decorator that forgets this
+    /// takes the log out with it — which is the failure `note` was added to
+    /// end. `nonisolated` because the requirement is synchronous and
+    /// `underlying` is an immutable `Sendable` let; hopping the actor to
+    /// forward a string would make every log line an await for nothing.
+    nonisolated func note(_ line: String) {
+        underlying.note(line)
+    }
+
+    func openTasks() async throws -> [WatchedTask] {
+        if let tasks { return try tasks.get() }
+        let outcome: Result<[WatchedTask], Error>
+        do {
+            outcome = .success(try await underlying.openTasks())
+        } catch {
+            outcome = .failure(error)
+        }
+        tasks = outcome
+        return try outcome.get()
+    }
+}
+
 /// Runs one proactive check and prints what it *would* say.
 ///
 /// **The unit tests cover the rules; this covers the wiring.** Everything in
@@ -1810,7 +1925,33 @@ func runCalendar(_ arguments: [String]) -> Never {
 ///
 /// **Deliberately does not touch the real ledger.** Running this must not
 /// consume the news: whatever it finds is still new to the daemon afterwards.
+/// The node's own claim is the exception and cannot be avoided from here — see
+/// `OneReadProactiveSource` — so it is reduced to one and printed rather than
+/// hidden.
 func runCheck(_ arguments: [String]) -> Never {
+    // **Asking what this costs must not cost it.**
+    //
+    // `--help` was not a recognised flag, so it fell straight through into a
+    // full run: the only way to ask this command what it does was to do it,
+    // claim and all. Answered here, before the node is ever started.
+    if arguments.contains("--help") || arguments.contains("-h") {
+        print("""
+        usage: sage-voiced check [--sage PATH]
+
+        Runs one proactive check and prints what the daemon would say. The real
+        ledger is untouched, so whatever it finds is still new to the daemon
+        afterwards.
+
+        The one cost, which cannot be avoided from here: it calls sage_inbox
+        once, and sage_inbox has no passive mode. Every message it lists is
+        claimed for a session that ends with this command, and the receipt has
+        no expiry — so the daemon will not announce those again until you hand
+        them back with sage_message_handoff. To read the inbox without claiming
+        anything, use sage_message_history(folder: "inbox") instead of running
+        this.
+        """)
+        exit(0)
+    }
     let flags = parseFlags(arguments)
     let sagePath = flags["sage"]
         ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
@@ -1823,7 +1964,21 @@ func runCheck(_ arguments: [String]) -> Never {
             environment: MynahIdentity.applianceEnvironment()
         )
         defer { mcp.stop() }
-        let source = SageProactiveSource(tools: mcp)
+        // One read of each, shared by the summary below and the rehearsal at the
+        // bottom. See `OneReadProactiveSource`: the second inbox read used to
+        // contradict the first, because the first had claimed the message.
+        //
+        // **`log:` set, and not the silent default.** `ProactiveWatch` writes
+        // its own line about the read it took — the count and the "held by
+        // another session" clause beside it — through `ProactiveSource.note`,
+        // which on the daemon's path is `bridge.log`. Left unset here, the
+        // wrapper could forward `note` perfectly and the line would still land
+        // in a closure that discards it, so this command would show none of the
+        // machinery it exists to diagnose. Printed verbatim, so what appears on
+        // screen is the line the daemon would have written.
+        let source = OneReadProactiveSource(
+            SageProactiveSource(tools: mcp, log: { print($0) })
+        )
 
         // What it can see at all — and **why not**, when it cannot.
         //
@@ -1836,11 +1991,79 @@ func runCheck(_ arguments: [String]) -> Never {
         // diagnostic.
         var reachable = true
         do {
-            let waiting = try await source.waitingMessages(limit: 20)
-            print("inbox: \(waiting.count) waiting")
-            for item in waiting {
+            let read = try await source.waitingInbox(limit: 20)
+            // **The clause, on the same line as the count.**
+            //
+            // "inbox: 0 waiting" was true on 17 August and useless: a real
+            // message was there, held under another session's claim, so the
+            // number this appliance could act on was honestly zero and read
+            // exactly like a quiet day. The node reports the other half in
+            // `claimed_elsewhere_count`; this is where the diagnostic says it.
+            //
+            // `forLog` is nil for a node that never mentions the field, so an
+            // older node prints precisely what it printed before. An absent
+            // clause is "this node does not say", never zero.
+            print("inbox: \(read.items.count) waiting"
+                + (read.claimedElsewhere.forLog.map { "; \($0)" } ?? ""))
+            for item in read.items {
                 print("  - from \(item.content.sender)\(item.intent.map { " (\($0))" } ?? "")")
             }
+            // **A count with no next action is the dead end this project keeps
+            // removing**, and this one has a door: the rows can be read without
+            // claiming, and the claim itself ends when the session holding it
+            // finishes or when somebody hands it over on purpose.
+            //
+            // Which of those two is his situation is a separate question, and
+            // the note now says how to tell rather than leading with the door
+            // that is shut. A session still working the message will release
+            // it; a session that has already exited — a `check` run three lines
+            // from its own exit, which is how the thirteen rows on this
+            // appliance were made — never will, and the receipt has no expiry
+            // to settle it either way. SAGE's own guidance is to compare
+            // `claimant_session_id` in `sage_message_history` before judging a
+            // claimant dead, so that comparison is the first thing named. A
+            // "wait and it clears" that can never come true is a wall painted
+            // to look like a door.
+            //
+            // Mynah is not that somebody. SAGE's guidance for taking work
+            // another session holds is to judge the prior claimant dead first,
+            // and this appliance has no basis for that judgement — so it says
+            // what it found, names who can act, and stops.
+            //
+            // Only for a count the node actually gave: `.notReported` and a
+            // failed probe both already read on the line above, and neither is
+            // grounds for telling anybody to go and look at a claim.
+            if case .exactly(let held) = read.claimedElsewhere, held > 0 {
+                print("  note: \(held) message(s) held by another session under this same "
+                    + "agent identity — this appliance cannot take them, so it will not "
+                    + "announce them and will not break the claim. Read them without "
+                    + "claiming with sage_message_history(folder: \"inbox\") and compare "
+                    + "their claimant_session_id: a session still working will finish and "
+                    + "release the claim, but one that has already exited never will — the "
+                    + "receipt has no expiry — and only a sage_message_handoff you run "
+                    + "yourself frees those.")
+            }
+            // **The command's own side effect, said out loud — with its door.**
+            //
+            // There is no passive `sage_inbox`: the read above claimed whatever
+            // it listed, under a session that dies when this process does, and
+            // the daemon then sees those rows as held elsewhere. A support tool
+            // that quietly eats the thing it is diagnosing is the worst of the
+            // lot, so the cost and the alternative both go on screen.
+            //
+            // "may not" was a hedge over a certainty. The claiming session ends
+            // with this command, so it can never complete the work, and the
+            // receipt has no expiry: absent a handoff the daemon will never see
+            // those rows again. And the note above — the one that hands him
+            // `sage_message_handoff` — is gated on *another* session's count,
+            // which is zero in exactly the run that just claimed something. So
+            // the recovery is named here too, rather than only where it does
+            // not apply.
+            print("  note: reading the inbox claims what it lists, under a session that ends with "
+                + "this command, and the receipt has no expiry — so the daemon will not "
+                + "announce anything claimed here again until you hand it back with "
+                + "sage_message_handoff. sage_message_history(folder: \"inbox\") reads "
+                + "without claiming, and reopens what this run took.")
         } catch {
             reachable = false
             print("inbox: could not ask — \(error)")

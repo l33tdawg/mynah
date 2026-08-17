@@ -22,16 +22,75 @@ public struct SageProactiveSource: ProactiveSource {
         case unreadableBacklog(String)
     }
 
+    /// `ProactiveWatch`'s lines about a check that used this source, into the
+    /// same sink as the two below.
+    ///
+    /// **This one method is what makes the watch's logging real rather than
+    /// declared.** The daemon already builds this type with `log: { note($0) }`
+    /// (`sage-voiced/main.swift`), so implementing the protocol's `note` here
+    /// puts "inbox: 3 waiting" and "inbox: could not read — …" into
+    /// `bridge.log` without a line changing in the daemon. The default
+    /// implementation on `ProactiveSource` is silence, which is right for a
+    /// stub and would have been a fix that shipped doing nothing had it been
+    /// left in place here.
+    public func note(_ line: String) {
+        log(line)
+    }
+
     /// The inbox, with the same nil-versus-empty rule as `openTasks`.
     ///
-    /// Only the unreadable case is logged here. A node that is simply down
-    /// already says so through `MCPClient`, and repeating it would put two lines
-    /// in the owner's log for one event — but a node that *answers* with
-    /// something else leaves no trace anywhere else, which is precisely how the
-    /// backlog version of this went unexplained for a day.
+    /// Items only, for the callers that want nothing else. Same single read as
+    /// `waitingInbox`, and the reasoning for both is on `read(limit:)`.
     public func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
+        try await read(limit: limit).items
+    }
+
+    /// The same read, with the scalar the node reports beside the items.
+    ///
+    /// **Implemented here rather than left to the protocol's default, because
+    /// the default is what a fix that ships inert looks like.** It answers
+    /// `.notReported`, which is honest for a stub and false for this type: the
+    /// node does report it, `SageAgentMessaging.inboxRead` does parse it, and
+    /// this is the one source the daemon actually runs — `SageProactiveSource(
+    /// tools: mcp, log: { note($0) })` in `sage-voiced/main.swift`. Without
+    /// this override the whole chain would compile, log "0 waiting" forever,
+    /// and reproduce 17 August exactly.
+    public func waitingInbox(limit: Int) async throws -> AgentInboxRead {
+        try await read(limit: limit)
+    }
+
+    /// One `sage_inbox` call, shared by both of the above.
+    ///
+    /// **Not `waitingMessages` calling `waitingInbox` or the reverse.** The
+    /// protocol's default implements `waitingInbox` *in terms of*
+    /// `waitingMessages`, so a delegation in that direction here would become
+    /// unbounded recursion the day somebody deletes the override — a crash the
+    /// compiler cannot see. A private third method makes that shape
+    /// impossible.
+    ///
+    /// **And it must stay one call.** `sage_inbox` atomically claims the rows
+    /// it returns under the caller's session, with no expiry, so reading twice
+    /// to fill in two return types would strand the second read's answer under
+    /// a claim — the defect this same patch removes from `sage-voiced check`.
+    ///
+    /// Only the unreadable case is logged *here*, and the reason has changed.
+    /// It used to be that "a node that is simply down already says so through
+    /// `MCPClient`" — which was never true of this path. `MCPClient` throws a
+    /// `MCPClientError` and logs nothing; the throw came through here, `try?`
+    /// in `ProactiveWatch` dropped it, and 17 August's `bridge.log` has the
+    /// proof: 105 checks, zero inbox lines of any kind.
+    ///
+    /// Every failure is logged now — by `ProactiveWatch.check`, one layer up,
+    /// where the decision to stay quiet is actually taken and where *every*
+    /// error passes rather than the one case this method can name. So this line
+    /// stays what it always was and does not become a catch-all: the reply the
+    /// node actually sent, which is the detail the outer line cannot carry and
+    /// which nothing else records. The two together read as cause then
+    /// consequence for this one case; every other failure gets the outer line
+    /// alone, where before it got nothing.
+    private func read(limit: Int) async throws -> AgentInboxRead {
         do {
-            return try await SageAgentMessaging(tools: tools).inbox(limit: limit)
+            return try await SageAgentMessaging(tools: tools).inboxRead(limit: limit)
         } catch AgentMessagingTrouble.unreadableInbox(let reply) {
             log("[watch] sage_inbox answered with something that is not an inbox, so this "
                 + "check changed nothing: \(Self.head(of: reply))")
