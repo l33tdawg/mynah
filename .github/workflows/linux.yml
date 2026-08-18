@@ -118,19 +118,31 @@ jobs:
           # executed one, so a floor on the executed count alone is satisfied by
           # a run in which everything skipped.
           #
-          # This is deliberately NOT the build Mac's 24 for the same reason,
-          # arrived at from the other side. The Linux container runs as root,
-          # and the settings failure-path tests skip under root because a root
-          # process can write a file whose permissions say it may not — so those
-          # skip here and run there.
+          # The Linux container runs as root, and that used to cost this run
+          # exactly one test — counted off the run's own skipped.txt rather than
+          # assumed, because the number was carried as "two" for a while and the
+          # artefact says otherwise:
+          # SettingsWithoutTheMacTests/testAResumeThatCannotClearTheFlagSaysSoRatherThanClaimingSuccess.
+          # It staged its failure by taking write permission off a directory,
+          # which a root process walks straight past, so it skipped here and ran
+          # only on the build Mac — a test that could not redden in the one
+          # environment that runs it.
+          #
+          # It now goes through ImpossibleRemoval.staged(in:), which gives the
+          # bypass up — CAP_DAC_OVERRIDE and its two neighbours on Linux,
+          # per-file immutability on Darwin — and, rather than trusting that,
+          # proves the staging with a decoy file and throws a named error if the
+          # decoy still comes away. So it cannot quietly go back to passing for
+          # the wrong reason.
           #
           # **Measured, and corrected down from 40.** 40 was set before this
           # workflow had ever run, against no measurement at all. Two
           # independent healthy runs on 18 Aug 2026 — CI on native x86-64 and
-          # Docker on the build Mac's arm64 — both skipped exactly 18, so 40 was
-          # 22 tests of slack: a fifth of the suite could have gone quiet under
-          # it without a word. 24 keeps six of room, which is the same margin
-          # the Mac's ceiling holds over its own healthy 21.
+          # Docker on the build Mac's arm64 — both skipped exactly 18, and the
+          # root fix above takes that to 17. 40 was therefore 23 tests of slack:
+          # a fifth of the suite could have gone quiet under it without a word.
+          # 24 keeps seven of room, close to the margin the Mac's ceiling holds
+          # over its own healthy 21.
           #
           # If a run exceeds it, find out which tests stopped running before
           # raising it:

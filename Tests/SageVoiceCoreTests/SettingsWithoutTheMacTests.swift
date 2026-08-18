@@ -1,15 +1,6 @@
 import XCTest
 @testable import SageVoiceCore
 
-// `getuid()` is libc, and nothing re-exports it off Darwin.
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Musl)
-import Musl
-#endif
-
 /// The settings a Linux owner cannot reach.
 ///
 /// Every writer of `ProactivePreferences` in the shipped product was a Mac
@@ -305,28 +296,28 @@ final class SettingsWithoutTheMacTests: XCTestCase {
     /// was told nothing, so a tool would print "answering again" while the
     /// daemon went on reading a flag that was still there and staying silent.
     ///
-    /// The removal is made to fail by taking write permission off the directory
-    /// the flag sits in — a stand-in for the real case, a state directory the
-    /// owner cannot write. Two other tricks were tried and do not work:
-    /// `removeItem` deletes a non-empty directory recursively rather than
-    /// refusing, and a symlink is removed as itself.
+    /// **This test used to skip under root, and root is the only user the Linux
+    /// container has** — .github/workflows/linux.yml runs the suite in
+    /// `swift:6.0.3-jammy`, where every process is uid 0. So the failure branch
+    /// of the only pause control an off-Darwin owner has had never once
+    /// executed off Darwin, while the ceiling on skips counted it as covered: a
+    /// control believed proven whose failing half had never run anywhere but a
+    /// Mac, which is the exact shape of the defect this file exists to catch.
+    /// `ImpossibleRemoval.staged(in:)` gives the root bypass up for the
+    /// duration instead of giving the test up, and proves the removal really
+    /// does fail before this test asserts anything; see that file for why that
+    /// is not a trick, and for the tricks that do not work.
     func testAResumeThatCannotClearTheFlagSaysSoRatherThanClaimingSuccess() throws {
-        try XCTSkipIf(
-            getuid() == 0,
-            "root ignores the directory mode this uses to make the removal fail"
-        )
         let holder = root.appendingPathComponent("read-only", isDirectory: true)
         try FileManager.default.createDirectory(at: holder, withIntermediateDirectories: true)
         let marker = holder.appendingPathComponent("paused", isDirectory: false)
+        // Written before the staging, not after: on Darwin the bypass is given
+        // up by making the entries that exist at that moment immutable, so a
+        // flag created afterwards would be the one file still deletable and
+        // this test would pass having removed something nothing protected.
         try Data().write(to: marker)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o500], ofItemAtPath: holder.path
-        )
-        defer {
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: holder.path
-            )
-        }
+        let putItBack = try ImpossibleRemoval.staged(in: holder)
+        defer { putItBack() }
         let pause = PauseState(fileURL: marker)
 
         XCTAssertTrue(pause.isPaused())

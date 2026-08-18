@@ -1,16 +1,6 @@
 import XCTest
 @testable import SageVoiceCore
 
-// `geteuid()`, `chflags()` and `dlsym()` are libc, and nothing re-exports them
-// off Darwin.
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Musl)
-import Musl
-#endif
-
 /// `sage-voiced settings`, which is the whole of the appliance's controls on a
 /// machine with no Mac app.
 ///
@@ -291,14 +281,17 @@ final class SettingsFromAShellTests: XCTestCase {
     /// **This test used to skip under root**, and root is the only user the
     /// Linux container has, so on the one Linux this port is tested on the
     /// failure path of the only pause control an off-Darwin owner has was never
-    /// run. `removalsMadeImpossible(in:)` gives the bypass up instead of
-    /// skipping; see it for why that is not a trick.
+    /// run. `ImpossibleRemoval.staged(in:)` gives the bypass up instead of
+    /// skipping; see it for why that is not a trick — and note that
+    /// `SettingsWithoutTheMacTests` now stages the same failure the same way
+    /// over `PauseState` directly, which is why that mechanism is no longer a
+    /// private method of this suite.
     func testAResumeThatCannotClearTheFlagSaysTheApplianceIsStillPaused() throws {
         let holder = root.appendingPathComponent("read-only", isDirectory: true)
         try FileManager.default.createDirectory(at: holder, withIntermediateDirectories: true)
         let marker = holder.appendingPathComponent("paused", isDirectory: false)
         try Data().write(to: marker)
-        let putItBack = try removalsMadeImpossible(in: holder)
+        let putItBack = try ImpossibleRemoval.staged(in: holder)
         defer { putItBack() }
 
         let outcome = HeadlessSettings.run(
@@ -530,115 +523,6 @@ final class SettingsFromAShellTests: XCTestCase {
         }
     }
 
-    // MARK: - Staging a removal that cannot happen
-
-    /// Everything in `holder` made impossible for **this process** to remove,
-    /// and the undo.
-    ///
-    /// Taking write permission off the directory is the real case — a state
-    /// directory the owner cannot write — and for the user this suite normally
-    /// runs as, the mode is the whole mechanism.
-    ///
-    /// **Root ignores the mode, and root is the only user the Linux container
-    /// has.** Skipping there meant the resume-that-cannot-clear-the-flag path
-    /// was unrun on the only Linux this port is tested on: a control believed
-    /// covered, whose failure branch had never once executed off Darwin, which
-    /// is the exact shape of the defect the rest of this file exists to catch.
-    /// So when this is root the *bypass* is given up for the duration rather
-    /// than the test — the capability on Linux, per-file immutability on Darwin
-    /// — and the same directory mode then does the same work it does for an
-    /// owner. The product sees an ordinary refusal from the filesystem either
-    /// way; nothing about `PauseState` or `HeadlessSettings` is faked.
-    ///
-    /// Proved on a decoy before the caller asserts anything, because a
-    /// mechanism that silently failed to take would leave the removal
-    /// succeeding — and a test that passed anyway would be reporting a control
-    /// it never exercised, which is the thing being tested for.
-    private func removalsMadeImpossible(in holder: URL) throws -> () -> Void {
-        let manager = FileManager.default
-        // Not the flag the caller is about to assert on: proving the mechanism
-        // must not be the thing that consumes it.
-        let decoy = holder.appendingPathComponent("decoy", isDirectory: false)
-        try Data().write(to: decoy)
-
-        var undo: [() -> Void] = []
-        func putItBack() { for step in undo.reversed() { step() } }
-
-        if geteuid() == 0 {
-            guard let restored = Self.releaseTheRootBypass(over: holder) else {
-                putItBack()
-                throw CannotStageAFailedRemoval(holder: holder.path)
-            }
-            undo.append(restored)
-        }
-        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: holder.path)
-        undo.append {
-            try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: holder.path)
-        }
-
-        let cameAwayAnyway: Bool
-        do {
-            try manager.removeItem(at: decoy)
-            cameAwayAnyway = true
-        } catch {
-            cameAwayAnyway = false
-        }
-        guard !cameAwayAnyway else {
-            putItBack()
-            throw CannotStageAFailedRemoval(holder: holder.path)
-        }
-        return putItBack
-    }
-
-    /// The one part of being root this needs taken away: the right to ignore a
-    /// directory's mode. `nil` when the system offers no way to give it up, and
-    /// the caller then fails loudly rather than passing on an unstaged test.
-    private static func releaseTheRootBypass(over holder: URL) -> (() -> Void)? {
-        #if canImport(Darwin)
-        // Darwin has no capability model, so the files are made immutable
-        // instead: `unlink` refuses an immutable file for uid 0 as well — root
-        // has to clear the flag first, which is precisely the step a `resume`
-        // does not take.
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: holder, includingPropertiesForKeys: nil
-        ) else { return nil }
-        for entry in entries {
-            _ = entry.withUnsafeFileSystemRepresentation { chflags($0, UInt32(UF_IMMUTABLE)) }
-        }
-        return {
-            for entry in entries {
-                _ = entry.withUnsafeFileSystemRepresentation { chflags($0, 0) }
-            }
-        }
-        #elseif canImport(Glibc) || canImport(Musl)
-        return LinuxCapabilities.withoutTheRightToIgnoreADirectoryMode()
-        #else
-        return nil
-        #endif
-    }
-
-    /// A dead end with a door on it: what could not be staged, and what to do
-    /// about it. `LocalizedError` as well, because XCTest reports a thrown
-    /// error through `localizedDescription`, which for a bare `Error` off
-    /// Darwin is a sentence with none of this in it.
-    private struct CannotStageAFailedRemoval: Error, LocalizedError, CustomStringConvertible {
-        let holder: String
-
-        var description: String {
-            """
-            this process can still delete files inside \(holder) with write \
-            permission taken off it, so the resume-that-cannot-clear-the-flag \
-            this test is about cannot be staged here — and the test will not \
-            skip, because that failure path is the only thing standing between \
-            an owner and an appliance that says it is answering while the flag \
-            is still on disk.
-            Run the suite as a non-root user, or on a Linux where \
-            CAP_DAC_OVERRIDE can be dropped from this thread.
-            """
-        }
-
-        var errorDescription: String? { description }
-    }
 
     // MARK: - Reading the daemon
 
@@ -670,62 +554,3 @@ final class SettingsFromAShellTests: XCTestCase {
     }
 }
 
-#if canImport(Glibc) || canImport(Musl)
-/// `capget`/`capset`, by symbol rather than by header.
-///
-/// The declarations live in `<sys/capability.h>`, which belongs to libcap and
-/// is not something the Glibc module exposes; the two symbols themselves are in
-/// libc, and the structures are kernel ABI pinned by the version word. Reached
-/// through `dlsym` so that a system without them is a `nil` the caller reports,
-/// not a link error that stops this file compiling.
-private enum LinuxCapabilities {
-
-    private struct Header {
-        /// `_LINUX_CAPABILITY_VERSION_3`, which is the 64-bit-capability layout
-        /// and the reason `Words` is asked for in twos.
-        var version: UInt32 = 0x2008_0522
-        /// Zero means this thread.
-        var pid: Int32 = 0
-    }
-
-    private struct Words {
-        var effective: UInt32 = 0
-        var permitted: UInt32 = 0
-        var inheritable: UInt32 = 0
-    }
-
-    private typealias Call =
-        @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
-
-    /// `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH` and `CAP_FOWNER` — the three
-    /// that let uid 0 walk past a mode that would stop an owner — dropped from
-    /// the effective set, and the undo.
-    ///
-    /// They stay in the *permitted* set, so raising them again always works.
-    /// Capabilities are per-thread on Linux, so this touches only the thread
-    /// the test is running on: no `SIGSETXID` broadcast, nothing for another
-    /// thread to answer, and nothing a wedged one could hold up.
-    static func withoutTheRightToIgnoreADirectoryMode() -> (() -> Void)? {
-        guard let image = dlopen(nil, RTLD_NOW),
-            let read = dlsym(image, "capget").map({ unsafeBitCast($0, to: Call.self) }),
-            let write = dlsym(image, "capset").map({ unsafeBitCast($0, to: Call.self) })
-        else { return nil }
-
-        var header = Header()
-        var held = [Words](repeating: Words(), count: 2)
-        guard read(&header, &held) == 0 else { return nil }
-
-        let toRestore = held
-        let bypass: UInt32 = (1 << 1) | (1 << 2) | (1 << 3)
-        var reduced = held
-        reduced[0].effective &= ~bypass
-        guard write(&header, &reduced) == 0 else { return nil }
-
-        return {
-            var header = Header()
-            var restored = toRestore
-            _ = write(&header, &restored)
-        }
-    }
-}
-#endif
