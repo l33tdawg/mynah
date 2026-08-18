@@ -898,7 +898,25 @@ public final class ToolLoop: @unchecked Sendable {
         guard !configuration.allowedToolNames.isEmpty else {
             return tools
         }
-        let filtered = tools.filter { configuration.allowedToolNames.contains($0.name) }
+        // **Widened here, because here is the only place that knows the
+        // brain.** `Configuration` is built by `loopConfiguration(for:)` and by
+        // the window, neither of which is handed a backend, and there are four
+        // `ToolLoop` construction sites across the daemon, the one-shot path,
+        // the window and the call. Curating at each of them is how three copies
+        // of the catalogue drifted apart once already; this loop holds the
+        // backend, so the tier is known once, at the one point every surface
+        // passes through.
+        //
+        // The union cannot widen anything the node does not publish — the
+        // filter below intersects with `tools` — and it cannot widen the local
+        // catalogue at all, which is the half that was measured. See
+        // `BrainPrompts.sageToolsAHostedBrainAlsoGets` for what is added and
+        // for the two candidates that were refused.
+        let allowed = configuration.allowedToolNames
+            .union(BrainPrompts.sageToolsAHostedBrainAlsoGets.filter { _ in
+                backend.brain.tier == .hosted
+            })
+        let filtered = tools.filter { allowed.contains($0.name) }
         guard filtered.isEmpty else {
             return filtered
         }
@@ -914,7 +932,10 @@ public final class ToolLoop: @unchecked Sendable {
         // sage_register and the governance tools, driven by an ASR transcript
         // that may contain mishearings.
         throw ToolLoopError.toolAllowlistMatchedNothing(
-            expected: configuration.allowedToolNames.sorted(),
+            // The widened set, not the configured one: reporting names that
+            // were never looked for would send the reader after the wrong
+            // difference.
+            expected: allowed.sorted(),
             published: tools.map(\.name).sorted()
         )
     }

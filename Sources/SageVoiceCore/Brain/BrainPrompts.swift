@@ -411,13 +411,27 @@ public enum BrainPrompts {
         // the model already has from the inbox, so an adapter would be a
         // passthrough with a typed wrapper around nothing.
         //
-        // Two other tools stay out and stay reachable programmatically:
-        // `sage_message_status` answers "was this delivered" about an id the
-        // model does not hold, and `sage_messages_receive` duplicates
-        // `sage_inbox`.
-        // Same reasoning as `sage_pipe_result`, one comment down: a tool whose
-        // name answers the owner's question but whose behaviour does not is the
-        // trap, and two more of those is how a catalogue rots.
+        // `sage_messages_receive` stays out and stays reachable
+        // programmatically: it duplicates `sage_inbox`. Same reasoning as
+        // `sage_pipe_result`, one comment down — a tool whose name answers the
+        // owner's question but whose behaviour does not is the trap.
+        //
+        // **`sage_message_status` was excluded here for a reason that stopped
+        // being true three lines below, and 2.3.1 shipped with it.** The reason
+        // read: it "answers 'was this delivered' about an id the model does not
+        // hold". Correct when written. Then `sage_message_history` was added —
+        // see the comment under it, which is about the model NOT being able to
+        // read its own outbox — and history returns a `message_id` on every
+        // item. From that day the model held the ids and had nothing to spend
+        // them on.
+        //
+        // 18 Aug 2026: asked whether two messages had been read, Mynah replied
+        // "there is no sage_message_status tool on my side", listed both ids it
+        // had just read out of the outbox, and called them pending, because
+        // workflow state was the only state it could see.
+        //
+        // It stays out of THIS set, which is sized for the 4B, and is added for
+        // a hosted brain by `sageToolsAHostedBrainAlsoGets` below.
         "sage_message_send",
         "sage_message_reply",
         // The exception that proved the old "duplicates inbox" claim false:
@@ -488,6 +502,64 @@ public enum BrainPrompts {
         // published it — leaving this out was a silent no-op for web search.
         WebSearchToolSource.toolName
     ]).union(NotesToolSource.toolNames)
+
+    /// **What a hosted brain may also reach, and why it is not simply added
+    /// above.**
+    ///
+    /// The set above is one list applied to every brain, and it is sized for
+    /// the smallest one. That is not a neutral default: routing was measured at
+    /// 12/12 with 14 tools and 5-6/12 with 27 **on qwen3.5:4b**, and
+    /// `BrainCapabilities.hosted.maxRoutableTools` is 27 precisely because that
+    /// accuracy half was taken on local models only. So a frontier model was
+    /// being refused a tool on evidence gathered from a different brain — and
+    /// the owner met the consequence, told by a frontier model that the tool to
+    /// answer him did not exist.
+    ///
+    /// `sage_message_status` earns the slot on the same test every name above
+    /// had to pass. "Did they read it?" is a question the owner asked in those
+    /// words, and the schema answers exactly that and no more: *"payload-free
+    /// delivery, exact-recipient read confirmation, and workflow state for one
+    /// exact message sent by this caller"* — no presence, no last-seen, no
+    /// comprehension. It takes a `message_id`, which `sage_message_history` has
+    /// been handing the model since that tool was added.
+    ///
+    /// **Two more were considered and are deliberately still out**, because
+    /// having room is not a reason to spend it:
+    ///
+    /// - `sage_message_replies` pages the replies to messages Mynah sent, and
+    ///   `sage_message_history(folder: "outbox")` already returns them — its
+    ///   own schema calls it "the explicit sender-side pager behind
+    ///   sage_inbox.reply_items". Two tools for one question is the condition
+    ///   the routing measurement punishes.
+    /// - `sage_message_handoff` takes over work another session has claimed,
+    ///   which SAGE's own guidance says to do "only after judging the prior
+    ///   claimant session dead or stale" — a judgement about a foreign
+    ///   process's liveness that a language model cannot make. Same family as
+    ///   `sage_rename` and `sage_register`.
+    ///
+    /// **Not added to the system prompt, deliberately.** One prompt serves both
+    /// tiers, and a prompt that names a tool the local brain does not have is
+    /// the defect `PromptNamesOnlyRealToolsTests` exists to catch. A hosted
+    /// model finds this in its catalogue, which is where it should find it.
+    public static let sageToolsAHostedBrainAlsoGets: Set<String> = [
+        "sage_message_status"
+    ]
+
+    /// The tools one brain may reach.
+    ///
+    /// A function rather than a second constant so that adding a name forces
+    /// the author to answer "which tier?" — the question a single global set
+    /// never asked, which is how a frontier brain ended up sized for a 4B.
+    public static func voiceToolAllowlist(for tier: BrainTier) -> Set<String> {
+        switch tier {
+        case .onDevice:
+            // Measured, at the ceiling `BrainTierTests` ratchets against, and
+            // not to be grown without re-running scripts/measure-tool-routing.py.
+            return voiceToolAllowlist
+        case .hosted:
+            return voiceToolAllowlist.union(sageToolsAHostedBrainAlsoGets)
+        }
+    }
 
     /// **What a call may reach, which is not what a Signal message may reach.**
     ///

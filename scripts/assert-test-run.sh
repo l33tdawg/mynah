@@ -604,9 +604,21 @@ Worth checking in this order:
      KokoroEngine and KokoroEngineTests targets exist by looking for
      vendor/onnxruntime/lib/libonnxruntime.dylib as it is read, so an absent
      dylib removes 38 tests from the graph rather than failing anything. Run
-     scripts/provision-onnxruntime.sh, then delete .build — SwiftPM caches the
-     evaluated manifest and will otherwise keep serving the graph it already
-     decided on.
+     scripts/provision-onnxruntime.sh, then clear BOTH caches, in this order:
+
+       rm -rf ~/.swiftpm/cache/manifests ~/Library/Caches/org.swift.swiftpm/manifests
+       rm -rf .build
+
+     **Deleting .build alone is not enough, and this line used to say it was.**
+     SwiftPM caches the evaluated manifest OUTSIDE the package, in the two
+     directories above, so a build after the dylib is restored keeps serving the
+     graph it decided on while the dylib was missing. Measured on 19 Aug 2026:
+     dylib restored and .build deleted still enumerated 2463 ids; clearing the
+     manifest caches as well gave 2501. Clearing the manifest caches without
+     also deleting .build is equally not enough — the configured build keeps its
+     own copy of the product graph. `swift package --manifest-cache none
+     dump-package` tells you what the manifest says today without touching
+     either.
   3. tests really were deleted on purpose, in which case lower
      MYNAH_MIN_EXECUTED_TESTS in the same commit that deleted them, so the new
      floor is reviewed alongside the removal."
