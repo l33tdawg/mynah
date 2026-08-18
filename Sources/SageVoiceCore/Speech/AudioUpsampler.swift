@@ -36,7 +36,7 @@ import Foundation
 ///
 /// ## Off Darwin
 ///
-/// Accelerate is Apple's, so on Linux and Windows the four `vDSP` calls below
+/// Accelerate is Apple's, so on Linux the four `vDSP` calls below
 /// come from `ScalarDSP` instead. The kernel, the padding, the group-delay
 /// trim and the clip-then-scale order are all shared — only the inner
 /// arithmetic changes, and it changes to something that sums in `Double` and

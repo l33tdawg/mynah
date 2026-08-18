@@ -43,12 +43,6 @@ public enum LocalASRAvailability: Equatable, Sendable {
                 + "transcribed by the fallback engine. It is a release asset staged by "
                 + "scripts/provision-asr-assets.sh before the app is signed — reinstall Mynah "
                 + "from a release build. Looked in: \(Self.list(searched))."
-            #elseif os(Windows)
-            return "No whisper.cpp program was found, so voice notes cannot be turned into "
-                + "text. Install whisper.cpp — the program is whisper-cli.exe — and add the "
-                + "folder holding it to Path under System Properties → Environment "
-                + "Variables, or set SAGE_VOICE_WHISPER_CLI to the .exe itself. "
-                + "Looked in: \(Self.list(searched))."
             #else
             return "No whisper.cpp program was found, so voice notes cannot be turned into "
                 + "text. Install whisper.cpp — its program is called whisper-cli, or "
@@ -199,11 +193,10 @@ public struct LocalASRDiscovery: @unchecked Sendable {
     /// The macOS list is unchanged, so the Mac still resolves exactly what it
     /// resolved before.
     ///
-    /// These are the names the *owner* knows the program by. What a file has to
-    /// be called for the platform to run it — the `.exe` on Windows — is added
-    /// by `PlatformExecutable.executableNameCandidates` at each point of use,
-    /// so this list stays a statement about whisper.cpp rather than about
-    /// filesystems.
+    /// These are the names the *owner* knows the program by.
+    /// `PlatformExecutable.executableNameCandidates` turns each of them into the
+    /// filenames worth trying, at each point of use, so this list stays a
+    /// statement about whisper.cpp rather than about filesystems.
     private var executableNamesOnPath: [String] {
         #if os(macOS)
         return ["whisper-cli", "main", "whisper"]
@@ -214,8 +207,7 @@ public struct LocalASRDiscovery: @unchecked Sendable {
 
     private func pathFromEnvironment(_ name: String) -> String? {
         let environment = ProcessInfo.processInfo.environment
-        // Hoisted: the spelling of a name does not change between directories,
-        // and on Windows working it out means parsing `PATHEXT`.
+        // Hoisted: the spelling of a name does not change between directories.
         let names = PlatformExecutable.executableNameCandidates(for: name, in: environment)
         for path in PlatformExecutable.searchPathDirectories(in: environment) {
             let directory = URL(fileURLWithPath: path)
@@ -312,18 +304,14 @@ public struct LocalASRDiscovery: @unchecked Sendable {
     private func executableCandidates() -> [URL] {
         var paths: [String] = []
 
-        #if !os(Windows)
-        // Homebrew and `/usr/local` are UNIX conventions. On Windows they
-        // resolve against the current drive as `C:\opt\homebrew\bin\...`, which
-        // has never existed on any machine — and reading them back to the owner
-        // in "Looked in:" is noise dressed up as diligence.
+        // Homebrew and `/usr/local`: where a copy the owner installed lands, as
+        // opposed to the source builds gathered below.
         paths += [
             "/opt/homebrew/bin/whisper-cli",
             "/opt/homebrew/bin/whisper",
             "/usr/local/bin/whisper-cli",
             "/usr/local/bin/whisper"
         ]
-        #endif
 
         paths += [
             joined(homeDirectory, "whisper.cpp", "build", "bin", "whisper-cli").path,
@@ -337,18 +325,6 @@ public struct LocalASRDiscovery: @unchecked Sendable {
         paths += portableExecutableCandidatePaths()
         #endif
 
-        #if os(Windows)
-        // Windows will not run an extension-less file, so a fixed candidate
-        // path means nothing without its suffix on.
-        //
-        // `.exe` alone rather than the whole of `PATHEXT`: whisper.cpp builds a
-        // program, and multiplying every fixed candidate by four would
-        // quadruple the "Looked in:" list the owner has to read for a spelling
-        // that has never existed. The `PATH` search is the one that honours
-        // `PATHEXT` in full, because a `.cmd` shim is a thing that turns up
-        // there and nowhere else.
-        paths = paths.map { $0 + ".exe" }
-        #endif
 
         return paths.map(URL.init(fileURLWithPath:))
     }
@@ -417,9 +393,9 @@ public struct LocalASRDiscovery: @unchecked Sendable {
             return url
         }
         for name in executableNamesOnPath {
-            // The suffix matters here for the same reason it matters on `PATH`:
-            // somebody who points this at their build directory has named a
-            // folder holding `whisper-cli.exe`, not `whisper-cli`.
+            // Expanded through the same candidate-name step as the `PATH`
+            // search, so pointing this at a directory and finding the program
+            // on `PATH` cannot disagree about what the file is called.
             for candidateName in PlatformExecutable.executableNameCandidates(for: name, in: environment) {
                 let inside = url.appendingPathComponent(candidateName)
                 if isExecutable(inside) {
@@ -458,9 +434,7 @@ public struct LocalASRDiscovery: @unchecked Sendable {
         paths.append(joined(rootDirectory, "vendor", "asr", "bin", "whisper-cpp").path)
 
         // Anything Mynah itself staged, under `$XDG_DATA_HOME` — the same
-        // directory `MemoryStore` keeps its key in off Darwin. On Windows the
-        // same corelibs mapping lands it under the user's AppData, which is why
-        // this arm carries the platform without being told about it.
+        // directory `MemoryStore` keeps its key in off Darwin.
         if let support = applicationSupportDirectory() {
             let bin = support.appendingPathComponent("bin", isDirectory: true)
             paths += ["whisper-cli", "whisper-cpp", "whisper"].map {
@@ -468,13 +442,6 @@ public struct LocalASRDiscovery: @unchecked Sendable {
             }
         }
 
-        #if os(Windows)
-        // A source build in the owner's home directory is the one entry below
-        // that means anything on Windows. Everything around it is XDG or FHS:
-        // conventions of a filesystem Windows does not have, absent here rather
-        // than dressed up as somewhere anybody would have looked.
-        paths.append(joined(homeDirectory, "whisper.cpp", "build", "bin", "whisper-cpp").path)
-        #else
         // Order is preference, and this is the order Linux has shipped: the
         // packaged copies the owner installed before the source build they
         // forgot about.
@@ -489,7 +456,6 @@ public struct LocalASRDiscovery: @unchecked Sendable {
             "/opt/whisper.cpp/build/bin/whisper-cli",
             "/opt/whisper.cpp/whisper-cli"
         ]
-        #endif
         return paths
     }
 
@@ -500,14 +466,6 @@ public struct LocalASRDiscovery: @unchecked Sendable {
         if let support = applicationSupportDirectory() {
             directories.append(support.appendingPathComponent("Models", isDirectory: true))
         }
-        #if os(Windows)
-        // A model is a file the owner downloaded, so the two places worth
-        // looking are the one Mynah stages into (above) and the source tree
-        // beside a build. `/usr/share` and friends are not empty on Windows —
-        // they are meaningless, and listing them in "Looked in:" would send
-        // somebody hunting for a directory their machine cannot have.
-        directories.append(joinedDirectory(homeDirectory, "whisper.cpp", "models"))
-        #else
         directories += [
             joinedDirectory(homeDirectory, ".local", "share", "whisper.cpp", "models"),
             joinedDirectory(homeDirectory, ".local", "share", "whisper.cpp"),
@@ -516,7 +474,6 @@ public struct LocalASRDiscovery: @unchecked Sendable {
             URL(fileURLWithPath: "/usr/share/whisper.cpp", isDirectory: true),
             URL(fileURLWithPath: "/opt/whisper.cpp/models", isDirectory: true)
         ]
-        #endif
         return directories
     }
 
@@ -562,11 +519,7 @@ public struct LocalASRDiscovery: @unchecked Sendable {
         var searched = executableCandidates().map(\.path)
         // Spelled the way the owner's own shell spells it, because this string
         // is read by somebody about to go and check.
-        #if os(Windows)
-        searched += executableNamesOnPath.map { "\($0).exe on %PATH%" }
-        #else
         searched += executableNamesOnPath.map { "\($0) on $PATH" }
-        #endif
         return searched
     }
 
@@ -595,8 +548,8 @@ public struct LocalASRDiscovery: @unchecked Sendable {
 /// WhisperKit is CoreML: an `.mlmodelc` encoder and decoder run through the
 /// Neural Engine, on Apple silicon, from a helper built with Apple's own
 /// toolchain. There is no port of it and there is not going to be one, so on
-/// Linux and Windows the cascade has exactly one rung — **whisper.cpp, which
-/// was already here as the fallback and is portable by construction.**
+/// Linux the cascade has exactly one rung — **whisper.cpp, which was already
+/// here as the fallback and is portable by construction.**
 ///
 /// That is a selection, not an accident, and the difference matters. The code
 /// used to append the WhisperKit rung unconditionally and let it fail its way

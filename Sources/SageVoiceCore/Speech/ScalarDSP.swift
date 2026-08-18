@@ -7,7 +7,7 @@ import Foundation
 /// `AudioUpsampler` and `SilenceTrim` are the only two files in the package that
 /// reach for `vDSP`, and between them they use exactly four calls: `vDSP_conv`,
 /// `vDSP_vclip`, `vDSP_vsmul`, `vDSP_vfix16` and `vDSP_measqv`. Accelerate is
-/// Apple-only, so on Linux and Windows those four calls are the whole of what
+/// Apple-only, so on Linux those four calls are the whole of what
 /// stands between the port and voice notes working. They are replaced here
 /// rather than in the call sites so the guarded region at each call site is one
 /// line and the arithmetic can be read — and checked — in one place.

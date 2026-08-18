@@ -35,8 +35,8 @@ public actor CallHost {
         #if !os(macOS)
         /// **Off-Darwin only, and it exists so the refusal has a name.**
         ///
-        /// `Package.swift` excludes `Sources/SageVoiceCore/Call/` on Linux and
-        /// Windows: the live voice call is a Mac feature and is not ported.
+        /// `Package.swift` excludes `Sources/SageVoiceCore/Call/` on Linux:
+        /// the live voice call is a Mac feature and is not ported.
         /// This type stays because `CallEnrolment` and the daemon read its
         /// paths and its readiness check, but `start()` there has no endpoint
         /// to run and no appliance socket to point one at. It says so rather

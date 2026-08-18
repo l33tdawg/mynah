@@ -492,8 +492,8 @@ public enum BrainPrompts {
     // **Everything below here is the phone call, and the phone call is a Mac.**
     //
     // `Package.swift` excludes `Sources/SageVoiceCore/Call/` off-Darwin, so
-    // there is no call surface on Linux or Windows and no
-    // `AfterTheCallToolSource` to name. Both members are guarded rather than
+    // there is no call surface on Linux and no `AfterTheCallToolSource` to
+    // name. Both members are guarded rather than
     // rewritten to drop the tool: a catalogue for a call that cannot happen and
     // a prompt that opens "YOU ARE ON A PHONE CALL" would each be a lie in
     // their own right, and the prompt's whole middle section instructs the

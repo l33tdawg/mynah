@@ -392,6 +392,10 @@ public struct AmbientAPIKeyReport: Sendable, Equatable, Codable {
 public enum HostPlatform: String, Sendable, Codable, CaseIterable {
     case darwin
     case linux
+    /// Nothing reports this any more — the Windows port was dropped. The case
+    /// stays because this is a `Codable` with a string raw value, and a support
+    /// bundle recorded while the port existed still says `"windows"`; removing
+    /// it would turn reading that bundle back into a decode failure.
     case windows
     case unknown
 
@@ -406,8 +410,6 @@ public enum HostPlatform: String, Sendable, Codable, CaseIterable {
         return .darwin
         #elseif os(Linux)
         return .linux
-        #elseif os(Windows)
-        return .windows
         #else
         return .unknown
         #endif

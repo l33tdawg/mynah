@@ -37,11 +37,6 @@ let onnxRuntimeRoot = packageRoot + "/vendor/onnxruntime"
 // downgrading to the system voice with nothing to indicate why.
 #if os(macOS)
 let onnxLibraryPath = onnxRuntimeRoot + "/lib/libonnxruntime.dylib"
-#elseif os(Windows)
-// The import library, not the DLL: `onnxruntime.lib` is what the linker needs
-// at build time. `onnxruntime.dll` still has to sit next to the executable at
-// run time — Windows has no rpath to point at `vendor/`.
-let onnxLibraryPath = onnxRuntimeRoot + "/lib/onnxruntime.lib"
 #else
 let onnxLibraryPath = onnxRuntimeRoot + "/lib/libonnxruntime.so"
 #endif
@@ -66,15 +61,6 @@ let onnxLinkerSettings: [LinkerSetting] = [
         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
     ])
 ]
-#elseif os(Windows)
-// No rpath concept at all on Windows; the loader searches the executable's own
-// directory, so placement is `package-app.sh`'s job rather than the linker's.
-let onnxLinkerSettings: [LinkerSetting] = [
-    .unsafeFlags([
-        "-L\(onnxRuntimeRoot)/lib",
-        "-lonnxruntime",
-    ])
-]
 #else
 let onnxLinkerSettings: [LinkerSetting] = [
     .unsafeFlags([
@@ -94,7 +80,7 @@ let onnxTargets: [Target] = hasOnnxRuntime ? [
     ),
 ] : []
 
-// **swift-crypto is a Linux/Windows dependency and is not declared on a Mac.**
+// **swift-crypto is a Linux dependency and is not declared on a Mac.**
 //
 // Off-Darwin there is no CryptoKit, so `Crypto` stands in for it — same API,
 // BoringSSL underneath. On a Mac the whole dependency is absent from the
@@ -119,7 +105,7 @@ if isDarwin {
         .product(
             name: "Crypto",
             package: "swift-crypto",
-            condition: .when(platforms: [.linux, .windows])
+            condition: .when(platforms: [.linux])
         )
     ]
 }
