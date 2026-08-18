@@ -1,21 +1,48 @@
 import XCTest
 @testable import SageVoiceCore
 
+/// A tool source that records what was called, and can hold a call *open*.
+///
+/// **Holding a call open is what distinguishes started from returned, and that
+/// distinction is the whole reason this can be tested at all.** `names` records
+/// the order calls START in, and the order two tasks start in belongs to the
+/// scheduler, not to this codebase: `boot()` fires the domain scan as an
+/// unstructured `Task` and then awaits inception, so on Darwin `sage_status` is
+/// recorded after inception and on Linux it is recorded before it. The first
+/// Linux CI run of the suite proved it — 1738 tests passed and this file's boot
+/// test failed with `["sage_register", "sage_status"]`, having asserted an
+/// ordering nothing in `boot()` promises.
+///
+/// What `boot()` does promise is that it never WAITS for the domain scan, and a
+/// call that has returned cannot be un-returned by a scheduler. So a test holds
+/// `sage_status` open and asks which calls had finished by the time boot came
+/// back. That question has one answer on every platform.
 private final class RecordingToolSource: ToolProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var calls: [(name: String, arguments: [String: JSONValue])] = []
+    private var completed: [String] = []
+    private var releasedTools: Set<String> = []
+    private let held: Set<String>
     private let failing: Set<String>
     private let replies: [String: String]
 
-    init(replies: [String: String] = [:], failing: Set<String> = []) {
+    init(replies: [String: String] = [:], failing: Set<String> = [], holding: Set<String> = []) {
         self.replies = replies
         self.failing = failing
+        self.held = holding
     }
 
     func listTools() async throws -> [MCPTool] { [] }
 
     func call(name: String, arguments: [String: JSONValue]) async throws -> String {
         record(name, arguments)
+        if held.contains(name) {
+            await waitUntil { self.withLock { self.releasedTools.contains(name) } }
+        }
+        // Recorded before the throw as well as before the return: a call that
+        // failed is a call the caller is no longer waiting on, which is the
+        // only property `completed` is asked about.
+        withLock { completed.append(name) }
         if failing.contains(name) {
             throw CompositeToolSource.Failure.unknownTool(name)
         }
@@ -24,6 +51,34 @@ private final class RecordingToolSource: ToolProviding, @unchecked Sendable {
 
     var recorded: [(name: String, arguments: [String: JSONValue])] { withLock { calls } }
     var names: [String] { recorded.map(\.name) }
+
+    /// The calls that have RETURNED, in the order they returned.
+    var completedNames: [String] { withLock { completed } }
+
+    /// Lets a held call return, and does not come back until it has.
+    ///
+    /// The wait matters: without it the held task outlives the test, and what
+    /// it outlives into is a `tearDown` that deletes the directory underneath
+    /// it.
+    func release(_ name: String) async {
+        withLock { _ = releasedTools.insert(name) }
+        await waitUntil { self.withLock { self.completed.contains(name) } }
+    }
+
+    /// Bounded, and the bound is the point.
+    ///
+    /// If `boot()` ever awaits the domain scan again, the call held here is the
+    /// one the whole boot is parked behind, and an unbounded wait would park
+    /// the process with it. `scripts/linux-test.sh` would then report the
+    /// regression as HUNG — the word it reserves for the corelibs run-loop bug
+    /// — and a real regression would be filed as a toolchain race. Five seconds
+    /// turns the same regression into a named assertion failure instead.
+    private func waitUntil(_ satisfied: @Sendable () -> Bool) async {
+        let deadline = Date().addingTimeInterval(5)
+        while !satisfied() && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+    }
 
     private func record(_ name: String, _ arguments: [String: JSONValue]) {
         withLock { calls.append((name, arguments)) }
@@ -59,6 +114,22 @@ final class SageRitualTests: XCTestCase {
     private func makeRitual(_ tools: ToolProviding) -> SageRitual {
         SageRitual(
             tools: tools,
+            // **The third default is not a file, and it was the loud one.**
+            //
+            // Left out, `readinessCheck` is `ApplianceWriteReadinessCheck()`,
+            // which resolves the SAGE node on this Mac and starts `sage-gui
+            // mcp` under `MynahIdentity.applianceEnvironment()`: a second
+            // process signing as the appliance's own key, spawned by the test
+            // suite, asking the owner's live node a question. Six boot tests
+            // did that six times a run, at about a second each — this file was
+            // 7.3 seconds of a 249-second suite, nearly all of it here.
+            //
+            // Nothing in this file is about the answer.
+            // `checkWhetherItCanSaveAnything` logs it and returns; every
+            // assertion here is about the calls around it.
+            readinessCheck: {
+                ApplianceWriteReadiness(agentID: nil, standing: .unknown("not asked in tests"))
+            },
             alreadySaidFile: directory.appendingPathComponent("said.json"),
             readableDomainsFile: directory.appendingPathComponent("domains.json")
         )
@@ -67,29 +138,45 @@ final class SageRitualTests: XCTestCase {
     // MARK: Boot
 
     func testBootCallsInceptionAndKeepsItsReply() async {
-        let tools = RecordingToolSource(replies: [SageRitual.Tool.inception: "You were migrating the voice bridge."])
+        // **`sage_status` is held open for the whole of boot: called, never
+        // answered.** That is the exact shape of the failure this guards. It
+        // ran awaited for one build, and the owner watched start-up sit on
+        // "Signing in" for three minutes — `sage_status` does not return for
+        // this appliance on 11.16.4, so boot spent the client's full 90-second
+        // timeout, twice, once per surface, before reaching inception.
+        //
+        // It runs unstructured now. Nothing waits on the answer: `ScopedRecall`
+        // loads the file when it needs it, and falls back to the domains this
+        // appliance is known to use until then. So a node that never replies is
+        // what boot has to survive, and it is what this hands it.
+        let tools = RecordingToolSource(
+            replies: [SageRitual.Tool.inception: "You were migrating the voice bridge."],
+            holding: [SageRitual.Tool.status]
+        )
         let ritual = makeRitual(tools)
 
         let context = await ritual.boot()
 
-        // **`sage_status` is deliberately not in this list.**
+        XCTAssertEqual(context, "You were migrating the voice bridge.")
+        // **Calls that RETURNED, not calls that started.**
         //
-        // It was, for one build, and the owner watched start-up sit on "Signing
-        // in" for three minutes: `sage_status` does not return for this
-        // appliance on 11.16.4, so boot spent the client's full 90-second
-        // timeout — twice, once per surface — before reaching inception.
+        // This asserted `names.prefix(2)` until Linux CI ran it, and it failed
+        // there with `["sage_register", "sage_status"]` while 1738 other tests
+        // passed. Nothing had regressed: `boot()` starts the domain scan as an
+        // unstructured `Task` and then awaits inception, so which of the two is
+        // recorded first is the scheduler's decision, and Darwin and Linux
+        // decide differently. The assertion was reading the scheduler.
         //
-        // It runs unstructured now. Nothing waits on the answer: `ScopedRecall`
-        // loads the file when it needs it, and falls back to the domains this
-        // appliance is known to use until then.
-        // A prefix, not the whole list: `sage_status` runs unstructured and may
-        // land at any point after. What matters is that nothing but register
-        // gets in front of inception, because that is what the owner waits on.
+        // Completion order is not the scheduler's to reorder. `sage_status` is
+        // still in flight here and will be until this test releases it, so
+        // seeing it in this list at all would mean boot had waited for it —
+        // which is the regression, stated as the thing that actually hurt.
         XCTAssertEqual(
-            Array(tools.names.prefix(2)),
+            tools.completedNames,
             [SageRitual.Tool.register, SageRitual.Tool.inception]
         )
-        XCTAssertEqual(context, "You were migrating the voice bridge.")
+
+        await tools.release(SageRitual.Tool.status)
     }
 
     /// SAGE gates its task surface on identity: `sage_backlog` answers "only to
