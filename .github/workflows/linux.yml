@@ -44,6 +44,16 @@ jobs:
     # this repository, and two runs would stop being comparable.
     container: swift:6.0.3-jammy
 
+    # **Every `run:` here is bash, said explicitly.** Inside a `container:` the
+    # runner picks the shell by probing the image, and on the first CI run of
+    # this workflow it chose `sh -e {0}` — dash on jammy — which rejected
+    # `set -o pipefail` on line one and failed the job in 2 seconds having run
+    # no tests at all. `pipefail` is a bashism and the harness depends on it, so
+    # the shell is pinned here rather than left to whatever the image offers.
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - uses: actions/checkout@v4
 
