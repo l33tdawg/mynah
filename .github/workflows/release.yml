@@ -140,10 +140,19 @@ jobs:
       # The two numbers are runner numbers rather than the script's defaults,
       # and each is derived rather than guessed.
       #
-      # 1777 executed instead of 1815, because without vendor/onnxruntime
+      # 2517 executed instead of 2555, because without vendor/onnxruntime
       # Package.swift leaves the KokoroEngine targets out of the graph
-      # altogether — measured locally at exactly 1777 with those three targets
-      # absent, so the floor sits 17 under it.
+      # altogether — enumerated rather than estimated, with
+      # `arch -arm64 swift test --list-tests`, which names 2555 tests with those
+      # targets present and 2517 with them absent. The 38 between the two is
+      # KokoroEngineTests exactly, which is the same 38 assert-test-run.sh calls
+      # SMALLEST_TEST_TARGET, so the two files are describing one number.
+      #
+      # The floor sits 12 under, not 17 and not 25: the rot check fires at
+      # floor + 38, so a floor K under the count buys (38 - K) tests of room.
+      # 12 leaves 26. See FLOOR_SITS_UNDER in assert-test-run.sh, which exists
+      # because "25 under, so there is room for 25" is wrong by construction and
+      # had already been spent by the release that wrote it down.
       #
       # 27 skipped instead of 21, because ten further tests reach for
       # voices-v1.0.bin and a runner has it in neither of the two places they
@@ -161,7 +170,7 @@ jobs:
           # **The runner's graph is not the build Mac's, so this is not the
           # script's number.** vendor/onnxruntime is deliberately not staged
           # below, so Package.swift drops KokoroEngineTests and its 38 tests
-          # before the run starts: 2336 on the build Mac means 2298 here.
+          # before the run starts: 2555 on the build Mac means 2517 here.
           #
           # Twelve under the runner's own count, which is what assert-test-run.sh's
           # rot check wants — it fires at floor + 38, so a floor set further under
@@ -170,9 +179,17 @@ jobs:
           # on a perfectly healthy suite: the check is new, and the first thing
           # it caught was the commit that added it.
           #
-          # Raise both in one commit. They are one subtraction apart and setting
-          # only one is how this first went red.
-          MYNAH_MIN_EXECUTED_TESTS: "2410"
+          # **There are three of these, not two, and they move in one commit.**
+          # This one, the one on the release.sh step below, and the MIN_EXECUTED
+          # default in scripts/assert-test-run.sh. The two build-Mac numbers are
+          # always equal and this one is always 38 under them, because the build
+          # Mac and the runner differ by exactly KokoroEngineTests. Every commit
+          # that has ever moved one has moved all three — see ca774f1, "Raise the
+          # three test floors together" — and the file histories have never
+          # diverged. Moving a subset is how this first went red: the local
+          # release path reads the script default, so a floor raised here and not
+          # there fails the release nobody ran on a runner.
+          MYNAH_MIN_EXECUTED_TESTS: "2505"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -229,7 +246,16 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2448"
+          #
+          # Measured at 2555 by `arch -arm64 swift test --list-tests` with
+          # vendor/onnxruntime staged, which is the graph release.sh builds, so
+          # the floor is 12 under at 2543. **This must equal the MIN_EXECUTED
+          # default in scripts/assert-test-run.sh**, because that default is what
+          # the build Mac uses: release.sh does not set MYNAH_MIN_EXECUTED_TESTS,
+          # so a local release reads the script's number and only CI reads this
+          # one. Two spellings of one figure; if they disagree, the one that
+          # ships is the one nobody edited.
+          MYNAH_MIN_EXECUTED_TESTS: "2543"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

@@ -497,7 +497,13 @@ final class ToolLoopDeadlineTests: XCTestCase {
         let backend = FanOutBackend(callsPerIteration: 8)
         let loop = ToolLoop(
             backend: backend,
-            mcp: SlowEchoToolSource(seconds: 0.15),
+            // **0.3 s per tool, not 0.15.** `sage_recall` is read-only, so
+            // eight of them now run as two batches of four rather than eight
+            // sequential calls — the fan-out this file's own comment asked for.
+            // At 0.15 s the first batch left enough budget for the second and
+            // the brake never fired, so the test would have passed while
+            // asserting nothing. The numbers move; what is asserted does not.
+            mcp: SlowEchoToolSource(seconds: 0.3),
             configuration: ToolLoop.Configuration(
                 maxIterations: 1,
                 deadlineSeconds: 0.4,
@@ -522,7 +528,13 @@ final class ToolLoopDeadlineTests: XCTestCase {
         let backend = FanOutBackend(callsPerIteration: 8)
         let loop = ToolLoop(
             backend: backend,
-            mcp: SlowEchoToolSource(seconds: 0.15),
+            // **0.3 s per tool, not 0.15.** `sage_recall` is read-only, so
+            // eight of them now run as two batches of four rather than eight
+            // sequential calls — the fan-out this file's own comment asked for.
+            // At 0.15 s the first batch left enough budget for the second and
+            // the brake never fired, so the test would have passed while
+            // asserting nothing. The numbers move; what is asserted does not.
+            mcp: SlowEchoToolSource(seconds: 0.3),
             configuration: ToolLoop.Configuration(
                 maxIterations: 1,
                 deadlineSeconds: 0.4,
@@ -538,6 +550,42 @@ final class ToolLoopDeadlineTests: XCTestCase {
             8,
             "a requested call went unanswered, which poisons every later turn"
         )
+    }
+
+    /// **The protocol survives fan-out.** A group skipped for time is several
+    /// calls skipped at once, and every one of them still owes the model a
+    /// result — an unanswered `tool_call_id` poisons the whole thread, which is
+    /// the failure that reached the owner as "Something went wrong talking to
+    /// the model" on a voice note. Same invariant as the test above, now that
+    /// the thing being skipped is a batch rather than a call.
+    func testAWideFanOutThatRunsOutOfTimeStillAnswersEveryCall() async throws {
+        let backend = FanOutBackend(callsPerIteration: 8)
+        let loop = ToolLoop(
+            backend: backend,
+            mcp: SlowEchoToolSource(seconds: 0.3),
+            configuration: ToolLoop.Configuration(
+                maxIterations: 1,
+                deadlineSeconds: 0.4,
+                summaryReserveSeconds: 0.05,
+                allowedToolNames: []
+            )
+        )
+
+        let result = try await loop.run(transcript: "do all of it")
+
+        XCTAssertTrue(result.trace.hitDeadline)
+        XCTAssertGreaterThan(result.trace.droppedToolCalls, 0, "no batch was skipped")
+        XCTAssertEqual(
+            result.trace.toolCalls.count + result.trace.droppedToolCalls, 8,
+            "a member of a skipped batch went unanswered, which poisons every later turn"
+        )
+
+        // And the ones that did not run say so, rather than returning a stub the
+        // model would read as "the tool is empty".
+        let skipped = result.messages.filter {
+            $0.role == .tool && $0.content.contains("ran out of time")
+        }
+        XCTAssertEqual(skipped.count, result.trace.droppedToolCalls)
     }
 
     /// An ordinary turn must not be clipped. The cap is a guard against a

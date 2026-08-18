@@ -1,0 +1,13 @@
+{
+  "claimed_elsewhere_action": "Inspect sage_message_history(folder=\"inbox\") and compare claimant_session_id values. Use sage_message_handoff only after judging the prior claimant session dead or stale; a live session may still be working.",
+  "claimed_elsewhere_count": 1,
+  "claimed_elsewhere_state": "present",
+  "coordination_schema": "sage.inbox.v2",
+  "count": 0,
+  "items": [],
+  "mcp_runtime_version": "11.18.17",
+  "message": "No unclaimed work is waiting, but 1 message(s) remain unfinished under another claimant session. This inbox is not clear.",
+  "message_count": 0,
+  "reply_items": [],
+  "task_assignment_count": 0
+}

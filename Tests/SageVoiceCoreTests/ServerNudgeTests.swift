@@ -23,7 +23,7 @@ import XCTest
 /// This appliance does not work that way: `SageRitual.recordTurn` calls
 /// `sage_turn` from the daemon after every turn, precisely so the model never
 /// has to — a 4B forgets the discipline three turns in, which is why `sage_turn`
-/// is deliberately absent from `voiceToolAllowlist` and `SageRitualTests` says
+/// is deliberately absent from `BrainPrompts.sageToolCuration` and `SageRitualTests` says
 /// so out loud.
 ///
 /// The five-minute clause is what makes this near-certain rather than
@@ -81,7 +81,7 @@ final class ServerNudgeTests: XCTestCase {
     /// given the tool, so it must not be told to use it.
     func testTheModelIsStillNotGivenTheTool() {
         XCTAssertFalse(
-            BrainPrompts.voiceToolAllowlist.contains(SageRitual.Tool.turn),
+            BrainPrompts.sageToolCuration.contains(SageRitual.Tool.turn),
             "if sage_turn is ever offered to the model, this stripping should be reconsidered"
         )
     }

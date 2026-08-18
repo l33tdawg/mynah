@@ -269,7 +269,7 @@ final class SageRitualTests: XCTestCase {
     func testBootAndTurnToolsAreNotOfferedToTheModel() {
         for tool in [SageRitual.Tool.inception, SageRitual.Tool.turn] {
             XCTAssertFalse(
-                BrainPrompts.voiceToolAllowlist.contains(tool),
+                BrainPrompts.sageToolCuration.contains(tool),
                 "\(tool) must stay out of the model's catalogue"
             )
         }
@@ -301,7 +301,7 @@ final class SageRitualTests: XCTestCase {
     /// with their eyes open rather than rediscovering the argument.
     func testReflectIsNoLongerOfferedToTheModel() {
         XCTAssertFalse(
-            BrainPrompts.voiceToolAllowlist.contains(SageRitual.Tool.reflect),
+            BrainPrompts.sageToolCuration.contains(SageRitual.Tool.reflect),
             "sage_reflect is back in the model's catalogue — see this test's note for what that trades"
         )
         // The half that must keep working: the daemon still reflects on its own
@@ -320,11 +320,11 @@ final class SageRitualTests: XCTestCase {
     /// the model is shown.
     func testTheBrowseShapedMemoryToolIsNotOfferedEither() {
         XCTAssertFalse(
-            BrainPrompts.voiceToolAllowlist.contains("sage_list"),
+            BrainPrompts.sageToolCuration.contains("sage_list"),
             "sage_list is an attractor by this repository's own measurement"
         )
         XCTAssertTrue(
-            BrainPrompts.voiceToolAllowlist.contains("sage_recall"),
+            BrainPrompts.sageToolCuration.contains("sage_recall"),
             "the tool that answers the question sage_list was reached for is gone too"
         )
     }

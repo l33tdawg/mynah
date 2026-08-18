@@ -38,7 +38,7 @@ final class InboxFailureIsNotAnEmptyInboxTests: XCTestCase {
         )
         do {
             let waiting = try await source.waitingMessages(limit: 20)
-            XCTFail("came back as \(waiting.count) item(s) instead of throwing")
+            XCTFail("came back as \(waiting.items.count) item(s) instead of throwing")
         } catch {
             // The point.
         }
@@ -49,7 +49,11 @@ final class InboxFailureIsNotAnEmptyInboxTests: XCTestCase {
             tools: AnswersWithoutAnInbox(reply: #"{"count":0,"items":[],"message_count":0}"#)
         )
         let waiting = try await source.waitingMessages(limit: 20)
-        XCTAssertEqual(waiting, [])
+        XCTAssertEqual(waiting.items, [])
+        // The reading is still a reading. An envelope with no probe in it is a
+        // node that does not report claimed-elsewhere counts, which is a
+        // different fact from a count of none — see `ClaimedElsewhere`.
+        XCTAssertEqual(waiting.claimedElsewhere, .notReported)
     }
 
     // MARK: - What it costs downstream, which is why any of this matters
@@ -69,7 +73,7 @@ final class InboxFailureIsNotAnEmptyInboxTests: XCTestCase {
 
         var updated = ledger
         if let sawMessages {
-            updated.forgetMessagesNotIn(Set(sawMessages.map(\.id)))
+            updated.forgetMessagesNotIn(Set(sawMessages.items.map(\.id)))
         }
 
         XCTAssertEqual(
@@ -94,7 +98,7 @@ final class InboxFailureIsNotAnEmptyInboxTests: XCTestCase {
 
         var updated = ledger
         if let sawMessages {
-            updated.forgetMessagesNotIn(Set(sawMessages.map(\.id)))
+            updated.forgetMessagesNotIn(Set(sawMessages.items.map(\.id)))
         }
 
         XCTAssertTrue(

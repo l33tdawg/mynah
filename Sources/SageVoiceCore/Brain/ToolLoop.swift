@@ -216,6 +216,15 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// from, and that belongs in the same line as the rest of the turn.
     public var droppedToolCalls: Int = 0
 
+    /// Calls that ran inside a concurrent group rather than on their own.
+    ///
+    /// Counted in the idiom of `droppedToolCalls` and `blankResponses`: fan-out
+    /// changes how long a turn takes and how hard the node is hit, and a
+    /// behaviour that only shows up as "the turn felt quicker" is one nobody can
+    /// confirm or regress. Zero on a turn whose reads were all singletons — a
+    /// group of one is not concurrency and is not reported as any.
+    public var concurrentToolCalls: Int = 0
+
     /// Replies that announced a tool call the model then did not make.
     ///
     /// A 4B announces its intent in prose — "Let me check my agent identity:" —
@@ -449,6 +458,7 @@ public struct ToolLoopTrace: Sendable, Equatable {
         // budget, the other is the token ceiling.
         if wasTruncated { notes.append("[TRUNCATED]") }
         if droppedToolCalls > 0 { notes.append("[DROPPED \(droppedToolCalls)]") }
+        if concurrentToolCalls > 0 { notes.append("[PARALLEL \(concurrentToolCalls)]") }
         if unfulfilledPromises > 0 { notes.append("[PROMISED \(unfulfilledPromises)]") }
         if unbackedClaims > 0 { notes.append("[UNBACKED \(unbackedClaims)]") }
         if refusedToMakeAFile > 0 { notes.append("[REFUSED \(refusedToMakeAFile)]") }
@@ -489,7 +499,29 @@ public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
     /// The curated tool allowlist matched none of the tools the server publishes.
     /// Deliberately fatal rather than silently falling back to the full
     /// catalogue — see `ToolLoop.availableTools()`.
+    ///
+    /// **Production no longer reaches this**, and that is not neglect. Curation
+    /// moved to `CompositeToolSource.Source.external`, where it fails closed as
+    /// `Failure.curationMatchedNothing` against the one source it is about.
+    /// `Configuration.allowedToolNames` keeps its meaning — a filter over
+    /// whatever this loop is handed, empty meaning "offer everything" — because
+    /// roughly fifteen tests narrow a fake catalogue with it, and a guard with
+    /// no way to fire is a guard nobody can trust.
     case toolAllowlistMatchedNothing(expected: [String], published: [String])
+    /// More tools were composed than a brain in this tier may be asked to
+    /// choose between.
+    ///
+    /// **It refuses; it does not truncate, and the difference is the whole
+    /// point.** Handing the model the first `ceiling` schemas would leave the
+    /// owner believing a tool he enabled is live while the model has never
+    /// heard of it — a feature that lies about having worked, which is the
+    /// defect class this repository treats as worst. A refusal he can read is
+    /// worth more than a catalogue that silently lost its tail.
+    ///
+    /// See `BrainCapabilities.maxRoutableTools`, whose own comment used to say
+    /// it was "read by `BrainTierTests` and by nothing at runtime". This is
+    /// what stopped being true.
+    case catalogueOverTierCeiling(tier: BrainTier, ceiling: Int, offered: [String])
 
     public var description: String {
         switch self {
@@ -506,6 +538,25 @@ public enum ToolLoopError: Error, CustomStringConvertible, Equatable {
             on the full set and it contains irreversible operations. \
             Expected any of: \(expected.joined(separator: ", ")). \
             Server publishes: \(published.joined(separator: ", ")).
+            """
+        case .catalogueOverTierCeiling(let tier, let ceiling, let offered):
+            // Named in full: the tier, the ceiling, the actual count, which
+            // tools are over the line, and what to do about it. A dead end that
+            // does not name the next action leaves the owner with a broken
+            // appliance and a number.
+            //
+            // "Over the line" is decided by the same name sort the catalogue is
+            // offered in — the last ones alphabetically, not a judgement about
+            // which are least useful. Said plainly so nobody reads the list as
+            // advice about what to turn off.
+            let overflowing = offered.dropFirst(ceiling)
+            return """
+            \(offered.count) tools were composed for a \(tier.rawValue) brain, which may be asked to \
+            choose between \(ceiling). Refusing to offer a truncated catalogue: the tools past the \
+            ceiling would be enabled and unreachable, and nothing would say so. \
+            Past the ceiling in name order: \(overflowing.joined(separator: ", ")). \
+            Turn a skill off in Settings, or connect a hosted brain, which allows \
+            \(BrainCapabilities.hosted.maxRoutableTools).
             """
         }
     }
@@ -619,6 +670,26 @@ public final class ToolLoop: @unchecked Sendable {
     /// that matters is the turn's own clock, checked between calls.
     public static let maximumToolCallsPerIteration = 12
 
+    /// How many read-only tools may run at the same time.
+    ///
+    /// **Scoped to reads, and narrow on purpose.** A reply asking for three
+    /// `sage_recall`s is three sequential round trips to a Go process on this
+    /// Mac, and the owner waits through all of them for an answer that could
+    /// have taken as long as the slowest one. That is worth fixing. Running
+    /// *writes* concurrently is not the same trade at all — see
+    /// `ToolLoopTrace.readOnlyTools`, whose inversion this reuses: anything not
+    /// on that list, including a name nobody recognises, runs alone and in
+    /// order.
+    ///
+    /// Four rather than twelve, and the gap is deliberate. `MCPClient` is
+    /// id-correlated with a serialised write queue, so our side multiplexes
+    /// correctly over the one stdio pipe — but SAGE has never been asked to
+    /// handle twelve simultaneous `tools/call`, and a width nobody has measured
+    /// against the real node is a width worth keeping small. It also bounds the
+    /// other blast radius: `web_search` fanned out four ways is four hits on
+    /// somebody's search provider inside one second.
+    public static let maximumConcurrentReadOnlyCalls = 4
+
     /// How many times a turn will reject a promise and ask the model again.
     ///
     /// Two, and then the wrap-up takes over. Each retry is a whole model call —
@@ -680,9 +751,24 @@ public final class ToolLoop: @unchecked Sendable {
         /// `BrainCapabilities.toolResultBackstopCharacters`.
         public var maxToolResultCharacters: Int?
         /// Restrict the catalogue offered to the model to these names. Schemas
-        /// still come from the server. Empty means "offer everything"; the
-        /// default trades unreachable tools for a large accuracy win — see
-        /// `BrainPrompts.voiceToolAllowlist`.
+        /// still come from the server. Empty means "offer everything", and
+        /// empty is now the default.
+        ///
+        /// **It used to default to `BrainPrompts.voiceToolAllowlist`, and that
+        /// is what made curation a global.** A single set applied to the
+        /// *composed* catalogue meant every source's tools needed permission
+        /// from a constant in `BrainPrompts` — so the set had to union the note
+        /// tools in and hand-add `web_search`, and forgetting the latter was a
+        /// silent no-op for the whole web-search feature. Curation now happens
+        /// per source, in `CompositeToolSource`, where a source this repository
+        /// implements self-declares and a child process must be curated by
+        /// name. Production surfaces therefore stop *setting* this.
+        ///
+        /// It is kept, with its fail-closed guard, because narrowing a fake
+        /// catalogue is how roughly fifteen tests state what a loop is being
+        /// shown. Moving them to build a composite each would be a change to
+        /// tests that are already passing, in the same commit as a change to
+        /// the thing they test.
         public var allowedToolNames: Set<String>
 
         /// Everything a reply style decides, decided once.
@@ -719,7 +805,7 @@ public final class ToolLoop: @unchecked Sendable {
             reasoningOnSummary: ReasoningPreference = .disabled,
             maxGeneratedTokens: Int? = ReplyStyle.default.maximumGeneratedTokens,
             maxToolResultCharacters: Int? = nil,
-            allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist
+            allowedToolNames: Set<String> = []
         ) {
             self.systemPrompt = systemPrompt
             self.maxIterations = maxIterations
@@ -851,6 +937,13 @@ public final class ToolLoop: @unchecked Sendable {
     /// than assumed.
     public var backendSeesImages: Bool { backend.seesImages }
 
+    /// The model answering this turn, for log lines that have to name it.
+    ///
+    /// "Images kept but not sent" is only actionable if it says *which* model
+    /// was blind — that is the difference between an owner switching model and
+    /// an owner filing a bug about a photo that vanished.
+    public var backendModelName: String { backend.modelName }
+
     public func setSystemPrompt(_ prompt: String) {
         promptLock.lock()
         defer { promptLock.unlock() }
@@ -895,28 +988,47 @@ public final class ToolLoop: @unchecked Sendable {
     /// what `warmUp()` has been quietly assuming since the day it was written.
     public func availableTools() async throws -> [MCPTool] {
         let tools = try await mcp.listTools().sorted { $0.name < $1.name }
-        guard !configuration.allowedToolNames.isEmpty else {
-            return tools
-        }
-        let filtered = tools.filter { configuration.allowedToolNames.contains($0.name) }
-        guard filtered.isEmpty else {
-            return filtered
+        let offered: [MCPTool]
+        if configuration.allowedToolNames.isEmpty {
+            offered = tools
+        } else {
+            let filtered = tools.filter { configuration.allowedToolNames.contains($0.name) }
+            guard !filtered.isEmpty else {
+                // The allowlist matched nothing. Fail CLOSED rather than
+                // silently widening to the whole catalogue — see the case's own
+                // note, and `CompositeToolSource.Failure.curationMatchedNothing`
+                // where the production-facing half of this guard now lives.
+                throw ToolLoopError.toolAllowlistMatchedNothing(
+                    expected: configuration.allowedToolNames.sorted(),
+                    published: tools.map(\.name).sorted()
+                )
+            }
+            offered = filtered
         }
 
-        // The allowlist matched nothing — SAGE has renamed or re-prefixed its
-        // tools, or we are pointed at a differently-branded build.
+        // **The tier ceiling, cashed in.** `BrainCapabilities.maxRoutableTools`
+        // was read by two tests and by nothing at runtime, and its own comment
+        // said so; its own comment also said "how many tools a skill loader may
+        // expose is a tier field, not a global constant — which is what this
+        // becomes when that loader is written". This is that.
         //
-        // Fail CLOSED. Silently widening to the whole catalogue is the worst
-        // possible response: routing accuracy roughly halves at 27 tools
-        // (measured 5-6/12 vs 12/12 on the curated set), so the model would be
-        // at its least reliable exactly when its blast radius is widest — and
-        // the widened set includes irreversible verbs like sage_forget,
-        // sage_register and the governance tools, driven by an ASR transcript
-        // that may contain mishearings.
-        throw ToolLoopError.toolAllowlistMatchedNothing(
-            expected: configuration.allowedToolNames.sorted(),
-            published: tools.map(\.name).sorted()
-        )
+        // Checked after the sort, so the names the refusal reports are the
+        // names in the order the model would have seen them, and so the sort
+        // itself — worth ~16 s of prefill per cold turn, see above — is never
+        // skipped on the path that succeeds.
+        //
+        // It throws and does not truncate. Twenty-one enabled tools and twenty
+        // offered is an appliance that lies about what it can do; a refusal
+        // naming the tier, the count and the door is one that does not.
+        let ceiling = backend.brain.maxRoutableTools
+        guard offered.count <= ceiling else {
+            throw ToolLoopError.catalogueOverTierCeiling(
+                tier: backend.brain.tier,
+                ceiling: ceiling,
+                offered: offered.map(\.name)
+            )
+        }
+        return offered
     }
 
     /// Puts the model and its prompt prefix in cache before anyone is waiting.
@@ -1106,8 +1218,17 @@ public final class ToolLoop: @unchecked Sendable {
                     + "it:\n\n\(spokenFirst)")
         ]
         messages.append(contentsOf: history.dropFirst(leading.count).filter { $0.role != .system })
+        // **A blind backend is never handed the bytes at all.**
+        //
+        // The backends gate this too, and that guard stays — but this is the one
+        // that makes the note and the wire incapable of disagreeing. What the
+        // owner is told about their photo is decided from `backend.seesImages`
+        // by `VoiceBridgeDaemon`, and what actually travels is decided here from
+        // the same bit. A backend written next year that forgets its own gate
+        // still cannot be handed a picture it will not send.
+        let carried = backend.seesImages ? images : []
         // Stamped here and nowhere else. See `WhereWeAre.rightNow`.
-        messages.append(.user(WhereWeAre.stamp(transcript), images: images))
+        messages.append(.user(WhereWeAre.stamp(transcript), images: carried))
         // Only appends follow, so this stays valid — it is where the stamp comes
         // back off before the messages are handed to the caller to replay.
         let ownTurn = messages.count - 1
@@ -1434,7 +1555,10 @@ public final class ToolLoop: @unchecked Sendable {
             // read as "the tool is empty".
             var outOfTime = false
 
-            for call in calls {
+            // **Reads that were asked for together are run together.** See
+            // `concurrentGroups(of:)` for what may share a batch and why the
+            // grouping keeps the model's own order.
+            for group in Self.concurrentGroups(of: calls) {
                 // **The brake the count used to stand in for.** A reply asking
                 // for eight writes is eight round trips inside one iteration,
                 // and the between-iterations check cannot see any of them. This
@@ -1445,6 +1569,13 @@ public final class ToolLoop: @unchecked Sendable {
                 //
                 // First call always runs. A turn that returns nothing because it
                 // was already late is worse than one that is a little later.
+                //
+                // **Checked once per group, and the estimate is already right.**
+                // A group costs the wall clock of its *slowest* member, not the
+                // sum, and `slowestTool` below is exactly that — the worst call
+                // observed so far. So a fan-out that now takes one tool's time
+                // is no longer braked as though it took four, without the
+                // expression changing at all.
                 if !outOfTime,
                    !trace.toolCalls.isEmpty,
                    let deadline = configuration.deadlineSeconds {
@@ -1456,42 +1587,84 @@ public final class ToolLoop: @unchecked Sendable {
                 }
 
                 guard !outOfTime else {
-                    trace.droppedToolCalls += 1
-                    messages.append(
-                        .toolResult(
-                            name: call.name,
-                            content: "Not run: this turn ran out of time. Ask for this again "
-                                + "and it will be done first.",
-                            id: call.id
+                    // Every member still gets an answer. The protocol is not
+                    // optional: an unanswered `tool_call_id` poisons the whole
+                    // thread, whichever way the turn ended.
+                    for call in group {
+                        trace.droppedToolCalls += 1
+                        messages.append(
+                            .toolResult(
+                                name: call.name,
+                                content: "Not run: this turn ran out of time. Ask for this again "
+                                    + "and it will be done first.",
+                                id: call.id
+                            )
                         )
-                    )
+                    }
                     continue
                 }
 
-                let record = await execute(call, iteration: iteration, knownToolNames: knownToolNames)
-                trace.toolCalls.append(record)
-                lastToolResult = record.result
-                progress.finished(record.name, result: record.result)
-                messages.append(
-                    .toolResult(
-                        name: call.name,
-                        // The backstop, not the budget. `VoiceToolBudget.fit` has
-                        // already fitted this to the brain's ceiling; what is left
-                        // for this to catch is a string `execute` built itself — a
-                        // tool failure described by a server that answered with a
-                        // novel — which `fit` never sees. See
-                        // `BrainCapabilities.toolResultBackstopCharacters`.
-                        content: Self.truncate(
-                            record.result,
-                            to: configuration.maxToolResultCharacters
-                                ?? backend.brain.toolResultBackstopCharacters
-                        ),
-                        // Carried so backends that match results to requests by
-                        // id (Anthropic, OpenAI) can pair them up. Ollama
-                        // matches by name and ignores it.
-                        id: call.id
+                if group.count > 1 { trace.concurrentToolCalls += group.count }
+
+                // `withTaskGroup`, not `withThrowingTaskGroup`: `execute` never
+                // throws — every failure path already returns a `ToolCallRecord`
+                // carrying the error as text — so one member failing must not be
+                // able to cancel its siblings and lose work already paid for.
+                let records = await withTaskGroup(
+                    of: (Int, ToolCallRecord).self,
+                    returning: [ToolCallRecord].self
+                ) { tasks in
+                    for (index, call) in group.enumerated() {
+                        tasks.addTask {
+                            let record = await self.execute(
+                                call, iteration: iteration, knownToolNames: knownToolNames
+                            )
+                            // Narrated as each one lands rather than when the
+                            // batch drains, because the owner-facing working
+                            // line should say what is genuinely done. Safe from
+                            // several tasks at once: `TurnProgress` is
+                            // lock-guarded. The *order* within a batch is
+                            // therefore whichever finished first, which is why
+                            // nothing pins it.
+                            progress.finished(record.name, result: record.result)
+                            return (index, record)
+                        }
+                    }
+                    var collected: [(Int, ToolCallRecord)] = []
+                    for await pair in tasks { collected.append(pair) }
+                    // **Back into the order the model asked in**, once the group
+                    // has drained. Anthropic requires every `tool_use` answered
+                    // and the loop's own tests read `trace.toolCalls` positionally
+                    // — and a prompt prefix whose byte order depends on which
+                    // tool happened to win a race is a prompt cache that never
+                    // hits twice.
+                    return collected.sorted { $0.0 < $1.0 }.map(\.1)
+                }
+
+                for (call, record) in zip(group, records) {
+                    trace.toolCalls.append(record)
+                    lastToolResult = record.result
+                    messages.append(
+                        .toolResult(
+                            name: call.name,
+                            // The backstop, not the budget. `VoiceToolBudget.fit` has
+                            // already fitted this to the brain's ceiling; what is left
+                            // for this to catch is a string `execute` built itself — a
+                            // tool failure described by a server that answered with a
+                            // novel — which `fit` never sees. See
+                            // `BrainCapabilities.toolResultBackstopCharacters`.
+                            content: Self.truncate(
+                                record.result,
+                                to: configuration.maxToolResultCharacters
+                                    ?? backend.brain.toolResultBackstopCharacters
+                            ),
+                            // Carried so backends that match results to requests by
+                            // id (Anthropic, OpenAI) can pair them up. Ollama
+                            // matches by name and ignores it.
+                            id: call.id
+                        )
                     )
-                )
+                }
             }
 
             if iteration == cap {
@@ -1609,7 +1782,7 @@ public final class ToolLoop: @unchecked Sendable {
     /// This appliance does not. `SageRitual.recordTurn` calls `sage_turn` from
     /// the daemon after every turn, precisely so the model never has to — a 4B
     /// forgets the discipline three turns in, which is why `sage_turn` is
-    /// deliberately absent from `voiceToolAllowlist` and a test says so.
+    /// deliberately absent from `BrainPrompts.sageToolCuration` and a test says so.
     ///
     /// So the nudge reaches a model that cannot act on it. The five-minute
     /// clause makes that near-certain rather than occasional: an appliance whose
@@ -1631,6 +1804,46 @@ public final class ToolLoop: @unchecked Sendable {
     }
 
     // MARK: Tool execution
+
+    /// Splits one reply's tool calls into batches that may run at the same time.
+    ///
+    /// **Maximal runs of consecutive reads, in the model's own order.** Not "all
+    /// the reads first, then the writes", which is the obvious version and is
+    /// wrong: `[remember(X), recall()]` is a perfectly reasonable thing for a
+    /// model to ask for, and hoisting the recall above the remember would
+    /// silently change what it returns. Reordering a model's work is not an
+    /// optimisation, it is a different request.
+    ///
+    /// Membership is `ToolLoopTrace.readOnlyTools`, reused rather than
+    /// duplicated, and its inversion is what makes this safe: a tool nobody
+    /// listed — including a name the model hallucinated — counts as having acted
+    /// and therefore runs alone, in order. The failure mode of a missing entry
+    /// is a lost speed-up, never a write racing another write.
+    ///
+    /// Width is capped by `maximumConcurrentReadOnlyCalls`; a ninth consecutive
+    /// read starts a third batch rather than widening the second.
+    ///
+    /// Exposed to the test target (not `private`) because the grouping *is* the
+    /// behaviour — asserting on it through wall-clock timings alone would be a
+    /// test that fails when a CI box is busy.
+    static func concurrentGroups(of calls: [BrainToolCall]) -> [[BrainToolCall]] {
+        var groups: [[BrainToolCall]] = []
+        for call in calls {
+            let isRead = ToolLoopTrace.readOnlyTools.contains(call.name)
+            if isRead,
+               var open = groups.last,
+               open.count < maximumConcurrentReadOnlyCalls,
+               // A write's group is closed the moment it is opened: the next
+               // read starts a new batch rather than joining it.
+               ToolLoopTrace.readOnlyTools.contains(open[0].name) {
+                open.append(call)
+                groups[groups.count - 1] = open
+            } else {
+                groups.append([call])
+            }
+        }
+        return groups
+    }
 
     private func execute(
         _ call: BrainToolCall,

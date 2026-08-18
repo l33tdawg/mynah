@@ -32,13 +32,23 @@ import Foundation
 /// `BrainBackend.seesImages`, and `VoiceBridgeDaemon` passes that to the
 /// attachment note.
 ///
-/// **With one exception, named because the 1.7.2 audit went looking for it:**
-/// `mayCarryImages` is the tier's half of that AND and nothing reads it yet.
-/// The backend half is what decides today, and it defaults to pessimistic — so
-/// the behaviour is correct and the field is inert. It flips in one place when
-/// the two wire encoders land (#36); until then, changing it changes nothing,
-/// and a reader who assumes otherwise will believe they granted vision and will
-/// not have.
+/// **`mayCarryImages` is now the live example of that AND, and it is worth
+/// reading before touching it.** The 1.7.2 audit found it inert, because it was
+/// `false` on `.hosted` and nothing read it. Both halves have since landed. The
+/// field is `true` on both tiers today, and every backend computes its own
+/// `seesImages` as
+///
+///     brain.mayCarryImages && <this model can see>
+///
+/// where the right-hand side is `CloudBrainModelCatalog.seesImages(model:)` for
+/// a hosted backend and `LocalVisionModels.sees(_:)` for a local one, each
+/// defaulting to blind for a model it does not recognise.
+///
+/// So flipping this to `true` did **not** grant any brain vision, and flipping
+/// it back to `false` *would* take vision away from every brain in that tier at
+/// once. It is a ceiling in both directions: it can only ever subtract. A
+/// reader who skims this field and concludes "hosted brains see now" has read
+/// half the sentence — the per-model table is the half that decides.
 public enum BrainTier: String, Sendable, Equatable, Hashable, Codable, CaseIterable {
 
     /// A model running on this Mac, whether through Ollama or an OpenAI-shaped
@@ -115,16 +125,23 @@ public struct BrainCapabilities: Sendable, Equatable {
 
     /// Whether a brain in this tier can be sent a photo at all.
     ///
-    /// A ceiling, never a grant. `false` on `.hosted` states a fact about this
-    /// repository rather than about the vendors: the word "image" does not
-    /// appear in `AnthropicBackend.swift` or `OpenAICompatBackend.swift`, so a
-    /// hosted backend declaring vision today would be claiming to have seen a
-    /// picture it dropped on the floor — the exact fabrication
-    /// `BrainBackend.seesImages`'s pessimistic default exists to prevent.
+    /// **A ceiling, never a grant**, and now that both tiers say `true` that
+    /// sentence is carrying real weight rather than describing an inert field.
+    /// It was `false` on `.hosted` because the word "image" did not appear in
+    /// `AnthropicBackend.swift` or `OpenAICompatBackend.swift` — a statement
+    /// about this repository, not about the vendors. Both encoders have landed,
+    /// so the statement stopped being true and the field followed it.
     ///
-    /// Flips to `true` in this one place when the two wire encoders land, and
-    /// `CloudBrainModelCatalog` then narrows it per model — a model missing from
-    /// that table must still read as blind.
+    /// What decides whether a photo actually goes out is the AND on each
+    /// backend's `seesImages`: this ceiling, and then
+    /// `CloudBrainModelCatalog.seesImages(model:)` or
+    /// `LocalVisionModels.sees(_:)` for the one model that instance is bound to.
+    /// A model missing from either table reads as blind, which is the direction
+    /// that costs a description rather than the direction that invents one.
+    ///
+    /// Setting this `false` for a tier is still meaningful and still supported:
+    /// it turns off pictures for every brain in that tier regardless of model,
+    /// which is what a ceiling is for.
     public let mayCarryImages: Bool
 
     /// Whether the prompt cache lives in one slot on this machine.
@@ -188,9 +205,10 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// intelligence" and is redundant when the agent is already strong, which is
     /// the owner's sentence arrived at from the other side.
     ///
-    /// 20 on device is **what ships**: `BrainPrompts.voiceToolAllowlist` holds
-    /// exactly twenty today. It sits between the two measurements and has not
-    /// itself been measured, so this number's job is to be a ratchet — a
+    /// 20 on device is **what ships**: `ApplianceCatalogue.conversation` composes
+    /// exactly twenty today — fifteen curated SAGE tools, four note tools and
+    /// `web_search`. It sits between the two measurements and has not itself
+    /// been measured, so one of this number's jobs is to be a ratchet: a
     /// twenty-first tool turns `BrainTierTests` red and forces the re-run,
     /// rather than letting the catalogue drift past the cliff the way it already
     /// drifted past the "18" its own comment claimed.
@@ -200,16 +218,27 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// the accuracy drop, was taken on local models only; the latency half is
     /// somebody else's hardware here.
     ///
-    /// **Read by `BrainTierTests` and by nothing at runtime**, and that is
-    /// stated rather than left to be discovered: `ToolLoop.Configuration`
-    /// applies `BrainPrompts.voiceToolAllowlist` unconditionally, so a hosted
-    /// brain is offered exactly what a local one is — nineteen after the 5 Aug
-    /// cuts (`sage_list`, `sage_reflect`) and the messages swap (`sage_pipe` out,
-    /// `sage_message_send` and `sage_message_reply` in). One slot of headroom
-    /// under the ceiling, deliberately. The ratchet is the
-    /// whole of its current job. How many tools a skill loader may expose is a
-    /// tier field, not a global constant — which is what this becomes when that
-    /// loader is written.
+    /// **This is read at runtime now, and the sentence that used to be here is
+    /// what changed.** It said: *"Read by `BrainTierTests` and by nothing at
+    /// runtime … the ratchet is the whole of its current job. How many tools a
+    /// skill loader may expose is a tier field, not a global constant — which
+    /// is what this becomes when that loader is written."* The loader is being
+    /// written, and this is that promise cashed in.
+    ///
+    /// `ToolLoop.availableTools()` counts the composed catalogue against this
+    /// number and **refuses** past it — `ToolLoopError.catalogueOverTierCeiling`,
+    /// which names the tier, the count, the tools past the line and the two
+    /// ways out. It does not truncate to fit. Truncating would hand the model
+    /// twenty schemas while the owner believes twenty-one are live, which is a
+    /// feature lying about having worked.
+    ///
+    /// A hosted brain is no longer offered exactly what a local one is: the
+    /// same catalogue is composed for both, and this is the only thing that
+    /// differs. What that buys today is headroom rather than tools — 20 is
+    /// exactly what ships, so the local tier has none — and what it buys
+    /// tomorrow is that a skill the owner enables can be refused on the small
+    /// brain and offered on the large one, by the same arithmetic, with no
+    /// second constant to keep in step.
     public let maxRoutableTools: Int
 
     public init(
@@ -277,7 +306,11 @@ public struct BrainCapabilities: Sendable, Equatable {
         minimumOutputTokens: 16_384,
         directoryResultBytes: 16_000,
         contentResultBytes: 32_000,
-        mayCarryImages: false,
+        // **The 1.7.2 finding, resolved rather than reversed.** This was `false`
+        // because no hosted encoder existed; both now do, so the ceiling stops
+        // contradicting the code. It is not a grant — see the field's comment
+        // and `CloudBrainModelCatalog.sighted`, which is what actually decides.
+        mayCarryImages: true,
         servesOneCacheSlot: false,
         holdsARealtimeCall: true,
         maxRoutableTools: 27

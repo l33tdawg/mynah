@@ -365,53 +365,43 @@ func makeBackend(
 /// therefore what the reply should carry.
 func makeToolSource(
     mcp: MCPClient,
-    allowWeb: Bool
+    allowWeb: Bool,
+    // Which brain is about to be handed this catalogue. Threaded rather than
+    // defaulted: the curated SAGE names differ by tier, and both possible
+    // defaults are wrong in a way that is silent at the call site — see
+    // `ApplianceCatalogue.conversation`.
+    brain: BrainTier
 ) -> (tools: ToolProviding, notes: NotesToolSource) {
     let notes = NotesToolSource(delivery: .attachedToReply, log: { note($0) })
 
-    var sources: [CompositeToolSource.Source] = [
-        .init(
-            label: "SAGE MCP",
-            // See `ScopedRecall`: 11.16.4 refuses recall with no domain, and
-            // the model leaves it out. The ritual keeps the raw client.
-            // Three decorators, and the order matters only in that none cares:
-            // one rewrites `sage_task` arguments, one fills in `sage_recall`'s
-            // domain, and one keeps `sage_timeline` inside the 31 days an
-            // app-v23 node will answer. All three exist because a rule in the
-            // prompt is followed most of the time, and "most of the time" fails
-            // silently.
-            provider: BoundedTimeline(
-                wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp)))
-            ),
-            isRequired: true,
-            expectedToolNames: BrainPrompts.voiceToolAllowlist
-                .subtracting([WebSearchToolSource.toolName])
-                .subtracting(NotesToolSource.toolNames)
-        ),
-        // Required. Unlike search, this has no network to be down and no
-        // credential to expire — if it cannot list its three tools something is
-        // wrong with the appliance itself, and degrading quietly would hide it.
-        .init(
-            label: "notes",
-            provider: notes,
-            isRequired: true,
-            expectedToolNames: NotesToolSource.toolNames
-        )
-    ]
-    if allowWeb {
-        sources.append(
-            .init(
-                label: "web search",
-                provider: WebSearchToolSource(
-                    backends: WebSearchToolSource.defaultBackends(),
-                    log: { note($0) }
-                ),
-                isRequired: false,
-                expectedToolNames: [WebSearchToolSource.toolName]
-            )
-        )
-    }
-    return (CompositeToolSource(sources: sources, log: { note($0) }), notes)
+    // The shape — which sources, in which order, curated or self-declaring — is
+    // `ApplianceCatalogue`'s, not this file's. It was decided here, in
+    // `makeCallToolSource` below and a third time in `ConversationModel`, and
+    // the three had already stopped agreeing: each derived a different
+    // `expectedToolNames` set by hand-written subtraction, and the window's was
+    // a two-name guess. The providers are still built here, because only this
+    // file knows which decorators and which log sink the daemon wants.
+    let memory = BoundedTimeline(
+        // See `ScopedRecall`: 11.16.4 refuses recall with no domain, and the
+        // model leaves it out. The ritual keeps the raw client. Three
+        // decorators, and the order matters only in that none cares: one
+        // rewrites `sage_task` arguments, one fills in `sage_recall`'s domain,
+        // and one keeps `sage_timeline` inside the 31 days an app-v23 node will
+        // answer. All three exist because a rule in the prompt is followed most
+        // of the time, and "most of the time" fails silently.
+        wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp)))
+    )
+    let web = allowWeb
+        ? WebSearchToolSource(backends: WebSearchToolSource.defaultBackends(), log: { note($0) })
+        : nil
+    let tools = ApplianceCatalogue.conversation(
+        memory: memory,
+        notes: notes,
+        web: web,
+        brain: brain,
+        log: { note($0) }
+    )
+    return (tools, notes)
 }
 
 /// **The call's own catalogue: no notes source at all, and a queue instead.**
@@ -429,47 +419,24 @@ func makeToolSource(
 /// Shares the same `MCPClient` and the same decorator stack as the daemon's, so
 /// there is no second node process and no second journal.
 ///
-/// `makeToolSource`'s signature is untouched, so the one-shot `runBrain` path is
-/// unaffected.
+/// `makeToolSource` now takes the tier too, so both paths curate for the brain
+/// they are about to run rather than for the smallest one that exists.
 func makeCallToolSource(
     mcp: MCPClient,
     allowWeb: Bool,
-    queue: CallActionQueue
+    queue: CallActionQueue,
+    brain: BrainTier
 ) -> ToolProviding {
-    var sources: [CompositeToolSource.Source] = [
-        .init(
-            label: "SAGE MCP",
-            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
-            isRequired: true,
-            expectedToolNames: BrainPrompts.callToolAllowlist
-                .subtracting([WebSearchToolSource.toolName])
-                .subtracting([AfterTheCallToolSource.toolName])
-        ),
-        // Required for the same reason the notes source is on the daemon: it is
-        // in-process and has nothing to be down, so a failure to publish it
-        // means something is wrong with the appliance rather than with the
-        // network, and degrading quietly would hide it.
-        .init(
-            label: "after the call",
-            provider: AfterTheCallToolSource(queue: queue, log: { note($0) }),
-            isRequired: true,
-            expectedToolNames: [AfterTheCallToolSource.toolName]
-        )
-    ]
-    if allowWeb {
-        sources.append(
-            .init(
-                label: "web search",
-                provider: WebSearchToolSource(
-                    backends: WebSearchToolSource.defaultBackends(),
-                    log: { note($0) }
-                ),
-                isRequired: false,
-                expectedToolNames: [WebSearchToolSource.toolName]
-            )
-        )
-    }
-    return CompositeToolSource(sources: sources, log: { note($0) })
+    let web = allowWeb
+        ? WebSearchToolSource(backends: WebSearchToolSource.defaultBackends(), log: { note($0) })
+        : nil
+    return ApplianceCatalogue.call(
+        memory: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
+        afterTheCall: AfterTheCallToolSource(queue: queue, log: { note($0) }),
+        web: web,
+        brain: brain,
+        log: { note($0) }
+    )
 }
 
 func runBrain(_ arguments: [String]) -> Never {
@@ -511,7 +478,7 @@ func runBrain(_ arguments: [String]) -> Never {
     )
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
-    let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let (tools, _) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"), brain: backend.tier)
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     note("[daemon] reply style: \(style.rawValue)")
@@ -1034,7 +1001,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     )
     // `parseFlags` only reads `--key value` pairs, so a bare switch has to be
     // looked for in the raw arguments.
-    let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"))
+    let (tools, notes) = makeToolSource(mcp: mcp, allowWeb: !arguments.contains("--no-web"), brain: backend.tier)
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     note("[daemon] reply style: \(style.rawValue)")
@@ -1215,22 +1182,29 @@ func runDaemon(_ arguments: [String]) -> Never {
         // most of why the call surface never got one.
         let ownTaskEdits = OwnTaskEdits()
 
-        // **The call gets its own catalogue, its own allowlist and its own
-        // prompt.** All three, because any one of them alone leaves a way
-        // through: the catalogue is what makes `send_file` unroutable, the
-        // allowlist is what stops it being offered, and the prompt is what stops
-        // the model being told in the imperative to use a tool it no longer has.
+        // **The call gets its own catalogue and its own prompt.** It used to get
+        // its own allowlist as well, and that third thing is gone: the
+        // catalogue is what makes `send_file` unroutable, and the allowlist was
+        // only ever the weaker half of the same statement — a name filter over
+        // a provider that was still registered and would still route the call.
+        // The prompt is the half that remains, and it is doing different work:
+        // it stops the model being told in the imperative to use a tool it no
+        // longer has.
         let afterTheCall = CallActionQueue()
         let callTools = makeCallToolSource(
             mcp: mcp,
             allowWeb: !arguments.contains("--no-web"),
-            queue: afterTheCall
+            queue: afterTheCall,
+            brain: backend.tier
         )
-        // `.forStyle` then mutate, never a bare `Configuration(...)` — a literal
-        // there is how the window twice got the written prompt on a spoken token
-        // ceiling. `allowedToolNames` is a `var` for exactly this.
-        var callConfiguration = loopConfiguration(for: .spoken)
-        callConfiguration.allowedToolNames = BrainPrompts.callToolAllowlist
+        // `.forStyle`, never a bare `Configuration(...)` — a literal there is how
+        // the window twice got the written prompt on a spoken token ceiling.
+        //
+        // Nothing is mutated afterwards any more. The line that used to sit
+        // here, `callConfiguration.allowedToolNames = BrainPrompts
+        // .callToolAllowlist`, is what `makeCallToolSource` above now says by
+        // not registering the notes source at all.
+        let callConfiguration = loopConfiguration(for: .spoken)
         let callLoop = ToolLoop(
             backend: backend,
             mcp: callTools,
@@ -1644,7 +1618,9 @@ func runDaemon(_ arguments: [String]) -> Never {
                 ),
                 arrivedReplies: {
                     guard let ritual else { return [] }
-                    return await ritual.collectArrivedReplies().map(\.spokenDescription)
+                    // Whole, not flattened to sentences. The `.map` that used to
+                    // be here was the seam the exact identity fell through.
+                    return await ritual.collectArrivedReplies()
                 },
                 wakeLatch: wakeLatch,
                 say: { message, quotingAnotherAgent, senders in
@@ -1836,11 +1812,17 @@ func runCheck(_ arguments: [String]) -> Never {
         // diagnostic.
         var reachable = true
         do {
-            let waiting = try await source.waitingMessages(limit: 20)
-            print("inbox: \(waiting.count) waiting")
-            for item in waiting {
+            let reading = try await source.waitingMessages(limit: 20)
+            print("inbox: \(reading.items.count) waiting")
+            for item in reading.items {
                 print("  - from \(item.content.sender)\(item.intent.map { " (\($0))" } ?? "")")
             }
+            // The same distinction this command already makes for the backlog,
+            // on the same reasoning: a person runs this *because* they are
+            // confused about a quiet appliance, and "nothing waiting" is only
+            // half an answer when the node is holding work under somebody
+            // else's claim — or could not tell us either way.
+            print("  held elsewhere: \(ClaimedElsewhere.forTheLog(reading.claimedElsewhere))")
         } catch {
             reachable = false
             print("inbox: could not ask — \(error)")
@@ -1931,7 +1913,12 @@ func runProactiveWatch(
     /// Mirrors dated tasks into the owner's Calendar. `nil` switches the whole
     /// thing off; everything else here behaves exactly as it did before.
     calendar: CalendarSync? = nil,
-    arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
+    /// **The replies themselves, not their sentences.** This was `[String]`,
+    /// and the `.map(\.spokenDescription)` that fed it threw away the identity
+    /// of the agent that had just answered — so the announcement reached the
+    /// stored history with no exact sender on it and the model's only handle on
+    /// the replier was a display label. See `SageRitual.PipeReply.exactAgent`.
+    arrivedReplies: @escaping @Sendable () async -> [SageRitual.PipeReply] = { [] },
     /// Set by `MessageWakeBus` when the node reports canonical inbox work was
     /// durably inserted for this appliance. `nil` on a node with no wake bus,
     /// and on any build that has not started one, where this loop behaves
@@ -2028,6 +2015,23 @@ func runProactiveWatch(
             log("[watch] absorbing the owner's own task edits without announcing them")
         }
         let report = await watch.check(against: ledger, announcingTaskChanges: !ownEdit)
+
+        // **Only on a wake, and that is the whole of the gate.**
+        //
+        // The line above says "the node says a message is waiting; checking
+        // now", and until now nothing followed it when the check found nothing
+        // — leaving the one puzzling case in this loop with no explanation in
+        // the log at all. This is that explanation, and it is printed whatever
+        // the check found, because the two facts are independent: work held
+        // under another session's claim is perfectly compatible with there also
+        // being something new in the same reply.
+        //
+        // An ordinary interval check finding an empty inbox is not a puzzle and
+        // does not need ninety-six of these a day, so it does not get one.
+        if wokenByMessage {
+            log("[watch] " + ClaimedElsewhere.forTheLog(report.claimedElsewhere))
+        }
+
         ledger = report.ledger
         ledger.lastCheckedAt = Date()
         try? ledger.save(to: ledgerURL)
@@ -2062,7 +2066,12 @@ func runProactiveWatch(
         // the morning. That bug shipped once and the owner read it twice.
         for reply in await arrivedReplies() {
             log("[watch] a reply came back; telling the owner")
-            await say(reply, true, [])
+            // The sentence goes to the phone and the exact identity goes only
+            // into the stored copy — the same split the digest below makes, on
+            // the same road. `storedSenders` is empty when the node did not say
+            // who, and an empty list is already what `relayed` renders as no
+            // extra line rather than an invented one.
+            await say(reply.spokenDescription, true, reply.storedSenders)
         }
 
         guard let message = report.message else { continue }

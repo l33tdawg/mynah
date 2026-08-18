@@ -245,6 +245,75 @@ final class ExactSenderTests: XCTestCase {
             "a reminder is Mynah's own sentence and must not be marked as a relay"
         )
     }
+
+    // MARK: - The outbox half
+
+    /// **The half that was left open in 2.2.0.**
+    ///
+    /// The inbox side built this road: an announcement quoting another agent
+    /// goes to the phone as a plain sentence and into the model's history with
+    /// the exact identity attached. The *reply* side — an answer coming back to
+    /// work this appliance sent out — walked past it. `main.swift` mapped every
+    /// `PipeReply` to its sentence and called `say(reply, true, [])`, and that
+    /// literal empty array was where the identity was lost: the model's only
+    /// handle on the agent that had just answered was a mutable display label,
+    /// which is the condition that once sent the owner's messages to strangers.
+    ///
+    /// Nothing in `VoiceBridgeDaemon` changed to close it. The frame already
+    /// took the addresses and already put them in the stored copy and nowhere
+    /// else; the outbox half simply drives on the road the inbox half built.
+    func testTheOutboxHalfNowReachesTheStoredFrame() throws {
+        let wire = "62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838"
+        let reply = SageRitual.PipeReply(
+            from: "codex/sage",
+            text: "The roof quote came back at 4,200.",
+            exactAgent: AgentAddress.asAttributedByTheNode(
+                senderAgent: wire, displayName: "codex/sage", isForeign: false
+            )
+        )
+
+        let stored = VoiceBridgeDaemon.relayed(reply.spokenDescription, from: reply.storedSenders)
+        XCTAssertTrue(stored.contains(wire), stored)
+        XCTAssertTrue(stored.contains("codex/sage = \(wire)"), stored)
+        XCTAssertTrue(stored.contains("The roof quote came back at 4,200."), stored)
+
+        // And the phone copy — which is the argument itself — carries neither
+        // the id nor the frame.
+        XCTAssertFalse(reply.spokenDescription.contains(wire))
+        XCTAssertFalse(reply.spokenDescription.contains("["), reply.spokenDescription)
+    }
+
+    /// A reply from a node that did not say who gets the frame it always got:
+    /// no empty bracket, no address rebuilt from the label.
+    func testStoredSendersIsEmptyRatherThanInvented() {
+        let reply = SageRitual.PipeReply(from: "6aa1d1a4214855ff…", text: "Done.")
+        XCTAssertEqual(reply.storedSenders, [])
+
+        let stored = VoiceBridgeDaemon.relayed(reply.spokenDescription, from: reply.storedSenders)
+        XCTAssertFalse(stored.contains("exact agent"), stored)
+        XCTAssertTrue(stored.contains("another agent"))
+        XCTAssertTrue(stored.contains("Done."))
+    }
+
+    /// The wiring, at the one seam a test cannot import. Everything above can be
+    /// correct while the daemon still hands `[]` to `say`, which is exactly what
+    /// it did until this release.
+    func testTheDaemonHandsTheReplysOwnSendersToTheStoredCopy() throws {
+        let main = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/sage-voiced/main.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            main.contains("await say(reply.spokenDescription, true, reply.storedSenders)"),
+            "the agent that answered is announced with no identity attached"
+        )
+        XCTAssertFalse(
+            main.contains("collectArrivedReplies().map(\\.spokenDescription)"),
+            "the replies are flattened to sentences before their identities can be read"
+        )
+    }
 }
 
 /// A failed tool call's receipt, which is the only record of why it failed.

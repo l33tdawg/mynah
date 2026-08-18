@@ -176,21 +176,32 @@ final class BrainTierTests: XCTestCase {
 
     // MARK: The catalogue ratchet
 
-    /// **A ratchet, and the only job this field currently has.** Routing was
-    /// measured at 12/12 with 14 tools and 5–6/12 with 27; the allowlist holds
-    /// exactly twenty today, which sits between the two measurements and has
-    /// never itself been measured. A twenty-first tool turns this red and forces
-    /// somebody to run `scripts/measure-tool-routing.py` rather than letting the
-    /// catalogue drift past the cliff — which it already did once, past the "18"
-    /// its own comment claimed.
-    func testATwentyFirstToolForcesARemeasurement() {
+    /// **A ratchet.** Routing was measured at 12/12 with 14 tools and 5–6/12
+    /// with 27; the appliance composes exactly twenty today, which sits between
+    /// the two measurements and has never itself been measured. A twenty-first
+    /// tool turns this red and forces somebody to run
+    /// `scripts/measure-tool-routing.py` rather than letting the catalogue
+    /// drift past the cliff — which it already did once, past the "18" its own
+    /// comment claimed.
+    ///
+    /// **It counts the composed catalogue, and that is the change worth
+    /// noticing.** It used to count `BrainPrompts.voiceToolAllowlist`, which
+    /// was fine while one constant *was* the catalogue. It stopped being fine
+    /// the moment anything could publish a tool at runtime: a skills loader
+    /// could add five tools, sail past a ratchet still counting a constant
+    /// nobody had edited, and the guard would go on reporting success while
+    /// measuring nothing. That is the silent-success failure this repository
+    /// treats as worst, and a ratchet is the last place to accept it.
+    func testATwentyFirstToolForcesARemeasurement() async throws {
+        let composed = try await ComposedCatalogue.conversation()
         XCTAssertLessThanOrEqual(
-            BrainPrompts.voiceToolAllowlist.count,
+            composed.count,
             BrainCapabilities.onDevice.maxRoutableTools,
             """
-            The local catalogue has grown past the number routing was last sized for. \
-            Re-run scripts/measure-tool-routing.py against qwen3.5:4b and move \
-            BrainCapabilities.onDevice.maxRoutableTools with the measurement in the comment.
+            The local catalogue has grown to \(composed.count), past the number routing was last \
+            sized for. Re-run scripts/measure-tool-routing.py against qwen3.5:4b and move \
+            BrainCapabilities.onDevice.maxRoutableTools with the measurement in the comment. \
+            Composed: \(composed.sorted().joined(separator: ", ")).
             """
         )
     }
@@ -208,12 +219,25 @@ final class BrainTierTests: XCTestCase {
 
     // MARK: Vision
 
-    /// `false` on hosted states a fact about this repository, not about the
-    /// vendors: the word "image" does not appear in either hosted encoder, so a
-    /// hosted backend declaring vision would be claiming to have seen a picture
-    /// it dropped on the floor.
-    func testAHostedBrainIsStillBlindBecauseNobodyWroteTheEncoder() throws {
-        XCTAssertFalse(BrainCapabilities.hosted.mayCarryImages)
+    /// **The inversion of `testAHostedBrainIsStillBlindBecauseNobodyWroteTheEncoder`,
+    /// kept in place rather than deleted.**
+    ///
+    /// That test asserted `false` on hosted and scanned both hosted encoders for
+    /// the word "image", because the flag was stating a fact about this
+    /// repository rather than about the vendors: no encoder existed, so a hosted
+    /// backend declaring vision would have been claiming to have seen a picture
+    /// it dropped on the floor. Its failure message named what to do when the
+    /// encoders landed. They have, so this is that.
+    ///
+    /// The source scan survives, flipped: deleting an encoder while leaving the
+    /// tier flag up must turn something red, because that combination is exactly
+    /// the state the original test existed to prevent — and it is now reachable
+    /// from the other direction.
+    func testAHostedBrainSeesOnlyTheModelsTheTableNames() throws {
+        XCTAssertTrue(
+            BrainCapabilities.hosted.mayCarryImages,
+            "the ceiling is down, so no hosted model can see regardless of the table"
+        )
 
         for file in ["AnthropicBackend.swift", "OpenAICompatBackend.swift"] {
             let source = try String(
@@ -223,15 +247,27 @@ final class BrainTierTests: XCTestCase {
                     .appendingPathComponent("Sources/SageVoiceCore/Brain/\(file)"),
                 encoding: .utf8
             )
-            XCTAssertFalse(
+            XCTAssertTrue(
                 source.lowercased().contains("image"),
                 """
-                \(file) mentions images now. If the encoder has landed, flip \
-                BrainCapabilities.hosted.mayCarryImages and narrow it per model in \
-                CloudBrainModelCatalog — a model missing from that table must read as blind.
+                \(file) no longer mentions images, but BrainCapabilities.hosted.mayCarryImages \
+                is still true — so the tier claims a capability the encoder no longer has. \
+                Either restore the encoder or take the ceiling back down.
                 """
             )
         }
+
+        // **The ceiling is not the grant.** A hosted model the table does not
+        // name reads as blind, which is the whole reason flipping the flag was
+        // safe: the cost of omitting a sighted model is one lost description,
+        // and the cost of including a blind one is a fabricated photo
+        // description on the owner's phone.
+        XCTAssertFalse(CloudBrainModelCatalog.seesImages(model: "a-model-nobody-listed"))
+        XCTAssertFalse(CloudBrainModelCatalog.seesImages(model: ""))
+        XCTAssertFalse(
+            AnthropicBackend(modelName: "claude-opus-4-1", apiKey: "k").seesImages,
+            "a hosted backend inherited vision from its tier instead of its model"
+        )
     }
 
     // MARK: The wire, which is where the floor actually has to happen

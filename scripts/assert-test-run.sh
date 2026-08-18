@@ -102,15 +102,17 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2460   (2.3.0, a five-minute check the owner can choose;
+#   measured      2555   (2.5.0, measured on the build Mac on 2026-08-17 with every
+#                         vendor tree staged: "Executed 2555 tests, with 22 tests skipped";
+#                         2460 at 2.3.0, a five-minute check the owner can choose;
 #                         2456 at 2.2.0, answering the exact agent rather than the label;
 #                         2438 at 2.1.1, three defects the owner found by using 2.1.0;
 #                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2422   (2460 - 38)
-#   floor           2448   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2517   (2555 - 38)
+#   floor           2543   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -412,6 +414,67 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # it red for a reason unrelated to what it checks. Its fixture is now derived
 # from the constant rather than written as a number.
 #
+# 2460 to 2555 is 2.5.0, ninety-five tests and the largest single jump this
+# number has taken. Sixty are in six new files, which is what a release that
+# opens a surface looks like rather than one that repairs an old one; the other
+# thirty-five are a net, forty-nine new functions in existing files against
+# fourteen that went with the assertions they replaced.
+#
+# **Twenty-nine of them are about a photograph, and they are the ones to read
+# first, because that surface produced three separate lies before it worked.**
+# `BrainMessage.images` had existed since the day the type was written and only
+# `OllamaClient` ever read it: both hosted encoders accepted the array and
+# dropped it, with no error and no log, so the owner watched Signal upload a
+# picture and was told "I can't see an image attached to this message, nothing
+# came through" by a daemon that had already found it and read 94 KB off disk.
+#
+# Seventeen of the twenty-nine are `HostedVisionWireTests`, and they assert on
+# the serialised request body rather than on a helper, for the reason
+# BrainTierTests records about the output-token floor: a correct encoder nobody
+# calls is not an encoder. Seven are
+# `ABrainNeverClaimsToSeeWhatItWasNotSentTests`, for the third and worst lie —
+# told it COULD see and sent nothing, because the note was built from what the
+# attachment store had put on disk while the bytes came from a separate pass
+# that capped at three and dropped anything the encoder could not read. The
+# first two lies are a model reasoning from what it was given; that one is the
+# appliance instructing it to invent. Five are `APhotoIsSentOnceTests`, pinning
+# an invariant that sat in a doc comment from the day the type was written and
+# was never implemented — one picture in the context and in the shared
+# prompt-cache budget for all sixteen history turns, at roughly 125 KB of base64
+# a request.
+#
+# One existing test changed sides here rather than being deleted, and the
+# reversal is written down where a reader meets it:
+# testAHostedBrainIsStillBlindBecauseNobodyWroteTheEncoder asserted `false` on
+# the hosted tier and scanned both encoders for the word "image", because the
+# flag was stating a fact about this repository rather than about the vendors.
+# Its failure message named what to do when the encoders landed. They landed, so
+# the source scan survives flipped: deleting an encoder while leaving the tier
+# flag up still has to redden something.
+#
+# Fourteen are `ApplianceCatalogueTests`, whose stub publishes SAGE's whole
+# thirty-three tools rather than the interesting names — curation is defined by
+# what it leaves behind, and a fixture listing only the fifteen kept would pass
+# every test in that file while proving nothing about the eighteen dropped.
+#
+# Nine are `ReadOnlyToolsFanOutTests`, the second half of the owner's "its
+# better the agent does all the jobs and takes longer than reply with a half
+# done task": reads asked for together now run together, scoped to
+# `ToolLoopTrace.readOnlyTools` so a tool nobody listed — including a name the
+# model invented — counts as having acted and runs alone. The failure mode of a
+# missing entry is a lost speed-up, never two writes racing.
+#
+# Eight are `ClaimedElsewhereTests`, on why a wake found nothing, and they exist
+# because `as? Int ?? 0` on that path turns "I could not find out" into "nothing
+# is held elsewhere" — this project's worst defect class, landing in the one
+# sentence whose whole job is telling those two apart.
+#
+# Of the thirty-five in existing files, sixteen are `DocumentTemplateTests`,
+# from the owner's report that "asking the agent to make a pdf, just produces a
+# .md looking file in pdf format"; six put the exact counterparty on an answered
+# send; four hold the proactive probe to surviving each shape of return, with an
+# unreadable inbox leaving it nil rather than zero.
+#
 # The bridge's
 # own 88 JavaScript tests are NOT in this number and never will be: they run
 # under `node --test` from scripts/provision-whatsapp-bridge.sh, which is its
@@ -451,7 +514,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2448}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2543}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
@@ -495,6 +558,23 @@ FLOOR_SITS_UNDER="${MYNAH_FLOOR_SITS_UNDER:-12}"
 # room for three new opt-in tests rather than five. If you need more than that,
 # the right move is to stop skipping — raising this past 24 restores the blind
 # spot, and past 30 the gate stops seeing a missing document surface at all.
+#
+# **Healthy is 22 rather than 21 as of 2026-08-17**, and it is recorded here
+# because a ceiling is only a ceiling relative to the baseline it was set over —
+# the same rot the floor above has an assertion for, on a number that has none.
+# It is the same fully-provisioned build-Mac run the floor was measured from, and
+# every one of the 22 names an environment variable or a file that is not on this
+# Mac; none of them is a document tool. The one that moved is 2.5.0's end-to-end
+# document test, opt-in behind MYNAH_E2E, which skips on a machine that has
+# pandoc, typst and its packages all staged.
+#
+# The ceiling stays at 24 and the change is what it leaves: two tests of room
+# rather than three. The absent-tool numbers above were measured against a
+# baseline of 21 and have NOT been remeasured — on those same deltas an absent
+# vendor/typst-packages would now produce about 26, which this still catches, but
+# that is arithmetic and the 25 above is a measurement. Anyone raising this past
+# 24 has to remeasure rather than extrapolate, because the margin that made 24
+# safe is the part that just got smaller.
 MAX_SKIPPED="${MYNAH_MAX_SKIPPED_TESTS:-24}"
 
 # The line after "Test Suite 'All tests' passed", specifically, rather than the

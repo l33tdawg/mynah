@@ -517,7 +517,12 @@ final class OwnTaskEditsTests: XCTestCase {
         var tasks: [WatchedTask] = []
         var messages: [AgentInboxItem] = []
 
-        func waitingMessages(limit: Int) async throws -> [AgentInboxItem] { messages }
+        // A live node with nothing held under anybody else's claim — which is
+        // a *reading*, not an absence of one. `.notReported` here would quietly
+        // say "this node has no probe" in tests that are about something else.
+        func waitingMessages(limit: Int) async throws -> AgentInboxReading {
+            AgentInboxReading(items: messages, claimedElsewhere: .counted(0, state: "present"))
+        }
         func openTasks() async throws -> [WatchedTask] { tasks }
     }
 }

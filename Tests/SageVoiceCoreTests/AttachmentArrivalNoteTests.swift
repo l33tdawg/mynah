@@ -22,23 +22,32 @@ import XCTest
 /// kept, and reading it out answers a question nobody asked.
 final class AttachmentArrivalNoteTests: XCTestCase {
 
+    /// **The `seesImages:` label survives at the test's own boundary on purpose.**
+    ///
+    /// Every assertion below is the spec for a sentence the owner hears, and
+    /// those sentences did not change — only who they are said about. Keeping
+    /// this shim means each test body is byte-identical to the one that passed
+    /// before per-file `wasSent` existed, so a reviewer can see at a glance that
+    /// this was not a quiet rewrite of settled owner-facing wording.
+    ///
+    /// The one real change is what it maps to: a brain that can see is now just
+    /// the case where every photo's bytes went out.
     private func image(_ titles: [String], seesImages: Bool = false) -> String {
         AttachmentArrivalNote.text(
-            titles.map { .init(title: $0, isImage: true) }, seesImages: seesImages
+            titles.map { .init(title: $0, isImage: true, wasSent: seesImages) }
         ) ?? ""
     }
 
     private func document(_ titles: [String], seesImages: Bool = false) -> String {
         AttachmentArrivalNote.text(
-            titles.map { .init(title: $0, isImage: false) }, seesImages: seesImages
+            titles.map { .init(title: $0, isImage: false) }
         ) ?? ""
     }
 
     // MARK: - Nothing arrived
 
     func testNothingSaidWhenNothingWasSent() {
-        XCTAssertNil(AttachmentArrivalNote.text([], seesImages: false))
-        XCTAssertNil(AttachmentArrivalNote.text([], seesImages: true))
+        XCTAssertNil(AttachmentArrivalNote.text([]))
     }
 
     // MARK: - A document, at any capability
@@ -123,9 +132,9 @@ final class AttachmentArrivalNoteTests: XCTestCase {
     /// note, which is the point of splitting on type rather than on backend.
     func testAPhotoAndADocumentTogetherAreTreatedDifferently() {
         let text = AttachmentArrivalNote.text([
-            .init(title: "the plant on my balcony", isImage: true),
+            .init(title: "the plant on my balcony", isImage: true, wasSent: true),
             .init(title: "ferry booking", isImage: false)
-        ], seesImages: true) ?? ""
+        ]) ?? ""
 
         XCTAssertTrue(text.contains("\"the plant on my balcony\""), text)
         XCTAssertTrue(text.contains("\"ferry booking\""), text)

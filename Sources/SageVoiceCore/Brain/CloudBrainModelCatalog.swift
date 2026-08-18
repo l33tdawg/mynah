@@ -154,6 +154,76 @@ public enum CloudBrainModelCatalog {
         "gemini": Pick(fast: "gemini-3.6-flash", pro: "gemini-2.5-pro")
     ]
 
+    /// The models this product will put a photo on the wire for.
+    ///
+    /// **A model missing from this set reads as blind, and that is the whole
+    /// design.** The two errors are not symmetric. Leaving out a model that can
+    /// see costs one lost description and an honest sentence saying the picture
+    /// was kept but not looked at. Putting in a model that *cannot* see ships
+    /// the fabrication this whole feature exists to end — the owner is told
+    /// *"You can see it — say what it is, specifically"* about bytes the model
+    /// never received, and gets a confident description of a photo nobody read.
+    /// So the fallback is `false`, there is no prefix cleverness, and an id
+    /// nobody could confirm stays out.
+    ///
+    /// **Exact-id match, deliberately.** Vision is a property of the specific
+    /// model, not of the family: `gpt-5.6-luna` and `gpt-5.6-sol` both take
+    /// images, and a future `gpt-5.6-*` might not. Prefix matching would decide
+    /// that question by guessing, in the direction that lies.
+    ///
+    /// Every id below was read off the vendor's own current documentation on
+    /// 2026-08-17, one at a time, exactly as `docs/MODEL-CHOICES.md` requires —
+    /// and four ids we offer are **not** here because that reading said no or
+    /// said nothing:
+    ///
+    /// - **`deepseek-v4-flash` / `deepseek-v4-pro`.** DeepSeek's chat-completions
+    ///   schema documents text content for user messages and no image part; the
+    ///   V4 family exposes no image input on the public API. Both are out
+    ///   because the vendor says text-only, not because nobody looked.
+    /// - **`llama-3.1-8b-instant` / `llama-3.3-70b-versatile`.** Groq's model
+    ///   table lists no image modality for either. Vision on Llama lives in the
+    ///   3.2-vision and 4 families, which we do not offer.
+    /// - **`gemini-2.5-pro`.** Google's current model page does not state its
+    ///   input modalities, and the OpenAI-compatibility guide demonstrates image
+    ///   understanding with `gemini-3.6-flash` — so the flash tier is confirmed
+    ///   through the exact surface `OpenAICompatBackend` speaks and the pro tier
+    ///   is not. An owner on Gemini's Careful tier therefore loses picture
+    ///   reading and is told plainly that the photo was not looked at. That is
+    ///   the safe direction and it is still a regression; the door out is one
+    ///   confirmation away, which is why the id is named here rather than
+    ///   silently absent.
+    private static let sighted: Set<String> = [
+        // Anthropic prices image tokens for Haiku 4.5 by name in its own vision
+        // guide, and Sonnet 5 is documented as the first Sonnet-tier model with
+        // high-resolution image support (2576 px long edge).
+        "claude-haiku-4-5",
+        "claude-sonnet-5",
+        // Both OpenAI model pages state "Input modalities: text, image".
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        // Moonshot's own "Configure Kimi Vision Models" guide lists both ids and
+        // shows base64 image input through the `image_url` part — the exact
+        // shape `openAIWireObject` emits.
+        "kimi-k2.6",
+        "kimi-k3",
+        // Google's OpenAI-compatibility guide uses this id for its image
+        // understanding example, with a `data:image/jpeg;base64,…` URL.
+        "gemini-3.6-flash"
+    ]
+
+    /// Whether this product will send a photo to a given hosted model.
+    ///
+    /// Exact match, `false` for anything unlisted — including the empty string.
+    /// See `sighted` for why the fallback is the blind one.
+    public static func seesImages(model: String) -> Bool {
+        sighted.contains(model)
+    }
+
+    /// The sighted ids, sorted so a test can assert on them. Every entry must
+    /// also be a model some `Pick` offers — otherwise a typo would sit here
+    /// matching nothing, looking like coverage that does not exist.
+    public static var sightedModels: [String] { sighted.sorted() }
+
     /// The tier Mynah uses when nothing has said otherwise.
     public static let defaultTier: Tier = .fast
 

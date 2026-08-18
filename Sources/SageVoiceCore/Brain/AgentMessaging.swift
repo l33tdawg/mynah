@@ -188,6 +188,120 @@ public struct SentAgentMessage: Sendable, Equatable {
     public let sent: Date
 }
 
+// MARK: - Work this appliance can see and cannot have
+
+/// What `sage_inbox` says about messages held under *another* session's claim.
+///
+/// ## Why this exists at all
+///
+/// The appliance can be woken by the node — `MessageWakeBus` says canonical
+/// inbox work was durably inserted — look, and find nothing. Today that is
+/// unexplainable from the log: the wake line goes in, the check reports nothing
+/// changed, and there is no third line saying which of the two ordinary causes
+/// it was. One of them is that the work is real and already claimed by another
+/// runtime sharing this agent identity, where it will stay until that session
+/// finishes or the message expires.
+///
+/// ## Why three cases rather than an `Int?`
+///
+/// **The node's own contract sentence is that "an unavailable probe is explicit
+/// and never presented as zero"**, and the mechanism behind it is visible in
+/// the vendored binary: the field is a *pointer* to a struct —
+/// `*struct { Count int "json:\"claimed_elsewhere_count\"" }` — so when the
+/// probe cannot run the key is omitted entirely rather than sent as `0`.
+///
+/// Modelled as an `Int` with a `?? 0` anywhere on this path, "I could not find
+/// out" silently becomes "nothing is held elsewhere". That is this project's
+/// worst defect class — a feature reporting a success it did not achieve —
+/// landing in the one log line whose entire job is telling those two apart. So
+/// they are three cases, for the same reason `AgentMessagingTrouble` is an enum
+/// rather than one string: three different facts with three different next
+/// steps, and a type is what stops a future reader flattening two of them.
+public enum ClaimedElsewhere: Sendable, Equatable {
+    /// The probe ran and this is its answer. Exact and payload-free — the node
+    /// hands over a number and never the messages themselves.
+    case counted(Int, state: String)
+    /// The probe could not answer. **Not a count of zero**, and the whole
+    /// reason this type is not an `Int?`.
+    case unavailable(state: String)
+    /// The reply carried no probe at all.
+    ///
+    /// Which SAGE release introduced these keys is deliberately not asserted
+    /// anywhere here or in the log sentence: it could not be determined, and
+    /// this file already carries a long correction about a comment that stated
+    /// a durability window it had not measured. `claimed_elsewhere_*` **is**
+    /// present in the vendored node, so this case is a real older-node answer
+    /// rather than the ordinary one.
+    case notReported
+
+    /// One line for `bridge.log`, said the same way every time.
+    ///
+    /// ## Why the sentence is built here and not where it is logged
+    ///
+    /// `runProactiveWatch` lives in the `sage-voiced` executable, which no test
+    /// can import — the same reason `VoiceBridgeDaemon.relayed` is a static on a
+    /// library type. A sentence that can only be produced inside the daemon is a
+    /// sentence nothing can pin, and the distinction this one exists to make is
+    /// exactly the kind that rots quietly.
+    ///
+    /// ## Why it takes the Optional
+    ///
+    /// `nil` is a fourth fact: the inbox was not read on this check *at all*.
+    /// Collapsing it into `.notReported` would have a node with a working probe
+    /// described as a node without one, every time it was unreachable — the
+    /// same "could not ask" reported as "there is nothing to ask about" that
+    /// this whole type is built to refuse.
+    ///
+    /// **None of the five asserts what the check found.** A claim held elsewhere
+    /// is perfectly compatible with there also being new work in this reply, so
+    /// the line reports the field and stops.
+    public static func forTheLog(_ reading: ClaimedElsewhere?) -> String {
+        // Verbatim, never enumerated. `state` has been observed with exactly one
+        // value ("present"), and inventing a vocabulary for a field on that
+        // evidence is what `AgentMessagingTrouble.terminalFailure` warns against
+        // one file over. The appliance never branches on it; it only prints it.
+        func clause(_ state: String) -> String {
+            state.isEmpty ? "" : " (state: \(state))"
+        }
+        switch reading {
+        case .counted(let held, let state) where held > 0:
+            return "the node reports \(held) unfinished message(s) held by another claimant "
+                + "session\(clause(state)); this appliance cannot take those over — they clear "
+                + "when that session finishes or the message expires."
+        case .counted(_, let state):
+            // Zero, and anything below it. A negative is not a shape the node
+            // can produce, and if one ever arrived the honest reading is still
+            // "nothing is being held", which is this sentence.
+            return "the node reports no message held by another claimant session\(clause(state)); "
+                + "a wake that found nothing is not explained by a stranded claim."
+        case .unavailable(let state):
+            return "the node could not probe for messages held by another "
+                + "session\(clause(state)). This is not a count of zero."
+        case .notReported:
+            return "this node does not report claimed-elsewhere counts, so a wake that finds "
+                + "nothing cannot be explained from here."
+        case nil:
+            return "the inbox could not be read on this check, so nothing can be said about "
+                + "messages held elsewhere."
+        }
+    }
+}
+
+/// One reading of the inbox: what is waiting, and what the node said about work
+/// it is holding for somebody else.
+///
+/// A pair rather than two calls, because they arrive in one reply and asking
+/// twice would claim the inbox twice.
+public struct AgentInboxReading: Sendable, Equatable {
+    public let items: [AgentInboxItem]
+    public let claimedElsewhere: ClaimedElsewhere
+
+    public init(items: [AgentInboxItem], claimedElsewhere: ClaimedElsewhere) {
+        self.items = items
+        self.claimedElsewhere = claimedElsewhere
+    }
+}
+
 // MARK: - When it does not work
 
 /// Every way sending or reading can fail, each with its own sentence.
@@ -211,7 +325,7 @@ public enum AgentMessagingTrouble: LocalizedError, Equatable {
     ///
     /// **A distinct case because "nothing is waiting" and "I could not look" are
     /// opposite facts**, and the read used to hand both of them back as an empty
-    /// list. See `SageAgentMessaging.inbox`.
+    /// list. See `SageAgentMessaging.inboxReading`.
     case unreadableInbox(String)
 
     public var errorDescription: String? {
@@ -312,8 +426,22 @@ public protocol AgentMessaging: Sendable {
         intent: String?,
         retrying key: String?
     ) async throws -> SentAgentMessage
-    /// What is waiting. Called when the owner looks, never on a timer.
-    func inbox(limit: Int) async throws -> [AgentInboxItem]
+    /// What is waiting, **and what the node is holding for somebody else**.
+    /// Called when the owner looks, never on a timer.
+    ///
+    /// **The reading is the requirement and the plain list is the convenience,
+    /// for the same reason `retrying` is the requirement above.** It would read
+    /// better the other way round — add `inboxReading` to the extension with a
+    /// default of `.notReported` and leave every conformer alone. That default
+    /// would be a lie with a specific shape: a conformer that simply had not
+    /// been updated would report *"this node does not have a claimed-elsewhere
+    /// probe"* about a node that does, and the sentence built from it would
+    /// close off the one explanation a puzzled reader came looking for.
+    ///
+    /// Making the reading the thing a type must implement means the compiler
+    /// asks the question instead. Everything that only wants the items keeps
+    /// calling `inbox(limit:)` below, unchanged.
+    func inboxReading(limit: Int) async throws -> AgentInboxReading
 }
 
 public extension AgentMessaging {
@@ -326,6 +454,10 @@ public extension AgentMessaging {
         intent: String?
     ) async throws -> SentAgentMessage {
         try await send(message, to: recipient, intent: intent, retrying: nil)
+    }
+    /// Just the items, for the callers that have no use for the probe.
+    func inbox(limit: Int) async throws -> [AgentInboxItem] {
+        try await inboxReading(limit: limit).items
     }
     func inbox() async throws -> [AgentInboxItem] { try await inbox(limit: 20) }
 }

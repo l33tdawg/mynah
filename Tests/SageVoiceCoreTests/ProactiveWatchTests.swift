@@ -7,10 +7,15 @@ private struct ScriptedNode: ProactiveSource {
     var messages: [AgentInboxItem] = []
     var tasks: [WatchedTask] = []
     var refuses = false
+    /// What the node says it is holding under another session's claim. Defaults
+    /// to a live probe that found nothing rather than to `.notReported`, because
+    /// "this node has no probe" is a different fact and would be the wrong
+    /// backdrop for every test in this file that is about something else.
+    var claimedElsewhere: ClaimedElsewhere = .counted(0, state: "present")
 
-    func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
+    func waitingMessages(limit: Int) async throws -> AgentInboxReading {
         if refuses { throw AgentMessagingTrouble.nodeUnavailable }
-        return messages
+        return AgentInboxReading(items: messages, claimedElsewhere: claimedElsewhere)
     }
 
     func openTasks() async throws -> [WatchedTask] {
@@ -357,7 +362,9 @@ final class ProactiveWatchTests: XCTestCase {
     func testOneHalfBeingDownDoesNotSilenceTheOther() async {
         struct HalfDown: ProactiveSource {
             let inbox: [AgentInboxItem]
-            func waitingMessages(limit: Int) async throws -> [AgentInboxItem] { inbox }
+            func waitingMessages(limit: Int) async throws -> AgentInboxReading {
+                AgentInboxReading(items: inbox, claimedElsewhere: .counted(0, state: "present"))
+            }
             func openTasks() async throws -> [WatchedTask] { throw AgentMessagingTrouble.nodeUnavailable }
         }
         let known = [task("t1", "Book the hotel")]
@@ -376,6 +383,74 @@ final class ProactiveWatchTests: XCTestCase {
             .check(against: ProactiveLedger())
 
         XCTAssertFalse(report.ledger.hasSeeded)
+    }
+
+    // MARK: - What the node is holding for somebody else
+    //
+    // `check` returns from three places, and the one this feature exists for is
+    // the middle one: seeded, checked, nothing to say. A field added to the
+    // digest return and forgotten on that one would ship a feature that is
+    // silent in precisely the situation it was built for — so each path is
+    // pinned separately rather than by one test that happens to take one of
+    // them.
+
+    /// The first-ever check, which says nothing by design and still has to
+    /// carry it: a fresh install woken by the node deserves the same answer as
+    /// an old one.
+    func testTheProbeSurvivesTheUnseededReturn() async {
+        let node = ScriptedNode(
+            messages: [message("m1")],
+            claimedElsewhere: .counted(2, state: "present")
+        )
+        let report = await ProactiveWatch(source: node).check(against: ProactiveLedger())
+
+        XCTAssertNil(report.message, "the first check is silent")
+        XCTAssertEqual(report.claimedElsewhere, .counted(2, state: "present"))
+    }
+
+    /// **The case the whole feature exists for.** Woken, checked, nothing new,
+    /// nothing to say — and the node holding one message under another claim is
+    /// the only available explanation.
+    func testTheProbeSurvivesTheNothingToSayReturn() async {
+        let node = ScriptedNode(claimedElsewhere: .counted(1, state: "present"))
+        let report = await ProactiveWatch(source: node).check(against: knowing([]))
+
+        XCTAssertNil(report.message, "nothing was new, or this is testing the wrong return")
+        XCTAssertEqual(report.claimedElsewhere, .counted(1, state: "present"))
+    }
+
+    /// And a check that does announce something carries it too. A count above
+    /// zero is perfectly compatible with there also being new work in the same
+    /// reply, so the two are reported independently.
+    func testTheProbeSurvivesTheDigestReturn() async {
+        let node = ScriptedNode(
+            messages: [message("m9")],
+            claimedElsewhere: .counted(3, state: "present")
+        )
+        let report = await ProactiveWatch(source: node).check(against: knowing([]))
+
+        XCTAssertNotNil(report.message, "nothing was announced, so this is the wrong return")
+        XCTAssertEqual(report.claimedElsewhere, .counted(3, state: "present"))
+    }
+
+    /// **"Could not ask" is a fourth fact and stays `nil`.** Reported as
+    /// `.notReported` it would say *"this node has no probe"* about a node
+    /// nobody managed to reach — the same manufactured certainty as the
+    /// coalescing this file already documents. The task half still reports, so
+    /// the two halves are still independent after the signature change.
+    func testAnUnreadableInboxLeavesTheProbeNil() async {
+        struct InboxDown: ProactiveSource {
+            let tasks: [WatchedTask]
+            func waitingMessages(limit: Int) async throws -> AgentInboxReading {
+                throw AgentMessagingTrouble.unreadableInbox("{\"error\":\"starting up\"}")
+            }
+            func openTasks() async throws -> [WatchedTask] { tasks }
+        }
+        let report = await ProactiveWatch(source: InboxDown(tasks: [task("t1", "Book the hotel")]))
+            .check(against: knowing([]))
+
+        XCTAssertNil(report.claimedElsewhere)
+        XCTAssertEqual(report.sawTasks?.map(\.id), ["t1"], "the backlog half stopped reporting too")
     }
 }
 

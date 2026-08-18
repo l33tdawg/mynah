@@ -55,8 +55,8 @@ final class CompositeToolSourceTests: XCTestCase {
         let sage = makeSage()
         let web = FakeSource(toolNames: ["web_search"])
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: sage, isRequired: true),
-            .init(label: "web", provider: web, isRequired: false)
+            .inProcess(label: "sage", provider: sage, isRequired: true),
+            .inProcess(label: "web", provider: web, isRequired: false)
         ])
 
         let names = try await composite.listTools().map(\.name)
@@ -67,8 +67,8 @@ final class CompositeToolSourceTests: XCTestCase {
         let sage = makeSage()
         let web = FakeSource(toolNames: ["web_search"])
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: sage, isRequired: true),
-            .init(label: "web", provider: web, isRequired: false)
+            .inProcess(label: "sage", provider: sage, isRequired: true),
+            .inProcess(label: "web", provider: web, isRequired: false)
         ])
         _ = try await composite.listTools()
 
@@ -84,7 +84,7 @@ final class CompositeToolSourceTests: XCTestCase {
     func testACallBeforeAnyListStillRoutes() async throws {
         let web = FakeSource(toolNames: ["web_search"])
         let composite = CompositeToolSource(sources: [
-            .init(label: "web", provider: web, isRequired: false)
+            .inProcess(label: "web", provider: web, isRequired: false)
         ])
 
         let result = try await composite.call(name: "web_search", arguments: [:])
@@ -93,7 +93,7 @@ final class CompositeToolSourceTests: XCTestCase {
 
     func testAnInventedToolNameIsRejected() async throws {
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: makeSage(), isRequired: true)
+            .inProcess(label: "sage", provider: makeSage(), isRequired: true)
         ])
         _ = try await composite.listTools()
 
@@ -112,8 +112,8 @@ final class CompositeToolSourceTests: XCTestCase {
         let sage = makeSage()
         let web = FakeSource(toolNames: ["web_search"], listError: StubError(description: "offline"))
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: sage, isRequired: true),
-            .init(label: "web", provider: web, isRequired: false)
+            .inProcess(label: "sage", provider: sage, isRequired: true),
+            .inProcess(label: "web", provider: web, isRequired: false)
         ])
 
         let names = try await composite.listTools().map(\.name)
@@ -124,8 +124,8 @@ final class CompositeToolSourceTests: XCTestCase {
     func testARequiredSourceFailingFailsTheCatalogue() async {
         let sage = FakeSource(toolNames: [], listError: StubError(description: "sage node down"))
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: sage, isRequired: true),
-            .init(label: "web", provider: FakeSource(toolNames: ["web_search"]), isRequired: false)
+            .inProcess(label: "sage", provider: sage, isRequired: true),
+            .inProcess(label: "web", provider: FakeSource(toolNames: ["web_search"]), isRequired: false)
         ])
 
         do {
@@ -140,12 +140,19 @@ final class CompositeToolSourceTests: XCTestCase {
 
     // MARK: Shadowing
 
+    /// **Curated to include the contested name**, which is what the class doc
+    /// says the escape hatch is. That file used to promise a SAGE which shipped
+    /// its own `web_search` would win "without a code change"; it now wins with
+    /// a one-line change, in the place where SAGE's catalogue is curated —
+    /// which is where somebody weighing two implementations of one tool would
+    /// be looking anyway. Asserted here, so the hatch is known to work rather
+    /// than merely documented.
     func testTheFirstSourceToPublishANameKeepsIt() async throws {
         let sage = makeSage(["sage_recall", "web_search"])
         let web = FakeSource(toolNames: ["web_search"])
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: sage, isRequired: true),
-            .init(label: "web", provider: web, isRequired: false)
+            .external(label: "sage", provider: sage, isRequired: true, curated: ["sage_recall", "web_search"]),
+            .inProcess(label: "web", provider: web, isRequired: false)
         ])
         _ = try await composite.listTools()
 
@@ -157,8 +164,8 @@ final class CompositeToolSourceTests: XCTestCase {
 
     func testAShadowedToolIsPublishedOnlyOnce() async throws {
         let composite = CompositeToolSource(sources: [
-            .init(label: "sage", provider: makeSage(["web_search"]), isRequired: true),
-            .init(label: "web", provider: FakeSource(toolNames: ["web_search"]), isRequired: false)
+            .external(label: "sage", provider: makeSage(["web_search"]), isRequired: true, curated: ["web_search"]),
+            .inProcess(label: "web", provider: FakeSource(toolNames: ["web_search"]), isRequired: false)
         ])
 
         let names = try await composite.listTools().map(\.name)
@@ -168,31 +175,27 @@ final class CompositeToolSourceTests: XCTestCase {
     // MARK: The silent-partial-catalogue guard
 
     /// Regression test for a hole that opened when the catalogue stopped coming
-    /// from one place. `ToolLoop`'s allowlist fails closed only when *nothing*
-    /// matches — and web search always matches — so a SAGE that renamed every
-    /// tool would leave the model with one tool, no memory, and no error.
+    /// from one place. The old loop-level allowlist failed closed only when
+    /// *nothing anywhere* matched — and web search always matched — so a SAGE
+    /// that renamed every tool would leave the model with one tool, no memory,
+    /// and no error.
     func testARequiredSourcePublishingNoRecognisedToolIsFatal() async {
         let renamedSage = FakeSource(toolNames: ["brain_recall", "brain_remember"])
         let composite = CompositeToolSource(sources: [
-            .init(
+            .external(
                 label: "SAGE MCP",
                 provider: renamedSage,
                 isRequired: true,
-                expectedToolNames: ["sage_recall", "sage_remember"]
+                curated: ["sage_recall", "sage_remember"]
             ),
-            .init(
-                label: "web search",
-                provider: FakeSource(toolNames: ["web_search"]),
-                isRequired: false,
-                expectedToolNames: ["web_search"]
-            )
+            .inProcess(label: "web search", provider: FakeSource(toolNames: ["web_search"]), isRequired: false)
         ])
 
         do {
             _ = try await composite.listTools()
             XCTFail("expected a partial catalogue to be refused")
         } catch let failure as CompositeToolSource.Failure {
-            guard case .sourceContributedNothing(let label, _, let published) = failure else {
+            guard case .curationMatchedNothing(let label, _, let published) = failure else {
                 return XCTFail("wrong failure: \(failure)")
             }
             XCTAssertEqual(label, "SAGE MCP")
@@ -202,28 +205,43 @@ final class CompositeToolSourceTests: XCTestCase {
         }
     }
 
-    func testOneRecognisedToolIsEnoughToPassTheGuard() async throws {
+    /// **Both halves, and the second one is new.** A curated source growing a
+    /// tool must not trip the guard — SAGE ships new tools between releases and
+    /// an appliance that refused to boot over one would be worse than useless.
+    /// It must also not have that tool *admitted*: the catalogue ships at
+    /// exactly the tier ceiling, so a name nobody chose to offer is a slot
+    /// taken from a name somebody measured for.
+    func testOneRecognisedToolIsEnoughToPassTheGuardAndTheRestStayOut() async throws {
         let composite = CompositeToolSource(sources: [
-            .init(
+            .external(
                 label: "SAGE MCP",
                 provider: FakeSource(toolNames: ["sage_recall", "sage_something_new"]),
                 isRequired: true,
-                expectedToolNames: ["sage_recall", "sage_remember"]
+                curated: ["sage_recall", "sage_remember"]
             )
         ])
 
         let names = try await composite.listTools().map(\.name)
-        XCTAssertEqual(names, ["sage_recall", "sage_something_new"], "SAGE growing a tool must not trip the guard")
+        XCTAssertEqual(names, ["sage_recall"], "an uncurated tool SAGE added upstream reached the model")
     }
 
-    func testAnOptionalSourceFailingTheGuardIsDroppedNotFatal() async throws {
+    /// The same fail-closed check on an optional source degrades instead. This
+    /// is the shape an owner-added MCP server takes: curated to whatever they
+    /// ticked in preferences, and a server that renamed everything costs them
+    /// that server rather than the appliance.
+    func testAnOptionalSourceMatchingNoCuratedNameIsDroppedNotFatal() async throws {
         let composite = CompositeToolSource(sources: [
-            .init(label: "SAGE MCP", provider: makeSage(), isRequired: true, expectedToolNames: ["sage_recall"]),
-            .init(
-                label: "web search",
+            .external(
+                label: "SAGE MCP",
+                provider: makeSage(),
+                isRequired: true,
+                curated: ["sage_recall", "sage_remember"]
+            ),
+            .external(
+                label: "an owner-added MCP server",
                 provider: FakeSource(toolNames: ["something_else"]),
                 isRequired: false,
-                expectedToolNames: ["web_search"]
+                curated: ["the_thing_they_ticked"]
             )
         ])
 
@@ -231,16 +249,55 @@ final class CompositeToolSourceTests: XCTestCase {
         XCTAssertEqual(names, ["sage_recall", "sage_remember"])
     }
 
-    /// The wiring the CLI actually uses. If web search is not in the allowlist
-    /// the model never sees it, and the feature is a silent no-op.
-    func testTheVoiceAllowlistIncludesWebSearch() {
-        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains(WebSearchToolSource.toolName))
+    /// A required in-process source has no curation to match, so the only
+    /// expectation left is that it publishes something at all. Notes and the
+    /// after-the-call queue are required for the reason web search is not: they
+    /// have no network to be down and no credential to expire, so an empty
+    /// catalogue means the appliance itself is broken and degrading quietly
+    /// would hide it.
+    func testARequiredInProcessSourcePublishingNothingIsFatal() async {
+        let composite = CompositeToolSource(sources: [
+            .external(label: "SAGE MCP", provider: makeSage(), isRequired: true, curated: ["sage_recall"]),
+            .inProcess(label: "notes", provider: FakeSource(toolNames: []), isRequired: true)
+        ])
+
+        do {
+            _ = try await composite.listTools()
+            XCTFail("a required in-process source published nothing and the catalogue was accepted")
+        } catch let failure as CompositeToolSource.Failure {
+            XCTAssertEqual(failure, .requiredSourcePublishedNothing(label: "notes"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    /// **The intent survives; the mechanism it asserted does not.** Web search
+    /// shipped as a silent no-op because its name was missing from the one set
+    /// that filtered the composed catalogue, and this test was written to stop
+    /// that recurring. That set no longer names it — `web_search` is published
+    /// by an in-process source that self-declares — so asserting its membership
+    /// would now be asserting the bug back.
+    ///
+    /// What the owner cares about is unchanged and is what is asserted: the
+    /// tool the model is offered. Composed, not curated.
+    func testWebSearchIsInTheCatalogueTheModelIsOffered() async throws {
+        let offered = try await ComposedCatalogue.conversation()
+        XCTAssertTrue(
+            offered.contains(WebSearchToolSource.toolName),
+            "web search is built and never offered, which is the exact shape of the bug this "
+                + "test was written for: \(offered.sorted())"
+        )
+        XCTAssertFalse(
+            BrainPrompts.sageToolCuration.contains(WebSearchToolSource.toolName),
+            "web_search is back in the SAGE curation. It is not a SAGE tool, and a name there is "
+                + "a name the composite will only admit if SAGE itself publishes it."
+        )
     }
 
     /// Replies to messages we sent live in the durable outbox, not `sage_inbox`.
     /// The live agent must be able to inspect that outbox when the owner asks.
-    func testTheVoiceAllowlistIncludesSentMessageHistory() {
-        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains("sage_message_history"))
+    func testTheCurationIncludesSentMessageHistory() {
+        XCTAssertTrue(BrainPrompts.sageToolCuration.contains("sage_message_history"))
         XCTAssertTrue(BrainPrompts.voiceAgentManager.contains("sage_message_history"))
         XCTAssertTrue(BrainPrompts.voiceAgentManager.contains(#"{"folder":"outbox"}"#))
         XCTAssertFalse(
@@ -261,9 +318,9 @@ final class CompositeToolSourceTests: XCTestCase {
     /// Nothing fetches replies. They arrive on `sage_turn.pipe_results` and the
     /// surface announces them, which is why the model kept casting about.
     func testTheModelIsNotOfferedTheToolThatSendsResultsToOtherAgents() {
-        XCTAssertFalse(BrainPrompts.voiceToolAllowlist.contains("sage_pipe_result"))
+        XCTAssertFalse(BrainPrompts.sageToolCuration.contains("sage_pipe_result"))
         XCTAssertTrue(
-            BrainPrompts.voiceToolAllowlist.contains("sage_message_send"),
+            BrainPrompts.sageToolCuration.contains("sage_message_send"),
             """
             sending work out is still Mynah's job. `sage_pipe` was swapped for \
             `sage_message_send` on 5 August 2026 — "message inbox outbox is the \
@@ -297,7 +354,7 @@ final class CompositeToolSourceTests: XCTestCase {
     /// sage_inbox, sage_message_reply` on "did anyone get back to me". If that
     /// appears, this comes out and the argument above is why.
     func testReplyingIsOfferedWithItsRiskWrittenDown() {
-        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains("sage_message_reply"))
+        XCTAssertTrue(BrainPrompts.sageToolCuration.contains("sage_message_reply"))
         // Still classified as a send, so `WorkingReply` narrates it as an action
         // and the receipt discipline applies — the thing that made the
         // pipe_result incident legible after the fact.

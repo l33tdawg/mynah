@@ -299,6 +299,68 @@ final class AgentMessagingTests: XCTestCase {
         XCTAssertTrue(items.first?.expectsAResult == true)
     }
 
+    /// **The regression guard on moving the protocol requirement.** `inbox` is
+    /// an extension over `inboxReading` now, and every item field this appliance
+    /// reads has to survive that: the id, the label, the trust, the reply
+    /// address and `requires_reply`. Parsed from a modern envelope carrying the
+    /// claimed-elsewhere probe, because that is the reply shape the change was
+    /// made for — the probe must ride alongside the items and not instead of
+    /// them.
+    ///
+    /// The item is the live 11.18.13 local shape pinned in `ExactSenderTests`;
+    /// the probe keys are as recorded from 11.18.17. Composed deliberately: the
+    /// captured reading in `Tests/Fixtures/sage_inbox-11.18.17-claimed-elsewhere.json`
+    /// is a real one, and what makes it interesting is that it holds *no*
+    /// unclaimed items — so it cannot answer this question.
+    func testItemsStillParseAlongsideTheProbe() async throws {
+        let tools = ScriptedTools(replies: ["sage_inbox": #"""
+            {"coordination_schema":"sage.inbox.v2","count":1,"items":[
+            {"message_id":"msg-16539de7","from":"codex/sage",
+            "sender_agent":"62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838",
+            "source_chain_id":"","trust":"agent_untrusted","requires_reply":true,
+            "payload":"Coordinate the bridge fix"}],
+            "claimed_elsewhere_count":1,"claimed_elsewhere_state":"present",
+            "message_count":1,"task_assignment_count":0}
+            """#])
+
+        let read = try await SageAgentMessaging(tools: tools).inboxReading(limit: 20)
+
+        XCTAssertEqual(read.claimedElsewhere, .counted(1, state: "present"))
+        XCTAssertEqual(read.items.map(\.id), ["msg-16539de7"])
+        XCTAssertEqual(read.items.first?.content.sender, "codex/sage")
+        XCTAssertEqual(read.items.first?.content.trust, .anotherAgentHere)
+        XCTAssertEqual(
+            read.items.first?.replyTo?.wire,
+            "62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838"
+        )
+        XCTAssertTrue(read.items.first?.expectsAResult == true)
+        // And the convenience over it hands back the same items, which is what
+        // every existing caller still uses.
+        let items = try await SageAgentMessaging(tools: tools).inbox()
+        XCTAssertEqual(items, read.items)
+    }
+
+    /// **The probe is read, and it is still not evidence that a reply is an
+    /// inbox.** Admitting these keys to `isAnInbox` would make a body carrying
+    /// only the probe — an error shape, a partial reply, whatever the node grows
+    /// next — parse as a *successful empty inbox*, which is the precise fault
+    /// `InboxFailureIsNotAnEmptyInboxTests` exists to record.
+    func testProbeKeysAloneAreStillNotAnInbox() async {
+        XCTAssertFalse(SageAgentMessaging.isAnInbox([
+            "claimed_elsewhere_count": 1, "claimed_elsewhere_state": "present"
+        ]))
+        let tools = ScriptedTools(replies: ["sage_inbox": #"""
+            {"error":"pipeline inbox: Active agent required",
+            "claimed_elsewhere_count":0,"claimed_elsewhere_state":"present"}
+            """#])
+        do {
+            let read = try await SageAgentMessaging(tools: tools).inboxReading(limit: 20)
+            XCTFail("a refusal carrying the probe read as \(read.items.count) item(s)")
+        } catch {
+            // The point.
+        }
+    }
+
     /// The node caps at 20. Asking for more should not make the two disagree.
     func testTheInboxLimitIsClampedToWhatTheNodeAccepts() async throws {
         let tools = ScriptedTools(replies: ["sage_inbox": #"{"items":[]}"#])

@@ -507,6 +507,161 @@ final class PipeReplyTests: XCTestCase {
         let replies = await ritual.drainReplies()
         XCTAssertEqual(replies.first?.spokenDescription, "Claude replied: Done.")
     }
+
+    // MARK: - Who actually answered
+    //
+    // The outbox half of the exact-sender fix. 2.2.0 put the authenticated
+    // identity on every *inbox* item and carried it into the stored copy of an
+    // announcement; the reply path kept reading `counterparty`, which is a
+    // display label — and on the captured 11.17.10 outbox is worse than a
+    // label, being a hex string the node itself truncated to sixteen characters
+    // and an ellipsis. Nothing can be addressed with that.
+
+    /// **The keys are as recorded from a live 11.18.17 outbox on an answered
+    /// send; the envelope around them follows the 11.17.10 capture.** Said
+    /// exactly rather than loosely, because this file already carries a note
+    /// about a fixture that was believed to be a capture and an assertion that
+    /// was believed to follow from it: `counterparty`, `counterparty_agent`,
+    /// `counterparty_display_name`, `counterparty_registered_name` and `result`
+    /// are the measured part, and the ids, timestamps and payload text are
+    /// written to match the shape of the row they came from.
+    ///
+    /// Two things it pins that no hand-written case would: `counterparty_agent`
+    /// is the full exact identity beside the display and registered names, and
+    /// `result` — guessed first in the candidate list since the day this was
+    /// written, and never once verified against the wire — is the reply key.
+    func testAnAnsweredSendCarriesTheExactCounterparty() async throws {
+        let captured = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/sage_message_history-outbox-11.18.17-answered.json"),
+            encoding: .utf8
+        )
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: captured)
+
+        let replies = await ritual.drainReplies()
+        let reply = try XCTUnwrap(replies.first)
+        XCTAssertEqual(
+            reply.exactAgent?.wire,
+            "62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838",
+            "the identity of the agent that answered never left the outbox row"
+        )
+        XCTAssertEqual(reply.from, "codex/sage", "the owner hears the name, not the id")
+        XCTAssertEqual(reply.exactAgent?.displayName, "codex/sage")
+        XCTAssertEqual(reply.exactAgent?.isForeign, false)
+        XCTAssertTrue(reply.text.contains("Under result"), reply.text)
+    }
+
+    /// **The exact id is carried whole or not at all.** `shortened` cuts any hex
+    /// run over 24 characters to eight and an ellipsis, which is right for a
+    /// name being read aloud and fatal for an address — eight characters of an
+    /// agent id reaches nobody while still looking like an identity.
+    func testTheWireIsNotShortened() async throws {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-w","counterparty_display_name":"codex/sage","#
+                + #""counterparty_agent":"62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838","#
+                + #""completed_at":"\#(then)","result":"Done."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        let reply = try XCTUnwrap(replies.first)
+        XCTAssertEqual(reply.exactAgent?.wire.count, 64)
+        XCTAssertFalse(reply.exactAgent?.wire.contains("…") == true, "the address was truncated")
+    }
+
+    /// **The pinned 11.17.10 capture has no `counterparty_agent`, and nothing is
+    /// invented from what it does have.** Its `counterparty` reads
+    /// `"6aa1d1a4214855ff…"` — truncated *by the node*, with a literal ellipsis
+    /// in it. Building an address from that would produce a plausible-looking
+    /// identity that reaches nobody, which is worse than having none.
+    func testAnOlderOutboxRowInventsNothing() async throws {
+        let captured = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Fixtures/sage_message_history-outbox-11.17.10.json"),
+            encoding: .utf8
+        )
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: captured)
+
+        let replies = await ritual.drainReplies()
+        let reply = try XCTUnwrap(replies.first)
+        XCTAssertNil(reply.exactAgent, "an address was built out of a truncated label")
+        XCTAssertEqual(reply.storedSenders, [])
+        XCTAssertTrue(reply.from.hasPrefix("6aa1d1a4"), reply.from)
+    }
+
+    /// The failure branch is the one that regresses silently when only the happy
+    /// path is wired, and a broken promise is the thing the owner is most likely
+    /// to want to follow up on.
+    func testAnUndeliveredSendAlsoCarriesTheIdentity() async throws {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-dead","counterparty":"Kestrel","#
+                + #""counterparty_agent":"7f2b91aabbccddee0011223344556677889900aabbccddeeff0011223344556","#
+                + #""status":"expired"}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        let reply = try XCTUnwrap(replies.first)
+        XCTAssertEqual(reply.kind, .neverArrived(why: "it expired before it could be delivered"))
+        XCTAssertEqual(
+            reply.exactAgent?.wire,
+            "7f2b91aabbccddee0011223344556677889900aabbccddeeff0011223344556"
+        )
+        XCTAssertEqual(reply.storedSenders.count, 1)
+    }
+
+    /// A federated counterparty is addressed `id@chain`, and the whole string is
+    /// the exact `to`. Stripping at the `@` leaves a bare id that reaches nobody
+    /// once it leaves this SAGE — the same rule `AgentInboxItem.replyTo` keeps
+    /// on the inbox side.
+    func testAForeignCounterpartyKeepsItsChain() async throws {
+        let ritual = await seeded()
+
+        await ritual.noteResults(in: outbox(
+            #"{"message_id":"msg-far","counterparty_display_name":"MYNAH@studio","#
+                + #""counterparty_agent":"abc123@sage-studio","#
+                + #""completed_at":"\#(then)","result":"Got it."}"#
+        ))
+
+        let replies = await ritual.drainReplies()
+        let reply = try XCTUnwrap(replies.first)
+        XCTAssertEqual(reply.exactAgent?.wire, "abc123@sage-studio")
+        XCTAssertEqual(reply.exactAgent?.isForeign, true)
+    }
+
+    /// **The owner's-phone guarantee.** `spokenDescription` is what goes to
+    /// Signal; the exact id belongs only in the stored frame. Reading a
+    /// 64-character hex string to somebody is not an answer.
+    func testTheExactIdIsNeverInWhatIsSpoken() throws {
+        let wire = "62a4fb76cb0ff019a2e44d2f49a4ee34efbee63a290c4afae055ef88345a1838"
+        let exact = try XCTUnwrap(AgentAddress.asAttributedByTheNode(
+            senderAgent: wire, displayName: "codex/sage", isForeign: false
+        ))
+        for reply in [
+            SageRitual.PipeReply(from: "codex/sage", text: "Done.", exactAgent: exact),
+            SageRitual.PipeReply(
+                from: "codex/sage", text: "",
+                kind: .neverArrived(why: "it expired before it could be delivered"),
+                exactAgent: exact
+            )
+        ] {
+            let spoken = reply.spokenDescription
+            XCTAssertFalse(spoken.contains(wire), spoken)
+            XCTAssertNil(
+                spoken.range(of: "[0-9a-fA-F]{24,}", options: .regularExpression),
+                "a long hex run reached the owner's phone: \(spoken)"
+            )
+            XCTAssertTrue(spoken.contains("codex/sage"), spoken)
+        }
+    }
 }
 
 /// A node that answers nothing, for the parsing tests above.

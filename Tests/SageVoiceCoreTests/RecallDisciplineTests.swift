@@ -153,7 +153,7 @@ final class RecallDisciplineTests: XCTestCase {
     /// the catalogue without reading the prompt.
     func testTheToolTheRuleNamesIsActuallyOffered() {
         XCTAssertTrue(
-            BrainPrompts.voiceToolAllowlist.contains("sage_forget"),
+            BrainPrompts.sageToolCuration.contains("sage_forget"),
             "the correction rule names a tool the model is never given"
         )
     }

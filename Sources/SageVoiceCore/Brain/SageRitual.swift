@@ -736,11 +736,50 @@ public actor SageRitual {
         public let text: String
         public let kind: Kind
 
-        public init(from: String, text: String, kind: Kind = .reply) {
+        /// The exact identity behind `from`, for the *stored* copy only.
+        ///
+        /// **This is the outbox half of the fix `AgentInboxItem.replyTo` made
+        /// for the inbox.** `from` is a display label: mutable, chosen by the
+        /// node for presentation, and shareable by two different agents — which
+        /// is recorded in `SageAgentIdentity` as how the owner's messages once
+        /// reached strangers. On an older node it is worse than mutable; the
+        /// captured 11.17.10 outbox carries `"counterparty": "6aa1d1a4214855ff…"`,
+        /// a hex string the node itself truncated, which routes nowhere.
+        /// `counterparty_agent` is the full identity and is what this holds.
+        ///
+        /// **Named `exactAgent` rather than `replyTo`, and the asymmetry is the
+        /// point.** An inbox item is always something to answer, so `replyTo`
+        /// is honest there. A `PipeReply` is either an answer that arrived or a
+        /// send that never did, and on the second one this agent is not
+        /// somebody to reply to — nothing here replays a send, deliberately;
+        /// see `AgentSendJournal`. A name promising a reply path would be a
+        /// promise half these values cannot keep.
+        ///
+        /// Nil when the node did not say, which is a real answer meaning "ask
+        /// the node" and never a licence to rebuild an address from the label.
+        public let exactAgent: AgentAddress?
+
+        public init(
+            from: String,
+            text: String,
+            kind: Kind = .reply,
+            exactAgent: AgentAddress? = nil
+        ) {
             self.from = from
             self.text = text
             self.kind = kind
+            self.exactAgent = exactAgent
         }
+
+        /// The identities to attach to the stored copy of this announcement.
+        ///
+        /// A list because that is the shape `VoiceBridgeDaemon.relayed(_:from:)`
+        /// takes — one reply names one agent, and an empty list is what the
+        /// frame is already built to render as no extra line at all. Pairing it
+        /// here rather than at the call site keeps the "and nothing invented
+        /// when the node did not say" rule in a place a test can reach; the
+        /// daemon loop that consumes it cannot be imported.
+        public var storedSenders: [AgentAddress] { exactAgent.map { [$0] } ?? [] }
 
         /// One sentence for the owner, attributed.
         public var spokenDescription: String {
@@ -844,6 +883,17 @@ public actor SageRitual {
     /// skipped rather than announced empty — an owner told "Kestrel replied"
     /// with nothing attached learns less than one told nothing.
     ///
+    /// **`result` has since been read off the wire, and the guess was right.**
+    /// An answered send on a live 11.18.17 node carries `"result": "<the reply
+    /// text>"` beside `counterparty_agent`, `counterparty_display_name` and
+    /// `counterparty_registered_name`. Kept as `Tests/Fixtures/`
+    /// `sage_message_history-outbox-11.18.17-answered.json`, so the shape that
+    /// could not be captured in the 11.17.10 outbox now has a fixture of its
+    /// own and the candidate list is pinned rather than merely hopeful. The
+    /// paragraph above stays because the lesson in it is about how the key was
+    /// arrived at, and that has not changed: the ordering is still a guess for
+    /// every candidate after the first.
+    ///
     /// Note `completed_at` is an empty *string* when absent, not a missing key,
     /// which is why emptiness is checked rather than nullity.
     func noteResults(in answer: String) {
@@ -888,8 +938,10 @@ public actor SageRitual {
         for result in results {
             // `counterparty` is the outbox's word for the agent this was sent
             // to, and on an answered send that is the agent who answered.
-            let from = Self.text(result, ["counterparty", "from", "from_name", "agent", "responder"])
-                ?? "one of your agents"
+            let answered = Self.counterparty(
+                of: result, labelledBy: ["from", "from_name", "agent", "responder"]
+            )
+            let from = answered.spoken
             // **Never `payload`.** In an outbox `payload` is the message *this
             // appliance sent*, so reading it as an answer would have Mynah
             // telling the owner its own words back as though somebody had
@@ -907,17 +959,28 @@ public actor SageRitual {
             // nothing else. `message_id` is exact and durable — the outbox's own
             // identifier, renamed from `pipe_id` at 11.17.4 by `toolMessageHistory`
             // rather than by the formatter, which is why both are read.
-            let identity = Self.text(result, ["message_id", "pipe_id", "id"]) ?? "\(from)|\(said)"
+            //
+            // **`answered.forDedupe`, not `from`.** The spoken label now
+            // prefers `counterparty_display_name`, which is right for the ear
+            // and wrong here: a key that changes when the reader's preferences
+            // improve re-announces every id-less reply the owner has already
+            // heard. See `counterparty(of:labelledBy:)`.
+            let identity = Self.text(result, ["message_id", "pipe_id", "id"])
+                ?? "\(answered.forDedupe)|\(said)"
             guard !alreadySaid.has(identity) else { continue }
             alreadySaid.remember(identity)
             changed = true
             guard !seeding else { continue }
-            arrivedReplies.append(PipeReply(from: Self.shortened(from), text: said))
+            arrivedReplies.append(
+                PipeReply(from: from, text: said, exactAgent: answered.exact)
+            )
         }
         for dead in stranded {
             // `counterparty` again, and here it is the agent who never got it.
-            let to = Self.text(dead, ["counterparty", "to", "to_name", "agent", "recipient"])
-                ?? "one of your agents"
+            let intended = Self.counterparty(
+                of: dead, labelledBy: ["to", "to_name", "agent", "recipient"]
+            )
+            let to = intended.spoken
             guard let why = Self.terminalFailure(in: dead) else { continue }
             // The same ledger as answered sends, so a failure is said once and
             // then never again however long the node goes on listing it. No
@@ -934,7 +997,16 @@ public actor SageRitual {
             changed = true
             guard !seeding else { continue }
             arrivedReplies.append(
-                PipeReply(from: Self.shortened(to), text: "", kind: .neverArrived(why: why))
+                PipeReply(
+                    from: to, text: "",
+                    kind: .neverArrived(why: why),
+                    // **The failure branch gets it too.** A broken promise is
+                    // the case the owner is most likely to follow up on, and it
+                    // is also the branch that silently regresses when only the
+                    // happy path is wired — so the identity of the agent who
+                    // never received it is carried on exactly the same terms.
+                    exactAgent: intended.exact
+                )
             )
         }
         if seeding {
@@ -989,10 +1061,76 @@ public actor SageRitual {
     }
 
     /// A 64-character hex agent id is not a name anybody can hear read out.
+    ///
+    /// **Never let this near a wire value.** It cuts any hex string over 24
+    /// characters down to eight and an ellipsis, which is precisely the
+    /// mutilation that turns an exact agent id into an address reaching nobody
+    /// while still looking plausible. It runs over labels, and `counterparty`
+    /// is a label — see `counterparty(of:labelledBy:)`, where the two are read
+    /// apart deliberately.
     private static func shortened(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard trimmed.count > 24, trimmed.allSatisfy({ $0.isHexDigit }) else { return trimmed }
         return String(trimmed.prefix(8)) + "…"
+    }
+
+    /// The other agent on an outbox row, as three separate things: the name to
+    /// say out loud, the identity to write down, and the key to recognise the
+    /// row by.
+    ///
+    /// ## They are read from different keys, and that is the fix
+    ///
+    /// The outbox names the other side four ways. `counterparty_agent` is the
+    /// full exact identity — 64 hex characters locally, `id@chain` for a
+    /// federated agent. `counterparty_display_name`, `counterparty_registered_name`
+    /// and plain `counterparty` are presentation, and the node's own words for
+    /// labels like these are *"optional presentation metadata"* and *"no label
+    /// establishes authorization"*.
+    ///
+    /// Until this existed the appliance read `counterparty` and threw the rest
+    /// away, so the model's only handle on an agent that had just answered was
+    /// a mutable name — the inbox half of that was fixed in 2.2.0 and this half
+    /// was left open. On the pinned 11.17.10 fixture it is worse than mutable:
+    /// `counterparty` there is `"6aa1d1a4214855ff…"`, truncated *by the node*,
+    /// with a literal ellipsis in it. Nothing can be addressed with that.
+    ///
+    /// **`shortened` is applied to the label and never to the identity.** The
+    /// display name may well be a raw hex id on an older row, and reading a hex
+    /// id aloud to somebody is not an answer; the wire value is carried whole
+    /// because eight characters of it reaches nobody.
+    ///
+    /// **`@` decides foreignness**, which is not a new rule invented here:
+    /// `SageAgentMessaging.findAgent` already falls back to exactly that test,
+    /// and the history tool describes a foreign counterparty as an exact
+    /// `agent@chain` identity. There is no `foreign` flag on an outbox row to
+    /// read instead.
+    ///
+    /// **`forDedupe` is the old key list, unchanged, and that is deliberate.**
+    /// `noteResults` falls back to the label plus the reply text to recognise a
+    /// row with no `message_id`. Letting that follow the improved preference
+    /// order above would change the key for every such row the moment this
+    /// shipped — and a changed key is a reply the owner has already been told
+    /// about being told to him again. Display preferences are for the ear; a
+    /// dedupe key is a promise to the past.
+    private static func counterparty(
+        of row: [String: Any],
+        labelledBy fallbacks: [String]
+    ) -> (spoken: String, exact: AgentAddress?, forDedupe: String) {
+        // Display name first, then the registered name, then bare
+        // `counterparty`. A free improvement that rides along: it is what stops
+        // the owner hearing "6aa1d1a4214855ff… replied:" on a row from a node
+        // that also sent a perfectly good name.
+        let label = text(row, ["counterparty_display_name", "counterparty_registered_name"]
+            + ["counterparty"] + fallbacks) ?? "one of your agents"
+        let spoken = shortened(label)
+        let exact = text(row, ["counterparty_agent"]).flatMap {
+            AgentAddress.asAttributedByTheNode(
+                senderAgent: $0,
+                displayName: spoken,
+                isForeign: $0.contains("@")
+            )
+        }
+        return (spoken, exact, text(row, ["counterparty"] + fallbacks) ?? "one of your agents")
     }
 
     private func reflect() async {

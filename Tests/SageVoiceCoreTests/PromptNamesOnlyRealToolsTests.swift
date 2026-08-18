@@ -3,7 +3,7 @@ import XCTest
 
 /// **The prompt told the model to call a tool it does not have.**
 ///
-/// `sage_pipe` was removed from `voiceToolAllowlist` in 1.7.2 and replaced by
+/// `sage_pipe` was removed from the SAGE curation in 1.7.2 and replaced by
 /// `sage_message_send` / `sage_message_reply`. The allowlist changed; two lines
 /// of the prompt did not, and they were not obscure ones:
 ///
@@ -23,15 +23,6 @@ import XCTest
 /// only way that agreement survives the next removal.
 final class PromptNamesOnlyRealToolsTests: XCTestCase {
 
-    /// Tools the appliance implements itself rather than taking from SAGE.
-    ///
-    /// Listed rather than pattern-matched: the point is to enumerate what is
-    /// real, so a name the prompt invents has nowhere to hide. `ToolLoop` and
-    /// the note/file surfaces own these.
-    private static let applianceTools: Set<String> = [
-        "web_search", "write_note", "read_note", "list_notes", "send_file"
-    ]
-
     /// Every `snake_case` word the prompt uses as a tool name.
     ///
     /// Deliberately greedy — anything shaped like a tool is treated as a claim
@@ -49,35 +40,58 @@ final class PromptNamesOnlyRealToolsTests: XCTestCase {
         return found
     }
 
-    private var everyRealTool: Set<String> {
-        BrainPrompts.voiceToolAllowlist.union(Self.applianceTools)
+    /// **The composed catalogue, not a set unioned with a hand-written list of
+    /// "appliance tools".**
+    ///
+    /// That literal existed because `voiceToolAllowlist` was only ever half the
+    /// answer — it curated SAGE, so the five tools this repository implements
+    /// had to be listed beside it by hand. Two hand-maintained lists to answer
+    /// one question is how the prompt and the catalogue drifted apart in the
+    /// first place, which is the defect this whole file exists for. There is
+    /// one list now and nobody maintains it: it is what the model is handed.
+    ///
+    /// The payoff is not tidiness. A skills loader publishes tools no constant
+    /// anywhere names, and a prompt sentence naming one of them is checkable
+    /// here the day it lands, with no edit to this file.
+    private func everyRealTool() async throws -> Set<String> {
+        let offered = try await ComposedCatalogue.conversation()
+        // Not vacuous, and asserted rather than assumed: if the composition
+        // ever returns nothing, every "the prompt invented a tool" assertion
+        // below would fail loudly — but if it returned only SAGE's names, the
+        // *absence* checks would pass for the wrong reason forever.
+        XCTAssertTrue(offered.contains("write_note"), "the composed catalogue is missing this repository's own tools")
+        XCTAssertTrue(offered.contains("web_search"))
+        XCTAssertTrue(offered.contains("sage_recall"))
+        return offered
     }
 
     /// The defect itself, for every reply style — the body is shared, so a
     /// single style passing would prove nothing about the others.
-    func testEveryToolTheVoicePromptNamesIsOneTheModelHas() {
+    func testEveryToolTheVoicePromptNamesIsOneTheModelHas() async throws {
+        let real = try await everyRealTool()
         for style in ReplyStyle.allCases {
             let prompt = BrainPrompts.voiceAgentManager(style: style)
             let named = toolNames(in: prompt)
             XCTAssertFalse(named.isEmpty, "the \(style) prompt names no tools at all, so this test is vacuous")
 
-            let invented = named.subtracting(everyRealTool)
+            let invented = named.subtracting(real)
             XCTAssertTrue(
                 invented.isEmpty,
                 "the \(style) prompt instructs the model to call \(invented.sorted().joined(separator: ", ")), "
-                    + "which is not in voiceToolAllowlist and not an appliance tool. A model told to "
-                    + "call a tool it cannot see improvises rather than reporting the gap."
+                    + "which nothing publishes into the composed catalogue. A model told to call a "
+                    + "tool it cannot see improvises rather than reporting the gap."
             )
         }
     }
 
     /// **The specific removal that caused this**, named so the fix cannot be
     /// undone by a copy-paste from an older revision of the prompt.
-    func testThePipeToolsAreGoneFromBothTheCatalogueAndTheProse() {
+    func testThePipeToolsAreGoneFromBothTheCatalogueAndTheProse() async throws {
+        let offered = try await ComposedCatalogue.conversation()
         for retired in ["sage_pipe", "sage_pipe_result", "sage_pipe_history", "sage_list", "sage_reflect"] {
             XCTAssertFalse(
-                BrainPrompts.voiceToolAllowlist.contains(retired),
-                "\(retired) is back in the allowlist; if that is deliberate, this test is the place to say so"
+                offered.contains(retired),
+                "\(retired) is back in the catalogue; if that is deliberate, this test is the place to say so"
             )
             for style in ReplyStyle.allCases {
                 XCTAssertFalse(

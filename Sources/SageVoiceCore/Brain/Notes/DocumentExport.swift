@@ -249,7 +249,23 @@ public struct DocumentExporter: Sendable {
         /// owner.
         public let droppedDiagram: Bool
 
-        public static let clean = Conversion(droppedDiagram: false)
+        /// A chart in the note is in the document as a table of the same
+        /// numbers rather than as a drawn one — either because the row could
+        /// not be read as data, or because the format asked for is not one
+        /// Typst typesets. Also never silent, and for the sharper reason: a
+        /// model that thinks it drew a picture will write a sentence about a
+        /// picture that is not on the page.
+        public let droppedChart: Bool
+
+        /// Spelled out rather than left to the memberwise initialiser, which is
+        /// internal — this type is public, and a caller outside the module has
+        /// to be able to make one.
+        public init(droppedDiagram: Bool = false, droppedChart: Bool = false) {
+            self.droppedDiagram = droppedDiagram
+            self.droppedChart = droppedChart
+        }
+
+        public static let clean = Conversion()
     }
 
     /// Converts a markdown file that is already on disk.
@@ -267,8 +283,10 @@ public struct DocumentExporter: Sendable {
     ) async throws -> Conversion {
         let markdown = (try? String(contentsOf: source, encoding: .utf8)) ?? ""
         do {
-            try await attempt(markdown, to: format, at: destination, title: title, date: date)
-            return .clean
+            let droppedChart = try await attempt(
+                markdown, to: format, at: destination, title: title, date: date
+            )
+            return Conversion(droppedChart: droppedChart)
         } catch {
             // **A broken diagram must not cost the owner the document.**
             //
@@ -278,30 +296,44 @@ public struct DocumentExporter: Sendable {
             // the whole conversion failed and a syntax error in a decoration
             // turned a report into "here is the note instead".
             //
-            // Only worth trying when there is a diagram to drop, and only once.
-            guard format == .pdf, packages != nil, DocumentTemplate.hasDiagram(markdown) else {
-                throw error
-            }
-            log("[notes] a diagram would not draw (\(error)); making the document without it")
+            // Only worth trying when there is something to drop, and only once.
+            //
+            // Charts join this as belt and braces. `DocumentTemplate.prepared`
+            // canonicalises every chart row before Typst is ever handed one, so
+            // in principle a chart cannot be what failed — but "in principle"
+            // is what the diagram path thought too, and the cost of being wrong
+            // is the owner's whole report. The diagram half still needs
+            // `packages`, because without them there is no `dot` rule to break;
+            // the chart half does not, because a chart draws wherever the PDF
+            // engine does.
+            let hadDiagram = packages != nil && DocumentTemplate.hasDiagram(markdown)
+            let hadChart = DocumentTemplate.hasChart(markdown)
+            guard format == .pdf, hadDiagram || hadChart else { throw error }
+            log("[notes] the document would not compile (\(error)); making it without the "
+                + (hadDiagram && hadChart ? "diagram or the chart"
+                    : hadDiagram ? "diagram" : "drawn chart"))
             try await attempt(
-                DocumentTemplate.withoutDiagrams(markdown),
+                DocumentTemplate.withoutDiagrams(DocumentTemplate.chartsAsTables(markdown)),
                 to: format,
                 at: destination,
                 title: title,
                 date: date
             )
-            return Conversion(droppedDiagram: true)
+            return Conversion(droppedDiagram: hadDiagram, droppedChart: hadChart)
         }
     }
 
+    /// - Returns: whether a chart in the note is in the document as a table
+    ///   rather than as a drawn chart.
+    @discardableResult
     private func attempt(
         _ markdown: String,
         to format: DocumentFormat,
         at destination: URL,
         title: String,
         date: String?
-    ) async throws {
-        guard format != .markdown else { return }
+    ) async throws -> Bool {
+        guard format != .markdown else { return false }
 
         // The note as written stays on disk untouched; what Pandoc reads is a
         // copy with the duplicated heading taken off. Doing it the other way —
@@ -312,7 +344,16 @@ public struct DocumentExporter: Sendable {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
-        let prepared = DocumentTemplate.prepared(markdown, title: title)
+        // Only the PDF route is typeset by the Typst template, so it is the only
+        // one where a chart fence becomes a picture; everywhere else the fence
+        // body would arrive as literal text, which is the lying-feature class
+        // this whole area exists to stay out of.
+        let prepared = DocumentTemplate.prepared(
+            markdown, title: title, drawingCharts: format == .pdf
+        )
+        if let why = prepared.chartBecameATable {
+            log("[notes] a chart is in the document as a table rather than drawn: \(why)")
+        }
         let trimmed = scratch.appendingPathComponent("source.md")
         try Data(prepared.markdown.utf8).write(to: trimmed, options: [.atomic])
 
@@ -373,6 +414,7 @@ public struct DocumentExporter: Sendable {
         }
         try OwnerOnlyFileSecurity.protectFile(destination)
         log("[notes] converted a note to \(destination.lastPathComponent)")
+        return prepared.chartBecameATable != nil
     }
 
     private func run(arguments: [String], workingDirectory: URL) async throws {

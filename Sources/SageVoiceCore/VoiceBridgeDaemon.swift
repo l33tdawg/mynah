@@ -1325,10 +1325,16 @@ public actor VoiceBridgeDaemon {
             // Everything the loop needs, resolved here on the actor before the
             // deadline wrapper takes the work off it. The closure handed to
             // `withDeadline` runs outside this actor's isolation and so cannot
-            // read `histories`, call `resolveImages`, or touch `loop` directly.
-            let prompt = attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript
+            // read `histories`, call `encodedImages`, or touch `loop` directly.
+            // **Encoded first, then described.** The note is built from the
+            // result of this call, so what the model is told about the photo and
+            // what the request carries are the same list rather than two lists
+            // that were assumed to match. See `attachmentNote(for:sent:)`.
+            let photos = encodedImages(from: kept, in: batch, sighted: loop.backendSeesImages)
+            let attachedImages = photos.map(\.bytes)
+            let prompt = attachmentNote(for: kept, sent: Set(photos.map(\.file)))
+                .map { "\(transcript)\n\n\($0)" } ?? transcript
             let priorTurns = histories[key] ?? []
-            let attachedImages = batch.flatMap { resolveImages($0) }
             let brain = loop
             let announceChosenTool: @Sendable ([String]) async -> Void = { [weak self] chosen in
                     guard let self else { return }
@@ -1698,31 +1704,68 @@ public actor VoiceBridgeDaemon {
         }
     }
 
-    /// Tells the model what arrived. See `AttachmentArrivalNote` for what it
-    /// says and why it stopped apologising.
+    /// Tells the model what arrived, from what actually went out.
+    ///
+    /// **The order here is the fix.** This used to be built from `kept` — what
+    /// landed on disk — while the bytes came from a separate pass over the
+    /// original attachments, and nothing compared the two lists. See
+    /// `AttachmentArrivalNote`'s third section: a fourth photo, or one the
+    /// encoder could not read, was announced as visible and described from
+    /// nothing. Now the encoding happens first and the note is built from its
+    /// result, so the two cannot disagree — there is only one list.
     ///
     /// The title rather than the filename, because that is what `send_file`
     /// takes and therefore what the owner will need to ask for it back.
-    private func attachmentNote(for kept: [SignalAttachmentStore.Kept]) -> String? {
+    ///
+    /// - Parameter sent: the kept files whose bytes are on this request. A
+    ///   `Kept` absent from this set is reported as not looked at, whether it
+    ///   was capped, failed to encode, or the brain has no eyes — three causes
+    ///   the owner experiences as one fact.
+    private func attachmentNote(
+        for kept: [SignalAttachmentStore.Kept],
+        sent: Set<URL>
+    ) -> String? {
         AttachmentArrivalNote.text(
             kept.map {
                 AttachmentArrivalNote.Arrival(
                     title: NoteSlug.readableTitle(fromFilename: $0.note.lastPathComponent),
-                    isImage: $0.isImage
+                    isImage: $0.isImage,
+                    wasSent: sent.contains($0.file)
                 )
-            },
-            seesImages: loop.backendSeesImages
+            }
         )
     }
 
-    private func resolveImages(_ message: ChannelMessage) -> [Data] {
+    /// The photos going on this request, paired with the file each came from.
+    ///
+    /// **Encoded from the stored copy, not the original attachment URL.** Those
+    /// were two different paths over the same bytes: `keepAttachments` copies
+    /// into the notes directory and `resolveImages` read `message.imageURLs`,
+    /// which is where the note and the wire were able to drift apart. Reading
+    /// `kept.file` gives a 1:1 correspondence with the titles the note uses, for
+    /// free, and deletes the mismatch rather than papering over it.
+    ///
+    /// Never throws. A photo that cannot be read is worth a log line and a turn
+    /// that proceeds on the words alone — refusing to answer "what is this?"
+    /// because one attachment was a malformed HEIC would be a worse appliance
+    /// than one that says it did not manage to look.
+    ///
+    /// - Parameter sighted: whether this turn's brain reads pictures at all.
+    ///   Checked here rather than left to `ToolLoop` so a blind brain does not
+    ///   pay to downscale and JPEG-encode photos nobody will look at — and so
+    ///   the log says which of the two reasons applied.
+    private func encodedImages(
+        from kept: [SignalAttachmentStore.Kept],
+        in batch: [ChannelMessage],
+        sighted: Bool
+    ) -> [(file: URL, bytes: Data)] {
         // Logged unconditionally when anything is attached, because the failure
         // this catches is silent by construction: an attachment that is not
         // recognised as an image produces no error, no empty file and no
         // exception — just a model that says it cannot see pictures. Knowing
         // whether the MIME type, the on-disk lookup or the encoder was at fault
         // is the difference between a one-line fix and another round trip.
-        if !message.attachments.isEmpty {
+        for message in batch where !message.attachments.isEmpty {
             let described = message.attachments.map { attachment in
                 "\(attachment.contentType ?? "no-type")"
                     + " image=\(attachment.isImage)"
@@ -1731,13 +1774,32 @@ public actor VoiceBridgeDaemon {
             log("[daemon] attachments: \(described.joined(separator: ", "))")
         }
 
-        return message.imageURLs.compactMap { url in
+        guard sighted else {
+            let count = kept.filter(\.isImage).count
+            if count > 0 {
+                log("[daemon] \(count) image(s) kept but not sent: "
+                    + "\(loop.backendModelName) does not read pictures")
+            }
+            return []
+        }
+
+        // **The cap lives here, once.** It used to sit on `imageURLs` while the
+        // note was built from an uncapped list, which is exactly how a fourth
+        // photo got announced as seen.
+        let all = kept.filter(\.isImage)
+        let photos = all.prefix(ChannelMessage.maximumImagesPerMessage)
+        if all.count > photos.count {
+            log("[daemon] \(all.count - photos.count) image(s) over the "
+                + "\(ChannelMessage.maximumImagesPerMessage)-per-message cap; not sent")
+        }
+
+        return photos.compactMap { item in
             do {
-                let encoded = try VisionAttachment.encoded(contentsOf: url)
-                log("[daemon] image ready: \(url.lastPathComponent), \(encoded.count) bytes")
-                return encoded
+                let encoded = try VisionAttachment.encoded(contentsOf: item.file)
+                log("[daemon] image ready: \(item.file.lastPathComponent), \(encoded.count) bytes")
+                return (item.file, encoded)
             } catch {
-                log("[daemon] could not read image \(url.lastPathComponent): \(error)")
+                log("[daemon] could not read image \(item.file.lastPathComponent): \(error)")
                 return nil
             }
         }
@@ -2547,7 +2609,18 @@ public actor VoiceBridgeDaemon {
                     pendingLinks.append(url)
                 }
             case .user:
-                carried.append(message)
+                // **Rebuilt, not passed through, so photo bytes cannot ride
+                // along.** `BrainMessage.images` says image bytes are
+                // deliberately not carried in conversation history, and
+                // `ToolLoop.run` implements that by replacing the owner's turn
+                // on the replay copy. This is the belt to that braces: whatever
+                // a future caller hands this function, what leaves it is
+                // role + text, so nothing image-shaped can reach
+                // `ConversationStore` or `PendingDelivery` even by accident.
+                // Cheap insurance against re-paying a photo's tokens on all
+                // sixteen history turns, which is the bug the 1.7.0 audit found
+                // already documented and not implemented.
+                carried.append(.user(message.content))
             case .assistant:
                 // **Judged on what is kept, not on what arrived.**
                 //

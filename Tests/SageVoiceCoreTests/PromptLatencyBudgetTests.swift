@@ -112,10 +112,20 @@ final class PromptLatencyBudgetTests: XCTestCase {
     ///
     /// The budget still has no headroom, on purpose. Tool twenty-one turns this
     /// red and whoever adds it re-runs the script.
-    static let voiceCatalogueBudget = 20
+    ///
+    /// **It is no longer a second hardcoded 20.** It was, and that was the
+    /// number in four places at once: two constants and two comments, drifting
+    /// independently. `BrainTier.swift` carries a 6,000-byte write-up of what
+    /// that costs — a rule enforced by folklore was decided in nine places and
+    /// one of them had no branch at all. This budget is a latency question and
+    /// `maxRoutableTools` is a routing-accuracy question, so they are genuinely
+    /// two opinions; they simply have to be *the same number* today, and the
+    /// honest way to say that is to derive one from the other rather than to
+    /// type it twice and hope.
+    static var voiceCatalogueBudget: Int { BrainCapabilities.onDevice.maxRoutableTools }
 
-    func testTheVoiceCatalogueDoesNotSilentlyGrow() {
-        let count = BrainPrompts.voiceToolAllowlist.count
+    func testTheVoiceCatalogueDoesNotSilentlyGrow() async throws {
+        let count = try await ComposedCatalogue.conversation().count
         XCTAssertLessThanOrEqual(
             count,
             Self.voiceCatalogueBudget,
@@ -133,11 +143,76 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// Measured against the tool sources rather than a hardcoded string, so a
     /// verbose description added to `NotesToolSource` shows up here rather than
     /// in a "feels slower" report from a phone.
-    static let ownedToolSchemaByteBudget = 3_000
+    ///
+    /// **3,000 to 3,400 on 17 August, for the chart rule**, and the framing
+    /// narrowed the way `systemPromptCharacterBudget` above already had to. This
+    /// was written as a latency line — descriptions "are prefilled on every cold
+    /// turn" — and after the system prompt, tool schemas are the most cacheable
+    /// thing in the request: byte-identical every turn, in the same position at
+    /// the front of the prefix, so a warm appliance prefills them once. What
+    /// they cost on every turn is the *other* half of that sentence, which still
+    /// holds exactly: they compete with the owner's question for a 4B's
+    /// attention, and a document-writing rule is read on the thousands of turns
+    /// that write nothing.
+    ///
+    /// Measured with pandoc, Typst and the Graphviz package all staged:
+    ///
+    ///     write_note + read_note + list_notes + send_file + web_search  3,316
+    ///     of which the ```chart paragraph in `contentGuidance`            388
+    ///     the same five schemas without it                              2,928
+    ///
+    /// So 3,000 had 72 bytes left in it and the rule wants 388. It is bought,
+    /// on the test the paragraph above sets — *is this rule earning its place
+    /// against the ones already here*:
+    ///
+    /// - It is gated on the PDF being producible, so on a Mac that cannot draw
+    ///   one it is not merely unused, it is absent from every prefill.
+    /// - It replaces text rather than adding it. `DocumentTemplateTests` pins
+    ///   six data points costing fewer JSON characters as a chart fence than as
+    ///   the markdown table of the same numbers, so a document that takes the
+    ///   offer is cheaper to *generate* than the one it replaces — and the local
+    ///   ceiling this repo ships against is the tighter of the two limits.
+    /// - It was shorter once. Every clause after the first is on the wire
+    ///   because the local 4B did the thing that clause forbids on a real run;
+    ///   the comment on `contentGuidance` names each one. Trimming it back is
+    ///   re-running those failures, not saving 388 bytes.
+    ///
+    /// The 84 bytes left over are not room for a sentence, on purpose. The next
+    /// rule that wants to live in a schema argues here first.
+    static let ownedToolSchemaByteBudget = 3_400
 
     func testOurOwnToolSchemasStayWithinTheirPrefillBudget() async throws {
-        let published = try await NotesToolSource(directory: Self.scratchDirectory()).listTools()
-            + WebSearchToolSource(backends: []).listTools()
+        // Pinned to a Mac that can do everything, rather than to whatever this
+        // one happens to have staged.
+        //
+        // `NotesToolSource` takes `DocumentExporter.locate()` by default, and on
+        // a checkout with no `vendor/pandoc` — every fresh clone, and CI — that
+        // is nil: the format enum collapses to `markdown` and both fenced-block
+        // sentences disappear out of `contentGuidance`. Measured, the same day
+        // as the numbers above: 2,594 bytes there against 3,316 on a fully
+        // staged Mac. A budget reading 722 bytes *under* the prompt the
+        // appliance actually sends is not a budget — it would have let the chart
+        // rule through without a word anywhere but here, which is the same
+        // silence this whole file exists to break. Nothing is executed: only
+        // `canProduce` and `drawsDiagrams` are consulted, both of which just ask
+        // whether a URL is nil.
+        let everythingStaged = DocumentExporter(
+            pandoc: URL(fileURLWithPath: "/usr/bin/true"),
+            pdfEngine: URL(fileURLWithPath: "/usr/bin/true"),
+            packages: Self.scratchDirectory()
+        )
+        let notes = NotesToolSource(directory: Self.scratchDirectory(), exporter: everythingStaged)
+        XCTAssertEqual(
+            notes.offeredFormats, DocumentFormat.allCases,
+            "a format missing here is a byte count for a smaller prompt than the one that ships"
+        )
+        XCTAssertTrue(
+            notes.contentGuidance.contains("```dot") && notes.contentGuidance.contains("```chart"),
+            "the two optional paragraphs are what the budget is mostly made of, and this "
+                + "measurement is missing one of them: \(notes.contentGuidance)"
+        )
+
+        let published = try await notes.listTools() + WebSearchToolSource(backends: []).listTools()
 
         let bytes = try PromptStableJSON.data(from: published.map(\.brainTool.ollamaWireObject)).count
         XCTAssertLessThanOrEqual(
@@ -145,8 +220,12 @@ final class PromptLatencyBudgetTests: XCTestCase {
             Self.ownedToolSchemaByteBudget,
             """
             The tool schemas this repo owns are \(bytes) bytes, over the \(Self.ownedToolSchemaByteBudget) \
-            budget. Descriptions are prompt text: they are prefilled on every cold turn and they compete \
-            with the owner's question for a 4B model's attention.
+            budget. Descriptions are prompt text. They cache like the system prompt does, so this is not \
+            a second of the owner's morning — it is a paragraph the model reads on every turn, including \
+            the thousands that never write a document, competing with the owner's question for a 4B's \
+            attention. Read the comment on ownedToolSchemaByteBudget: it records what the last raise \
+            bought and what it cost. Cut something, or move the budget in this commit with the same \
+            arithmetic written out.
             """
         )
     }

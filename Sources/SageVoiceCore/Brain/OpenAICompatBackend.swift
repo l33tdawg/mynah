@@ -110,6 +110,36 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     public let modelName: String
     public var isLocal: Bool { provider.isLocal }
 
+    /// The tier's ceiling AND this model's own documented ability.
+    ///
+    /// Two tables because there are two naming worlds behind one wire format.
+    /// A hosted id is a fixed string the vendor publishes, so
+    /// `CloudBrainModelCatalog` matches it exactly. A model on an OpenAI-shaped
+    /// server *on this Mac* is whatever the owner loaded into LM Studio, named
+    /// with a quantisation and a build, so `LocalVisionModels` matches the
+    /// family. Both default to blind for a name they do not recognise.
+    public var seesImages: Bool {
+        guard brain.mayCarryImages else { return false }
+        return provider.isLocal
+            ? LocalVisionModels.sees(modelName)
+            : CloudBrainModelCatalog.seesImages(model: modelName)
+    }
+
+    /// Whether a given model on a given provider may be sent photos.
+    ///
+    /// Static and separate from the instance property so `requestBody` — which
+    /// is `static` precisely so a test can read the wire without a network or a
+    /// key — can derive the same answer. A test that had to construct a live
+    /// backend to check the blind arm would be checking a different code path
+    /// from the one that ships.
+    static func carriesImages(model: String, provider: OpenAICompatProvider) -> Bool {
+        let tier: BrainTier = provider.isLocal ? .onDevice : .hosted
+        guard tier.capabilities.mayCarryImages else { return false }
+        return provider.isLocal
+            ? LocalVisionModels.sees(model)
+            : CloudBrainModelCatalog.seesImages(model: model)
+    }
+
     private let provider: OpenAICompatProvider
     private let credential: BrainCredential
     private let session: URLSession
@@ -204,7 +234,13 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
-            "messages": encodeMessages(request.messages),
+            // Derived from the model and the provider rather than taken as an
+            // argument, so this function decides the same way `complete` does
+            // and a static test can drive both arms.
+            "messages": encodeMessages(
+                request.messages,
+                carryingImages: carriesImages(model: model, provider: provider)
+            ),
             "stream": false
         ]
         if !request.tools.isEmpty {
@@ -304,8 +340,14 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     /// are the two easy-to-get-wrong details handled in `openAIWireObject`:
     /// `arguments` is a JSON-encoded *string*, and a pure tool-call assistant
     /// turn carries null content.
-    static func encodeMessages(_ messages: [BrainMessage]) -> [[String: Any]] {
-        messages.map(\.openAIWireObject)
+    ///
+    /// - Parameter carryingImages: whether `BrainMessage.images` may go on the
+    ///   wire. Defaulted so the existing text-only call sites read unchanged.
+    static func encodeMessages(
+        _ messages: [BrainMessage],
+        carryingImages: Bool = false
+    ) -> [[String: Any]] {
+        messages.map { $0.openAIWireObject(carryingImages: carryingImages) }
     }
 
     // MARK: Parsing
@@ -409,7 +451,9 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
 // MARK: - Wire encoding
 
 extension BrainMessage {
-    var openAIWireObject: [String: Any] {
+    /// - Parameter carryingImages: whether this turn's photos may go out. The
+    ///   caller has already decided per model; this only shapes the bytes.
+    func openAIWireObject(carryingImages: Bool = false) -> [String: Any] {
         var object: [String: Any] = ["role": role.rawValue]
 
         switch role {
@@ -444,7 +488,39 @@ extension BrainMessage {
             }
 
         case .system, .user:
-            object["content"] = content
+            let photos = (role == .user && carryingImages) ? images : []
+            guard !photos.isEmpty else {
+                // **Content stays a plain String when there are no images**, and
+                // that is worth money as well as bytes. Some compatible servers
+                // reject a parts array on a text-only turn outright, and DeepSeek
+                // prices a context-cache hit about ten times cheaper than a miss
+                // — so promoting every text turn to the array shape would charge
+                // full price on every request in the product for nothing.
+                object["content"] = content
+                break
+            }
+            // Text part first, matching the vendors' own examples for this
+            // endpoint, and then one part per photo.
+            var parts: [[String: Any]] = [["type": "text", "text": content]]
+            for photo in photos {
+                parts.append([
+                    "type": "image_url",
+                    // **A data URI, not bare base64.** `image_url.url` is what
+                    // the chat-completions shape takes and what every provider
+                    // here documents (OpenAI, Kimi, Gemini's compat layer, LM
+                    // Studio). The `input_image` part belongs to the Responses
+                    // API and none of these implement it on this endpoint.
+                    //
+                    // `detail` is omitted on purpose: `VisionAttachment` has
+                    // already downscaled to 1024 px, `"low"` would force 512 px
+                    // tiling and lose the text in a screenshot, and an omitted
+                    // optional key is the one least likely to be rejected by a
+                    // llama.cpp-shaped server that implements only the core of
+                    // this schema.
+                    "image_url": ["url": "data:image/jpeg;base64,\(photo.base64EncodedString())"]
+                ])
+            }
+            object["content"] = parts
         }
         return object
     }

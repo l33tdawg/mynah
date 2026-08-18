@@ -36,6 +36,28 @@ import Foundation
 /// image gets described wherever that is possible. Neither offers to
 /// reconfigure the appliance.
 ///
+/// ## The third fabrication: told it could see, sent nothing
+///
+/// The rule above is right and the *input* to it was wrong. `seesImages` is a
+/// claim about a backend; whether a particular photo reached the model is a
+/// claim about that photo, and the two were being used interchangeably.
+///
+/// The note was built from what `SignalAttachmentStore` had put on disk, while
+/// the bytes came from a separate pass that silently dropped anything
+/// `VisionAttachment.encoded` could not decode — a malformed HEIC, a truncated
+/// download — and capped the rest at `MessageChannel.maximumImagesPerMessage`.
+/// The two lists were never compared. So on a vision-capable model, a fourth
+/// photo or one unreadable file produced *"You can see it — say what it is,
+/// specifically"* about a picture that was not in the request, and the model
+/// duly described it. That is the original fabrication with the blame moved:
+/// the model is not guessing, it was told.
+///
+/// The fix is that `Arrival.wasSent` means *these exact bytes are on this
+/// request*, and it is decided per file by whoever built the request. A brain
+/// with no eyes and an image that failed to encode reach this type as the same
+/// fact, because to the owner they are the same fact: it was kept, and it was
+/// not looked at.
+///
 /// ## Why the title and not the filename
 ///
 /// `send_file` takes a title, so the one useful thing to say back is the name
@@ -50,28 +72,51 @@ enum AttachmentArrivalNote {
         let title: String
         /// A picture to look at, rather than a document to keep.
         let isImage: Bool
+        /// **Whether these exact bytes are on this request.**
+        ///
+        /// Not "can this brain see" — that question is one step too far from the
+        /// photo. A capable brain still gets nothing for an image the encoder
+        /// could not decode, or one past `maximumImagesPerMessage`, and the note
+        /// used to be built from what landed on disk while the bytes came from a
+        /// separate pass. Send four photos, or one malformed HEIC, and the model
+        /// was told *"You can see it"* about a picture that was never in the
+        /// request. Per-file, because the failure is per-file.
+        ///
+        /// Meaningless for a document, which is never read at any capability;
+        /// defaulted so a caller filing a PDF does not have to answer a question
+        /// about vision.
+        let wasSent: Bool
 
-        init(title: String, isImage: Bool) {
+        init(title: String, isImage: Bool, wasSent: Bool = false) {
             self.title = title
             self.isImage = isImage
+            self.wasSent = wasSent
         }
     }
 
-    /// - Parameter seesImages: whether the brain answering this turn reads
-    ///   `BrainMessage.images`. See `BrainBackend.seesImages`, whose default is
-    ///   deliberately `false`. Irrelevant to documents, which are never read.
-    static func text(_ arrivals: [Arrival], seesImages: Bool) -> String? {
+    /// The note, or `nil` when nothing arrived.
+    ///
+    /// Images split by `wasSent` rather than by a single backend-wide flag, so
+    /// one message carrying a photo that went out and a photo that did not gets
+    /// both sentences, each naming the right files. The sentences themselves are
+    /// unchanged — only who they are said about.
+    static func text(_ arrivals: [Arrival]) -> String? {
         guard !arrivals.isEmpty else { return nil }
 
         let images = arrivals.filter(\.isImage)
         let documents = arrivals.filter { !$0.isImage }
+        let seen = images.filter(\.wasSent)
+        let unseen = images.filter { !$0.wasSent }
 
         var parts: [String] = []
-        if !images.isEmpty {
-            parts.append(sentence(for: images, noun: "image", seesImages: seesImages))
+        if !seen.isEmpty {
+            parts.append(sentence(for: seen, noun: "image", seesImages: true))
+        }
+        if !unseen.isEmpty {
+            parts.append(sentence(for: unseen, noun: "image", seesImages: false))
         }
         if !documents.isEmpty {
-            parts.append(sentence(for: documents, noun: "file", seesImages: seesImages))
+            parts.append(sentence(for: documents, noun: "file", seesImages: false))
         }
         return "[" + parts.joined(separator: " ") + "]"
     }

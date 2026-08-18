@@ -197,6 +197,8 @@ private struct NodeWith: ProactiveSource {
     var messages: [AgentInboxItem] = []
     var tasks: [WatchedTask] = []
 
-    func waitingMessages(limit: Int) async throws -> [AgentInboxItem] { messages }
+    func waitingMessages(limit: Int) async throws -> AgentInboxReading {
+        AgentInboxReading(items: messages, claimedElsewhere: .counted(0, state: "present"))
+    }
     func openTasks() async throws -> [WatchedTask] { tasks }
 }

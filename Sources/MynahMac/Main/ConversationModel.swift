@@ -363,59 +363,47 @@ actor ToolLoopTurnEngine: TurnEngine {
             log: { conversationLog.error("\($0)") }
         )
         self.notes = notes
-        var sources: [CompositeToolSource.Source] = [
-            CompositeToolSource.Source(
-                label: "memory",
-                // Wrapped, so a recall the model wrote without a domain is
-                // scoped to what this agent may actually search. 11.16.4
-                // refuses the unscoped form outright. The ritual below keeps
-                // the raw client — it calls tools the model never sees, and one
-                // of them is what discovers the scope.
-                provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
-                isRequired: true,
-                // Fails closed if the node ever renames its tools. Web search
-                // always matches the allowlist, so without this expectation a
-                // renamed memory catalogue would sail through leaving the model
-                // holding one tool and no memory, looking perfectly healthy.
-                expectedToolNames: ["sage_recall", "sage_remember"]
-            ),
-            // `.savedOnDisk` — the default, and load-bearing. Mynah has no
-            // attachment channel, so the appliance's "the file is attached to
-            // your reply" would be a lie here, and one the owner would only
-            // discover by looking for a file that never arrived.
-            //
-            // Held rather than built inline, because the window offers what it
-            // wrote as something to click — which means somebody has to ask it
-            // afterwards what it wrote.
-            CompositeToolSource.Source(
-                label: "notes",
-                provider: notes,
-                isRequired: true,
-                expectedToolNames: NotesToolSource.toolNames
+        // **The window built its own source list, and it was the one that had
+        // drifted.** It declared the memory source should publish
+        // `["sage_recall", "sage_remember"]` — a hand-guessed literal agreeing
+        // with neither of the daemon's two declarations, each of which derived
+        // its own set by hand-written subtraction from `BrainPrompts`. The
+        // shape is `ApplianceCatalogue`'s now; what stays here is the two
+        // things only this file knows.
+        //
+        // The notes source is `.savedOnDisk` — the default, and load-bearing.
+        // Mynah has no attachment channel, so the appliance's "the file is
+        // attached to your reply" would be a lie here, and one the owner would
+        // only discover by looking for a file that never arrived. It is held
+        // rather than built inline, because the window offers what it wrote as
+        // something to click, which means somebody has to ask it afterwards
+        // what it wrote.
+        let web: WebSearchToolSource? = allowsWebSearch
+            ? WebSearchToolSource(
+                backends: WebSearchToolSource.defaultBackends(browserEngine: browserEngine),
+                // The daemon has always passed a log sink here and the window
+                // never did, which mattered little while both ran the same
+                // providers. It matters now: after the crash fix this is the
+                // ONLY process that starts a browser engine, so a provider
+                // falling over — "DuckDuckGo (browser) failed: … — trying next
+                // provider" — is visible nowhere else in the appliance.
+                log: { conversationLog.info("\($0)") }
             )
-        ]
-        if allowsWebSearch {
-            sources.append(
-                CompositeToolSource.Source(
-                    label: "web",
-                    provider: WebSearchToolSource(
-                        backends: WebSearchToolSource.defaultBackends(browserEngine: browserEngine),
-                        // The daemon has always passed a log sink here and the
-                        // window never did, which mattered little while both ran
-                        // the same providers. It matters now: after the crash
-                        // fix this is the ONLY process that starts a browser
-                        // engine, so a provider falling over — "DuckDuckGo
-                        // (browser) failed: … — trying next provider" — is
-                        // visible nowhere else in the appliance.
-                        log: { conversationLog.info("\($0)") }
-                    ),
-                    // The owner's phone is a long way from this Mac. "The
-                    // internet lookup is down" must not read as "Mynah is down".
-                    isRequired: false,
-                    expectedToolNames: [WebSearchToolSource.toolName]
-                )
-            )
-        }
+            : nil
+        let tools = ApplianceCatalogue.conversation(
+            // Wrapped, so a recall the model wrote without a domain is scoped
+            // to what this agent may actually search. 11.16.4 refuses the
+            // unscoped form outright. The ritual below keeps the raw client —
+            // it calls tools the model never sees, and one of them is what
+            // discovers the scope.
+            memory: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
+            notes: notes,
+            web: web,
+            // The window and the daemon must not disagree about what the same
+            // brain may reach; both read it off the backend they were handed.
+            brain: backend.tier,
+            log: { conversationLog.info("\($0)") }
+        )
         self.mcp = mcp
         // **Configured, not bare.** This was `ToolLoop(backend:mcp:)`, which took
         // the written system prompt from `Configuration`'s default and the spoken
@@ -427,7 +415,7 @@ actor ToolLoopTurnEngine: TurnEngine {
         // "Mynah didn't have an answer for that."
         self.loop = ToolLoop(
             backend: backend,
-            mcp: CompositeToolSource(sources: sources),
+            mcp: tools,
             configuration: .forStyle(style)
         )
         self.localProvisioner = backend.identifier == "ollama"
@@ -1510,6 +1498,19 @@ final class ConversationModel {
                 )
             case .noTools, .toolAllowlistMatchedNothing:
                 return memoryUnreachable
+            case .catalogueOverTierCeiling(_, let ceiling, let offered):
+                // Its own copy, and deliberately not `memoryUnreachable`:
+                // memory is fine, and "quit Mynah and open it again" would send
+                // the owner round a loop that cannot help. The count is his,
+                // the remedy is his, and the loop's own description carries the
+                // tool names for the log.
+                return Exchange.Failure(
+                    headline: "Mynah has more tools switched on than this brain can handle.",
+                    explanation: "\(offered.count) are enabled and this one can choose between "
+                        + "\(ceiling). Turn one off in Settings, or connect a hosted brain.",
+                    canRetry: false,
+                    isSevere: true
+                )
             }
         }
 

@@ -10,14 +10,22 @@ import XCTest
 /// The note recording that ruling said the call catalogue "must keep
 /// subtracting `NotesToolSource.toolNames`", which reads as a description of
 /// what the code already did. **It never did.** The call builds its loop from
-/// `Configuration.forStyle(.spoken)`, whose `allowedToolNames` defaults to
-/// `voiceToolAllowlist`, and that unions the notes tools in. The one
-/// `.subtracting(NotesToolSource.toolNames)` in the tree is an
-/// `expectedToolNames` health check on the SAGE source and has nothing to do
+/// `Configuration.forStyle(.spoken)`, whose `allowedToolNames` defaulted to
+/// `voiceToolAllowlist`, and that unioned the notes tools in. The one
+/// `.subtracting(NotesToolSource.toolNames)` in the tree was an
+/// `expectedToolNames` health check on the SAGE source and had nothing to do
 /// with what a model may call. So `send_file` was live on every call from the
 /// day calls shipped, and the rule was a rule nothing enforced.
 ///
 /// These tests are what enforce it.
+///
+/// **The catalogue assertions moved to `ApplianceCatalogueTests`** when
+/// curation moved into `CompositeToolSource`. They used to read a name out of a
+/// `Set<String>` in `BrainPrompts`; they now compose the real call catalogue
+/// and call `send_file` on it, which is the difference between asserting the
+/// filter and asserting the mechanism. What stays here is the wiring check —
+/// that the call surface is actually built from the call catalogue — and
+/// everything about the queue itself.
 final class AfterTheCallTests: XCTestCase {
 
     private var root: URL {
@@ -50,47 +58,24 @@ final class AfterTheCallTests: XCTestCase {
 
     // MARK: - The catalogue
 
-    /// The assertion the whole feature rests on. Without it a call can put a
-    /// file on the owner's phone mid-sentence, which is the thing that was
-    /// ruled against.
-    func testACallCannotReachTheNotesTools() {
-        for name in NotesToolSource.toolNames {
-            XCTAssertFalse(
-                BrainPrompts.callToolAllowlist.contains(name),
-                "\(name) is offered on a call. A call must not send files or emit documents "
-                    + "while the line is open — the work is queued and drained at hang-up."
-            )
-        }
-        XCTAssertTrue(
-            BrainPrompts.callToolAllowlist.contains(AfterTheCallToolSource.toolName),
-            "a call has no way to record what the owner asked for, so the request is simply lost"
-        )
-    }
-
-    /// A call must be strictly smaller than a Signal message, never larger:
-    /// catalogue size is the dominant term in routing accuracy, and the global
-    /// set is ratcheted against `BrainCapabilities.onDevice.maxRoutableTools`.
-    func testTheCallCatalogueIsSmallerThanTheMessageOne() {
-        XCTAssertLessThan(
-            BrainPrompts.callToolAllowlist.count,
-            BrainPrompts.voiceToolAllowlist.count,
-            "the call surface now offers at least as many tools as a Signal message, which "
-                + "spends the routing budget the call has least of"
-        )
-        // Everything the call keeps must still be a real tool the daemon knows.
-        for name in BrainPrompts.callToolAllowlist where name != AfterTheCallToolSource.toolName {
-            XCTAssertTrue(
-                BrainPrompts.voiceToolAllowlist.contains(name),
-                "\(name) is on the call catalogue but not the daemon's, so nothing publishes it"
-            )
-        }
-    }
-
-    /// **Filtering the allowlist is the weaker half.** `CompositeToolSource`
-    /// builds its name→provider table from what each source publishes, so a
-    /// notes source left registered would still route `send_file` for a model
-    /// that produced the name anyway. Not registering it is what makes the name
-    /// genuinely unreachable.
+    /// **Filtering the allowlist was the weaker half, and it is gone.**
+    /// `CompositeToolSource` builds its name→provider table from what each
+    /// source publishes, so a notes source left registered would still route
+    /// `send_file` for a model that produced the name anyway. Not registering
+    /// it is what makes the name genuinely unreachable — proven end to end in
+    /// `ApplianceCatalogueTests.testACallCannotReachTheNotesTools`, which calls
+    /// the tool and gets `Failure.unknownTool` back.
+    ///
+    /// This is the other half: that the daemon is wired to that catalogue at
+    /// all. A perfect call catalogue nothing is built from proves nothing.
+    ///
+    /// **It used to assert a third thing** — that `main.swift` contained the
+    /// literal `callConfiguration.allowedToolNames = BrainPrompts
+    /// .callToolAllowlist`. That line is deleted, and deliberately: it was set
+    /// arithmetic undoing a union performed four lines from where it was
+    /// written. The assertion is inverted rather than dropped, because the way
+    /// this regresses is somebody reaching for a name filter again instead of
+    /// leaving the source unregistered.
     func testTheCallSourceDoesNotRegisterTheNotesProviderAtAll() throws {
         let main = try text("Sources/sage-voiced/main.swift")
         XCTAssertTrue(
@@ -99,14 +84,39 @@ final class AfterTheCallTests: XCTestCase {
                 + "provider — so send_file stays routable however the allowlist is filtered"
         )
         XCTAssertTrue(
+            main.contains("ApplianceCatalogue.call("),
+            "makeCallToolSource no longer composes the call catalogue, so whatever it returns "
+                + "has not been through the one place that knows a call registers no notes source"
+        )
+        XCTAssertTrue(
             main.contains("mcp: callTools"),
             "the call loop is not wired to the call-only catalogue"
         )
-        XCTAssertTrue(
-            main.contains("callConfiguration.allowedToolNames = BrainPrompts.callToolAllowlist"),
-            "the call loop does not apply the call allowlist, so it falls back to the daemon's "
-                + "default — which unions the notes tools in"
+        XCTAssertFalse(
+            code(main).contains("callConfiguration.allowedToolNames"),
+            "the call surface is filtering tool names again. A filtered name still routes if its "
+                + "provider is registered — that is exactly how send_file stayed live on every "
+                + "call while a design note claimed it was subtracted."
         )
+    }
+
+    /// Comments stripped, because the assertion above is about what the daemon
+    /// *does* and the line it forbids is quoted in a comment two lines from
+    /// where it used to live — a tombstone saying why it went. A grep that
+    /// cannot tell code from prose turns "explain the deletion" into "reinstate
+    /// the defect", which teaches the next person to delete the explanation.
+    ///
+    /// Line comments only. This is not a Swift parser and does not need to be:
+    /// the file has no block comment, and a guard that quietly did less than it
+    /// claimed would be worse than this one being narrow on purpose.
+    private func code(_ source: String) -> String {
+        source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let comment = line.range(of: "//") else { return line }
+                return line[line.startIndex..<comment.lowerBound]
+            }
+            .joined(separator: "\n")
     }
 
     /// The prompt instructs, in the imperative, to use `list_notes` then

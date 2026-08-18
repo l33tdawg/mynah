@@ -24,7 +24,7 @@ import Foundation
 /// already see attachment notes — the store writes them into the notes root for
 /// exactly this reason. This type is only the second step, so the catalogue
 /// grows by one tool rather than two, which matters: routing accuracy fell off
-/// measurably past ~14 tools (see `BrainPrompts.voiceToolAllowlist`).
+/// measurably past ~14 tools (see `BrainPrompts.sageToolCuration`).
 ///
 /// ## Why a title and never a path
 ///

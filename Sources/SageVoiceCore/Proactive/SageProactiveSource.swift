@@ -29,9 +29,9 @@ public struct SageProactiveSource: ProactiveSource {
     /// in the owner's log for one event — but a node that *answers* with
     /// something else leaves no trace anywhere else, which is precisely how the
     /// backlog version of this went unexplained for a day.
-    public func waitingMessages(limit: Int) async throws -> [AgentInboxItem] {
+    public func waitingMessages(limit: Int) async throws -> AgentInboxReading {
         do {
-            return try await SageAgentMessaging(tools: tools).inbox(limit: limit)
+            return try await SageAgentMessaging(tools: tools).inboxReading(limit: limit)
         } catch AgentMessagingTrouble.unreadableInbox(let reply) {
             log("[watch] sage_inbox answered with something that is not an inbox, so this "
                 + "check changed nothing: \(Self.head(of: reply))")

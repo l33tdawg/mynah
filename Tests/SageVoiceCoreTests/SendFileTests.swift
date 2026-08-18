@@ -507,15 +507,30 @@ final class SendFileTests: XCTestCase {
 
     // MARK: - The catalogue it is published in
 
-    /// The tool has to be in the set both hosts use to declare what the notes
-    /// source publishes, or it is built and never offered — and `sage-voiced`
-    /// subtracts that same set when it filters the memory catalogue.
-    func testTheToolIsPublishedAndAllowlisted() async throws {
+    /// Built, published, and actually offered — three different things, and the
+    /// gap between the last two is where web search spent its first release
+    /// doing nothing.
+    ///
+    /// The middle assertion used to read `BrainPrompts.voiceToolAllowlist
+    /// .contains(sendToolName)`. That set curates SAGE and nothing else now, so
+    /// the question moved to where it can be answered: the catalogue a Signal
+    /// conversation composes.
+    func testTheToolIsPublishedAndOffered() async throws {
         XCTAssertTrue(NotesToolSource.toolNames.contains(NotesToolSource.sendToolName))
-        XCTAssertTrue(BrainPrompts.voiceToolAllowlist.contains(NotesToolSource.sendToolName))
 
         let published = try await makeSource().listTools().map(\.name)
         XCTAssertTrue(published.contains(NotesToolSource.sendToolName), "\(published)")
+
+        let offered = try await ComposedCatalogue.conversation()
+        XCTAssertTrue(
+            offered.contains(NotesToolSource.sendToolName),
+            "send_file is published and never offered: \(offered.sorted())"
+        )
+        // And still unreachable on a call, which is the other half of the same
+        // sentence: it is offered because a conversation registers the notes
+        // source, not because a name is on a list.
+        let onACall = try await ComposedCatalogue.call()
+        XCTAssertFalse(onACall.contains(NotesToolSource.sendToolName))
     }
 
     /// **It sends, so it must count as having acted.** `ToolLoop` treats

@@ -211,8 +211,31 @@ public enum BrainPrompts {
     /// The slice of SAGE's tool surface that a voice conversation actually needs.
     ///
     /// This is a *name* filter, not a schema: every schema still comes from the
-    /// server's `tools/list`, and an unrecognised server falls back to its full
-    /// catalogue (see `ToolLoop.availableTools()`).
+    /// server's `tools/list`. It is handed to `CompositeToolSource.Source
+    /// .external` as that source's `curated` set, and a SAGE that publishes
+    /// none of these names fails the catalogue closed rather than widening to
+    /// all 27 — see `CompositeToolSource.Failure.curationMatchedNothing`, which
+    /// is where that paragraph now lives.
+    ///
+    /// **It curates SAGE, and only SAGE. It was renamed from
+    /// `voiceToolAllowlist` on the day that stopped being true of it in
+    /// practice.** The old set had to `.union(NotesToolSource.toolNames)` and
+    /// hand-add `WebSearchToolSource.toolName`, because it was applied to the
+    /// *composed* catalogue: a tool this repository wrote itself was invisible
+    /// to the model until a line was added here, and the comment beside
+    /// `web_search` recorded that forgetting that line "was a silent no-op for
+    /// web search". Those unions were the list admitting it was the wrong
+    /// shape. Notes, web search, the after-the-call queue and the skills loader
+    /// are code this repository wrote deliberately; they self-declare through
+    /// `CompositeToolSource.Source.inProcess`, which has no name parameter to
+    /// type them into. Nothing below this line names a tool this repository
+    /// implements, and nothing should.
+    ///
+    /// Every word of the exclusion prose that follows survived that rename
+    /// untouched, because every word of it is about a SAGE tool. It is the
+    /// specification for this set; ten tests across `SageRitualTests`,
+    /// `ServerNudgeTests`, `RecallDisciplineTests` and `CompositeToolSourceTests`
+    /// enforce individual decisions recorded in it.
     ///
     /// It exists because a large catalogue costs something real on every model
     /// measured — but **what** it costs differs by model, and the two costs look
@@ -319,7 +342,7 @@ public enum BrainPrompts {
     /// Note schemas are written short regardless. If routing does regress,
     /// collapsing `read_note` and `list_notes` into one tool that lists when
     /// given no title is the cheapest thing to try before dropping the feature.
-    public static let voiceToolAllowlist: Set<String> = Set<String>([
+    public static let sageToolCuration: Set<String> = Set<String>([
         "sage_recall",
         "sage_remember",
         "sage_forget",
@@ -411,13 +434,33 @@ public enum BrainPrompts {
         // the model already has from the inbox, so an adapter would be a
         // passthrough with a typed wrapper around nothing.
         //
-        // Two other tools stay out and stay reachable programmatically:
-        // `sage_message_status` answers "was this delivered" about an id the
-        // model does not hold, and `sage_messages_receive` duplicates
-        // `sage_inbox`.
-        // Same reasoning as `sage_pipe_result`, one comment down: a tool whose
-        // name answers the owner's question but whose behaviour does not is the
-        // trap, and two more of those is how a catalogue rots.
+        // `sage_messages_receive` stays out and stays reachable
+        // programmatically: it duplicates `sage_inbox`. Same reasoning as
+        // `sage_pipe_result`, one comment down — a tool whose name answers the
+        // owner's question but whose behaviour does not is the trap, and more
+        // of those is how a catalogue rots.
+        //
+        // **`sage_message_status` used to be excluded here for a reason that
+        // stopped being true three lines further down, and the owner found it.**
+        // The reason read: it "answers 'was this delivered' about an id the
+        // model does not hold". That was correct when written. Then
+        // `sage_message_history` was added — see the comment below it, which is
+        // about a failure caused by the model NOT being able to read its own
+        // outbox — and history returns `message_id` on every item. From that
+        // day the model held the ids and had nothing to spend them on.
+        //
+        // What that looked like, 18 Aug 2026, on shipped 2.3.1: asked whether
+        // two messages had been read, Mynah answered "there is no
+        // sage_message_status tool on my side", listed both ids it had just
+        // read out of the outbox, and reported them as pending because the
+        // workflow status was the only status it could see. Delivery state and
+        // read state are different questions and it could only ask one of them.
+        //
+        // It is now offered to a hosted brain and still withheld from the local
+        // one — see `sageToolCuration(for:)`, and the ceiling arithmetic there
+        // is the whole reason for the split. Two decisions, each right on its
+        // own, wrong together: that is what a curated list costs, and it is why
+        // this one is checked against the node rather than remembered.
         "sage_message_send",
         "sage_message_reply",
         // The exception that proved the old "duplicates inbox" claim false:
@@ -482,38 +525,116 @@ public enum BrainPrompts {
         //     surface; no tool fetches them, which is why the model kept
         //     casting about for one.
         "sage_corroborate",
-        "sage_link",
-        // Not a SAGE tool. The allowlist filters the *composed* catalogue, so a
-        // name missing here is a tool the model never sees, whichever source
-        // published it — leaving this out was a silent no-op for web search.
-        WebSearchToolSource.toolName
-    ]).union(NotesToolSource.toolNames)
+        "sage_link"
+        // `web_search` used to be the sixteenth entry here, with a comment
+        // explaining that this set filtered the *composed* catalogue so a
+        // missing name was a silent no-op. It is gone, and so is the
+        // `.union(NotesToolSource.toolNames)` that closed the literal. Neither
+        // is a SAGE tool; both are published by an in-process source that
+        // self-declares. A name added below that this repository implements is
+        // a name in the wrong file.
+    ])
 
-    /// **What a call may reach, which is not what a Signal message may reach.**
+    /// **What a hosted brain may reach that a local one may not, and why the
+    /// answer is not "the same list".**
     ///
-    /// The owner's ruling, 5 August 2026: "calls cannot send files bro - calls
-    /// are for actionable things that happen AFTER the call ... but sending
-    /// files should be done at the end".
+    /// The curation above is one set applied to every brain, and it is sized
+    /// for the smallest one. That is not a neutral default — it is the 4B's
+    /// budget spent on a model that does not have the problem. Routing was
+    /// measured at 12/12 with 14 tools and 5-6/12 with 27 **on qwen3.5:4b**;
+    /// `BrainCapabilities.hosted.maxRoutableTools` is 27 precisely because the
+    /// accuracy half of that result was taken on local models only. So the
+    /// appliance was refusing a hosted brain a tool on evidence gathered from a
+    /// different brain, and the owner met the consequence: he asked whether two
+    /// messages had been read, and was told by a frontier model that the tool
+    /// to answer him did not exist.
     ///
-    /// **This subtraction is new, and the note it replaces was wrong.** The
-    /// design ruling was written down as "the call catalogue must keep
-    /// subtracting `NotesToolSource.toolNames`", which read as a description of
-    /// existing behaviour. It was not: the call builds its loop from
-    /// `Configuration.forStyle(.spoken)`, whose `allowedToolNames` defaults to
-    /// `voiceToolAllowlist` — and that unions the notes tools in, four lines
-    /// above. The only `.subtracting(NotesToolSource.toolNames)` in the tree is
-    /// an `expectedToolNames` health check declaring what the *SAGE* source
-    /// should publish, which has nothing to do with what a model may call. So
-    /// `send_file` was live on every call from the day calls shipped.
+    /// `sage_message_status` is the addition, and it earns the slot on the same
+    /// test every name above had to pass — does it answer a question the owner
+    /// actually asks out loud, and does its behaviour match its name. "Did they
+    /// read it?" is a question he asked in those words. Its schema answers
+    /// exactly that and nothing more: *"payload-free delivery, exact-recipient
+    /// read confirmation, and workflow state for one exact message sent by this
+    /// caller"* — no presence, no last-seen, no comprehension. It takes a
+    /// `message_id`, which `sage_message_history` has been handing the model
+    /// since the day that tool was added.
     ///
-    /// The global set is deliberately untouched. Catalogue size is the dominant
-    /// term in routing accuracy on a small model — 27 tools scored 5-6/12 where
-    /// 14 scored 12/12 — and `BrainTierTests` ratchets against
-    /// `BrainCapabilities.onDevice.maxRoutableTools`. Subtracting four and
-    /// adding one leaves a call strictly smaller than a message, never larger.
-    public static let callToolAllowlist: Set<String> = voiceToolAllowlist
-        .subtracting(NotesToolSource.toolNames)
-        .union([AfterTheCallToolSource.toolName])
+    /// **Two more were considered and are deliberately still out**, because a
+    /// tier split is a licence to think again, not a licence to add everything:
+    ///
+    /// - `sage_message_replies` pages the replies to messages Mynah sent — and
+    ///   `sage_message_history(folder: "outbox")` already returns them. Its own
+    ///   schema calls it "the explicit sender-side pager behind
+    ///   sage_inbox.reply_items". Two tools for one question is the condition
+    ///   the routing measurement punishes and the trap the `sage_pipe_result`
+    ///   note describes. If paging past the retained page ever becomes a thing
+    ///   the owner asks for, this is the first name to reconsider.
+    /// - `sage_message_handoff` takes over work another session has claimed.
+    ///   That is a write with a consequence nobody can see afterwards — SAGE's
+    ///   own guidance is to use it "only after judging the prior claimant
+    ///   session dead or stale", which is a judgement about another process's
+    ///   liveness that a language model has no way to make. Same family as
+    ///   `sage_rename` and `sage_register`, and out for the same reason.
+    ///
+    /// The arithmetic, because it is the reason this is a function and not one
+    /// larger set. A conversation composes the curated SAGE names + four notes
+    /// tools + `web_search`. On device that is 15 + 5 = 20 against a ceiling of
+    /// 20 — **zero headroom, and `ToolLoop.availableTools()` throws past it**,
+    /// so a sixteenth SAGE name offered to the local brain would not be a
+    /// slower appliance, it would be an appliance that refuses every turn.
+    /// Hosted is 16 + 5 = 21 against 27. A call is strictly smaller on both:
+    /// 17 and 18.
+    ///
+    /// So this must never be given to `.onDevice` without moving that ceiling,
+    /// and the ceiling only moves behind `scripts/measure-tool-routing.py`.
+    public static let sageToolsAHostedBrainAlsoGets: Set<String> = [
+        "sage_message_status"
+    ]
+
+    /// The curated SAGE names for one brain.
+    ///
+    /// A function rather than two constants so that adding a name forces the
+    /// author to answer "which tier?" — the question the single global set
+    /// never asked, which is how a frontier model ended up sized for a 4B.
+    public static func sageToolCuration(for tier: BrainTier) -> Set<String> {
+        switch tier {
+        case .onDevice:
+            // Measured, at the ceiling, and not to be grown without re-running
+            // the routing measurement.
+            return sageToolCuration
+        case .hosted:
+            return sageToolCuration.union(sageToolsAHostedBrainAlsoGets)
+        }
+    }
+
+    // MARK: - The call catalogue, which is no longer a set
+    //
+    // **What a call may reach used to be a second hand-curated set, and is now
+    // a shorter list of registrations.**
+    //
+    // The owner's ruling, 5 August 2026: "calls cannot send files bro - calls
+    // are for actionable things that happen AFTER the call ... but sending
+    // files should be done at the end".
+    //
+    // `callToolAllowlist` lived here to express that. It was defined as
+    // `voiceToolAllowlist.subtracting(NotesToolSource.toolNames)
+    // .union([AfterTheCallToolSource.toolName])` — set arithmetic whose entire
+    // job was to undo a union performed four lines above it, then add back a
+    // tool the call surface already registers. It is deleted rather than
+    // renamed: `ApplianceCatalogue.callSources` does not register the notes
+    // source, and under the in-process rule **not registering the source is
+    // the whole mechanism**. That is what `AfterTheCallTests` already called
+    // the stronger half — a filtered name still routes if its provider is
+    // registered, and an unregistered one comes back as
+    // `CompositeToolSource.Failure.unknownTool`.
+    //
+    // The arithmetic still holds and is now emergent rather than written:
+    // 15 curated SAGE tools + `web_search` + `after_the_call` = 17, against
+    // the daemon's 15 + `web_search` + four note tools = 20. A call stays
+    // strictly smaller than a Signal message, which matters because catalogue
+    // size is the dominant term in routing accuracy on a small model and
+    // `BrainTierTests` ratchets the composed count against
+    // `BrainCapabilities.onDevice.maxRoutableTools`.
 
     /// **Layered on top of the shared body, never replacing it.**
     ///

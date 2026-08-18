@@ -16,6 +16,18 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     /// The owner's transcript is sent to Anthropic.
     public let isLocal = false
 
+    /// The tier's ceiling AND this model's own documented ability.
+    ///
+    /// Computed, never stored: one backend instance is bound to one model, and
+    /// vision is a fact about the model. `claude-haiku-4-5` and
+    /// `claude-sonnet-5` are both in `CloudBrainModelCatalog`'s table; a model
+    /// name it does not recognise reads as blind, so an owner whose stored
+    /// choice is an id nobody confirmed is told the picture was kept and not
+    /// looked at rather than being handed an invented description.
+    public var seesImages: Bool {
+        brain.mayCarryImages && CloudBrainModelCatalog.seesImages(model: modelName)
+    }
+
     /// Wire version pinned per Anthropic's versioning policy. Bumping it is a
     /// deliberate act, not something to leave floating.
     public static let apiVersion = "2023-06-01"
@@ -157,7 +169,10 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
         var body: [String: Any] = [
             "model": modelName,
             "max_tokens": maxTokens,
-            "messages": try Self.encodeMessages(request.messages)
+            // The one place the per-model gate reaches the wire. `ToolLoop`
+            // already withholds the bytes from a blind backend; this is the
+            // same guard for anything calling `complete` directly.
+            "messages": try Self.encodeMessages(request.messages, carryingImages: seesImages)
         ]
 
         // Anthropic carries the system prompt in a top-level field, not as a
@@ -292,7 +307,16 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     ///    from `content` + `toolCalls` would drop it and the request would be
     ///    rejected. `providerPayload` holds the original content array for
     ///    exactly this.
-    static func encodeMessages(_ messages: [BrainMessage]) throws -> [[String: Any]] {
+    ///
+    /// - Parameter carryingImages: whether `BrainMessage.images` may go on the
+    ///   wire. False for a model `CloudBrainModelCatalog` does not name as
+    ///   sighted, and the bytes are then dropped here rather than sent to a
+    ///   model that would reject or ignore them. Defaulted so the many existing
+    ///   text-only call sites and tests read unchanged.
+    static func encodeMessages(
+        _ messages: [BrainMessage],
+        carryingImages: Bool = false
+    ) throws -> [[String: Any]] {
         var encoded: [[String: Any]] = []
         var pendingToolResults: [[String: Any]] = []
 
@@ -326,10 +350,47 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
 
             case .user:
                 flushToolResults()
-                encoded.append([
-                    "role": "user",
-                    "content": [["type": "text", "text": message.content]]
-                ])
+                let photos = carryingImages ? message.images : []
+                guard !photos.isEmpty else {
+                    // **Byte-for-byte what this emitted before vision existed.**
+                    // Not tidiness: `PromptStableJSON` serialises this body and
+                    // Anthropic's prompt cache matches an exact prefix, so
+                    // reshaping every text turn — even into an equivalent array
+                    // with an empty image list — would move the bytes of every
+                    // request in the product to buy nothing. Same discipline as
+                    // `ollamaWireObject`'s "only sent when there is one".
+                    encoded.append([
+                        "role": "user",
+                        "content": [["type": "text", "text": message.content]]
+                    ])
+                    continue
+                }
+                // **Images first, then the caption.** Anthropic's own guidance:
+                // *"Claude works best when images come before text"* — and it
+                // makes the caption read as being about the picture rather than
+                // as a separate remark.
+                var blocks: [[String: Any]] = photos.map { photo in
+                    [
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            // **A fact, not a guess.** `VisionAttachment.encoded`
+                            // re-encodes every input through `CGImageDestination`
+                            // with `UTType.jpeg`, so whatever the owner's phone
+                            // sent — HEIC, PNG, WebP — arrives here as JPEG. If a
+                            // path is ever added that skips that re-encode, the
+                            // media type has to travel with the bytes rather than
+                            // letting this constant quietly drift into a lie the
+                            // API will reject.
+                            "media_type": "image/jpeg",
+                            // Bare base64. The `data:` prefix is the OpenAI
+                            // shape; Anthropic rejects it here.
+                            "data": photo.base64EncodedString()
+                        ]
+                    ]
+                }
+                blocks.append(["type": "text", "text": message.content])
+                encoded.append(["role": "user", "content": blocks])
 
             case .assistant:
                 flushToolResults()

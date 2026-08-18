@@ -492,6 +492,18 @@ public protocol BrainBackend: Sendable {
     /// adds vision has to say so here. A new backend that forgets is treated as
     /// blind, which is the safe direction: the owner is told the picture was
     /// kept but not looked at, which is true of a backend that ignores it.
+    ///
+    /// **It is a claim about this instance, not about this class.** One backend
+    /// object is bound to one model (see the protocol comment), and vision is a
+    /// property of the model — so every implementation computes this rather than
+    /// storing it:
+    ///
+    ///     brain.mayCarryImages && <the table for this instance's modelName>
+    ///
+    /// `OllamaBackend` used to return a hardcoded `true`, which was a
+    /// per-backend constant answering a per-model question, and the appliance's
+    /// own text-only default model was advertised as sighted for months. See
+    /// `LocalVisionModels`.
     var seesImages: Bool { get }
 
     /// Cheap liveness/credential probe. Returns `false` rather than throwing so

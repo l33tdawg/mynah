@@ -194,6 +194,51 @@ grounded id here**, so the row stays blank.
 A blank row is not an unfinished doc. It is the reason that provider is absent
 from the picker, and it should be read that way.
 
+## Which of them can see a photo
+
+Vision is a **second, independent question** about the same ids, and it is asked
+the same way: read it off the vendor's own current documentation, one id at a
+time, and leave out anything nobody could confirm. The table lives in
+`CloudBrainModelCatalog.sighted`.
+
+**The two errors are not symmetric, and that decides the default.** Omitting a
+model that can see costs one lost description and an honest sentence — *"saved,
+and I have not looked at it"*. Including a model that cannot see ships a
+confident description of a photo the model never received, because
+`AttachmentArrivalNote` tells it *"You can see it — say what it is,
+specifically"*. The owner cannot tell that apart from the appliance working.
+So a model missing from the table reads as **blind**, there is no prefix
+matching, and an unconfirmed id stays out.
+
+Read on 2026-08-17:
+
+| Model | Sees a photo | Source |
+| --- | --- | --- |
+| `claude-haiku-4-5` | yes | Anthropic's vision guide prices its image tokens by name |
+| `claude-sonnet-5` | yes | documented as the first Sonnet-tier model with high-resolution image support |
+| `gpt-5.6-luna` | yes | model page: *"Input modalities: text, image"* |
+| `gpt-5.6-sol` | yes | model page: *"Input modalities: text, image"* |
+| `kimi-k2.6` | yes | listed in Moonshot's own "Configure Kimi Vision Models" guide |
+| `kimi-k3` | yes | same guide, with the base64 `image_url` example |
+| `gemini-3.6-flash` | yes | Google's OpenAI-compatibility guide uses this id for its image example |
+| `gemini-2.5-pro` | **not confirmed** | its model page does not state input modalities |
+| `deepseek-v4-flash` | no | the chat-completions schema documents no image part |
+| `deepseek-v4-pro` | no | same — the V4 family exposes no image input on the public API |
+| `llama-3.1-8b-instant` | no | Groq lists no image modality; vision is the 3.2-vision and 4 families |
+| `llama-3.3-70b-versatile` | no | same |
+
+The Gemini row is the one to watch. Its **Quick** tier can see and its
+**Careful** tier is treated as blind, which looks like an inconsistency and is
+not: it is the difference between an id confirmed through the exact surface this
+product speaks and an id nobody has confirmed at all. An owner who picks Careful
+on Gemini and sends a photo is told plainly that it was kept and not looked at.
+One reading of Google's model page fixes that; guessing would not.
+
+Local models are a separate table (`LocalVisionModels`) because their ids carry
+tags an exact match cannot enumerate, and it deliberately omits families whose
+vision depends on the size tag — `gemma3:1b` is text-only and `gemma3:4b` is
+not, so a family match would claim sight for the small one.
+
 ## Stale names found while doing this
 
 Three model names already in the codebase have expired. Recording them because

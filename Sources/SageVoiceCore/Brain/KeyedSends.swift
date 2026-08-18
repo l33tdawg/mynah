@@ -9,7 +9,7 @@ import Foundation
 ///
 /// `SageAgentMessaging.send` does it properly — a fresh key per logical send,
 /// journalled before the request — and has **no production call sites**. Only
-/// `.inbox` is reached, through `SageProactiveSource.waitingMessages`. So
+/// the inbox read is reached, through `SageProactiveSource.waitingMessages`. So
 /// `AgentSendJournal` and its whole careful argument were unreachable, and every
 /// real send came from the model calling the tool directly out of its
 /// catalogue, where the key was its problem.

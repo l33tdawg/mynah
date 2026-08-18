@@ -138,7 +138,7 @@ public struct SageAgentMessaging: AgentMessaging {
 
     // MARK: Reading
 
-    public func inbox(limit: Int) async throws -> [AgentInboxItem] {
+    public func inboxReading(limit: Int) async throws -> AgentInboxReading {
         let reply: String
         do {
             // The node caps this at 20; asking for more is not an error there
@@ -154,7 +154,50 @@ public struct SageAgentMessaging: AgentMessaging {
         guard let root = Self.object(in: reply), Self.isAnInbox(root) else {
             throw AgentMessagingTrouble.unreadableInbox(Self.condensed(reply))
         }
-        return (root["items"] as? [[String: Any]] ?? []).compactMap(Self.item(from:))
+        return AgentInboxReading(
+            items: (root["items"] as? [[String: Any]] ?? []).compactMap(Self.item(from:)),
+            claimedElsewhere: Self.claimedElsewhere(in: root)
+        )
+    }
+
+    /// What the reply says about work held under another session's claim.
+    ///
+    /// ## The order is the node's shape, not a preference
+    ///
+    /// The count is a *pointer* field in the node — the vendored binary carries
+    /// `*struct { Count int "json:\"claimed_elsewhere_count\"" }` — so a probe
+    /// that could not run omits the key rather than sending `0`. That is the
+    /// node keeping its own written promise that "an unavailable probe is
+    /// explicit and never presented as zero", and it is why the count is asked
+    /// for first and its *absence* is meaningful rather than defaulted.
+    ///
+    /// `claimed_elsewhere_state` decides the two absent cases apart, and its
+    /// mere presence is what does it — an explicit state with no count is the
+    /// node saying it looked and could not answer. The string itself is carried
+    /// verbatim and never matched on; see `ClaimedElsewhere`.
+    ///
+    /// **`claimed_elsewhere_action` is read by nobody on purpose.** The node
+    /// also sends a sentence of advice — on the observed day, to compare
+    /// `claimant_session_id` values and use `sage_message_handoff` "only after
+    /// judging the prior claimant session dead or stale; a live session may
+    /// still be working". It is not relayed for two reasons: it is node prose
+    /// that changes between releases, so a log built on it would drift with the
+    /// vendor, and the appliance has no basis whatsoever for judging another
+    /// session dead. Recorded here so the next reader knows the field was seen
+    /// and declined rather than missed.
+    static func claimedElsewhere(in root: [String: Any]) -> ClaimedElsewhere {
+        let state = string(root, "claimed_elsewhere_state") ?? ""
+        if let held = root["claimed_elsewhere_count"] as? Int {
+            return .counted(held, state: state)
+        }
+        // Presence, not non-emptiness. The contract's word is "explicit", and
+        // the key being there at all is the explicitness — reading it through
+        // `string` would send a state the node deliberately wrote back down the
+        // `.notReported` path, which says something quite different.
+        if root["claimed_elsewhere_state"] != nil {
+            return .unavailable(state: state)
+        }
+        return .notReported
     }
 
     /// Whether the node's reply is an inbox at all — the question the old
@@ -187,6 +230,14 @@ public struct SageAgentMessaging: AgentMessaging {
     /// waiting" by dropping the array rather than sending `items: []`, that
     /// still reads as an empty inbox and not as a fault. Mistaking empty for
     /// broken is the opposite error and would silently stop the watch.
+    ///
+    /// **`claimed_elsewhere_*` is deliberately not on this list**, though it is
+    /// read a few lines down and is present on every modern reply. Admitting it
+    /// as evidence would make a body carrying only the probe — an error shape,
+    /// a partial reply, anything the node grows next — parse as a successful
+    /// *empty inbox*, which is the precise fault the essay above exists to
+    /// record. The probe describes work this appliance cannot have; it says
+    /// nothing about whether this reply is an inbox.
     static func isAnInbox(_ root: [String: Any]) -> Bool {
         if root["items"] is [Any] { return true }
         // Present but not a list is a shape change, not an empty inbox.

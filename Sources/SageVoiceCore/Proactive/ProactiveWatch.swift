@@ -20,8 +20,13 @@ public struct WatchedTask: Sendable, Equatable, Codable {
 /// Narrow on purpose. A protocol that could reach anything would eventually
 /// reach something the owner did not agree to be told about unprompted.
 public protocol ProactiveSource: Sendable {
-    /// Messages from the owner's other agents.
-    func waitingMessages(limit: Int) async throws -> [AgentInboxItem]
+    /// Messages from the owner's other agents, and what the node says it is
+    /// holding under another session's claim.
+    ///
+    /// A reading rather than a list because both facts arrive in one reply, and
+    /// because a check that finds nothing needs the second one to say why — see
+    /// `ClaimedElsewhere`.
+    func waitingMessages(limit: Int) async throws -> AgentInboxReading
     /// The appliance's own open tasks.
     func openTasks() async throws -> [WatchedTask]
 }
@@ -199,15 +204,32 @@ public struct ProactiveReport: Sendable, Equatable {
     /// true answer — the node did not say who, so neither do we.
     public let relayedSenders: [AgentAddress]
 
+    /// What the node said about work held under another session's claim, or
+    /// `nil` when the inbox could not be read on this check at all.
+    ///
+    /// **Carried on every path out of `check`, including the two that have
+    /// nothing to say** — which is the whole point, because the situation this
+    /// answers is a wake that woke the appliance and then found nothing. A
+    /// report that only carried this alongside news would be silent in exactly
+    /// the case it was built for.
+    ///
+    /// Not defaulted in the initialiser, deliberately. There are three returns
+    /// in `check` and a default would let one of them be forgotten quietly; the
+    /// compiler asking three times costs nothing and is the only mechanism that
+    /// does not depend on somebody remembering.
+    public let claimedElsewhere: ClaimedElsewhere?
+
     public init(
         message: String?,
         ledger: ProactiveLedger,
+        claimedElsewhere: ClaimedElsewhere?,
         sawTasks: [WatchedTask]? = nil,
         relaysAnotherAgent: Bool = false,
         relayedSenders: [AgentAddress] = []
     ) {
         self.message = message
         self.ledger = ledger
+        self.claimedElsewhere = claimedElsewhere
         self.sawTasks = sawTasks
         self.relaysAnotherAgent = relaysAnotherAgent
         self.relayedSenders = relayedSenders
@@ -298,7 +320,14 @@ public struct ProactiveWatch: Sendable {
         //
         // Nil, not empty, and the two halves fail independently: a reachable
         // inbox is still worth reporting when the backlog is down.
-        let messages = try? await source.waitingMessages(limit: 20)
+        //
+        // **The reading is unwrapped here and nothing downstream changes.**
+        // `messages` keeps being the Optional it always was, with `nil` meaning
+        // the node could not be asked — every guard below still reads exactly
+        // that. The probe rides alongside it rather than through it, so a node
+        // that answered with an inbox but no probe is still a successful read.
+        let reading = try? await source.waitingMessages(limit: 20)
+        let messages = reading?.items
         let tasks = try? await source.openTasks()
 
         var updated = ledger
@@ -345,16 +374,27 @@ public struct ProactiveWatch: Sendable {
         // above, arriving one tick later.
         guard ledger.hasSeeded else {
             updated.hasSeeded = messages != nil || tasks != nil
-            return ProactiveReport(message: nil, ledger: updated, sawTasks: tasks)
+            return ProactiveReport(
+                message: nil,
+                ledger: updated,
+                claimedElsewhere: reading?.claimedElsewhere,
+                sawTasks: tasks
+            )
         }
 
         let lines = newMessages.map(Self.line(forMessage:)) + taskNews
         guard !lines.isEmpty else {
-            return ProactiveReport(message: nil, ledger: updated, sawTasks: tasks)
+            return ProactiveReport(
+                message: nil,
+                ledger: updated,
+                claimedElsewhere: reading?.claimedElsewhere,
+                sawTasks: tasks
+            )
         }
         return ProactiveReport(
             message: Self.message(from: lines),
             ledger: updated,
+            claimedElsewhere: reading?.claimedElsewhere,
             sawTasks: tasks,
 // Task news is Mynah's own reading of the owner's own list. An inbox
             // line quotes an agent that is not Mynah, so the message as a whole

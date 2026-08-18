@@ -637,14 +637,29 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// Ollama runs on this machine; nothing leaves it.
     public let isLocal = true
 
-    /// The only backend that has ever read `BrainMessage.images`.
+    /// Whether *this model* reads pictures — the tier's ceiling AND the family
+    /// table.
     ///
-    /// Not a claim that every Ollama model has eyes — a text-only model handed
-    /// an image will say it cannot see one, and that is the model's own honest
-    /// answer rather than an attachment silently discarded three layers below
-    /// it. What this asserts is narrower and checkable: the request built here
-    /// carries the bytes (`object["images"]`), so a vision model receives them.
-    public let seesImages = true
+    /// **This was `true`, unconditionally, and its own comment explained why
+    /// that was fine.** The reasoning was that a text-only model handed an image
+    /// "will say it cannot see one, and that is the model's own honest answer
+    /// rather than an attachment silently discarded three layers below it", and
+    /// that the checkable claim was narrower: the request built here carries the
+    /// bytes, so a vision model receives them.
+    ///
+    /// The second half was true and the first half was a hope. The appliance
+    /// ships `qwen3.5:4b`, which has no visual encoder, and `seesImages` does
+    /// not merely fail to send bytes — it decides what the model is *told*.
+    /// `AttachmentArrivalNote` put *"You can see it — say what it is,
+    /// specifically"* into the prompt of a blind model and then relied on that
+    /// model to contradict the instruction it had just been given. Being able
+    /// to carry bytes is not the same question as being able to see, and one
+    /// constant cannot answer both for every model an owner might pull.
+    ///
+    /// See `LocalVisionModels`, including the `/api/show` probe that retires it.
+    public var seesImages: Bool {
+        brain.mayCarryImages && LocalVisionModels.sees(modelName)
+    }
 
     /// Context window to ask Ollama for, in tokens.
     ///

@@ -2,15 +2,19 @@ import Foundation
 
 /// **The one tool a call gets instead of the four it used to have.**
 ///
-/// Until now the call surface published `write_note`, `read_note`, `list_notes`
-/// and `send_file` — the whole notes source — because `BrainPrompts
-/// .voiceToolAllowlist` unions `NotesToolSource.toolNames` in and the call
-/// builds its loop from that default. The design ruling this replaces assumed
-/// the call already subtracted them. It never did: the only subtraction in the
-/// tree is an `expectedToolNames` health check on the SAGE source, which
-/// declares what that source should publish and has nothing to do with what the
-/// model may call. So a call could send the owner a file mid-sentence, and the
-/// ruling was a rule nothing enforced.
+/// Until 1.8.0 the call surface published `write_note`, `read_note`,
+/// `list_notes` and `send_file` — the whole notes source — because the single
+/// global allowlist unioned `NotesToolSource.toolNames` in and the call built
+/// its loop from that default. The design ruling this replaces assumed the call
+/// already subtracted them. It never did: the only subtraction in the tree was
+/// a health check declaring what the *SAGE* source should publish, which has
+/// nothing to do with what the model may call. So a call could send the owner a
+/// file mid-sentence, and the ruling was a rule nothing enforced.
+///
+/// **What enforces it now is that `ApplianceCatalogue.call` does not register
+/// the notes source at all.** There is no name filter to get wrong: the
+/// composite builds its name→provider table from what each registered source
+/// publishes, so `send_file` on a call comes back as `Failure.unknownTool`.
 ///
 /// This publishes exactly one name. It records what was asked for and performs
 /// nothing at all, which is what makes the promise honest: there is no code
@@ -20,9 +24,10 @@ public struct AfterTheCallToolSource: ToolProviding {
     public static let toolName = "after_the_call"
 
     /// Deliberately not a `sage_` name. It is not a SAGE tool, and a `sage_`
-    /// prefix would be caught by `PromptNamesOnlyRealToolsTests`' regex and
-    /// forced into the global `voiceToolAllowlist` — the one set that must not
-    /// grow, because catalogue size is the dominant term in routing accuracy.
+    /// prefix would read as one everywhere a human looks — including in
+    /// `BrainPrompts.sageToolCuration`, the one set that curates a catalogue
+    /// this repository does not own and must not grow, because catalogue size
+    /// is the dominant term in routing accuracy.
     private let queue: CallActionQueue
     private let log: @Sendable (String) -> Void
 

@@ -3,7 +3,7 @@ import XCTest
 
 /// **The 12-utterance routing set, written down at last.**
 ///
-/// The numbers in `BrainPrompts.voiceToolAllowlist` — *27 tools = 5–6/12,
+/// The numbers in `BrainPrompts.sageToolCuration` — *27 tools = 5–6/12,
 /// 14 tools = 12/12* — have been quoted all week to justify curating the voice
 /// tool catalogue, and the set that produced them existed only as something
 /// somebody ran once. A number nobody can re-run is not evidence; it is a
@@ -44,7 +44,7 @@ import XCTest
 /// So the effect is real, it is not a small-model artefact, and the direction
 /// is the opposite of what was assumed here. High-generality tools act as
 /// attractors: a tool plausible for *any* input wins whenever nothing else is a
-/// strong match. `BrainPrompts.voiceToolAllowlist` carries the full write-up.
+/// strong match. `BrainPrompts.sageToolCuration` carries the full write-up.
 ///
 /// Two things this does not settle. The original 5–6/12 figure still does not
 /// reproduce on the model it names. And 4B and 26B are different families —
@@ -59,7 +59,7 @@ import XCTest
 /// gets disabled. Drive them from a harness that has both:
 ///
 ///   1. Build the backend under test and compose the tool catalogue at the size
-///      being measured (`BrainPrompts.voiceToolAllowlist` for the curated set,
+///      being measured (`BrainPrompts.sageToolCuration` for the curated set,
 ///      the unfiltered `tools/list` for the full one).
 ///   2. Send each `utterance` as a single user turn, temperature 0, no history.
 ///   3. Score `expected` against the tool actually called — **name only**. Do
@@ -125,15 +125,20 @@ final class VoiceRoutingUtteranceSetTests: XCTestCase {
         XCTAssertEqual(silent.count, 3, "a set with no negative cases scores a broken model 12/12")
     }
 
-    /// Every expected tool must survive the voice allowlist, or the case is
-    /// unscoreable against the curated catalogue — it would fail for the trivial
-    /// reason that the model was never shown the tool.
-    func testEveryExpectedToolIsActuallyOfferedToTheVoiceBrain() {
+    /// Every expected tool must actually be offered, or the case is unscoreable
+    /// against the curated catalogue — it would fail for the trivial reason
+    /// that the model was never shown the tool.
+    ///
+    /// Against the composed catalogue rather than the SAGE curation, because an
+    /// utterance may reasonably expect `web_search` or `write_note`, and
+    /// neither is a SAGE tool.
+    func testEveryExpectedToolIsActuallyOfferedToTheVoiceBrain() async throws {
+        let offered = try await ComposedCatalogue.conversation()
         for testCase in VoiceRoutingUtterances.all {
             guard let expected = testCase.expected else { continue }
             XCTAssertTrue(
-                BrainPrompts.voiceToolAllowlist.contains(expected),
-                "'\(expected)' is expected by an utterance but filtered out of the voice catalogue"
+                offered.contains(expected),
+                "'\(expected)' is expected by an utterance but never offered to the model"
             )
         }
     }

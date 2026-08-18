@@ -264,14 +264,21 @@ final class NotesToolSourceTests: XCTestCase {
 
     // MARK: - Catalogue
 
-    /// The exact bug that made web search a silent no-op when it shipped: the
-    /// allowlist filters the *composed* catalogue, so a tool missing from it is
-    /// a tool the model never sees, however correctly its source publishes it.
-    func testTheNoteToolsAreOnTheVoiceAllowlist() {
+    /// The exact bug that made web search a silent no-op when it shipped: a
+    /// tool can be published perfectly and still never reach the model.
+    ///
+    /// **This used to assert membership of `BrainPrompts.voiceToolAllowlist`,
+    /// and that membership is what slice 1 deliberately deletes.** This source
+    /// self-declares now — `CompositeToolSource.Source.inProcess` has no name
+    /// parameter to list it in — so the only place the question can honestly be
+    /// asked is the composed catalogue. Asserting the old way would be
+    /// asserting that a name is in a set that must never contain it.
+    func testTheNoteToolsAreInTheComposedCatalogue() async throws {
+        let offered = try await ComposedCatalogue.conversation()
         for name in NotesToolSource.toolNames {
             XCTAssertTrue(
-                BrainPrompts.voiceToolAllowlist.contains(name),
-                "\(name) is published but filtered out before the model sees it"
+                offered.contains(name),
+                "\(name) is published but never reaches the model: \(offered.sorted())"
             )
         }
     }
@@ -331,11 +338,12 @@ final class NoteDocumentTests: XCTestCase {
     private func write(
         _ source: NotesToolSource,
         title: String = "Quarterly brief",
+        content: String = "A paragraph.\n\n## What we found\n\n- One thing\n- Another\n",
         format: String? = nil
     ) async throws -> String {
         var arguments: [String: JSONValue] = [
             "title": .string(title),
-            "content": .string("A paragraph.\n\n## What we found\n\n- One thing\n- Another\n")
+            "content": .string(content)
         ]
         if let format { arguments["format"] = .string(format) }
         return try await source.call(name: NotesToolSource.writeToolName, arguments: arguments)
@@ -402,6 +410,82 @@ final class NoteDocumentTests: XCTestCase {
         XCTAssertEqual(
             withoutPDF.offeredFormats, [.markdown, .docx, .pptx],
             "a model told `pdf` is available will use it and say it did"
+        )
+    }
+
+    /// **A model told it can chart on a Mac that cannot would write the fence
+    /// and the owner would never see it drawn** — the same trap the diagram
+    /// sentence is gated against, one layer down. A chart needs no package, so
+    /// the gate is the PDF and nothing else.
+    func testTheChartSentenceIsOnlyOfferedWhereAChartCanBeDrawn() throws {
+        let withoutPandoc = makeSource(exporter: nil)
+        XCTAssertFalse(
+            withoutPandoc.contentGuidance.contains("```chart"),
+            "a chart was offered on a Mac with no converter: \(withoutPandoc.contentGuidance)"
+        )
+
+        let withoutPDF = makeSource(exporter: DocumentExporter(
+            pandoc: URL(fileURLWithPath: "/usr/bin/true"),
+            pdfEngine: nil
+        ))
+        XCTAssertFalse(
+            withoutPDF.contentGuidance.contains("```chart"),
+            "a chart was offered where only Word and slides can be made, and neither draws "
+                + "one: \(withoutPDF.contentGuidance)"
+        )
+
+        let withPDF = makeSource(exporter: DocumentExporter(
+            pandoc: URL(fileURLWithPath: "/usr/bin/true"),
+            pdfEngine: URL(fileURLWithPath: "/usr/bin/true")
+        ))
+        XCTAssertTrue(
+            withPDF.contentGuidance.contains("```chart"),
+            "nothing ever tells the model charts exist: \(withPDF.contentGuidance)"
+        )
+    }
+
+    /// **The anti-lying guard.** A dropped diagram leaves a hole the model can
+    /// see; a chart that became a table leaves the numbers exactly where they
+    /// were, so a model that is not told will describe bars that are not on the
+    /// page. It has to reach the tool result.
+    func testAChartThatBecameATableIsToldToTheModel() async throws {
+        guard let exporter = DocumentExporter.locate() else {
+            throw XCTSkip("pandoc is not staged; run scripts/provision-pandoc.sh")
+        }
+        let source = makeSource(exporter: exporter)
+
+        // A Word document, which is never typeset by Typst and therefore never
+        // draws one.
+        let answer = try await write(
+            source,
+            content: "The comparison.\n\n```chart\nLocal Mac | 1200\nHosted API | 3400\n```\n",
+            format: "docx"
+        )
+
+        XCTAssertTrue(
+            answer.contains("chart") && answer.contains("table"),
+            "the model will describe a picture that is not there: \(answer)"
+        )
+        XCTAssertEqual(source.drainOutgoingFiles().map(\.lastPathComponent), ["quarterly-brief.docx"])
+    }
+
+    /// And a chart that drew reports nothing, so the model has nothing to
+    /// apologise for.
+    func testADrawnChartReportsNoLoss() async throws {
+        guard let exporter = DocumentExporter.locate(), exporter.canProduce(.pdf) else {
+            throw XCTSkip("typst is not staged; run scripts/provision-typst.sh")
+        }
+        let source = makeSource(exporter: exporter)
+
+        let answer = try await write(
+            source,
+            content: "The comparison.\n\n```chart\nLocal Mac | 1200\nHosted API | 3400\n```\n",
+            format: "pdf"
+        )
+
+        XCTAssertFalse(
+            answer.contains("could not be drawn"),
+            "a chart that drew was apologised for: \(answer)"
         )
     }
 

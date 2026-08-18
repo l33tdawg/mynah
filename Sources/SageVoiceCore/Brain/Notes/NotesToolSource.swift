@@ -31,7 +31,15 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     public static let listToolName = "list_notes"
     public static let sendToolName = "send_file"
 
-    /// For `CompositeToolSource.Source.expectedToolNames` and the prompt allowlist.
+    /// Every name this source publishes, for the tests that assert the composed
+    /// catalogue carries all four.
+    ///
+    /// **No longer a curation input.** It used to be unioned into
+    /// `BrainPrompts.voiceToolAllowlist`, because that set filtered the composed
+    /// catalogue and a name missing from it was a tool the model never saw. This
+    /// source now self-declares through `CompositeToolSource.Source.inProcess`,
+    /// which has no name parameter — a tool this repository implements does not
+    /// ask a constant in `BrainPrompts` for permission to be offered.
     public static let toolNames: Set<String> = [writeToolName, readToolName, listToolName, sendToolName]
 
     /// The largest file that goes out over Signal.
@@ -219,7 +227,7 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     ///
     /// Catalogue *size* — not prompt wording — was the dominant factor in
     /// routing accuracy for this model: 27 tools scored 5–6/12 where 14 scored
-    /// 12/12 (see `BrainPrompts.voiceToolAllowlist`). These three take the voice
+    /// 12/12 (see `BrainPrompts.sageToolCuration`). These three take the voice
     /// catalogue from 15 to 18, so every sentence here has to earn its tokens.
     public func listTools() async throws -> [MCPTool] {
         [
@@ -347,6 +355,26 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
                     + "of Graphviz and it is drawn into the document. Plain nodes and "
                     + "edges with labels; no subgraphs or clusters, and quote every "
                     + "colour. One or two at most, and only where one genuinely helps."
+            )
+        }
+        // Gated on the PDF being on offer and nothing else, because that is
+        // exactly what a chart needs — it is drawn by the template itself, with
+        // no package behind it. A Word document or a deck gets the numbers as a
+        // table instead, which is why this does not promise "a document".
+        // Every clause after the first is here because the local 4B did the
+        // thing it forbids on a real run: handed `one "Label | number" per
+        // line`, it copied that placeholder into the block as a data row, then
+        // wrote ranges rather than numbers, put two different quantities in one
+        // chart, and printed the same figures as a table immediately above it.
+        // A worked example rather than a placeholder is what stopped the first.
+        if offeredFormats.contains(.pdf) {
+            lines.append(
+                "Where the point is a comparison of numbers, include a ```chart fenced "
+                    + "block and it is drawn as a bar chart in a PDF. One row per line: a "
+                    + "short name, a vertical bar, one plain number, like `Mac mini | 42`. "
+                    + "No header row, no ranges, no units, nothing negative, and one set of "
+                    + "comparable numbers per chart. One or two charts at most, and do not "
+                    + "also write those same figures out as a table."
             )
         }
         return lines.joined(separator: " ")
@@ -503,6 +531,14 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
             if conversion.droppedDiagram {
                 note += " The diagram in it would not draw, so the document was made without it —"
                     + " say so in passing, in one short clause."
+            }
+            // The same rule, for the failure that is easier to lie about. A
+            // dropped diagram leaves a gap the model can see; a chart that
+            // became a table leaves the numbers in place, so a model that does
+            // not know will happily describe the bars.
+            if conversion.droppedChart {
+                note += " The chart in it could not be drawn, so its numbers are in the"
+                    + " document as a table instead — say that, and do not describe a picture."
             }
             return (destination, note)
         } catch {

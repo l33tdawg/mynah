@@ -34,7 +34,7 @@ import json, pathlib, sys, time, urllib.request
 
 OLLAMA = "http://127.0.0.1:11434/api/chat"
 
-# The 14 SAGE names in BrainPrompts.voiceToolAllowlist. web_search and the note
+# The 14 SAGE names in BrainPrompts.sageToolCuration. web_search and the note
 # tools are published locally rather than by SAGE, so they are out of scope for
 # a 14-vs-27 comparison — which is the comparison the disputed claim makes.
 ALLOWLIST = {
@@ -43,7 +43,7 @@ ALLOWLIST = {
     "sage_inbox", "sage_find_agent", "sage_pipe", "sage_pipe_result",
     "sage_federation",
     # Added when 11.16.x published 27 tools. Kept in step with
-    # BrainPrompts.voiceToolAllowlist deliberately: this set is duplicated from
+    # BrainPrompts.sageToolCuration deliberately: this set is duplicated from
     # Swift, and letting the two drift is exactly the decoupling the note above
     # says ends the numbers' meaning.
     "sage_corroborate", "sage_link",
