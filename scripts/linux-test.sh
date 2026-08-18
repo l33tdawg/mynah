@@ -446,10 +446,16 @@ if [[ -f "$ASSERT" ]]; then
   # which is the exact hole assert-test-run.sh was written for. CI sets it — see
   # .github/workflows/linux.yml — and so should anyone running this by hand who
   # intends the result to mean something.
+  #
+  # The hung ids are NOT passed. That script reads hung.txt from beside the log
+  # by itself, which is where this one writes it, and a default that needs no
+  # caller is a default that is also there for a person gating a downloaded CI
+  # artefact directory by hand.
   ASSERT_FLOOR="${MYNAH_MIN_EXECUTED_TESTS:-$RAN}"
   set +e
   MYNAH_MIN_EXECUTED_TESTS="$ASSERT_FLOOR" \
   MYNAH_SMALLEST_TEST_TARGET="${MYNAH_SMALLEST_TEST_TARGET:-$ENUMERATED}" \
+  MYNAH_SMALLEST_TEST_TARGET_NAME="${MYNAH_SMALLEST_TEST_TARGET_NAME:-the whole enumerated suite}" \
   MYNAH_FLOOR_SITS_UNDER="${MYNAH_FLOOR_SITS_UNDER:-0}" \
   MYNAH_MAX_SKIPPED_TESTS="${MYNAH_MAX_SKIPPED_TESTS:-$SKIPPED}" \
     bash "$ASSERT" "$LOG"

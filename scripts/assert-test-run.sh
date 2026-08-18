@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
-# Decides whether a `swift test` run actually verified anything.
+# Decides whether a test run actually verified anything.
 #
-#   arch -arm64 swift test 2>&1 | tee /tmp/tests.log
-#   bash scripts/assert-test-run.sh /tmp/tests.log
+#   macOS   arch -arm64 swift test 2>&1 | tee /tmp/tests.log
+#           bash scripts/assert-test-run.sh /tmp/tests.log
+#
+#   Linux   bash scripts/linux-test.sh
+#           (writes the log AND calls this on it; there is nothing to do by hand)
 #
 # It reads a log a test run has already written; it runs nothing itself. That is
-# deliberate — scripts/release.sh and .github/workflows/release.yml invoke the
-# suite differently, and the point of this file is that they cannot end up
-# judging it differently.
+# deliberate — scripts/release.sh, .github/workflows/release.yml and
+# scripts/linux-test.sh invoke the suite three different ways, and the point of
+# this file is that they cannot end up judging it differently.
+#
+# ## Two platforms, and the remedies are not the same
+#
+# This file spoke only Darwin for its whole life, which was true until the suite
+# was first compiled off it. What that cost is visible in the first Linux CI run
+# of the port: a real failing test was reported, and the line under it told the
+# reader to find it with `grep " error: -\["` — Darwin's spelling of a failure,
+# which swift-corelibs-xctest never writes. The verdict was right and the door
+# out of it opened onto a wall.
+#
+# So the hints below are chosen per run, off the log being judged rather than
+# off the machine judging it. A CI artefact downloaded to a Mac still gets Linux
+# advice, because what matters is which runner produced the file.
 #
 # ## The check this replaces, and why it could not fail
 #
@@ -52,12 +68,32 @@ LOG="${1:-}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# How to produce a log on the machine this is running on.
+#
+# Off `uname` and not off the log, because these two callers fire when there is
+# no log to read. Both of them said `arch -arm64 swift test` unconditionally,
+# which is a Darwin command and the wrong instruction on the one platform where
+# the suite is run by a script rather than by hand.
+capture_hint() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "  arch -arm64 swift test 2>&1 | tee ${1:-/tmp/tests.log}"
+  else
+    echo "  bash scripts/linux-test.sh"
+    echo "which runs the suite one test per process, writes the log, and calls this"
+    echo "script on it. Do not run plain 'swift test' off Darwin to feed this: a"
+    echo "single wedged test parks the whole suite with no output and no summary"
+    echo "line, and this script would then report that nothing ran."
+  fi
+}
+
 [[ -n "$LOG" ]] \
   || die "assert-test-run.sh needs the path to a test log as its only argument.
-Capture one with: arch -arm64 swift test 2>&1 | tee /tmp/tests.log"
+Capture one with:
+$(capture_hint)"
 [[ -f "$LOG" ]] \
   || die "no test log at $LOG.
-Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
+Capture one with:
+$(capture_hint "$LOG")"
 
 # Measured on this checkout on 2026-08-04: a fully provisioned run on the build
 # Mac reports "Executed 1840 tests, with 21 tests skipped".
@@ -465,6 +501,13 @@ MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2603}"
 # target loss at all.
 SMALLEST_TEST_TARGET="${MYNAH_SMALLEST_TEST_TARGET:-38}"
 
+# What that target is called, so the message names a real thing wherever it
+# fires. KokoroEngineTests is the Darwin answer and is meaningless off it: the
+# target does not exist on a Linux checkout, which has no libonnxruntime.so
+# staged for the manifest to find. scripts/linux-test.sh overrides the count
+# with its own enumeration, and this travels with it.
+SMALLEST_TEST_TARGET_NAME="${MYNAH_SMALLEST_TEST_TARGET_NAME:-KokoroEngineTests}"
+
 # How far under the measured count a freshly-set floor sits.
 #
 # **Not 25, and the difference is the whole reason this is a named constant.**
@@ -499,6 +542,45 @@ FLOOR_SITS_UNDER="${MYNAH_FLOOR_SITS_UNDER:-12}"
 # the right move is to stop skipping — raising this past 24 restores the blind
 # spot, and past 30 the gate stops seeing a missing document surface at all.
 MAX_SKIPPED="${MYNAH_MAX_SKIPPED_TESTS:-24}"
+
+# **Which runner wrote this log, read off the log itself.**
+#
+# scripts/linux-test.sh stamps its own summary block into the aggregate log, and
+# that marker is the only honest way to tell a per-test Linux run from a plain
+# `swift test`: `uname` describes the machine running THIS script, which is not
+# necessarily the machine that ran the tests — a downloaded CI artefact is
+# gated on a Mac and is still a Linux run.
+FROM_LINUX_HARNESS=0
+if grep -q -- "--- harness summary (scripts/linux-test.sh) ---" "$LOG"; then
+  FROM_LINUX_HARNESS=1
+fi
+
+# The hung ids, which live beside the log rather than inside it.
+#
+# Not a parameter: gating a downloaded artefact directory then works exactly
+# like gating a local run, with nothing to remember. The harness truncates all
+# four id files at the start of every run, so the file next to a log is always
+# that log's own and never a leftover.
+HUNG_IDS_FILE="${MYNAH_HUNG_IDS_FILE:-$(dirname "$LOG")/hung.txt}"
+
+# Where the failing tests are named in THIS log.
+#
+# `grep " error: -\["` was the only spelling here and it is Darwin's.
+# swift-corelibs-xctest writes `error: SuiteName.testName : XCTAssert...` with
+# no `-[` anywhere in the line, so on Linux that hint matches nothing at all.
+# The harness log has something better than either: it brackets each test's
+# output with its own verdict line, and writes the ids to a file besides.
+failing_test_hint() {
+  if (( FROM_LINUX_HARNESS )); then
+    echo "  grep '^=== failed ::' $LOG"
+    echo "or read the ids on their own, one per line:"
+    echo "  cat $(dirname "$LOG")/failed.txt"
+  else
+    echo "  grep -E ' error: (-\[|[A-Za-z_][A-Za-z0-9_]*\.)' $LOG"
+    echo "(both spellings: Darwin writes 'error: -[Suite test]', corelibs writes"
+    echo "'error: Suite.test :')"
+  fi
+}
 
 # The line after "Test Suite 'All tests' passed", specifically, rather than the
 # last line matching "Executed" anywhere. XCTest prints a summary per suite, so
@@ -557,26 +639,77 @@ If XCTest has changed its wording, teach this script the new one rather than
 leaving it unable to parse — that would silently retire the gate."
 fi
 
+# **A hang is not a failure, and this is the only place that can say which it
+# was.**
+#
+# XCTest has two outcomes and no word for a hang, so scripts/linux-test.sh folds
+# hung tests into the failure count of the compatibility summary it writes. That
+# direction is deliberate and stays — a hang must never be the cheaper outcome
+# than a failure. What it left behind was this script announcing "8 failing
+# test(s)" for a run in which nothing failed at all, and pointing at a grep for
+# assertion messages that a hung test never got far enough to print.
+#
+# Checked before the failure count so the more specific diagnosis wins, and the
+# ids are read out in full: a hang names no test in the log, so the file beside
+# it is the only place the reader can learn which ones wedged.
+if (( FROM_LINUX_HARNESS )) && [[ -s "$HUNG_IDS_FILE" ]]; then
+  HUNG_COUNT="$(grep -c . "$HUNG_IDS_FILE" || true)"
+  die "$HUNG_COUNT test(s) HUNG — started, never returned, killed by the harness:
+$(sed 's/^/  /' "$HUNG_IDS_FILE")
+
+A hang is not a failing assertion and not a slow test. Every test runs in its
+own process under a timeout because corelibs-xctest routes every one of them
+through RunLoop.run, which on Linux can block forever ignoring its deadline; the
+first test to lose a libdispatch wake-up would otherwise park the whole suite at
+0% CPU with no output and no summary line.
+
+The wedge point MOVES between runs, because it is a race in the toolchain rather
+than a property of these tests. A rerun that comes back green has not fixed
+anything and has not disproved anything either — the union of several runs is
+worth more than any one of them, which is why the id lists are uploaded as
+artefacts.
+
+Do not raise MYNAH_LINUX_TEST_TIMEOUT and do not skip these. Both make the suite
+finish by testing less, which is the hollow run this whole script exists to
+catch."
+fi
+
 if (( FAILURES > 0 )); then
   die "the suite reported $FAILURES failing test(s), so this run did not verify the release.
 See them with:
-  grep ' error: -\[' $LOG"
+$(failing_test_hint)"
 fi
 
 RAN=$(( EXECUTED - SKIPPED ))
 
 if (( EXECUTED < MIN_EXECUTED )); then
-  die "the suite executed $EXECUTED tests, under the floor of $MIN_EXECUTED, so this run did not cover the release.
-Worth checking in this order:
-  1. 'incompatible architecture' in $LOG — the bundle did not load. Rerun with
-     arch -arm64 swift test.
-  2. vendor/onnxruntime is not staged. Package.swift decides whether the
+  if (( FROM_LINUX_HARNESS )); then
+    FLOOR_FIRST_CHECK="1. tests that HUNG rather than ran. A wedged test reaches no verdict, so
+     it is absent from this number by design — a run full of hangs sinks under
+     the floor instead of sliding under it. The count is in the harness summary
+     block in $LOG."
+    FLOOR_SECOND_CHECK="2. vendor/onnxruntime is not staged. Package.swift decides whether the
+     KokoroEngine and KokoroEngineTests targets exist by looking for
+     vendor/onnxruntime/lib/libonnxruntime.so as the manifest is read — the .so,
+     not the .dylib this script used to name, which no Linux checkout has ever
+     had — so an absent library removes those tests from the graph rather than
+     failing anything. Note that CI does not stage it at all, and its floor is
+     set for a graph without it."
+  else
+    FLOOR_FIRST_CHECK="1. 'incompatible architecture' in $LOG — the bundle did not load. Rerun with
+     arch -arm64 swift test."
+    FLOOR_SECOND_CHECK="2. vendor/onnxruntime is not staged. Package.swift decides whether the
      KokoroEngine and KokoroEngineTests targets exist by looking for
      vendor/onnxruntime/lib/libonnxruntime.dylib as it is read, so an absent
      dylib removes 38 tests from the graph rather than failing anything. Run
      scripts/provision-onnxruntime.sh, then delete .build — SwiftPM caches the
      evaluated manifest and will otherwise keep serving the graph it already
-     decided on.
+     decided on."
+  fi
+  die "the suite executed $EXECUTED tests, under the floor of $MIN_EXECUTED, so this run did not cover the release.
+Worth checking in this order:
+  $FLOOR_FIRST_CHECK
+  $FLOOR_SECOND_CHECK
   3. tests really were deleted on purpose, in which case lower
      MYNAH_MIN_EXECUTED_TESTS in the same commit that deleted them, so the new
      floor is reviewed alongside the removal."
@@ -602,7 +735,7 @@ if (( EXECUTED >= MIN_EXECUTED + SMALLEST_TEST_TARGET )); then
   die "the suite has grown to $EXECUTED and the floor of $MIN_EXECUTED can no longer do its job.
 
 Nothing is wrong with this run. The gate is what needs attention: losing the
-smallest test target ($SMALLEST_TEST_TARGET tests, KokoroEngineTests) would leave
+smallest test target ($SMALLEST_TEST_TARGET tests, $SMALLEST_TEST_TARGET_NAME) would leave
 $(( EXECUTED - SMALLEST_TEST_TARGET )), which still clears $MIN_EXECUTED — so the
 one failure this floor exists to catch would pass it.
 

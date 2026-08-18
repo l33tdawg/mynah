@@ -118,15 +118,24 @@ jobs:
           # executed one, so a floor on the executed count alone is satisfied by
           # a run in which everything skipped.
           #
-          # This is deliberately NOT the build Mac's 24. The Linux container
-          # runs as root, and the settings failure-path tests skip under root
-          # because a root process can write a file whose permissions say it may
-          # not — so those skip here and run there. Left unset the harness would
-          # accept whatever this run happened to skip, which is a ceiling that
-          # cannot fail; 40 is a real one. If a run exceeds it, find out which
-          # tests stopped running before raising it:
+          # This is deliberately NOT the build Mac's 24 for the same reason,
+          # arrived at from the other side. The Linux container runs as root,
+          # and the settings failure-path tests skip under root because a root
+          # process can write a file whose permissions say it may not — so those
+          # skip here and run there.
+          #
+          # **Measured, and corrected down from 40.** 40 was set before this
+          # workflow had ever run, against no measurement at all. Two
+          # independent healthy runs on 18 Aug 2026 — CI on native x86-64 and
+          # Docker on the build Mac's arm64 — both skipped exactly 18, so 40 was
+          # 22 tests of slack: a fifth of the suite could have gone quiet under
+          # it without a word. 24 keeps six of room, which is the same margin
+          # the Mac's ceiling holds over its own healthy 21.
+          #
+          # If a run exceeds it, find out which tests stopped running before
+          # raising it:
           #   grep 'Test skipped - ' <the log the step prints the path of>
-          MYNAH_MAX_SKIPPED_TESTS: "40"
+          MYNAH_MAX_SKIPPED_TESTS: "24"
         run: |
           set -euo pipefail
           # coreutils `timeout` is what names a hang; the harness refuses to run
