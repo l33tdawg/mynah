@@ -102,15 +102,18 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2460   (2.3.0, a five-minute check the owner can choose;
+#   measured      2615   (the Linux port: the suite had never been compiled off
+#                         Darwin at all, and the tests written to prove the port
+#                         sat inside `#if !os(macOS)` where nothing built them;
+#                         2460 at 2.3.0, a five-minute check the owner can choose;
 #                         2456 at 2.2.0, answering the exact agent rather than the label;
 #                         2438 at 2.1.1, three defects the owner found by using 2.1.0;
 #                         2407 at 2.1.0, the message wake bus;
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2422   (2460 - 38)
-#   floor           2448   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2577   (2615 - 38)
+#   floor           2603   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -451,7 +454,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2448}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2603}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
