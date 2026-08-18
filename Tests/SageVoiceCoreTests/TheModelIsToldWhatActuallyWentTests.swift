@@ -201,6 +201,83 @@ final class TheModelIsToldWhatActuallyWentTests: XCTestCase {
         XCTAssertFalse(sent.content.contains(Self.admitsBlindness))
     }
 
+    // MARK: - And a file that never arrived is said out loud
+
+    /// **The half of the attachment defect that lived at the call site.**
+    ///
+    /// `SignalAttachmentStore` builds a named `Refusal` for every file it could
+    /// not keep and hands back an `Outcome` carrying both lists, and
+    /// `AnAttachmentThatDidNotSaveIsNotSilenceTests` proves all of that works.
+    /// It went nowhere. `Outcome` conforms to `Collection` over its successes —
+    /// on purpose, so that adding refusals broke no existing call site — and
+    /// the daemon spelled its call `batch.flatMap { store.keep(…) }`, which
+    /// iterates that conformance and yields the kept files alone. Every refusal
+    /// was discarded one line after it was made.
+    ///
+    /// The owner sent a file, was told the turn was handled, and the only
+    /// record that it had not been kept was a line in bridge.log.
+    ///
+    /// This asserts through `handle` rather than on the store, because the
+    /// store was never the part that was wrong.
+    func testAFileThatCouldNotBeKeptIsNamedInTheTurn() async throws {
+        let turn = try Turn()
+
+        _ = await turn.send(
+            caption: "here's the ferry booking",
+            attachment: turn.neverWritten(named: "ferry.pdf")
+        )
+        let sent = try XCTUnwrap(turn.userTurn, "the brain was never asked anything")
+
+        XCTAssertTrue(
+            sent.content.contains("ferry.pdf"),
+            """
+            the turn never named the file that was lost, so the owner cannot know \
+            which of them to send again. What the model got:
+                \(sent.content)
+            The daemon's own account of the turn:
+                \(turn.log)
+            """
+        )
+        XCTAssertTrue(
+            sent.content.contains("could NOT be saved"),
+            """
+            the model was handed no instruction about the missing file, so the \
+            reply will read as though the turn went fine. What the model got:
+                \(sent.content)
+            """
+        )
+    }
+
+    /// The refusal must not cost the owner the files that DID arrive.
+    ///
+    /// One batch can keep two photographs and lose a PDF, and a turn that
+    /// mentions only one of those misleads about the other — which is why the
+    /// two asides are appended rather than one replacing the other.
+    func testAKeptFileAndARefusedOneAreBothAnnounced() async throws {
+        let turn = try Turn()
+
+        _ = await turn.daemon.handle(ChannelMessage(
+            kind: .whatsapp,
+            recipient: turn.recipient,
+            id: "message-both",
+            text: "the booking and the map",
+            attachments: [
+                try turn.document(named: "booking.pdf"),
+                turn.neverWritten(named: "map.pdf")
+            ]
+        ))
+        let sent = try XCTUnwrap(turn.userTurn)
+
+        XCTAssertTrue(
+            sent.content.contains(Self.announcesTheFile),
+            "the file that WAS kept stopped being announced:\n    \(turn.log)"
+        )
+        XCTAssertTrue(
+            sent.content.contains("map.pdf"),
+            "the file that was lost was not named:\n    \(sent.content)"
+        )
+    }
+
     // MARK: - The two ends of the wire agree
 
     /// The promise `seesImages` makes is about the HTTP body, so this reads the
@@ -372,6 +449,19 @@ final class TheModelIsToldWhatActuallyWentTests: XCTestCase {
             try Data("%PDF-1.4 ferry booking".utf8).write(to: url)
             return ChannelAttachment(
                 id: name, contentType: "application/pdf", filename: name, localURL: url
+            )
+        }
+
+        /// Announced by the channel, with no file behind it.
+        ///
+        /// Not a contrived shape: signal-cli reports an attachment on the
+        /// message before it has finished decrypting it to disk, and
+        /// `SignalAttachmentStore` treats a `nil` localURL as a refusal for
+        /// exactly that reason. It is the cheapest way to reach the refusal
+        /// path without breaking a filesystem.
+        func neverWritten(named name: String) -> ChannelAttachment {
+            ChannelAttachment(
+                id: name, contentType: "application/pdf", filename: name, localURL: nil
             )
         }
     }

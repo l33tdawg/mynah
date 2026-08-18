@@ -1318,7 +1318,7 @@ public actor VoiceBridgeDaemon {
         // the user wants it stored, just store it and pull it up when asked"* —
         // and doing it here means an attachment survives a turn that fails, a
         // model that has no eyes, and a tool loop that runs out of iterations.
-        let kept = keepAttachments(in: batch)
+        let attachments = keepAttachments(in: batch)
 
         if configuration.sendsThinkingAcknowledgement {
             // Through the same gate as everything else the appliance says while
@@ -1353,8 +1353,26 @@ public actor VoiceBridgeDaemon {
             // image decoder the two disagreed on every photo the owner ever
             // sent.
             let attachedImages = batch.flatMap { resolveImages($0) }
-            let prompt = attachmentNote(for: kept, imagesOnTheWire: attachedImages.count)
-                .map { "\(transcript)\n\n\($0)" } ?? transcript
+            // **Two asides, and the second one is the owner's.**
+            //
+            // The first says what arrived and whether the model can see it. The
+            // second says what did NOT arrive, and until now it was built by
+            // the store and then dropped here — so a file that failed to save
+            // produced a log line, a turn reported as handled, and a reply that
+            // never mentioned it. The owner is left believing the appliance has
+            // their ferry ticket.
+            //
+            // Both are appended rather than either replacing the other: a batch
+            // can perfectly well keep two photographs and lose a PDF, and a
+            // turn that mentioned only one of those is a turn that misleads
+            // about the other.
+            let asides = [
+                attachmentNote(for: attachments.kept, imagesOnTheWire: attachedImages.count),
+                attachments.ownerFacingNote
+            ].compactMap { $0 }
+            let prompt = asides.isEmpty
+                ? transcript
+                : ([transcript] + asides).joined(separator: "\n\n")
             let priorTurns = histories[key] ?? []
             let brain = loop
             let announceChosenTool: @Sendable ([String]) async -> Void = { [weak self] chosen in
@@ -1694,13 +1712,31 @@ public actor VoiceBridgeDaemon {
     /// because one attachment was a malformed HEIC would be a worse appliance
     /// than one that says it cannot see anything.
     /// Files everything attached to this batch, whatever the brain can do with
-    /// it. See `SignalAttachmentStore`.
-    private func keepAttachments(in batch: [ChannelMessage]) -> [SignalAttachmentStore.Kept] {
+    /// it — and reports what it could NOT file. See `SignalAttachmentStore`.
+    ///
+    /// **Returns the whole `Outcome`, and the reason is that the previous
+    /// return type quietly threw half of it away.** This read
+    /// `batch.flatMap { store.keep(…) }` and was typed `[Kept]`.
+    /// `SignalAttachmentStore.Outcome` conforms to `Collection` over its
+    /// successes — deliberately, so that adding refusals to the store broke no
+    /// call site — so `flatMap` compiled, ran, and dropped every `Refusal` one
+    /// line after the store had carefully built it. The owner's file was gone,
+    /// the log said so, and the turn was reported as handled.
+    ///
+    /// The store's own header names this and says the fix is one line at the
+    /// call site rather than in the store: *"anything that iterates one and
+    /// then speaks to the owner still owes them `ownerFacingNote`."* This is
+    /// the call site, and it is written as an explicit loop rather than a
+    /// `map`/`flatMap` precisely so that the next person to add a field to
+    /// `Outcome` cannot lose it by iterating.
+    private func keepAttachments(in batch: [ChannelMessage]) -> SignalAttachmentStore.Outcome {
         let store = SignalAttachmentStore(
             notesDirectory: notes?.notesDirectory ?? NotesToolSource.defaultDirectory()
         )
-        return batch.flatMap { message in
-            store.keep(
+        var kept: [SignalAttachmentStore.Kept] = []
+        var refusals: [SignalAttachmentStore.Refusal] = []
+        for message in batch {
+            let outcome = store.keep(
                 // **Not the voice note.** A spoken message arrives as an
                 // `audio/*` attachment and it is not a file the owner sent — it
                 // *is* the message, and the daemon has already turned it into
@@ -1722,7 +1758,10 @@ public actor VoiceBridgeDaemon {
                 receivedAt: Date(),
                 log: { [weak self] line in self?.log(line) }
             )
+            kept.append(contentsOf: outcome.kept)
+            refusals.append(contentsOf: outcome.refusals)
         }
+        return SignalAttachmentStore.Outcome(kept: kept, refusals: refusals)
     }
 
     /// Tells the model what arrived. See `AttachmentArrivalNote` for what it
