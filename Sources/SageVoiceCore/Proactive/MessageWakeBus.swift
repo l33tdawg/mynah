@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - What a wake is
 
@@ -358,7 +365,12 @@ public actor MessageWakeBus {
         ) else { throw Ending.notConfigured }
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
 
-        let (stream, response) = try await session.bytes(for: request)
+        // `PortableByteStream` and not `session.bytes(for:)` directly: that
+        // method is Darwin-only, and the substitute Foundation offers elsewhere
+        // returns the whole body at once — on a stream the node never closes,
+        // that is a call that returns at shutdown. On a Mac this *is*
+        // `session.bytes(for:)`; see the file for what it is off one.
+        let (stream, response) = try await PortableByteStream.open(request, on: session)
         try LoopbackSecurity.verifyResponseOrigin(response, expected: url)
         guard let http = response as? HTTPURLResponse else { throw WakeFailure.unreadable }
 

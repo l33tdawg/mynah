@@ -46,6 +46,7 @@ final class WebSearchFallthroughTests: XCTestCase {
         }
     }
 
+    #if os(macOS)
     /// The bound has to sit above every provider's own timeout, or it fires on
     /// providers that were about to answer.
     func testTheGiveUpBoundIsAboveTheBrowsersOwnTimeout() {
@@ -55,6 +56,7 @@ final class WebSearchFallthroughTests: XCTestCase {
             "the chain would abandon a page load that was still within its own budget"
         )
     }
+    #endif  // os(macOS)
 
     /// **The regression test for the outage.** A provider that never returns
     /// must not take the search with it.

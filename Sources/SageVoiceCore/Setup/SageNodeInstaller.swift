@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// What happened when we tried to obtain a SAGE node.
 public enum SageNodeProvisioning: Equatable, Sendable {

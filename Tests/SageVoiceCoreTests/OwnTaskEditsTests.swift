@@ -249,14 +249,31 @@ final class OwnTaskEditsTests: XCTestCase {
     /// A note that cannot be written says so. Silence here means he gets his own
     /// edit read back to him with nothing in the log to explain it — the failure
     /// this whole change exists to end, arriving with its evidence thrown away.
-    func testAMarkerThatCannotBeWrittenIsReported() {
-        let unwritable = URL(fileURLWithPath: "/System/nowhere/own-task-edit")
+    /// The path is a marker *inside a plain file*, which no account on any
+    /// platform can write to — the write has to stat its parent to make it, and
+    /// its parent is not a directory. `/System/nowhere/own-task-edit` used to
+    /// stand here, and that is a fixture only a Mac with SIP could honour: off
+    /// Darwin the suite runs as root, the writer made `/System/nowhere` itself,
+    /// the write succeeded, and the assertion below indexed an empty array.
+    /// That is not a red test — it is `Index out of range`, a trap that took the
+    /// whole process down at test 934 of 1755 with nothing reported.
+    func testAMarkerThatCannotBeWrittenIsReported() throws {
+        let blocked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("own-task-edits-not-a-directory-\(UUID().uuidString)")
+        try Data("a file, not a directory".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let unwritable = blocked.appendingPathComponent("own-task-edit", isDirectory: false)
 
         var complaints: [String] = []
         OwnTaskEdits.recordFromAnotherProcess(marker: unwritable, log: { complaints.append($0) })
 
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: unwritable.path),
+            "the fixture is writable after all, so this test proves nothing"
+        )
         XCTAssertEqual(complaints.count, 1, "a failed write said nothing")
-        XCTAssertTrue(complaints[0].contains("own-task-edit"), complaints[0])
+        let complaint = try XCTUnwrap(complaints.first, "a failed write said nothing")
+        XCTAssertTrue(complaint.contains("own-task-edit"), complaint)
     }
 
     /// Take-and-clear, across the boundary too: the second check has news to

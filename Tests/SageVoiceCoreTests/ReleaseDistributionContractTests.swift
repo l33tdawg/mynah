@@ -1,3 +1,11 @@
+// **Mac-only, because the check is run through JavaScriptCore.**
+//
+// The Pages download button is a piece of JavaScript, and the only way to prove
+// it and the release workflow agree on what a release *is* is to execute it.
+// JavaScriptCore is the interpreter to hand on a Mac and there is none off
+// Darwin. The contract it guards is the Darwin release contract — four DMG-side
+// artefacts — so nothing about it is waiting on Linux.
+#if canImport(JavaScriptCore)
 import JavaScriptCore
 import XCTest
 
@@ -195,3 +203,4 @@ final class ReleaseDistributionContractTests: XCTestCase {
         )
     }
 }
+#endif  // canImport(JavaScriptCore)

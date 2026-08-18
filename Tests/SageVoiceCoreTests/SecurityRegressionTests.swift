@@ -1,5 +1,11 @@
 import XCTest
 @testable import SageVoiceCore
+#if canImport(FoundationNetworking)
+// `URLRequest`, `URLSession` and `HTTPURLResponse` are in Foundation on a Mac
+// and in this second module everywhere else. Same convention as the twenty-eight
+// files under Sources/ that already reach for the network.
+import FoundationNetworking
+#endif
 
 /// Regression tests for the two security defects found in adversarial review
 /// of the Phase 1 subsystems. Both were reproduced with working exploits before

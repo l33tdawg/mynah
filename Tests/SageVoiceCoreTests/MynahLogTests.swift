@@ -18,30 +18,136 @@ final class MynahLogTests: XCTestCase {
 
     private var directory: URL!
     private var file: URL!
+    /// Where each `grep` run leaves its output and its exit status. Kept
+    /// outside `directory` on purpose: that folder's own mode is under test,
+    /// and a harness must not be the reason an assertion about it passes.
+    private var scratch: URL!
 
     override func setUpWithError() throws {
+        let unique = UUID().uuidString
         directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("mynah-log-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("mynah-log-\(unique)", isDirectory: true)
         file = directory.appendingPathComponent("mynah.log")
+        scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mynah-log-grep-\(unique)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.removeItem(at: scratch)
+    }
+
+    /// How long one `grep` over one small file may take before the run is
+    /// declared unjudgeable. Long enough that a loaded machine never sees it,
+    /// short enough that a wedge is *reported* instead of parking the suite.
+    private static let grepSeconds = 30
+
+    private enum GrepFailure: Error, CustomStringConvertible {
+        case neverFinished(needle: String, seconds: Int)
+        case couldNotRun(needle: String, path: String, status: Int32, said: String)
+
+        var description: String {
+            switch self {
+            case .neverFinished(let needle, let seconds):
+                return "the grep for \"\(needle)\" never recorded an exit status within "
+                    + "\(seconds)s, so whether the line reached disk is unknown. The child was "
+                    + "killed rather than waited on, so the suite carries on. Re-run this test "
+                    + "on its own; if it repeats, the harness is what to look at, not MynahLog."
+            case .couldNotRun(let needle, let path, let status, let said):
+                return "grep exited \(status) looking for \"\(needle)\" in \(path), so nothing "
+                    + "was read back and no assertion about the text would mean anything. It "
+                    + "said: " + (said.isEmpty ? "nothing" : said) + ". Exit 2 usually means the "
+                    + "file is not there — the line never reached disk at all; 127 means this "
+                    + "machine has no grep(1) on /usr/local/bin:/usr/bin:/bin."
+            }
+        }
     }
 
     /// Runs a real `grep` against the file and returns what it found. A hit
     /// proves the line is on disk and legible to something that is not this
     /// test.
+    ///
+    /// **Nothing here waits on `Foundation.Process`, and that is deliberate.**
+    /// Both obvious spellings hang forever on Linux, and both hang *after* the
+    /// line under test has already reached disk — the worst shape a harness can
+    /// have, because the thing being tested passed and the run never ends.
+    /// `TheDaemonSaysWhichNodeItRefusedTests` measured both in this repo:
+    ///
+    ///   * `Pipe` + `readDataToEndOfFile()`. The parent holds its own copy of
+    ///     the write end for as long as the `Process` holds the pipe, so the
+    ///     read waits for an EOF that cannot arrive.
+    ///   * `waitUntilExit()`. Verified against a child that had exited, written
+    ///     both its streams and left no zombie: the call never returned.
+    ///     `terminate()` afterwards cannot help — there is nothing left to
+    ///     signal.
+    ///
+    /// So the shell owns the lifetime. It redirects `grep` to files — no buffer
+    /// to deadlock against — and records the exit status when it is over. This
+    /// polls for that status under a deadline and *names* a miss rather than
+    /// waiting on it. `run()` itself is fine; only waiting is not.
     private func grepFromAnotherProcess(_ needle: String) throws -> String {
+        let box = scratch.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+        let outURL = box.appendingPathComponent("stdout")
+        let errURL = box.appendingPathComponent("stderr")
+        let statusURL = box.appendingPathComponent("status")
+        let partialURL = box.appendingPathComponent("status.partial")
+
+        // The status is written elsewhere and `mv`d into place, so a status
+        // file that exists is a whole one and the poll below cannot read half
+        // of a number and call it an exit code.
+        let script = "grep -- \(Self.quoted(needle)) \(Self.quoted(file.path)) "
+            + "> \(Self.quoted(outURL.path)) 2> \(Self.quoted(errURL.path)); "
+            + "echo $? > \(Self.quoted(partialURL.path)); "
+            + "mv \(Self.quoted(partialURL.path)) \(Self.quoted(statusURL.path))"
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
-        process.arguments = [needle, file.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        // `grep` by name off a described `PATH` rather than a hardcoded
+        // /usr/bin/grep, which is the kind of thing that differs between a Mac
+        // and a distro image.
+        process.environment = ["PATH": "/usr/local/bin:/usr/bin:/bin"]
+        // Not a `Pipe` on any of the three: everything the child says is
+        // already going to a file it owns.
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+
+        let deadline = Date().addingTimeInterval(TimeInterval(Self.grepSeconds))
+        var status: Int32?
+        while status == nil, Date() < deadline {
+            if let text = try? String(contentsOf: statusURL, encoding: .utf8) {
+                status = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            if status == nil { Thread.sleep(forTimeInterval: 0.02) }
+        }
+
+        guard let status else {
+            process.terminate()
+            throw GrepFailure.neverFinished(needle: needle, seconds: Self.grepSeconds)
+        }
+        // 0 is a hit and 1 is an honest miss, which the caller's own assertion
+        // should speak for. Anything else means the read never happened, and no
+        // assertion about absent text is entitled to describe that.
+        guard status == 0 || status == 1 else {
+            let said = ((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw GrepFailure.couldNotRun(
+                needle: needle,
+                path: file.path,
+                status: status,
+                said: said
+            )
+        }
+        return (try? String(contentsOf: outURL, encoding: .utf8)) ?? ""
+    }
+
+    /// Single-quoted for `/bin/sh`, embedded quotes and all.
+    private static func quoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
     // MARK: The property that was missing
@@ -215,9 +321,32 @@ final class MynahLogTests: XCTestCase {
     // MARK: Where it goes
 
     /// Beside `bridge.log`, `signal.log` and `appliance.log`, in the folder
-    /// somebody already knows to open.
+    /// somebody already knows to open — and off Darwin, in the folder somebody
+    /// on *that* machine already knows to open instead.
+    ///
+    /// **This assertion had no platform guard, and read as a product bug.** It
+    /// pinned `~/Library/Logs/Mynah` everywhere, so the first Linux run failed
+    /// here while `defaultFileURL` was doing exactly the right thing: on a
+    /// Linux box `~/Library` is a folder Mynah would be inventing, with a name
+    /// that means nothing to the person looking for the log, while
+    /// `~/.local/state` is the XDG place for state a program keeps across
+    /// runs. The test was wrong, not the code — so it pins both spellings now
+    /// rather than one, because a log nobody can find is the failure either
+    /// way.
+    ///
+    /// The condition is spelled `canImport(Darwin)` to match the one inside
+    /// `MynahLog.defaultFileURL` exactly. `os(macOS)` would read identically
+    /// on both machines we build for today and would quietly stop agreeing
+    /// with the product on any other Darwin platform — a test drifting from
+    /// the branch it checks is the thing this guard exists to prevent, not to
+    /// introduce.
     func testItLivesWithTheOtherLogsTheOwnerAlreadyHas() {
         let url = MynahLog.defaultFileURL(homeDirectory: URL(fileURLWithPath: "/Users/someone"))
+
+        #if canImport(Darwin)
         XCTAssertEqual(url.path, "/Users/someone/Library/Logs/Mynah/mynah.log")
+        #else
+        XCTAssertEqual(url.path, "/Users/someone/.local/state/mynah/mynah.log")
+        #endif
     }
 }

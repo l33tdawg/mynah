@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// A diagnostic line that can still be read tomorrow.
 ///
@@ -76,12 +78,30 @@ import OSLog
 public struct MynahLog: Sendable {
 
     /// Where the lines go, beside the logs somebody already knows to open.
+    ///
+    /// **Off Darwin the folder changes and the reason for it does not.** The
+    /// whole argument above is "put it where the other logs already are", and on
+    /// a Linux box `~/Library/Logs` is not where anything is — it is a folder
+    /// this program would invent, with a name that means nothing to the person
+    /// looking for it. `~/.local/state` is the XDG place for exactly this: state
+    /// a program keeps across runs that is not configuration and not a cache.
+    ///
+    /// The injected `homeDirectory` is still honoured rather than reading
+    /// `XDG_STATE_HOME`, because `mayWriteToFile` compares against this function
+    /// and every test that fakes a home would stop being fake if an environment
+    /// variable could overrule it.
     public static func defaultFileURL(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        homeDirectory
+        #if canImport(Darwin)
+        return homeDirectory
             .appendingPathComponent("Library/Logs/Mynah", isDirectory: true)
             .appendingPathComponent("mynah.log", isDirectory: false)
+        #else
+        return homeDirectory
+            .appendingPathComponent(".local/state/mynah", isDirectory: true)
+            .appendingPathComponent("mynah.log", isDirectory: false)
+        #endif
     }
 
     /// Whether a line may be written to `url`, which is `false` for exactly one
@@ -118,8 +138,28 @@ public struct MynahLog: Sendable {
     /// refuse to touch real launchd from a test. Borrowed rather than invented,
     /// because two different answers to "am I a test" is how one of them ends up
     /// wrong.
+    ///
+    /// **The Objective-C runtime is how it is asked on a Mac and there is no
+    /// runtime to ask off one.** `NSClassFromString` exists in
+    /// swift-corelibs-foundation but answers about Swift types by mangled name,
+    /// so `"XCTestCase"` comes back `nil` inside a test run — which is the
+    /// dangerous direction: it would report "not a test" while a test suite is
+    /// running, and the whole point of this property is to stop a test writing
+    /// into the owner's real log.
+    ///
+    /// So off Darwin it reads the thing the test runner actually is. `swift
+    /// test` runs `.build/<config>/<Package>PackageTests.xctest`, an ordinary
+    /// executable, and its own path is the one fact about that which does not
+    /// depend on a runtime.
     static var isRunningUnderXCTest: Bool {
-        NSClassFromString("XCTestCase") != nil
+        #if canImport(ObjectiveC)
+        return NSClassFromString("XCTestCase") != nil
+        #else
+        guard let executable = CommandLine.arguments.first else { return false }
+        return executable.hasSuffix(".xctest")
+            || executable.hasSuffix("PackageTests")
+            || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
+        #endif
     }
 
     /// Past this, the file is rolled once to `mynah.log.1`.
@@ -133,7 +173,9 @@ public struct MynahLog: Sendable {
 
     private let category: String
     private let fileURL: URL
+    #if canImport(OSLog)
     private let logger: Logger
+    #endif
 
     public init(
         category: String,
@@ -142,22 +184,56 @@ public struct MynahLog: Sendable {
     ) {
         self.category = category
         self.fileURL = fileURL
+        #if canImport(OSLog)
         self.logger = Logger(subsystem: subsystem, category: category)
+        #endif
     }
+
+    // MARK: The streaming half, off Darwin
+
+    /// The other destination on a platform with no `os_log`.
+    ///
+    /// **Not a stub that swallows the line.** The type above is deliberately two
+    /// destinations answering two questions — a stream for somebody watching,
+    /// a file for somebody arriving afterwards — and dropping the streaming half
+    /// on Linux would silently delete `debug` entirely, since `debug` is the one
+    /// level that never reaches the file.
+    ///
+    /// Standard error is the honest counterpart: under systemd it is the journal,
+    /// which is `log stream` and `log show` at once, and in a terminal it is
+    /// where a person watching already looks. Nothing is redacted here, which is
+    /// the same bargain the file makes and the same rule applies — see "What
+    /// must never reach here" above.
+    #if !canImport(OSLog)
+    private func stream(_ level: String, _ text: String) {
+        guard let data = "\(level) [\(category)] \(text)\n".data(using: .utf8) else { return }
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        FileHandle.standardError.write(data)
+    }
+    #endif
 
     // MARK: Writing
 
     /// Something went wrong that somebody may have to explain later.
     public func error(_ message: @autoclosure () -> String) {
         let text = message()
+        #if canImport(OSLog)
         logger.error("\(text, privacy: .public)")
+        #else
+        stream("ERROR", text)
+        #endif
         append("ERROR", text)
     }
 
     /// Something happened that a later diagnosis would want to know about.
     public func info(_ message: @autoclosure () -> String) {
         let text = message()
+        #if canImport(OSLog)
         logger.info("\(text, privacy: .public)")
+        #else
+        stream("INFO ", text)
+        #endif
         append("INFO ", text)
     }
 
@@ -166,7 +242,11 @@ public struct MynahLog: Sendable {
     /// worth having when somebody reads the file back.
     public func notice(_ message: @autoclosure () -> String) {
         let text = message()
+        #if canImport(OSLog)
         logger.notice("\(text, privacy: .public)")
+        #else
+        stream("NOTE ", text)
+        #endif
         append("NOTE ", text)
     }
 
@@ -175,7 +255,11 @@ public struct MynahLog: Sendable {
     /// it matters.
     public func debug(_ message: @autoclosure () -> String) {
         let text = message()
+        #if canImport(OSLog)
         logger.debug("\(text, privacy: .public)")
+        #else
+        stream("DEBUG", text)
+        #endif
     }
 
     // MARK: The file

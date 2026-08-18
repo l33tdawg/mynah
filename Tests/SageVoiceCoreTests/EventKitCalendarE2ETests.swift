@@ -1,3 +1,11 @@
+// **Mac-only, because it tests EventKit.**
+//
+// The calendar mirror is Apple's EventKit, which has no counterpart off Darwin;
+// `Sources/SageVoiceCore/Calendar/EventKitCalendar.swift` is itself compiled
+// only where `EventKit` can be imported. Guarding the whole file rather than
+// just the import, so Linux cannot report a green suite containing an empty
+// test class.
+#if canImport(EventKit)
 import XCTest
 import EventKit
 @testable import SageVoiceCore
@@ -161,3 +169,4 @@ final class EventKitCalendarE2ETests: XCTestCase {
         XCTAssertEqual(survivor.title, "Chiro")
     }
 }
+#endif  // canImport(EventKit)

@@ -138,6 +138,16 @@ final class ServicePreferencesTests: XCTestCase {
     /// It lands beside the other three rather than somewhere of its own. The
     /// directory survives a reinstall, which is the property the pause marker
     /// is chosen for and the reason this is not in `UserDefaults`.
+    ///
+    /// **Deliberately unguarded, on every platform.** "Beside" is not a Mac
+    /// fact, it is the whole invariant: `ApplianceSupportDirectory` exists
+    /// because two processes disagreeing about this path is a pause that stops
+    /// nothing, and that disagreement is exactly what shows up off Darwin when
+    /// one producer routes through that type and its neighbour spells
+    /// `~/Library/Application Support` by hand. A platform guard here would
+    /// hide the one arrangement that can actually break, so this compares the
+    /// two producers against each other rather than against a literal path —
+    /// which keeps it true under both layouts without knowing either.
     func testItLivesBesideTheOtherPreferences() {
         let home = URL(fileURLWithPath: "/Users/owner", isDirectory: true)
         let service = ServicePreferences.defaultFileURL(homeDirectory: home)
@@ -145,7 +155,17 @@ final class ServicePreferencesTests: XCTestCase {
 
         XCTAssertEqual(
             service.deletingLastPathComponent(),
-            reply.deletingLastPathComponent()
+            reply.deletingLastPathComponent(),
+            """
+            Two of the appliance's settings files landed in two different \
+            directories. Whichever of these does not go through \
+            ApplianceSupportDirectory is the one to fix: off Darwin that type \
+            answers $XDG_DATA_HOME/SAGE Voice Bridge (~/.local/share/… when \
+            unset), so a producer that spells ~/Library/Application Support by \
+            hand both misses its neighbour and leaves a stray Library in a \
+            Linux owner's home. Route it through ApplianceSupportDirectory \
+            rather than guarding this assertion.
+            """
         )
         XCTAssertEqual(service.lastPathComponent, "service-preferences.json")
     }

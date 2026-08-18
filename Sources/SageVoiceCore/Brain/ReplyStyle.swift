@@ -134,12 +134,30 @@ public struct ReplyPreferences: Sendable {
         self.fileURL = fileURL
     }
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge`
+    /// (`~/.local/share/…` when unset) off Darwin.
+    ///
+    /// **Spelled through `ApplianceSupportDirectory` rather than by hand here,
+    /// because this file has two readers.** Mynah writes the owner's choice and
+    /// `sage-voiced` reads it once per turn; a path spelled twice is the voice
+    /// notes switch reading as set on the screen while the daemon answers in the
+    /// other style — the same shape of failure as a pause that stops nothing.
+    /// It was spelled by hand until 2.5.0, which off Darwin also left a stray
+    /// `~/Library` in a Linux owner's home: a tree no package manager owns and
+    /// no backup covers, holding the settings file its neighbours had already
+    /// stopped putting there.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("reply-preferences.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "reply-preferences.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     private struct Stored: Codable {

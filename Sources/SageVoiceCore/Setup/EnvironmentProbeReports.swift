@@ -375,6 +375,54 @@ public struct AmbientAPIKeyReport: Sendable, Equatable, Codable {
 
 // MARK: - Hardware
 
+/// Which operating system a `HardwareReport` describes.
+///
+/// Recorded rather than inferred, because the judgement below reads the *same*
+/// stored fact — `isAppleSilicon == false` — in two opposite ways, and nothing
+/// else in the report tells them apart.
+///
+/// On a Mac that flag is a measurement: `hw.optional.arm64` said no, so this is
+/// an Intel Mac, and an Intel Mac has no accelerator to fall back to. Off Darwin
+/// it is not a measurement at all — `SystemHardwareProbe` hardcodes it to
+/// `false` there, deliberately, because the question the flag asks is "is Metal
+/// available" and Metal is a Darwin framework. Judging a Linux tower by that
+/// constant is how a Threadripper with a 4090 was told it "needs Apple Silicon
+/// — on an Intel chip a reply takes far too long", a sentence in which every
+/// clause was false about the machine printing it.
+public enum HostPlatform: String, Sendable, Codable, CaseIterable {
+    case darwin
+    case linux
+    case windows
+    case unknown
+
+    /// The platform of the process that is looking.
+    ///
+    /// Safe as the default for `HardwareReport.platform` precisely because a
+    /// default argument is evaluated at the *call site*: `SystemHardwareProbe`
+    /// writes down the machine it probed, not the machine that later reads the
+    /// report out of a support bundle.
+    public static var current: HostPlatform {
+        #if canImport(Darwin)
+        return .darwin
+        #elseif os(Linux)
+        return .linux
+        #elseif os(Windows)
+        return .windows
+        #else
+        return .unknown
+        #endif
+    }
+
+    /// True where "no Metal" is the whole story about acceleration.
+    ///
+    /// Darwin only. macOS has had no CUDA for years and llama.cpp ships no ROCm
+    /// for it, so a Mac that is not Apple Silicon genuinely has nothing else to
+    /// run on. Every other platform has several candidates and this probe cannot
+    /// yet see any of them — which is a reason to stop asking about Metal there,
+    /// not a reason to answer no on its behalf.
+    public var metalIsTheOnlyAccelerator: Bool { self == .darwin }
+}
+
 /// How well this machine could host a 4B local brain.
 public enum LocalModelCapability: String, Sendable, Codable {
     /// Runs the 4B brain alongside ASR and TTS with headroom. A 16 GB M2 mini,
@@ -386,17 +434,38 @@ public enum LocalModelCapability: String, Sendable, Codable {
     /// a slow private brain is a legitimate choice.
     case tight
 
-    /// Not honest to offer. Either not Apple Silicon (a 4B model on an Intel CPU
-    /// answers a routing turn far too slowly for speech, where the budget is
-    /// already ~10s on an M2) or below the 8 GiB floor.
+    /// Not honest to offer: below the 8 GiB floor on any platform, or — on a Mac
+    /// and only on a Mac — not Apple Silicon, where a 4B model answers a routing
+    /// turn far too slowly for speech (the budget is already ~10s on an M2) and
+    /// there is no other accelerator on the machine to reach for.
     case unsupported
 
     public var isOfferable: Bool { self != .unsupported }
 
-    /// Pure decision function, exposed so the threshold can be tested without a
-    /// machine that has the relevant amount of RAM.
-    public static func forMachine(memoryBytes: UInt64, isAppleSilicon: Bool) -> LocalModelCapability {
-        guard isAppleSilicon else { return .unsupported }
+    /// Pure decision function, exposed so the thresholds can be tested without a
+    /// machine that has the relevant amount of RAM — and, because `platform` is
+    /// an argument rather than a `#if`, so the Mac verdicts can be checked from
+    /// Linux and the Linux verdicts from a Mac. A rule that can only be tested
+    /// on the machine it is wrong about is how this one stayed wrong.
+    ///
+    /// **Memory is the only refusal off Darwin, and the asymmetry is deliberate.**
+    /// The floor is measured: `SystemHardwareProbe` reads `MemTotal` out of
+    /// `/proc/meminfo`, 3.4 GB of weights beside a 1.6 GB ASR model is
+    /// arithmetic, and a box under 8 GiB swaps through every reply. What the
+    /// probe cannot see off Darwin is the accelerator — there is no `/proc/gpu`
+    /// — so the choice is between refusing machines nobody measured and offering
+    /// with the uncertainty stated. It offers, because the two errors are not
+    /// symmetrical: an owner refused by a screen cannot argue with it and has no
+    /// next action, while an owner offered a CPU-only local brain gets something
+    /// slow that *says* it may be slow, and can switch in one click.
+    /// `BrainSetupPlanner` prints that caveat off Darwin, and it is load-bearing
+    /// rather than decoration — without it this function is over-promising.
+    public static func forMachine(
+        memoryBytes: UInt64,
+        isAppleSilicon: Bool,
+        platform: HostPlatform = .current
+    ) -> LocalModelCapability {
+        if platform.metalIsTheOnlyAccelerator, !isAppleSilicon { return .unsupported }
         if memoryBytes >= LocalBrainModelCatalog.comfortableMemoryBytes { return .comfortable }
         if memoryBytes >= LocalBrainModelCatalog.minimumMemoryBytes { return .tight }
         return .unsupported
@@ -416,7 +485,21 @@ public struct HardwareReport: Sendable, Equatable, Codable {
 
     public var cpuBrand: String?
     public var physicalCoreCount: Int
+
+    /// Metal is available. Read from `hw.optional.arm64` on Darwin and hardcoded
+    /// `false` everywhere else — which is why it must never be read without
+    /// `platform` beside it. See `HostPlatform`.
     public var isAppleSilicon: Bool
+
+    /// The platform this report describes.
+    ///
+    /// Defaulted to `.current` so `SystemHardwareProbe` records the machine it
+    /// probed without having to say so, and so no caller can forget. Written
+    /// down rather than recomputed at judgement time because a report is a
+    /// support-bundle payload: it can be read on a different machine than the
+    /// one it describes, and "which platform is this?" then has exactly one
+    /// right answer, the one from the probe.
+    public var platform: HostPlatform
 
     public init(
         physicalMemoryBytes: UInt64 = 0,
@@ -424,7 +507,8 @@ public struct HardwareReport: Sendable, Equatable, Codable {
         modelStorageDirectory: String = "",
         cpuBrand: String? = nil,
         physicalCoreCount: Int = 0,
-        isAppleSilicon: Bool = false
+        isAppleSilicon: Bool = false,
+        platform: HostPlatform = .current
     ) {
         self.physicalMemoryBytes = physicalMemoryBytes
         self.freeDiskBytes = freeDiskBytes
@@ -432,12 +516,31 @@ public struct HardwareReport: Sendable, Equatable, Codable {
         self.cpuBrand = cpuBrand
         self.physicalCoreCount = physicalCoreCount
         self.isAppleSilicon = isAppleSilicon
+        self.platform = platform
+    }
+
+    /// Hand-written so that `platform` — added after 2.3.0 shipped — is optional
+    /// on the wire. A support bundle written by an older build has no such key,
+    /// and synthesized `Decodable` would throw on it: a tool that reads those
+    /// bundles would fail on exactly the archived reports someone is most likely
+    /// to go looking for. Absent means "written before this fact was recorded",
+    /// and the only platform a reader can honestly assume is its own.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        physicalMemoryBytes = try container.decode(UInt64.self, forKey: .physicalMemoryBytes)
+        freeDiskBytes = try container.decodeIfPresent(Int64.self, forKey: .freeDiskBytes)
+        modelStorageDirectory = try container.decode(String.self, forKey: .modelStorageDirectory)
+        cpuBrand = try container.decodeIfPresent(String.self, forKey: .cpuBrand)
+        physicalCoreCount = try container.decode(Int.self, forKey: .physicalCoreCount)
+        isAppleSilicon = try container.decode(Bool.self, forKey: .isAppleSilicon)
+        platform = try container.decodeIfPresent(HostPlatform.self, forKey: .platform) ?? .current
     }
 
     public var localModelCapability: LocalModelCapability {
         LocalModelCapability.forMachine(
             memoryBytes: physicalMemoryBytes,
-            isAppleSilicon: isAppleSilicon
+            isAppleSilicon: isAppleSilicon,
+            platform: platform
         )
     }
 

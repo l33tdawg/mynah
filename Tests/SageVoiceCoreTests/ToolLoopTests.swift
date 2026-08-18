@@ -11,23 +11,42 @@ private final class ScriptedBackend: BrainBackend, @unchecked Sendable {
 
     private let lock = NSLock()
     private var script: [BrainReply]
+    private var recordedRequests: [BrainRequest] = []
+
     /// Every request the loop made, in order — this is what the tests assert on.
-    private(set) var requests: [BrainRequest] = []
+    var requests: [BrainRequest] { locked { recordedRequests } }
 
     init(_ script: [BrainReply]) {
         self.script = script
     }
 
+    /// The only place this stub takes its lock.
+    ///
+    /// `NSLock.lock()` and `unlock()` are `noasync`: taking a lock either side of
+    /// a suspension point would hold it across an arbitrary hop, so calling them
+    /// straight from an `async` function is diagnosed — "unavailable from
+    /// asynchronous contexts … this is an error in the Swift 6 language mode".
+    /// A warning today; a hard error the day the package adopts that mode, and
+    /// the Linux log already repeats it over a thousand times across the test
+    /// stubs. Going through a *synchronous* helper is a fix rather than a
+    /// silencing: the critical section provably cannot contain an `await`,
+    /// because a non-async closure cannot hold one.
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
     func isAvailable() async -> Bool { true }
 
     func complete(_ request: BrainRequest) async throws -> BrainReply {
-        lock.lock()
-        defer { lock.unlock() }
-        requests.append(request)
-        guard !script.isEmpty else {
-            throw BrainBackendError.requestRejected("the stub ran out of scripted replies")
+        try locked {
+            recordedRequests.append(request)
+            guard !script.isEmpty else {
+                throw BrainBackendError.requestRejected("the stub ran out of scripted replies")
+            }
+            return script.removeFirst()
         }
-        return script.removeFirst()
     }
 
     static func answering(_ text: String) -> BrainReply {
@@ -86,7 +105,10 @@ private final class StubToolSource: ToolProviding, @unchecked Sendable {
     private let lock = NSLock()
     private let tools: [MCPTool]
     private let results: [String: String]
-    private(set) var calls: [(name: String, arguments: [String: JSONValue])] = []
+    private var recordedCalls: [(name: String, arguments: [String: JSONValue])] = []
+
+    /// Every tool call the loop made, in order.
+    var calls: [(name: String, arguments: [String: JSONValue])] { locked { recordedCalls } }
 
     init(toolNames: [String], results: [String: String] = [:]) {
         self.tools = toolNames.map {
@@ -95,13 +117,20 @@ private final class StubToolSource: ToolProviding, @unchecked Sendable {
         self.results = results
     }
 
+    /// Synchronous for the same reason as `ScriptedBackend.locked`.
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
     func listTools() async throws -> [MCPTool] { tools }
 
     func call(name: String, arguments: [String: JSONValue]) async throws -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        calls.append((name, arguments))
-        return results[name] ?? "ok"
+        locked {
+            recordedCalls.append((name, arguments))
+            return results[name] ?? "ok"
+        }
     }
 }
 

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Keyless web search, by scraping DuckDuckGo's no-JavaScript HTML endpoint.
 ///

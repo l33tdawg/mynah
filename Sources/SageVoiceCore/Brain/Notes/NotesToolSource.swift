@@ -159,12 +159,22 @@ public final class NotesToolSource: ToolProviding, @unchecked Sendable {
     /// Alongside the provider keys and the OAuth token, for the same reason they
     /// are there: it is the owner's data, on the owner's machine, and it is not
     /// something they should find in a Finder window by accident.
+    /// "Alongside" is the whole point, so the directory is resolved through
+    /// `ApplianceSupportDirectory` rather than spelled here: off Darwin a
+    /// hand-written `Library/Application Support` would put the owner's notes in
+    /// a folder their system does not know about, next to nothing else this
+    /// appliance keeps.
     public static func defaultDirectory(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("Notes", isDirectory: true)
+        ApplianceSupportDirectory.directory(
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
+        .appendingPathComponent("Notes", isDirectory: true)
     }
 
     /// Where notes are kept. Exposed so the daemon can name it in a log line and

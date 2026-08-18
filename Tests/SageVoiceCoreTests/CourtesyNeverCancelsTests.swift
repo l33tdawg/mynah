@@ -1,3 +1,12 @@
+// **Mac-only, because the live voice call is a Mac feature.**
+//
+// `Sources/SageVoiceCore/Call` is excluded from the target off Darwin — see
+// `coreExclusions` in Package.swift — so none of the types below exist there.
+// The exclusion and this guard are two halves of one decision, and the tests
+// have to carry their half explicitly: a test file that cannot compile does not
+// fail loudly, it takes the whole target down with it and every other test in
+// the suite stops running too. That is what happened here.
+#if os(macOS)
 import XCTest
 @testable import SageVoiceCore
 
@@ -106,3 +115,4 @@ final class CourtesyNeverCancelsTests: XCTestCase {
         )
     }
 }
+#endif  // os(macOS)

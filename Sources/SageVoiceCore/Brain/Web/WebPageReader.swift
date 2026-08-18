@@ -1,5 +1,12 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Reads the public page behind a search result.
 ///
@@ -144,16 +151,28 @@ public struct WebPageReader: WebPageReading {
     /// RFC1918 space; allowing that would turn a search result into an SSRF
     /// primitive against the owner's local SAGE and model services.
     static func resolvesOnlyToPublicAddresses(_ host: String) -> Bool {
-        var hints = addrinfo(
-            ai_flags: AI_ADDRCONFIG,
-            ai_family: AF_UNSPEC,
-            ai_socktype: SOCK_STREAM,
-            ai_protocol: IPPROTO_TCP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
+        // Built field by field rather than with the memberwise initialiser.
+        // glibc declares `addrinfo`'s members in a different order from Darwin,
+        // so the memberwise call is a compile error off a Mac ("argument
+        // 'ai_addr' must precede argument 'ai_canonname'"); assignment by name
+        // is order-independent, and `addrinfo()` zeroes the rest — the same
+        // zeros the initialiser above was passing explicitly.
+        var hints = addrinfo()
+        hints.ai_flags = AI_ADDRCONFIG
+        hints.ai_family = AF_UNSPEC
+        #if canImport(Darwin)
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_protocol = IPPROTO_TCP
+        #elseif canImport(Glibc)
+        // And glibc types these two differently again: `SOCK_STREAM` is an
+        // `__socket_type` case and `IPPROTO_TCP` an `Int`, where both are
+        // `Int32` on Darwin. Same wire values, so the resolver asks the same
+        // question of both libcs.
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        hints.ai_protocol = Int32(IPPROTO_TCP)
+        #else
+        #error("no getaddrinfo hints for this platform: the private-address check below cannot be trusted without them, and a page reader that skips it is an SSRF hole")
+        #endif
         var result: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else { return false }
         defer { freeaddrinfo(first) }

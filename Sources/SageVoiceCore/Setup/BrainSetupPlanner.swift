@@ -378,10 +378,35 @@ public struct BrainSetupChoices: Sendable, Equatable, Codable {
 public struct BrainSetupPlanner: Sendable {
     public init() {}
 
+    // MARK: Words that have to be true where they are printed
+
+    /// "this Mac" is a true phrase on exactly one of the three platforms this
+    /// package now builds for, and `sage-voiced setup` prints every string in
+    /// this file on all of them.
+    ///
+    /// Taken from `HardwareReport.platform` rather than from a `#if` on the
+    /// build, for two reasons. It keeps one source of truth for "what is this
+    /// machine" — the probe — instead of two that can disagree; and it makes the
+    /// wording testable from either host, so a Mac can prove the Linux sentence
+    /// and Linux can prove the Mac one. A rule only testable on the machine it
+    /// is wrong about is how the Apple Silicon refusal survived this long.
+    ///
+    /// On `.darwin` both helpers return the words 2.3.0 shipped, so every option
+    /// summary, refusal and rationale below is byte-identical to what a Mac
+    /// owner sees today.
+    static func deviceNoun(_ platform: HostPlatform) -> String {
+        platform == .darwin ? "this Mac" : "this machine"
+    }
+
+    /// Sentence-initial form of `deviceNoun(_:)`.
+    static func deviceNounCapitalized(_ platform: HostPlatform) -> String {
+        platform == .darwin ? "This Mac" : "This machine"
+    }
+
     public func plan(for probe: EnvironmentProbeResult) -> BrainSetupChoices {
         var options: [BrainSetupOption] = []
         // The agent CLIs are deliberately absent — see `AgentCLINotOffered`.
-        options.append(contentsOf: apiKeyOptions(probe.ambientAPIKeys))
+        options.append(contentsOf: apiKeyOptions(probe.ambientAPIKeys, on: probe.hardware.platform))
         options.append(fullyLocalOption(probe))
 
         // Catalog position is the final tie-break, so the order is total and the
@@ -402,7 +427,7 @@ public struct BrainSetupPlanner: Sendable {
             ?? ordered.first(where: \.isAvailable)
         return BrainSetupChoices(
             options: ordered,
-            recommendation: recommended.map(recommendation(for:))
+            recommendation: recommended.map { recommendation(for: $0, on: probe.hardware.platform) }
         )
     }
 
@@ -467,7 +492,10 @@ public struct BrainSetupPlanner: Sendable {
     /// The structural guard below is a different thing and must survive: an
     /// option whose key we cannot explain how to obtain is not offerable at all.
 
-    private func apiKeyOptions(_ keys: AmbientAPIKeyReport) -> [BrainSetupOption] {
+    private func apiKeyOptions(
+        _ keys: AmbientAPIKeyReport,
+        on platform: HostPlatform
+    ) -> [BrainSetupOption] {
         APIKeyProvider.allCases.compactMap { provider in
             // Withdrawn providers never reach the menu — see `providersNoLongerOffered`
             // above for why this is a subtraction from the offer and not from the
@@ -516,7 +544,8 @@ public struct BrainSetupPlanner: Sendable {
                     ? "\(provider.displayName) — key already set"
                     : "\(provider.displayName) API key",
                 summary: hasAmbientKey
-                    ? "Uses the \(provider.displayName) API key already set on this Mac. Billed "
+                    ? "Uses the \(provider.displayName) API key already set on "
+                        + "\(Self.deviceNoun(platform)). Billed "
                         + "per use. What you say goes to \(provider.displayName)."
                     : "Paste \(Self.indefiniteArticle(for: provider.displayName)) "
                         + "\(provider.displayName) API key. Billed per use. What you say goes "
@@ -562,7 +591,8 @@ public struct BrainSetupPlanner: Sendable {
         let hardware = probe.hardware
         let runtime = probe.localRuntime
         let capability = hardware.localModelCapability
-        let label = "Fully on this Mac"
+        let platform = hardware.platform
+        let label = "Fully on \(Self.deviceNoun(platform))"
 
         func option(
             summary: String,
@@ -587,26 +617,48 @@ public struct BrainSetupPlanner: Sendable {
 
         guard capability.isOfferable else {
             return option(
-                summary: "Runs the brain on this Mac so nothing you say leaves it.",
+                summary: "Runs the brain on \(Self.deviceNoun(platform)) so nothing you say "
+                    + "leaves it.",
                 requirement: .download,
                 downloadBytes: nil,
-                availability: .unavailable(reason: unsupportedHardwareReason(hardware)),
+                availability: .unavailable(
+                    reason: unsupportedHardwareReason(hardware, runtime: runtime)
+                ),
                 model: nil
             )
         }
 
         let tightNote = capability == .tight
-            ? " This Mac has \(Self.gigabytes(Int64(hardware.physicalMemoryBytes))) of memory, "
+            ? " \(Self.deviceNounCapitalized(platform)) has "
+                + "\(Self.gigabytes(Int64(hardware.physicalMemoryBytes))) of memory, "
                 + "which is enough but not roomy — expect it to be slower and to compete with "
                 + "speech recognition."
             : ""
+
+        // **The half of the hardware question this probe cannot answer.**
+        //
+        // Off Darwin `LocalModelCapability.forMachine` gates on memory alone,
+        // because nothing here can see whether the box has a GPU Ollama could
+        // reach — see its comment for why it offers anyway rather than refusing
+        // machines nobody measured. Offering silently would be exactly the
+        // over-promise that reasoning depends on not making: a CPU-only 4B
+        // routing turn is tens of seconds, and an owner told nothing has no way
+        // to read that as anything but broken.
+        //
+        // Empty on Darwin, where `isAppleSilicon` already settled the question.
+        let acceleratorNote = platform.metalIsTheOnlyAccelerator
+            ? ""
+            : " Mynah cannot see from here whether \(Self.deviceNoun(platform)) has a GPU Ollama "
+                + "can use; without one the model runs on the CPU and a reply takes far longer "
+                + "than speech can wait for."
 
         // Already pulled and serving: no download, so no disk gate. This is the
         // branch the settings panel hits after a successful migration.
         if runtime.isReadyToServe, let model = runtime.preferredInstalledModel {
             return option(
-                summary: "Runs \(model) on this Mac. Nothing you say leaves the machine, and "
-                    + "there's nothing to sign into or pay for.\(tightNote)",
+                summary: "Runs \(model) on \(Self.deviceNoun(platform)). Nothing you say leaves "
+                    + "the machine, and there's nothing to sign into or pay "
+                    + "for.\(tightNote)\(acceleratorNote)",
                 requirement: .nothing,
                 downloadBytes: nil,
                 availability: .available,
@@ -627,12 +679,12 @@ public struct BrainSetupPlanner: Sendable {
                 ? 0 : LocalBrainModelCatalog.approximateRuntimeDownloadBytes)
         let runtimeNote = runtime.isRuntimeInstalled
             ? ""
-            : " It needs the Ollama runtime on this Mac as well."
+            : " It needs the Ollama runtime on \(Self.deviceNoun(platform)) as well."
 
         guard hardware.hasRoomForDownload(ofBytes: downloadBytes) else {
             return option(
-                summary: "Runs \(LocalBrainModelCatalog.preferredModel) on this Mac so nothing "
-                    + "you say leaves it.",
+                summary: "Runs \(LocalBrainModelCatalog.preferredModel) on "
+                    + "\(Self.deviceNoun(platform)) so nothing you say leaves it.",
                 requirement: .download,
                 downloadBytes: downloadBytes,
                 availability: .unavailable(reason: insufficientDiskReason(hardware, needs: downloadBytes)),
@@ -641,9 +693,9 @@ public struct BrainSetupPlanner: Sendable {
         }
 
         return option(
-            summary: "Runs \(LocalBrainModelCatalog.preferredModel) on this Mac. Nothing you "
-                + "say leaves the machine, and there's nothing to sign into or pay "
-                + "for.\(runtimeNote)\(tightNote)",
+            summary: "Runs \(LocalBrainModelCatalog.preferredModel) on "
+                + "\(Self.deviceNoun(platform)). Nothing you say leaves the machine, and there's "
+                + "nothing to sign into or pay for.\(runtimeNote)\(tightNote)\(acceleratorNote)",
             requirement: .download,
             downloadBytes: downloadBytes,
             availability: .available,
@@ -651,27 +703,74 @@ public struct BrainSetupPlanner: Sendable {
         )
     }
 
-    private func unsupportedHardwareReason(_ hardware: HardwareReport) -> String {
-        if !hardware.isAppleSilicon {
-            let chip = hardware.cpuBrand.map { " This Mac reports \($0)." } ?? ""
-            return "Running the brain on this Mac needs Apple Silicon — on an Intel chip a reply "
-                + "takes far too long to be spoken conversation.\(chip)"
+    /// Why fully-local is off the table, in words that are true on the machine
+    /// printing them.
+    ///
+    /// **The Apple Silicon clause is gated on the platform, not on the flag
+    /// alone.** `isAppleSilicon` is a measurement on a Mac and a hardcoded
+    /// `false` everywhere else — see `HostPlatform` — so reading it bare printed
+    /// *"needs Apple Silicon — on an Intel chip a reply takes far too long"* on
+    /// a Threadripper with a 4090. Every clause of that sentence was false about
+    /// the machine it appeared on, and the option it refused would have answered
+    /// faster there than on the Mac the sentence was written for.
+    ///
+    /// The runtime is passed in for a related reason: this is the one screen the
+    /// owner cannot get past, so it has to answer the objection they are about
+    /// to make.
+    private func unsupportedHardwareReason(
+        _ hardware: HardwareReport,
+        runtime: LocalModelRuntimeReport
+    ) -> String {
+        let platform = hardware.platform
+
+        // Said out loud whenever we refuse a machine whose daemon is up with the
+        // weights already pulled, because that owner is looking at a working
+        // `ollama run` in another window and a refusal that ignores it reads as
+        // a bug in Mynah rather than a fact about the machine.
+        //
+        // **It is also the answer to whether this gate should simply defer to
+        // `isReadyToServe`. It must not.** `LocalModelRuntimeReport` is built
+        // from `/api/version` and `/api/tags`: it says the daemon answered and
+        // the weights are on disk. Neither is the claim being made here, which
+        // is that 3.4 GB of weights fit in memory beside a 1.6 GB ASR model and
+        // come back inside a spoken pause. On the machines this branch refuses —
+        // under 8 GiB anywhere, or an Intel Mac — a pulled model is exactly the
+        // state that ends in swapping or dead air. Evidence beats a guess, but
+        // "the file exists" is not evidence about the thing being guessed.
+        var serving = ""
+        if runtime.isReadyToServe, let model = runtime.preferredInstalledModel {
+            serving = " Ollama is already serving \(model) here — that proves the weights are on "
+                + "disk, not that \(Self.deviceNoun(platform)) can hold and run them fast enough "
+                + "for spoken conversation."
         }
-        return "Running the brain on this Mac needs at least "
+
+        if platform.metalIsTheOnlyAccelerator, !hardware.isAppleSilicon {
+            let chip = hardware.cpuBrand
+                .map { " \(Self.deviceNounCapitalized(platform)) reports \($0)." } ?? ""
+            return "Running the brain on \(Self.deviceNoun(platform)) needs Apple Silicon — on an "
+                + "Intel chip a reply takes far too long to be spoken "
+                + "conversation.\(chip)\(serving)"
+        }
+        return "Running the brain on \(Self.deviceNoun(platform)) needs at least "
             + "\(Self.gigabytes(Int64(LocalBrainModelCatalog.minimumMemoryBytes))) of memory — "
-            + "this Mac has \(Self.gigabytes(Int64(hardware.physicalMemoryBytes)))."
+            + "\(Self.deviceNoun(platform)) has "
+            + "\(Self.gigabytes(Int64(hardware.physicalMemoryBytes))).\(serving)"
     }
 
     private func insufficientDiskReason(_ hardware: HardwareReport, needs: Int64) -> String {
         let required = max(needs, LocalBrainModelCatalog.requiredFreeDiskBytes)
         let free = hardware.freeDiskBytes.map(Self.gigabytes) ?? "an unknown amount"
-        return "Running the brain on this Mac needs about \(Self.gigabytes(required)) free to "
-            + "download the model — this volume has \(free) free."
+        return "Running the brain on \(Self.deviceNoun(hardware.platform)) needs about "
+            + "\(Self.gigabytes(required)) free to download the model — this volume has "
+            + "\(free) free."
     }
 
     // MARK: Recommendation
 
-    private func recommendation(for option: BrainSetupOption) -> BrainSetupRecommendation {
+    private func recommendation(
+        for option: BrainSetupOption,
+        on platform: HostPlatform
+    ) -> BrainSetupRecommendation {
         let rationale: String
         switch option.tier {
         case .signedInSubscription:
@@ -679,15 +778,16 @@ public struct BrainSetupPlanner: Sendable {
         case .zeroFrictionSignIn:
             rationale = "One sign-in with an account you probably already have — no API key, no card."
         case .ambientAPIKey:
-            rationale = "A key for this provider is already set on this Mac, so it works right "
-                + "away. It bills per use."
+            rationale = "A key for this provider is already set on \(Self.deviceNoun(platform)), "
+                + "so it works right away. It bills per use."
         case .typedAPIKey:
-            rationale = "Nothing zero-effort was found on this Mac, so this needs an API key you "
-                + "provide."
+            rationale = "Nothing zero-effort was found on \(Self.deviceNoun(platform)), so this "
+                + "needs an API key you provide."
         case .installedCLINeedingSignIn:
             rationale = "This is installed already; signing in is the shortest path from here."
         case .fullyLocal:
-            rationale = "It keeps everything you say on this Mac, with no account or usage bill."
+            rationale = "It keeps everything you say on \(Self.deviceNoun(platform)), with no "
+                + "account or usage bill."
         }
         return BrainSetupRecommendation(optionID: option.id, rationale: rationale)
     }

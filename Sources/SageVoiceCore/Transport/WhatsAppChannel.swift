@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// `WhatsAppClient` seen as a `MessageChannel`, plus the sending half.
 ///
@@ -92,13 +95,18 @@ public actor WhatsAppChannel: MessageChannel {
     /// survive a reboot, and unlike the socket its length is not constrained by
     /// `sockaddr_un`.
     public static func defaultTokenPath(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("WhatsApp", isDirectory: true)
-            .appendingPathComponent("api-token")
-            .path
+        ApplianceSupportDirectory.directory(
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
+        .appendingPathComponent("WhatsApp", isDirectory: true)
+        .appendingPathComponent("api-token")
+        .path
     }
 
     /// Read per request rather than cached.

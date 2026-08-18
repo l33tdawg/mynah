@@ -17,6 +17,29 @@ final class FreshInstallDefaultTests: XCTestCase {
 
     private let planner = BrainSetupPlanner()
 
+    /// **The fixture has to say which machine it is, or half this file changes
+    /// meaning when it runs on Linux.**
+    ///
+    /// The shared hardware fixtures in `BrainSetupPlannerTests` leave
+    /// `HardwareReport.platform` at its `.current` default, and a default
+    /// argument is evaluated at the call site — so `.intel32GB` describes an
+    /// Intel *Mac* only while the suite happens to be running on a Mac. Off
+    /// Darwin the identical report reads as a 32 GB x86_64 Linux box, which the
+    /// planner correctly offers the local brain, exactly as
+    /// `ALinuxBoxIsNotAnIntelMacTests` insists it must.
+    ///
+    /// The tests below are about the Mac verdicts, so they say `.darwin` out
+    /// loud. This is deliberately not a `#if canImport(Darwin)` guard: a guard
+    /// would stop Linux from proving the Mac refusals at all, and a rule only
+    /// testable on the machine it is wrong about is how the Apple Silicon
+    /// refusal survived to 2.3.0. Pinned this way, every case here runs
+    /// identically on both platforms.
+    private static func onDarwin(_ hardware: HardwareReport) -> HardwareReport {
+        var report = hardware
+        report.platform = .darwin
+        return report
+    }
+
     // MARK: The default itself
 
     /// The plain case: a Mac that can run a brain gets one, without being asked.
@@ -61,9 +84,9 @@ final class FreshInstallDefaultTests: XCTestCase {
     /// the screen doing the asking has to be able to say why.
     func testEveryMacThatCannotRunLocallySaysWhy() {
         let cases: [(String, EnvironmentProbeResult)] = [
-            ("Intel", .machine(hardware: .intel32GB)),
-            ("4 GB", .machine(hardware: .appleSilicon4GB)),
-            ("no disk", .machine(hardware: .appleSilicon16GBLowDisk))
+            ("Intel Mac", .machine(hardware: Self.onDarwin(.intel32GB))),
+            ("4 GB Mac", .machine(hardware: Self.onDarwin(.appleSilicon4GB))),
+            ("no disk Mac", .machine(hardware: Self.onDarwin(.appleSilicon16GBLowDisk)))
         ]
 
         for (name, probe) in cases {
@@ -88,14 +111,16 @@ final class FreshInstallDefaultTests: XCTestCase {
     /// The specific machines, so a reworded reason cannot quietly stop naming
     /// the obstacle it exists to name.
     func testTheReasonNamesTheActualObstacle() {
-        let intel = planner.plan(for: .machine(hardware: .intel32GB)).freshInstallDefaultObstacle
+        let intel = planner.plan(
+            for: .machine(hardware: Self.onDarwin(.intel32GB))
+        ).freshInstallDefaultObstacle
         XCTAssertTrue(
             intel?.contains("Apple Silicon") == true,
             "an Intel owner is not told it is about the chip: \(intel ?? "")"
         )
 
         let disk = planner.plan(
-            for: .machine(hardware: .appleSilicon16GBLowDisk)
+            for: .machine(hardware: Self.onDarwin(.appleSilicon16GBLowDisk))
         ).freshInstallDefaultObstacle
         XCTAssertTrue(
             disk?.lowercased().contains("space") == true || disk?.contains("GB") == true,
@@ -134,7 +159,7 @@ final class FreshInstallDefaultTests: XCTestCase {
     func testAMacThatCannotRunLocallyIsDefaultedToNothingAtAll() {
         let choices = planner.plan(
             for: .machine(
-                hardware: .intel32GB,
+                hardware: Self.onDarwin(.intel32GB),
                 ambientKeys: AmbientAPIKeyReport(providers: [.deepSeek])
             )
         )
@@ -145,6 +170,39 @@ final class FreshInstallDefaultTests: XCTestCase {
         )
         // The menu is still there — this is a fallback, not a dead end.
         XCTAssertFalse(choices.availableOptions.isEmpty, "and now there is nothing to choose from")
+    }
+
+    /// **The same silicon, off Darwin, is not a refusal — and this file has to
+    /// say so where the refusal is asserted.**
+    ///
+    /// The three tests above pin `.darwin` onto machines that would otherwise
+    /// inherit the host's platform. Left unpinned on Linux, `.intel32GB` — 32 GB
+    /// and no Metal — became a perfectly capable x86_64 tower being handed the
+    /// local brain, and the Mac assertions above turned into a bug report about
+    /// a missing refusal reason. Anyone acting on that report would have made
+    /// the planner refuse every Linux box to make this file green.
+    ///
+    /// So the counter-case lives here, next to the assertions it protects: the
+    /// byte-identical hardware, judged as Linux, is defaulted to the private
+    /// brain with nothing to explain. `x86_64` is only an obstacle where the
+    /// alternative was Apple Silicon.
+    func testTheSameHardwareOffDarwinIsDefaultedRatherThanRefused() {
+        var linuxTower = HardwareReport.intel32GB
+        linuxTower.platform = .linux
+        linuxTower.modelStorageDirectory = "/home/owner/.ollama/models"
+
+        let choices = planner.plan(for: .machine(hardware: linuxTower))
+
+        XCTAssertNotNil(
+            choices.freshInstallDefault,
+            "a 32 GB Linux box was refused the private default for not being Apple Silicon"
+        )
+        XCTAssertEqual(choices.freshInstallDefault?.option.id, .fullyLocal)
+        XCTAssertTrue(choices.freshInstallDefault?.option.keepsWordsOnDevice == true)
+        XCTAssertNil(
+            choices.freshInstallDefaultObstacle,
+            "an obstacle offered for a machine that has none"
+        )
     }
 
     // MARK: Nothing on the menu may dead-end

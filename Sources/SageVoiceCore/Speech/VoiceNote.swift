@@ -18,11 +18,16 @@ public enum VoiceNote {
     /// the appliance saying something private out loud, and the file exists on
     /// disk for as long as the send takes.
     public static func directory(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("VoiceNotes", isDirectory: true)
+        ApplianceSupportDirectory.directory(
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
+        .appendingPathComponent("VoiceNotes", isDirectory: true)
     }
 
     /// Writes `speech` as an m4a and returns the file.
@@ -100,11 +105,16 @@ public struct VoicePreferences: Sendable {
     }
 
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("voice-preferences.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "voice-preferences.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     private struct Stored: Codable {

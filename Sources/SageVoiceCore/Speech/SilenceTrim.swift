@@ -1,4 +1,6 @@
+#if canImport(Accelerate)
 import Accelerate
+#endif
 import Foundation
 
 /// Removes the silence Kokoro leaves at the start and end of every utterance.
@@ -99,8 +101,17 @@ public enum SilenceTrim {
                 // is genuinely there.
                 let length = min(frameLength, buffer.count - start)
                 guard length > 0 else { continue }
+                // The boundaries this decides are asserted to the exact sample
+                // in `SilenceTrimTests`, so the off-Darwin sum is taken in
+                // `Double` rather than in `Float`: a 2048-term single-precision
+                // accumulation is the one place a scalar rewrite could move a
+                // frame across the −60 dB line and shift a trim point.
+                #if canImport(Accelerate)
                 var mean: Float = 0
                 vDSP_measqv(buffer.baseAddress! + start, 1, &mean, vDSP_Length(length))
+                #else
+                let mean = ScalarDSP.meanSquare(buffer.baseAddress! + start, count: length)
+                #endif
                 energies[index] = sqrt(mean)
             }
         }

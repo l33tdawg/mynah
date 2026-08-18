@@ -489,6 +489,18 @@ public enum BrainPrompts {
         WebSearchToolSource.toolName
     ]).union(NotesToolSource.toolNames)
 
+    // **Everything below here is the phone call, and the phone call is a Mac.**
+    //
+    // `Package.swift` excludes `Sources/SageVoiceCore/Call/` off-Darwin, so
+    // there is no call surface on Linux or Windows and no
+    // `AfterTheCallToolSource` to name. Both members are guarded rather than
+    // rewritten to drop the tool: a catalogue for a call that cannot happen and
+    // a prompt that opens "YOU ARE ON A PHONE CALL" would each be a lie in
+    // their own right, and the prompt's whole middle section instructs the
+    // model to reach for a tool that would not be in its catalogue. A model
+    // told about a tool it cannot call will try to call it.
+    #if os(macOS)
+
     /// **What a call may reach, which is not what a Signal message may reach.**
     ///
     /// The owner's ruling, 5 August 2026: "calls cannot send files bro - calls
@@ -570,4 +582,6 @@ public enum BrainPrompts {
         NOT ON A CALL: \(NotesToolSource.toolNames.sorted().joined(separator: ", "))
         """
     }
+
+    #endif
 }

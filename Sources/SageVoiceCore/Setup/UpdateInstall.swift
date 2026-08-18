@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - How much of it has arrived
 
@@ -502,9 +505,7 @@ public struct UpdateInstaller: Sendable {
         // millisecond to avoid.
         if let size = asset.size {
             let needed = size * 3
-            let free = (try? updates.resourceValues(
-                forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-            ))?.volumeAvailableCapacityForImportantUsage
+            let free = VolumeFreeSpace.availableBytes(at: updates)
             if let free, free < needed { return .failure(.notEnoughRoom(needed: needed)) }
         }
 
@@ -891,7 +892,7 @@ public struct SystemCommands: UpdateCommanding {
         // draining it blocks the child forever, and `hdiutil -plist` on a
         // multi-partition image is bigger than that buffer.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExitWithoutBlockingTheRunLoop()
 
         let output = String(data: data, encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {

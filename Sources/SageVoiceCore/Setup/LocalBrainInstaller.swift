@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Gets a local brain working, and says what it is doing while it does.
 ///
@@ -548,7 +551,7 @@ public final class OllamaRuntimeInstaller: OllamaRuntimeInstalling, @unchecked S
         process.standardError = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExitWithoutBlockingTheRunLoop()
         let output = String(decoding: data, as: UTF8.self)
         guard process.terminationStatus == 0 else {
             throw Failure.archiveTool(output.trimmingCharacters(in: .whitespacesAndNewlines))

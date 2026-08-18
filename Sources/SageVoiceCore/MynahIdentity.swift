@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// The key Mynah signs SAGE requests with.
@@ -48,11 +52,16 @@ public enum MynahIdentity {
     /// the parent directory and generates the key on first use
     /// (`cmd/sage-gui/mcp.go:169-174`), so nothing here has to mint anything.
     public static func keyURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("agent.key", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "agent.key",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// The node's own directory, resolved the way the node resolves it —
@@ -167,7 +176,7 @@ public enum MynahIdentity {
         // somewhere else entirely.
         let ourDirectories = [
             applianceKeyURL(environment: environment, homeDirectory: homeDirectory),
-            legacyApplianceKeyURL(homeDirectory: homeDirectory)
+            legacyApplianceKeyURL(homeDirectory: homeDirectory, environment: environment)
         ].map { $0.deletingLastPathComponent().standardizedFileURL.path }
 
         let candidateDirectory = candidate.deletingLastPathComponent().path
@@ -272,12 +281,26 @@ public enum MynahIdentity {
     /// `svbtest-agent-*` — one per place it had ever been started from, each
     /// with its own memories. The `cd` in the launch script was load-bearing and
     /// nothing said so.
+    ///
+    /// "Legacy" is a Mac word. Off Darwin there is no installed base to adopt
+    /// from and nothing has ever written here — but this path is not read-only
+    /// in practice: `backUpApplianceKeyIfPresent` puts retired keys in a
+    /// `retired/` folder *beside* it, so a hardcoded `Library/Application
+    /// Support` would have every Linux appliance mint a stray `~/Library` the
+    /// first time it rotated an identity. It resolves through
+    /// `ApplianceSupportDirectory` for that reason; on a Mac it is the same
+    /// string it has always been.
     public static func legacyApplianceKeyURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("appliance-agent.key", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "appliance-agent.key",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     // MARK: - Migration
@@ -426,7 +449,7 @@ public enum MynahIdentity {
         // no dependence on where anything was launched from. The derived
         // candidates below only matter for an appliance old enough to predate
         // the pin as well, which is a smaller and shrinking set.
-        var candidates: [URL] = [legacyApplianceKeyURL(homeDirectory: homeDirectory)]
+        var candidates: [URL] = [legacyApplianceKeyURL(homeDirectory: homeDirectory, environment: environment)]
 
         // Then the live cwd — right when the migrating process happens to be the
         // one that minted the key — and then the launcher's directory.
@@ -600,12 +623,12 @@ public enum MynahIdentity {
         // that is precisely the boot where a lost key would cost the most.
         let candidates = [
             applianceKeyURL(environment: environment, homeDirectory: homeDirectory),
-            legacyApplianceKeyURL(homeDirectory: homeDirectory)
+            legacyApplianceKeyURL(homeDirectory: homeDirectory, environment: environment)
         ]
         guard let key = candidates.lazy.compactMap({ try? Data(contentsOf: $0) }).first else { return nil }
 
         let stamp = SageAgentIdentity.agentID(ofKeyBytes: key).map { String($0.prefix(8)) } ?? "unreadable"
-        let destination = legacyApplianceKeyURL(homeDirectory: homeDirectory)
+        let destination = legacyApplianceKeyURL(homeDirectory: homeDirectory, environment: environment)
             .deletingLastPathComponent()
             .appendingPathComponent("retired", isDirectory: true)
             .appendingPathComponent("appliance-agent.\(stamp).key", isDirectory: false)

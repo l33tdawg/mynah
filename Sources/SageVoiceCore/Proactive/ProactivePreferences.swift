@@ -12,6 +12,11 @@ import Foundation
 /// A file rather than `UserDefaults`, for the reason spelled out on
 /// `CallPreferences`: the app and the daemon are separate processes with
 /// separate defaults domains, and the daemon is the one that has to obey this.
+///
+/// **The only writer used to be a Mac settings screen**, which made this the
+/// one feature a Linux owner could install the product for and then never turn
+/// on. `update(at:_:)` is the headless way in; `amend(at:_:)` stays for the
+/// screen. They are not interchangeable — see both.
 public struct ProactivePreferences: Sendable, Equatable, Codable {
 
     /// Whether the appliance may check on its own and say something.
@@ -104,15 +109,24 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
     // MARK: Where it lives
 
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("proactive-preferences.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "proactive-preferences.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// Never throws. A file that will not parse should cost the owner a
     /// setting, not their appliance.
+    ///
+    /// This is the daemon's read and it stays exactly as forgiving as it was.
+    /// Anything that is about to *write* must use `loadOrRefuse(from:)` instead,
+    /// for the reason spelled out there.
     public static func load(
         from url: URL = ProactivePreferences.defaultFileURL()
     ) -> ProactivePreferences {
@@ -148,6 +162,12 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
         try OwnerOnlyFileSecurity.write(encoder.encode(self), to: url)
     }
 
+    /// **The settings screen's writer, and nothing else's.**
+    ///
+    /// It cannot report a failed write and it cannot report a file it could not
+    /// read, which is survivable behind a switch the owner is looking at — the
+    /// switch springs back on the next redraw — and is not survivable in a tool
+    /// that prints a line and exits. A headless caller wants `update(at:_:)`.
     public static func amend(
         at url: URL = ProactivePreferences.defaultFileURL(),
         _ change: (inout ProactivePreferences) -> Void
@@ -155,5 +175,89 @@ public struct ProactivePreferences: Sendable, Equatable, Codable {
         var preferences = load(from: url)
         change(&preferences)
         try? preferences.save(to: url)
+    }
+
+    // MARK: Changing it without a settings screen
+
+    /// Why a write refuses, in the words the caller should print.
+    public enum Refusal: Error, LocalizedError, Equatable {
+        /// There is a file, and it is not this.
+        case unreadable(path: String)
+        /// A caller asked for an interval outside the range that will be run.
+        case intervalOutOfRange(minutes: Int, path: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unreadable(let path):
+                return """
+                \(path) exists but is not readable proactive settings, so changing one \
+                setting would silently discard the rest.
+                Move that file aside and try again; a fresh one will be written with the \
+                defaults, and the check stays off until it is turned on.
+                """
+            case .intervalOutOfRange(let minutes, let path):
+                return """
+                \(minutes) minutes is outside the range this appliance checks at \
+                (\(ProactivePreferences.fastest) to \(ProactivePreferences.slowest) minutes).
+                Choose a number in that range. Nothing was written to \(path).
+                """
+            }
+        }
+    }
+
+    /// The read a caller does **before writing**.
+    ///
+    /// `load(from:)` answers with the defaults when the file will not parse,
+    /// which is right for the daemon and destructive for a writer: amending
+    /// defaults and saving them replaces whatever the owner had — their
+    /// interval, their quiet hours — with values nobody chose, and reports
+    /// success. So this one separates *no file* (defaults, an ordinary state)
+    /// from *a file I cannot read* (a refusal that names the path).
+    public static func loadOrRefuse(
+        from url: URL = ProactivePreferences.defaultFileURL()
+    ) throws -> ProactivePreferences {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return ProactivePreferences()
+            }
+            throw Refusal.unreadable(path: url.path)
+        }
+        guard let stored = try? JSONDecoder().decode(ProactivePreferences.self, from: data) else {
+            throw Refusal.unreadable(path: url.path)
+        }
+        return withoutTheOldNightDefault(stored)
+    }
+
+    /// The write for a caller that has to say what happened.
+    ///
+    /// Everything `amend` swallows, this reports: an unreadable file, a refused
+    /// interval, a directory it cannot write. And it returns what is now on
+    /// disk, so the caller prints the state of the appliance rather than the
+    /// state it hoped for.
+    ///
+    /// **An out-of-range interval is refused rather than clamped**, because a
+    /// tool that accepts `1` and quietly runs at `5` has told the owner
+    /// something untrue about their own appliance. Only an interval *this write
+    /// introduces* is refused, though: a file already carrying a hand-edited `1`
+    /// must not make it impossible to turn the feature off, which would be a
+    /// dead end with the setting stuck on.
+    ///
+    /// - Returns: the preferences as written.
+    @discardableResult
+    public static func update(
+        at url: URL = ProactivePreferences.defaultFileURL(),
+        _ change: (inout ProactivePreferences) -> Void
+    ) throws -> ProactivePreferences {
+        let before = try loadOrRefuse(from: url)
+        var after = before
+        change(&after)
+        if after.everyMinutes != before.everyMinutes, after.everyMinutes != after.clampedMinutes {
+            throw Refusal.intervalOutOfRange(minutes: after.everyMinutes, path: url.path)
+        }
+        try after.save(to: url)
+        return after
     }
 }

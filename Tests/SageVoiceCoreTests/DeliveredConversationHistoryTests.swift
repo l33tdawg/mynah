@@ -105,6 +105,7 @@ final class DeliveredConversationHistoryTests: XCTestCase {
         XCTAssertEqual(turns.map(\.content), ["news that landed"])
     }
 
+    #if os(macOS)
     func testFailedAfterCallReportIsNotRemembered() async throws {
         let fixture = try Fixture(answers: [], failures: 1)
 
@@ -126,6 +127,7 @@ final class DeliveredConversationHistoryTests: XCTestCase {
             ["a report that landed"]
         )
     }
+    #endif  // os(macOS)
 
     func testRestartReplayDeliversCompletedTurnWithoutRepeatingItsMutation() async throws {
         let directory = FileManager.default.temporaryDirectory

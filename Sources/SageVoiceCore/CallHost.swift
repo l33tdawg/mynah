@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Starts a call on demand and hands back a link.
 ///
@@ -29,6 +32,17 @@ public actor CallHost {
         case noSharedSecret(String)
         case endpointExited(Int32)
         case relayNeverAnswered(String)
+        #if !os(macOS)
+        /// **Off-Darwin only, and it exists so the refusal has a name.**
+        ///
+        /// `Package.swift` excludes `Sources/SageVoiceCore/Call/` on Linux and
+        /// Windows: the live voice call is a Mac feature and is not ported.
+        /// This type stays because `CallEnrolment` and the daemon read its
+        /// paths and its readiness check, but `start()` there has no endpoint
+        /// to run and no appliance socket to point one at. It says so rather
+        /// than starting something that could not carry audio.
+        case notOnThisPlatform
+        #endif
 
         /// For the log. Paths and exit statuses belong here and only here.
         public var description: String {
@@ -41,6 +55,10 @@ public actor CallHost {
                 return "the call endpoint stopped immediately (status \(status))"
             case .relayNeverAnswered(let url):
                 return "the relay never listed this call at \(url)"
+            #if !os(macOS)
+            case .notOnThisPlatform:
+                return "calls are not built into this platform's build of the appliance"
+            #endif
             }
         }
 
@@ -77,6 +95,14 @@ public actor CallHost {
             case .endpointExited, .relayNeverAnswered:
                 // Nothing for him to change. A transient, said as one.
                 return "something went wrong setting it up. Try again in a moment."
+            #if !os(macOS)
+            case .notOnThisPlatform:
+                // Not a fault and not a transient — this appliance will never
+                // do it, so "try again" would be a road ending in a wall. The
+                // door is the surface he is already on.
+                return "calls only work on the Mac version of Mynah. Keep messaging me here "
+                    + "and I'll answer in the chat."
+            #endif
             }
         }
     }
@@ -121,6 +147,7 @@ public actor CallHost {
     /// would both answer, but because a stale link should stop working the
     /// moment a new one is issued. A call link is a live microphone, and the
     /// owner assumes the last one they were sent is the only one that works.
+    #if os(macOS)
     public func start(probe: (String) async -> Bool = CallHost.linkIsLive) async throws -> String {
         stop()
 
@@ -177,6 +204,19 @@ public actor CallHost {
         stop()
         throw Failure.relayNeverAnswered(relayURL)
     }
+    #else
+    /// Refuses, by name, everywhere the call is not built.
+    ///
+    /// The signature is kept so the daemon's `//call` path compiles unchanged
+    /// and its existing `catch` turns this into the owner's sentence — the same
+    /// route every other `Failure` already takes to his phone. The alternative,
+    /// running the endpoint without `-appliance`, would start a call that
+    /// reaches no brain; and returning a link that goes nowhere would be the
+    /// one thing worse than saying no.
+    public func start(probe: (String) async -> Bool = CallHost.linkIsLive) async throws -> String {
+        throw Failure.notOnThisPlatform
+    }
+    #endif
 
     /// Ends the current call, if any.
     public func stop() {

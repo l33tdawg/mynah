@@ -160,12 +160,32 @@ public struct WhereWeAre: Codable, Equatable, Sendable {
 
     // MARK: On disk
 
+    /// The appliance directory, asked for rather than spelled here.
+    ///
+    /// On a Mac this resolves to exactly the path it always did —
+    /// `~/Library/Application Support/SAGE Voice Bridge/where-we-are.json` —
+    /// so an owner upgrading keeps the city a lookup already paid for.
+    ///
+    /// Off Darwin the hand-spelled version put a `~/Library` folder in the
+    /// owner's home that nothing on the system understands, no package manager
+    /// owns and no backup covers, and it did it early: `load` runs on every
+    /// brain turn and `save` follows the first lookup that succeeds, both from
+    /// code with no platform guard anywhere in this file. A cached city is not
+    /// worth a stray directory, and one file opting out is how the appliance
+    /// got scattered across two roots in the first place — so this asks
+    /// `ApplianceSupportDirectory` for the answer like everything else, and
+    /// lands beside the rest of the appliance's state under `$XDG_DATA_HOME`.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("where-we-are.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "where-we-are.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// The cached answer, or the free one derived from the zone.

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 /// SHA-256 over a file, read in chunks.
 ///
@@ -8,8 +12,11 @@ import CryptoKit
 /// appliance that is also holding a 4B model resident is how you get an OOM
 /// during what should be a background download.
 ///
-/// CryptoKit is a system framework, so this keeps the package's zero-external-
-/// dependency rule intact.
+/// The hash comes from CryptoKit on Apple platforms, where it is a system
+/// framework, and from swift-crypto elsewhere. The two present the same API, so
+/// nothing below changes — but the old claim that this kept the package free of
+/// external dependencies is no longer true off Darwin, where swift-crypto is a
+/// declared package dependency.
 public enum FileDigest {
     /// 1 MiB: large enough that syscall overhead is irrelevant, small enough to
     /// stay out of the way of the model.

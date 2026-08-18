@@ -316,12 +316,26 @@ public struct CalendarLedger: Codable, Equatable, Sendable {
         self.written = written
     }
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off
+    /// Darwin.
+    ///
+    /// Losing this file is not losing a cache. It is the only record of which
+    /// events in the owner's calendar this appliance wrote, so a ledger the
+    /// daemon cannot find is a mirror that can no longer update or remove
+    /// anything it made — every subsequent sync writes a second copy, and
+    /// `forget()` has nothing to take back.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("calendar-ledger.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "calendar-ledger.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     public static func load(from url: URL = CalendarLedger.defaultFileURL()) -> CalendarLedger {

@@ -49,12 +49,24 @@ public struct CalendarPreferences: Sendable, Equatable, Codable {
 
     // MARK: Where it lives
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off
+    /// Darwin. Spelled through `ApplianceSupportDirectory` rather than here for
+    /// the reason the switch exists at all: this is the file that says *do not
+    /// write to my calendar*, the app writes it and the daemon obeys it, and two
+    /// processes resolving one preference to two paths is a switch that reads as
+    /// off on the screen while the mirror keeps writing.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("calendar-preferences.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "calendar-preferences.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// Never throws. A file that will not parse should cost the owner a setting,

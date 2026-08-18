@@ -55,12 +55,30 @@ public struct ApplianceStatus: Sendable, Codable, Equatable {
         keepsWordsOnDevice ? "This Mac" : provider
     }
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off
+    /// Darwin.
+    ///
+    /// **This one is the first file the appliance ever writes.** `publish` is
+    /// called unguarded at every daemon start, before setup, before a message,
+    /// before anything the owner did — so while this was spelled by hand, the
+    /// very first `sage-voiced` launch on a Linux box created a `~/Library`
+    /// folder in the owner's home that nothing on the system understands, no
+    /// package manager owns and no backup covers. Routing it through
+    /// `ApplianceSupportDirectory` is what stops that happening at all, rather
+    /// than adding a platform check at the one call site and waiting for the
+    /// next caller to forget.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("appliance-status.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "appliance-status.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// Written by the daemon at start-up.

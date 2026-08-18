@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// One result as the appliance will speak it: a name, where it came from, and
 /// enough text to answer with.

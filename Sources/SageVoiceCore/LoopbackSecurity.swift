@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Loopback enforcement for local-only AI services (ASR, TTS, the local model).
 ///
@@ -88,7 +91,15 @@ public enum LoopbackSecurity {
         configuration.httpCookieAcceptPolicy = .never
         // A stream read byte-by-byte must not sit in a buffer waiting to be
         // economical about wake-ups; the point of the bus is promptness.
+        //
+        // Darwin-only: `.responsiveData` is not a case of
+        // `URLRequest.NetworkServiceType` on swift-corelibs-foundation, so
+        // naming it off-Darwin fails to compile. It is a hint either way — the
+        // corelibs transfer does no such coalescing to ask it to skip — so the
+        // stream is just as prompt on Linux without it.
+        #if canImport(Darwin)
         configuration.networkServiceType = .responsiveData
+        #endif
         return URLSession(
             configuration: configuration,
             delegate: RedirectBlocker.shared,

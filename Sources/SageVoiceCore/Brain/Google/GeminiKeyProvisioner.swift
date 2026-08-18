@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Turns a Google sign-in into a Gemini API key the owner actually owns.
 ///

@@ -8,6 +8,12 @@ import XCTest
 /// gating rules are exercised for machines nobody on this project owns — a 4 GB
 /// Mac, an Intel Mac, a volume with 2 GB free — from whatever machine happens to
 /// be running the suite.
+///
+/// **They are all Macs, and they say so.** Each fixture at the foot of this file
+/// carries `platform: .darwin` rather than letting it default to the host, so
+/// the verdicts asserted here are the ones a Mac owner gets whether the suite is
+/// run on macOS or on Linux. The Linux side of the same rules lives in
+/// `ALinuxBoxIsNotAnIntelMacTests`.
 final class BrainSetupPlannerTests: XCTestCase {
 
     private let planner = BrainSetupPlanner()
@@ -288,6 +294,13 @@ final class BrainSetupPlannerTests: XCTestCase {
         )
     }
 
+    /// The Mac thresholds. Every figure here is a claim about a Mac, including
+    /// the last one: an Intel Mac is refused because Metal is the only
+    /// accelerator macOS has, not because 32 GB is too little and not because
+    /// x86 is. The same silicon under Linux is `.comfortable` and that is
+    /// asserted in `ALinuxBoxIsNotAnIntelMacTests`, not contradicted here — the
+    /// fixtures carry `platform: .darwin` so this stays a Mac question wherever
+    /// the suite runs.
     func testSixteenGigabytesIsTheComfortableThreshold() {
         XCTAssertEqual(HardwareReport.appleSilicon16GB.localModelCapability, .comfortable)
         XCTAssertEqual(HardwareReport.appleSilicon8GB.localModelCapability, .tight)
@@ -757,6 +770,24 @@ final class BrainSetupPlannerTests: XCTestCase {
 
 extension HardwareReport {
     /// The reference appliance: a 16 GB M2 mini with room to spare.
+    ///
+    /// **`platform` is stated rather than defaulted, and every fixture below
+    /// inherits it.** It defaults to `HostPlatform.current`, which is the right
+    /// default for `SystemHardwareProbe` — it writes down the machine it probed
+    /// — and the wrong one for a fixture, which has to describe the same machine
+    /// from whatever host happens to be running the suite. Left to the default
+    /// these Macs quietly became Linux boxes off Darwin, and the verdicts moved
+    /// with them: `intel32GB` came back `.comfortable`, which is correct about a
+    /// 32 GB Linux tower and false about the Intel Mac this fixture is named
+    /// for. Four cases here failed on Linux for that reason and none of them was
+    /// about a defect in the product.
+    ///
+    /// The Linux verdicts are not missing as a result — they are asserted, by
+    /// the same trick in the other direction, in `ALinuxBoxIsNotAnIntelMacTests`
+    /// where every report carries `platform: .linux`. Between the two files each
+    /// platform's rules are checked from both, which is the point: a rule that
+    /// can only be exercised on the machine it is wrong about is how the Apple
+    /// Silicon gate stayed wrong until 2.3.0.
     static var appleSilicon16GB: HardwareReport {
         HardwareReport(
             physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
@@ -764,7 +795,8 @@ extension HardwareReport {
             modelStorageDirectory: "/Users/test/.ollama/models",
             cpuBrand: "Apple M2",
             physicalCoreCount: 8,
-            isAppleSilicon: true
+            isAppleSilicon: true,
+            platform: .darwin
         )
     }
 
@@ -782,7 +814,13 @@ extension HardwareReport {
         return report
     }
 
-    /// Plenty of memory, wrong architecture for conversational latency.
+    /// An Intel Mac: plenty of memory, and on a Mac there is no accelerator
+    /// besides Metal to fall back to.
+    ///
+    /// `isAppleSilicon: false` means "no Metal here", and it only means "too
+    /// slow for speech" beside `platform: .darwin` — off Darwin the same flag is
+    /// a hardcoded constant that says nothing about the machine. Both facts are
+    /// written down for that reason; see `HostPlatform`.
     static var intel32GB: HardwareReport {
         HardwareReport(
             physicalMemoryBytes: 32 * 1024 * 1024 * 1024,
@@ -790,7 +828,8 @@ extension HardwareReport {
             modelStorageDirectory: "/Users/test/.ollama/models",
             cpuBrand: "Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz",
             physicalCoreCount: 8,
-            isAppleSilicon: false
+            isAppleSilicon: false,
+            platform: .darwin
         )
     }
 

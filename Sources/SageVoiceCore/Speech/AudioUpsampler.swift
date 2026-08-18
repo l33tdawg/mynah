@@ -1,4 +1,6 @@
+#if canImport(Accelerate)
 import Accelerate
+#endif
 import Foundation
 
 /// Doubles a sample rate, correctly, with nothing but Accelerate.
@@ -31,6 +33,15 @@ import Foundation
 /// zero-stuffing costs is already folded in — `resample_poly` scales its filter
 /// by the upsampling factor, and so does this. Multiplying the output again
 /// would double every sample and clip.
+///
+/// ## Off Darwin
+///
+/// Accelerate is Apple's, so on Linux and Windows the four `vDSP` calls below
+/// come from `ScalarDSP` instead. The kernel, the padding, the group-delay
+/// trim and the clip-then-scale order are all shared — only the inner
+/// arithmetic changes, and it changes to something that sums in `Double` and
+/// is therefore no further from `resample_poly` than the Accelerate path is.
+/// The Darwin branches are left exactly as they shipped.
 public enum AudioUpsampler {
 
     /// 41 taps, centred at index 20.
@@ -92,6 +103,7 @@ public enum AudioUpsampler {
         // vDSP_conv correlates rather than convolves, which for a symmetric
         // kernel is the same operation — and this kernel is symmetric by
         // construction. Asserted in the tests rather than assumed here.
+        #if canImport(Accelerate)
         vDSP_conv(
             padded, 1,
             halfBandKernel, 1,
@@ -99,6 +111,14 @@ public enum AudioUpsampler {
             vDSP_Length(outputCount),
             vDSP_Length(taps)
         )
+        #else
+        ScalarDSP.correlate(
+            signal: padded,
+            filter: halfBandKernel,
+            into: &output,
+            outputCount: outputCount
+        )
+        #endif
         return output
     }
 
@@ -111,6 +131,7 @@ public enum AudioUpsampler {
     /// integer boundary is an audible click; clamping is a momentarily flat
     /// peak nobody hears.
     public static func toInt16(_ samples: [Float]) -> [Int16] {
+        #if canImport(Accelerate)
         var clipped = [Float](repeating: 0, count: samples.count)
         var low: Float = -1
         var high: Float = 1
@@ -122,5 +143,11 @@ public enum AudioUpsampler {
         var output = [Int16](repeating: 0, count: samples.count)
         vDSP_vfix16(clipped, 1, &output, 1, vDSP_Length(samples.count))
         return output
+        #else
+        // `vDSP_vfix16` truncates toward zero, so this one does too — 0.5
+        // scales to 16383.5 and lands on 16383 on both platforms rather than
+        // on whichever the encoder happened to run on.
+        return ScalarDSP.clippedScaledInt16(samples, low: -1, high: 1, scale: 32767)
+        #endif
     }
 }

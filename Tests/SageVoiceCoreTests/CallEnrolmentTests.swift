@@ -1,5 +1,11 @@
 import XCTest
 @testable import SageVoiceCore
+#if canImport(FoundationNetworking)
+// `URLRequest`, `URLSession` and `HTTPURLResponse` are in Foundation on a Mac
+// and in this second module everywhere else. Same convention as the twenty-eight
+// files under Sources/ that already reach for the network.
+import FoundationNetworking
+#endif
 
 /// **That an owner who links a phone gets calling, without anybody's help.**
 ///

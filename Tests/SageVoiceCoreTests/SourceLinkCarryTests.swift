@@ -55,7 +55,7 @@ final class SourceLinkCarryTests: XCTestCase {
     /// Links belong to the turn that used them, so trimming history by turns
     /// drops them with it — otherwise the model cites a source for an answer
     /// that has already scrolled out of context.
-    func testEachAnswerKeepsOnlyItsOwnLinks() {
+    func testEachAnswerKeepsOnlyItsOwnLinks() throws {
         let carried = VoiceBridgeDaemon.conversationOnly([
             .user("modular shops in asia"),
             .toolResult(name: "web_search", content: "1. Siam Modular\n   https://siammodular.com/", id: "1"),
@@ -65,13 +65,20 @@ final class SourceLinkCarryTests: XCTestCase {
             .assistant("Festival of Modular, Daikanyama.")
         ])
 
+        // Unwrapped rather than subscripted: off Darwin `conversationOnly`
+        // carries nothing at all, and `answers[0]` on an empty array is a trap
+        // that takes the process down mid-suite instead of a test that says
+        // which behaviour is missing.
         let answers = carried.filter { $0.role == .assistant }
-        XCTAssertEqual(answers.count, 2)
-        XCTAssertTrue(answers[0].content.contains("siammodular.com"))
-        XCTAssertFalse(answers[0].content.contains("tfom.info"))
-        XCTAssertTrue(answers[1].content.contains("tfom.info"))
+        XCTAssertEqual(answers.count, 2, "the two answers did not survive the carry")
+        let first = try XCTUnwrap(answers.first, "the first answer did not survive the carry")
+        let second = try XCTUnwrap(answers.dropFirst().first, "the second answer did not survive the carry")
+
+        XCTAssertTrue(first.content.contains("siammodular.com"))
+        XCTAssertFalse(first.content.contains("tfom.info"))
+        XCTAssertTrue(second.content.contains("tfom.info"))
         XCTAssertFalse(
-            answers[1].content.contains("siammodular.com"),
+            second.content.contains("siammodular.com"),
             "the corrected-away subject followed the owner into the new one — this is the reported bug"
         )
     }

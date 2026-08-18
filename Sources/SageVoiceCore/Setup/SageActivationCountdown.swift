@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// How far a brand-new SAGE node is from being able to remember anything.
 ///

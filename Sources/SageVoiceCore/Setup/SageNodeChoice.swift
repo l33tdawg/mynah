@@ -42,11 +42,16 @@ public struct SageNodeChoice: Sendable, Equatable {
     /// asked for.
     public var mayBeManagedByMynah: Bool { source == .vendored }
 
-    /// Where an installed SAGE is looked for, in order.
+    /// Where an installed SAGE **app bundle** is looked for, in order.
     ///
     /// Both of the places macOS puts an application, and nowhere else. A search
     /// that ranged wider would eventually find a build directory or a Downloads
     /// folder and treat a half-finished copy as the owner's node.
+    ///
+    /// This is the macOS answer and it is the same on every platform, because
+    /// the question it answers — "where does macOS put applications?" — has one
+    /// answer. Off-Darwin the question itself is the wrong one, and
+    /// `defaultInstalledCandidates()` asks a different one.
     public static func installedCandidates(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> [URL] {
@@ -54,6 +59,44 @@ public struct SageNodeChoice: Sendable, Equatable {
             URL(fileURLWithPath: "/Applications/SAGE.app"),
             homeDirectory.appendingPathComponent("Applications/SAGE.app")
         ]
+    }
+
+    /// What `resolve` searches when the caller does not say.
+    ///
+    /// **On Darwin this is `installedCandidates()`, unchanged and unchangeable
+    /// — the two Applications folders, the bundle identifier as the proof.**
+    ///
+    /// Off-Darwin it is `SageNodeLocator.locateInstalledExecutable`, which is
+    /// the search `EnvironmentProbe.probeSage` already performs: `PATH` first,
+    /// then `~/.sage/bin`, `~/go/bin`, `~/.local/bin` and the machine-wide
+    /// binary directories. That divergence is the whole repair. The product
+    /// shipped two detectors that disagreed, so on Linux setup printed a `sage`
+    /// it had found on `PATH` while the daemon died naming
+    /// `/Applications/SAGE.app/Contents/MacOS/sage-gui` — a path that cannot
+    /// exist on the only Linux arrangement there is, because the owner installs
+    /// SAGE himself there and Mynah bundles nothing.
+    ///
+    /// Every match, not just the first, because off-Darwin each one still has
+    /// to prove itself: a SageMath `sage` sitting in front of the owner's real
+    /// node on `PATH` must not be the end of the search.
+    ///
+    /// A caller that passes its own list replaces this entirely, which is how a
+    /// test describes a machine with or without SAGE regardless of what the
+    /// host running it happens to have.
+    public static func defaultInstalledCandidates(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        #if canImport(Darwin)
+        return installedCandidates(homeDirectory: homeDirectory)
+        #else
+        return SageNodeLocator.installedExecutableCandidates(
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
+        #endif
     }
 
     /// Decides which node to use.
@@ -84,25 +127,114 @@ public struct SageNodeChoice: Sendable, Equatable {
     /// way.
     public static func resolve(
         vendored: URL?,
-        installedCandidates: [URL] = SageNodeChoice.installedCandidates(),
+        installedCandidates: [URL] = SageNodeChoice.defaultInstalledCandidates(),
         fileManager: FileManager = .default
     ) -> SageNodeChoice? {
-        for bundle in installedCandidates {
-            let executable = bundle
-                .appendingPathComponent("Contents/MacOS")
-                .appendingPathComponent(SageNodeLocator.executableName)
-            guard fileManager.isExecutableFile(atPath: executable.path) else { continue }
-            guard identifier(ofBundleAt: bundle, fileManager: fileManager)
-                    == SageNodeLocator.expectedBundleIdentifier else {
-                // A directory called SAGE.app that is not SAGE. Skipped rather
-                // than run: the name is not the check.
+        try? decide(
+            vendored: vendored,
+            installedCandidates: installedCandidates,
+            fileManager: fileManager
+        ).get()
+    }
+
+    /// `resolve`, with the reason when the answer is nothing.
+    ///
+    /// `resolve` returns an `Optional` because every one of its call sites
+    /// wants a path or a fallback, and that is fine on a Mac where the fallback
+    /// is a vendored node that certainly exists. Off-Darwin there is no
+    /// vendored node, so `nil` is the *normal* outcome on a machine where SAGE
+    /// is simply not installed, or is installed as something that will not say
+    /// what it is — and a `nil` cannot say either of those things.
+    ///
+    /// So the reason is available to anything willing to print it. Both
+    /// failures name the next action, because a dead end that does not is how
+    /// an owner ends up reinstalling a working SAGE.
+    public static func decide(
+        vendored: URL?,
+        installedCandidates: [URL] = SageNodeChoice.defaultInstalledCandidates(),
+        fileManager: FileManager = .default
+    ) -> Result<SageNodeChoice, SageNodeError> {
+        // The first thing found-but-refused, kept so the failure can name it.
+        // Only ever *reported*: a refused candidate must not stop the vendored
+        // copy being used, or a directory called SAGE.app that is not SAGE
+        // would take a working Mac offline.
+        var refusal: SageNodeError?
+
+        for candidate in installedCandidates {
+            switch inspect(candidate, fileManager: fileManager) {
+            case .isSage(let executable):
+                return .success(SageNodeChoice(executable: executable, source: .installed))
+            case .isNotSage(let reason):
+                if refusal == nil { refusal = reason }
+            case .nothingThere:
                 continue
             }
-            return SageNodeChoice(executable: executable, source: .installed)
         }
 
-        guard let vendored, fileManager.isExecutableFile(atPath: vendored.path) else { return nil }
-        return SageNodeChoice(executable: vendored, source: .vendored)
+        if let vendored, fileManager.isExecutableFile(atPath: vendored.path) {
+            return .success(SageNodeChoice(executable: vendored, source: .vendored))
+        }
+
+        if let refusal { return .failure(refusal) }
+
+        #if canImport(Darwin)
+        let searched = installedCandidates.map(\.path)
+        #else
+        let searched = installedCandidates.isEmpty
+            ? SageNodeLocator.describeSearchedLocations()
+            : installedCandidates.map(\.path)
+        #endif
+        return .failure(.noNodeInstalled(searched: searched))
+    }
+
+    private enum Inspection {
+        case isSage(URL)
+        case isNotSage(SageNodeError)
+        case nothingThere
+    }
+
+    /// One candidate, and the two ways there are of proving it.
+    ///
+    /// A bundle proves itself with its `CFBundleIdentifier`; that check is
+    /// untouched and runs first on every platform, so a Mac behaves exactly as
+    /// it did and a Mac build unpacked into a Linux home directory is still
+    /// recognised for what it is.
+    ///
+    /// A bare binary has no such thing, and this is where an honest answer
+    /// matters most: the alternative is trusting any executable named `sage`,
+    /// and on Linux that is a live collision — SageMath installs one. So it
+    /// gets asked, by being run. See `SageNodeLocator.identify`.
+    private static func inspect(_ candidate: URL, fileManager: FileManager) -> Inspection {
+        let bundleExecutable = candidate
+            .appendingPathComponent("Contents/MacOS")
+            .appendingPathComponent(SageNodeLocator.executableName)
+
+        if fileManager.isExecutableFile(atPath: bundleExecutable.path) {
+            let found = identifier(ofBundleAt: candidate, fileManager: fileManager)
+            guard found == SageNodeLocator.expectedBundleIdentifier else {
+                // A directory called SAGE.app that is not SAGE. Skipped rather
+                // than run: the name is not the check.
+                return .isNotSage(.unexpectedBundleIdentifier(
+                    found: found ?? "none",
+                    expected: SageNodeLocator.expectedBundleIdentifier
+                ))
+            }
+            return .isSage(bundleExecutable)
+        }
+
+        #if canImport(Darwin)
+        return .nothingThere
+        #else
+        guard fileManager.isExecutableFile(atPath: candidate.path) else { return .nothingThere }
+        let evidence = SageNodeLocator.identify(executableAt: candidate, fileManager: fileManager)
+        guard evidence.isProven else {
+            return .isNotSage(.unprovenExecutable(
+                path: candidate.path,
+                evidence: evidence.evidence
+            ))
+        }
+        return .isSage(candidate)
+        #endif
     }
 
     // MARK: - Why setup does not provision Mynah's permissions

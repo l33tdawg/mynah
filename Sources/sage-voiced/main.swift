@@ -48,6 +48,9 @@ func usage() -> Never {
                          [--reply-prefix "MYNAH >> "] [--acknowledge]
       sage-voiced check [--sage PATH]                     one proactive check, printed
       sage-voiced calendar [--plan|--undo] [--sage PATH]  mirror dated tasks into iCal
+      sage-voiced settings                                what this appliance is set to
+      sage-voiced settings proactive on|off [--every N]   let Mynah check on its own
+      sage-voiced settings pause | resume                 stop answering, or answer again
 
     `brain` and `daemon` take --no-web to run with SAGE tools only.
     Web search uses Brave when a key is stored (or BRAVE_SEARCH_API_KEY is set),
@@ -237,6 +240,89 @@ struct HarnessError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
+// MARK: - the local brain, where Mynah does not own the runtime
+
+// **Off Darwin, Ollama is the owner's to install, and Mynah only detects it.**
+//
+// The same ruling the owner made about the SAGE node, and this one had teeth.
+// `OllamaRuntimeInstaller` fetches a *pinned Mac* archive — `ollama-darwin.tgz`,
+// 129 MB, checked against a digest and unpacked by shelling `/usr/bin/tar`. Not
+// one of those three facts survives the trip off Darwin. Wired in unguarded it
+// ran on Linux anyway: 129 MB of Mach-O downloaded on every daemon start, then
+// a `tar` that is not at that path, on machines that in many cases already had
+// a perfectly good `ollama serve` listening on 11434.
+//
+// So off Darwin nothing is installed, nothing is pulled, nothing is downloaded.
+// A runtime that is not there is *named*, with the command that supplies it —
+// because the alternative is the thing this appliance is worst at: coming up
+// "ready" and meeting the owner's first voice note with dead air.
+#if !os(macOS)
+enum UserInstalledOllama {
+
+    /// `nil` when a local turn could be served right now. Otherwise the refusal
+    /// to print: what is missing, where it was looked for, and what to run.
+    ///
+    /// Read-only by construction — `isReachable` and `listModels` are both GETs
+    /// against a daemon somebody else started. Nothing reachable from here can
+    /// begin a download, which is the property that matters.
+    static func refusal(baseURL: URL, model: String) async -> String? {
+        let client = OllamaClient(baseURL: baseURL)
+        let address = baseURL.absoluteString
+        let memoryModel = LocalBrainModelCatalog.embeddingModel
+
+        guard await client.isReachable() else {
+            return """
+            Ollama is not answering at \(address), so there is no local brain to think with.
+
+            Mynah does not install Ollama on this platform — that is yours, the same way SAGE
+            is. Once, then never again:
+
+              curl -fsSL https://ollama.com/install.sh | sh    (or https://ollama.com/download)
+              ollama serve
+              ollama pull \(model)
+              ollama pull \(memoryModel)
+
+            Then start the daemon again. If Ollama is already running somewhere else, point at
+            it with --ollama http://host:11434. To use a cloud brain instead, pass --provider
+            with a saved key: anthropic, openai, deepseek, moonshot, groq or gemini.
+            """
+        }
+
+        let installed: [String]
+        do {
+            installed = try await client.listModels()
+        } catch {
+            return """
+            Ollama answered at \(address) but would not list its models: \(error)
+
+            So Mynah cannot tell whether the models it needs are there, and starting anyway
+            would mean finding out on the owner's first voice note. Run `ollama list` on that
+            machine, fix what it reports, then start the daemon again.
+            """
+        }
+
+        let present = Set(installed.map(LocalBrainModelCatalog.normalize))
+        let missing = [model, memoryModel]
+            .filter { !present.contains(LocalBrainModelCatalog.normalize($0)) }
+        guard missing.isEmpty else {
+            let noun = missing.count == 1 ? "a model it needs is" : "models it needs are"
+            return """
+            Ollama is running at \(address), but \(noun) not pulled: \(missing.joined(separator: ", "))
+
+            Mynah does not pull them for you on this platform. \(model) is what thinks, and
+            \(memoryModel) is how SAGE searches its memory by meaning — a daemon missing that
+            one answers with no memory at all and says nothing about why. Run:
+
+            \(missing.map { "  ollama pull \($0)" }.joined(separator: "\n"))
+
+            then start the daemon again.
+            """
+        }
+        return nil
+    }
+}
+#endif
+
 func makeBackend(
     provider: String,
     model: String?,
@@ -301,10 +387,21 @@ func makeBackend(
         // model can be driven from a dev machine that has not pulled it.
         let client = ollamaBaseURL.flatMap { URL(string: $0) }.map { OllamaClient(baseURL: $0) }
             ?? OllamaClient()
+        // **No managed runtime off Darwin, because the runtime it would manage
+        // is a Mac binary.** This is not a startup-only concern: handed to
+        // `OllamaBackend`, the installer is called from `complete()`, so every
+        // single turn would try to fetch `ollama-darwin.tgz`. See
+        // `UserInstalledOllama` for what happens there instead.
+        #if os(macOS)
+        let managedRuntime: OllamaRuntimeInstalling? =
+            ollamaBaseURL == nil ? OllamaRuntimeInstaller.shared : nil
+        #else
+        let managedRuntime: OllamaRuntimeInstalling? = nil
+        #endif
         return OllamaBackend(
             client: client,
             model: model ?? "qwen3.5:4b",
-            managedRuntime: ollamaBaseURL == nil ? OllamaRuntimeInstaller.shared : nil
+            managedRuntime: managedRuntime
         )
     case "anthropic":
         return AnthropicBackend(
@@ -414,6 +511,15 @@ func makeToolSource(
     return (CompositeToolSource(sources: sources, log: { note($0) }), notes)
 }
 
+// **Everything from here to the end of `makeCallToolSource` is the live voice
+// call, and the call is a Mac feature.**
+//
+// `Package.swift` excludes `Sources/SageVoiceCore/Call/` off Darwin, so
+// `CallActionQueue`, `AfterTheCallToolSource` and `BrainPrompts.callToolAllowlist`
+// genuinely do not exist there. `#if os(macOS)` is the same condition the
+// manifest uses, which is the point: one discriminator, so the two cannot drift
+// apart and leave this referring to types that were never compiled.
+#if os(macOS)
 /// **The call's own catalogue: no notes source at all, and a queue instead.**
 ///
 /// The owner's ruling is that a call never sends a file or emits a document
@@ -472,6 +578,120 @@ func makeCallToolSource(
     return CompositeToolSource(sources: sources, log: { note($0) })
 }
 
+#endif
+
+/// Which SAGE node this process talks to, or an honest refusal.
+///
+/// The owner's node, then ours, then — on a Mac — the conventional path.
+/// Normally the flag is set: the launchd job carries the path the app resolved
+/// at setup. The rest is for a process started by hand, and it agrees with that
+/// resolution rather than hardcoding a second answer.
+///
+/// **Off Darwin there is no conventional path and nothing is bundled.**
+/// `/Applications/SAGE.app/Contents/MacOS/sage-gui` cannot exist on Linux;
+/// handing it to `MCPClient` anyway bought a spawn failure naming a Mac
+/// directory on a machine with no `/Applications`, which reads like a broken
+/// build rather than like "install SAGE". The owner's ruling is that a Linux
+/// owner installs SAGE themselves, so the honest answer names the flag that
+/// points at it.
+///
+/// Deliberately does **not** go looking on `$PATH` here. Detection belongs in
+/// `SageNodeChoice`, which is the one place entitled to decide which node holds
+/// the owner's memories — a second detector living in the daemon is exactly how
+/// two processes end up disagreeing and one of them starts a duplicate node
+/// beside the owner's. When that type learns about a platform, this picks the
+/// answer up for free.
+///
+/// ## `decide`, not `resolve`, and that is the whole of this function's job
+///
+/// `resolve` is `try? decide(...).get()`, so off-Darwin it threw the diagnosis
+/// away and left this printing one fixed sentence for two opposite situations.
+/// A Linux owner with SageMath's `sage` first on `PATH` — a real collision, it
+/// is packaged that way — has SAGE installed, and was told to go and install
+/// it. The reason `decide` returns names the binary it found, quotes what that
+/// binary said when asked, and points at `--sage`; none of it reached the one
+/// person who could act on it.
+func resolvedSagePath(_ flags: [String: String]) -> String {
+    if let named = flags["sage"] { return named }
+
+    #if os(macOS)
+    // Unchanged, deliberately: a Mac always has a node to fall back on — the
+    // vendored one — so `decide` cannot fail here in any way the owner could
+    // act on, and the conventional path is the answer setup would have given.
+    if let owned = SageNodeChoice.resolve(
+        vendored: SageNodeLocator.vendoredExecutableURL()
+    )?.executable.path {
+        return owned
+    }
+    return "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    #else
+    switch SageNodeChoice.decide(vendored: SageNodeLocator.vendoredExecutableURL()) {
+    case .success(let choice):
+        return choice.executable.path
+    case .failure(let reason):
+        exit(fail(sageNodeRefusal(reason)))
+    }
+    #endif
+}
+
+#if !os(macOS)
+
+/// What the owner reads when the daemon will not start, and why.
+///
+/// **The reason is the message.** There are two opposite situations here and
+/// they need opposite next actions:
+///
+///   * *Nothing anywhere.* Install SAGE — and be told where Mynah looked, so a
+///     node installed somewhere unusual is diagnosable without reading source.
+///   * *Something found and refused.* Do **not** install anything. The machine
+///     has a candidate; it either would not say it is SAGE (`SageMath` on
+///     `PATH` is the live collision) or is a bundle carrying somebody else's
+///     identifier. The next action is to name the right one.
+///
+/// Collapsing those two into "Install SAGE yourself" is what this replaces.
+///
+/// `SageNodeError.description` already names the next action for the cases it
+/// knows about, so the flag line is added only when the reason did not carry
+/// one — a dead end with no door is the defect, saying it twice is just noise.
+func sageNodeRefusal(_ reason: SageNodeError) -> String {
+    let consequence = """
+        Everything Mynah remembers lives in that node. It refuses to start without
+        one rather than answer with no memory and not say so.
+        """
+    let nameTheNode = """
+        Name the one you want it to use:
+
+          sage-voiced <command> --sage /path/to/sage
+        """
+
+    switch reason {
+    case .noNodeInstalled(let searched):
+        return """
+            No SAGE node found, and Mynah does not install one on this platform.
+
+            Install SAGE yourself, then name its executable:
+
+              sage-voiced <command> --sage /path/to/sage
+
+            Looked in:
+              \(searched.joined(separator: "\n  "))
+
+            \(consequence)
+            """
+
+    default:
+        let diagnosis = reason.description
+        let door = diagnosis.contains("--sage") ? "" : "\n\(nameTheNode)\n"
+        return """
+            \(diagnosis)
+            \(door)
+            \(consequence)
+            """
+    }
+}
+
+#endif
+
 func runBrain(_ arguments: [String]) -> Never {
     guard let transcript = arguments.first, !transcript.hasPrefix("--") else { usage() }
     let flags = parseFlags(Array(arguments.dropFirst()))
@@ -494,9 +714,7 @@ func runBrain(_ arguments: [String]) -> Never {
     // with that resolution rather than hardcoding a second answer — two places
     // deciding which SAGE to run is how one of them ends up starting a duplicate
     // beside the owner's.
-    let sagePath = flags["sage"]
-        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
-        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let sagePath = resolvedSagePath(flags)
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
     // memories the owner has.
@@ -519,6 +737,19 @@ func runBrain(_ arguments: [String]) -> Never {
 
     runAndExit {
         defer { mcp.stop() }
+        #if !os(macOS)
+        // The daemon's ruling, on the harness too. Without it a missing runtime
+        // comes back as a bare URLError from somewhere three layers down, which
+        // says "could not connect to the server" and not which server or why.
+        if backend.identifier == "ollama",
+           let refusal = await UserInstalledOllama.refusal(
+               baseURL: (flags["ollama"] ?? flags["base-url"]).flatMap { URL(string: $0) }
+                   ?? OllamaClient.defaultBaseURL,
+               model: backend.modelName
+           ) {
+            return fail(refusal)
+        }
+        #endif
         do {
             print("backend: \(backend.displayDescription)")
             let info = try await mcp.start()
@@ -842,10 +1073,25 @@ func runGoogle(_ arguments: [String]) -> Never {
                     // The appliance is headless and the owner is elsewhere, so
                     // print the URL as well as trying to open it.
                     print("\nopen this to sign in:\n\(url.absoluteString)\n")
-                    let open = Process()
-                    open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                    open.arguments = [url.absoluteString]
-                    try? open.run()
+                    // `/usr/bin/open` is a Mac program. The nearest thing
+                    // elsewhere is `xdg-open`, which is not guaranteed to be
+                    // installed — so look before launching and say when there
+                    // is nothing to launch. `try? run()` on a path that does
+                    // not exist swallows the failure and leaves the owner
+                    // waiting on a browser that is never coming.
+                    #if os(macOS)
+                    let opener = "/usr/bin/open"
+                    #else
+                    let opener = "/usr/bin/xdg-open"
+                    #endif
+                    if FileManager.default.isExecutableFile(atPath: opener) {
+                        let open = Process()
+                        open.executableURL = URL(fileURLWithPath: opener)
+                        open.arguments = [url.absoluteString]
+                        try? open.run()
+                    } else {
+                        print("(no \(opener) here — open the link above yourself)")
+                    }
                 }
             } catch {
                 return fail("\(error)")
@@ -1015,9 +1261,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     // with that resolution rather than hardcoding a second answer — two places
     // deciding which SAGE to run is how one of them ends up starting a duplicate
     // beside the owner's.
-    let sagePath = flags["sage"]
-        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
-        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let sagePath = resolvedSagePath(flags)
     // Pinned. Without this the node derives the appliance's identity from the
     // launch working directory, so the `cd` in the launch script decides which
     // memories the owner has.
@@ -1038,6 +1282,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     let style = resolveReplyStyle(arguments)
     let loop = ToolLoop(backend: backend, mcp: tools, configuration: loopConfiguration(for: style))
     note("[daemon] reply style: \(style.rawValue)")
+    #if os(macOS)
     // Which of Kokoro's 54 voices sounds like the appliance is pure taste, and
     // taste is only discoverable by hearing it on a call. A flag means trying
     // another one is a restart rather than a rebuild and a redeploy.
@@ -1052,6 +1297,7 @@ func runDaemon(_ arguments: [String]) -> Never {
     // Both of these are pure taste, and taste is only discoverable by living
     // with it on a phone. Exposing them as flags means retuning is a daemon
     // restart rather than a rebuild, a repackage, a resign and a redeploy.
+    #endif
     // Before anything expensive, and before Signal is touched. Two appliances
     // on one Mac both read the same socket and both answer, so the owner gets
     // every reply twice.
@@ -1087,12 +1333,26 @@ func runDaemon(_ arguments: [String]) -> Never {
     // SAGE's own boot tools, deliberately outside the model's allowlist.
     runAndExit {
         if backend.identifier == "ollama" {
+            #if os(macOS)
             let ready = await LocalBrainInstaller(
                 runtime: OllamaRuntimeInstaller.shared
             ).install()
             guard ready else {
                 return fail("the local Ollama runtime, chat model, or nomic memory model is not ready")
             }
+            #else
+            // Detect, never install: this used to reach the same installer and
+            // pull a 129 MB Mac archive down on every Linux start. Same
+            // severity as the Mac branch above — a refusal, not a warning —
+            // because a daemon that comes up without a brain answers the
+            // owner's first voice note with nothing.
+            if let refusal = await UserInstalledOllama.refusal(
+                baseURL: flags["ollama"].flatMap { URL(string: $0) } ?? OllamaClient.defaultBaseURL,
+                model: backend.modelName
+            ) {
+                return fail(refusal)
+            }
+            #endif
         }
 
         // Not fatal, and this took the appliance down to learn it.
@@ -1173,6 +1433,7 @@ func runDaemon(_ arguments: [String]) -> Never {
         } catch {
             return fail("startup failed: \(error)\n\(mcp.stderrLog)")
         }
+        #if os(macOS)
         // Calls answer through the same brain as messages, and keep their own
         // history. A call is a conversation: a caller made to repeat context
         // they gave twenty seconds ago is talking to a search box.
@@ -1205,6 +1466,7 @@ func runDaemon(_ arguments: [String]) -> Never {
         // Airlines as of 2025:" followed by markdown bullets, which is a list
         // nobody can hear and, until the synthesiser was fixed, a leading dash
         // that killed the answer outright.
+        #endif
         // Shared with the call surface, the daemon and the proactive watch below,
         // in memory rather than through the ledger file: all three live in this
         // process, and a flag written to disk while the watch holds a copy across
@@ -1215,6 +1477,7 @@ func runDaemon(_ arguments: [String]) -> Never {
         // most of why the call surface never got one.
         let ownTaskEdits = OwnTaskEdits()
 
+        #if os(macOS)
         // **The call gets its own catalogue, its own allowlist and its own
         // prompt.** All three, because any one of them alone leaves a way
         // through: the catalogue is what makes `send_file` unroutable, the
@@ -1343,6 +1606,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             }
         }
         defer { callTask.cancel() }
+        #endif
 
         // Held rather than built inline, because two things need it now: the
         // daemon runs it after every turn, and the proactive loop asks it
@@ -1393,6 +1657,43 @@ func runDaemon(_ arguments: [String]) -> Never {
         }
         let channels = ChannelSet(enabledChannels)
 
+        // **The two call arguments, resolved before the initialiser rather than
+        // inside it.**
+        //
+        // `#if` cannot appear inside an argument list, and both of these are
+        // call-only: one prepares a call server that off-Darwin does not exist,
+        // the other is built from a decision only a Mac has to make.
+        //
+        // Off-Darwin `callRefusal` is deliberately **not** nil. A nil refusal is
+        // how `CallInvitation.help` decides to advertise `//call` as something
+        // this appliance does — so leaving it nil would have `//help` promise a
+        // voice call on a build that cannot place one, and `//call` itself would
+        // then fall through to `CallHost.start()` to say no a second time. One
+        // authored sentence, said the first time it is asked for.
+        #if os(macOS)
+        let onCallRequested: (@Sendable (ChannelRecipient) async -> Void)? = { recipient in
+            afterTheCall.expectCall(from: recipient)
+            await callServer.prepare()
+        }
+        // Decided once. The backend used to be part of this and no longer
+        // is — see `CallInvitation.refusal(isSetUpForCalls:)`.
+        // The brain is part of this again, and this time as a declared
+        // capability rather than an `isLocal` proxy. See
+        // `BrainCapabilities.holdsARealtimeCall` for the evidence on both
+        // sides — the 29 July measurement that removed the old barrier, and
+        // the 4 August call that brought it back.
+        let callRefusal = CallInvitation.refusal(
+            isSetUpForCalls: CallHost.isSetUpForCalls(),
+            brain: backend.brain
+        )
+        #else
+        let onCallRequested: (@Sendable (ChannelRecipient) async -> Void)? = nil
+        let callRefusal: CallInvitation.Refusal? = .couldNotStart(
+            "calls are a Mac-only part of Mynah and this build does not have them. "
+            + "Messaging and voice notes work here exactly as they do there."
+        )
+        #endif
+
         let daemon = VoiceBridgeDaemon(
             channels: channels,
             transcriber: transcriber,
@@ -1415,17 +1716,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             // Absent on a build that did not vendor it, in which case //call
             // says so rather than pretending.
             calls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath)),
-            // Decided once. The backend used to be part of this and no longer
-            // is — see `CallInvitation.refusal(isSetUpForCalls:)`.
-            // The brain is part of this again, and this time as a declared
-            // capability rather than an `isLocal` proxy. See
-            // `BrainCapabilities.holdsARealtimeCall` for the evidence on both
-            // sides — the 29 July measurement that removed the old barrier, and
-            // the 4 August call that brought it back.
-            callRefusal: CallInvitation.refusal(
-                isSetUpForCalls: CallHost.isSetUpForCalls(),
-                brain: backend.brain
-            ),
+            callRefusal: callRefusal,
             // //call is several seconds of warning. Spent warming the model,
             // SAGE, the voice and recognition — and building the opening — so
             // the caller arrives to something ready rather than to a pause.
@@ -1436,18 +1727,17 @@ func runDaemon(_ arguments: [String]) -> Never {
             // was still transcribed by a cold model — 10.7s on the 6 August
             // call, against 1.2s three turns later. See
             // `CallTurnServer.warmRecognition`; the sentence is now true.
-            onCallRequested: { recipient in
-                afterTheCall.expectCall(from: recipient)
-                await callServer.prepare()
-            },
+            onCallRequested: onCallRequested,
             // What he changes himself is not news. See `OwnTaskEdits`.
             onTaskWrites: { await ownTaskEdits.record() }
         )
+        #if os(macOS)
         // After construction, because the transcript goes out through the same
         // Signal path as everything else and the daemon owns it.
         await callServer.onTranscript { [weak daemon] transcript in
             await daemon?.postCallTranscript(transcript)
         }
+        #endif
 
         // **What the call promised, done once the line is down.**
         //
@@ -1498,6 +1788,7 @@ func runDaemon(_ arguments: [String]) -> Never {
             return threads
         }()
 
+        #if os(macOS)
         let afterTheCallDrain = AfterTheCallDrain(
             queue: afterTheCall,
             notesDirectory: notes.notesDirectory,
@@ -1541,7 +1832,9 @@ func runDaemon(_ arguments: [String]) -> Never {
         Task.detached {
             await afterTheCallDrain.recoverAtStartup()
         }
+        #endif
 
+        #if os(macOS)
         // And the other direction, so a call opens on the conversation the
         // owner was already having rather than on his task list: *"most likely
         // i'm calling you to continue the conversation"*.
@@ -1579,6 +1872,7 @@ func runDaemon(_ arguments: [String]) -> Never {
         await callServer.onOpeningSpoken { opening in
             await callHistory.open(with: opening)
         }
+        #endif
 
         // Checking on things without being asked.
         //
@@ -1639,7 +1933,7 @@ func runDaemon(_ arguments: [String]) -> Never {
                 source: SageProactiveSource(tools: mcp, log: { note($0) }),
                 ownEdits: ownTaskEdits,
                 calendar: CalendarSync(
-                    calendar: EventKitCalendar(log: { note($0) }),
+                    calendar: SystemCalendar.make(log: { note($0) }),
                     log: { note($0) }
                 ),
                 arrivedReplies: {
@@ -1692,7 +1986,30 @@ case "key":         runKey(Array(arguments.dropFirst()))
 case "daemon":      runDaemon(Array(arguments.dropFirst()))
 case "check":       runCheck(Array(arguments.dropFirst()))
 case "calendar":    runCalendar(Array(arguments.dropFirst()))
+case "settings":    runSettings(Array(arguments.dropFirst()))
 default:            usage()
+}
+
+// MARK: - settings
+
+/// The two switches an owner with no settings screen still has to reach.
+///
+/// **Twelve lines, and every one of them is plumbing.** Everything that decides
+/// anything — what the words mean, what is refused, what is printed — is in
+/// `HeadlessSettings`, because nothing can import an executable target and a
+/// judgement that lives here is a judgement no test can see. That is not a
+/// hypothetical in this file: `parseFlags` above has one, it was wrong for
+/// eight releases, and it took an owner pasting a key that vanished to find it.
+///
+/// The two streams are the point of the split at the bottom: a refusal on
+/// stdout is a refusal a pipeline swallows.
+func runSettings(_ arguments: [String]) -> Never {
+    let outcome = HeadlessSettings.run(arguments)
+    for line in outcome.output { print(line) }
+    for line in outcome.problem {
+        FileHandle.standardError.write(Data("\(line)\n".utf8))
+    }
+    exit(outcome.status)
 }
 
 // MARK: - calendar
@@ -1719,13 +2036,19 @@ func runCalendar(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
     let planOnly = arguments.contains("--plan")
     let undo = arguments.contains("--undo")
-    let sagePath = flags["sage"]
-        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
-        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let sagePath = resolvedSagePath(flags)
     let ledgerURL = CalendarLedger.defaultFileURL()
 
     runAndExit {
         if undo {
+            // **`EventKitCalendar` by name here, not `SystemCalendar.make()`.**
+            //
+            // `forget()` — take the calendar away and everything in it with it —
+            // is on the real implementation rather than on `CalendarWriting`,
+            // because it is an uninstall rather than part of the mirror. So this
+            // one branch names the concrete type, and names it only where the
+            // compiler has one.
+            #if canImport(EventKit)
             let ledger = CalendarLedger.load(from: ledgerURL)
             let calendar = EventKitCalendar(log: { print($0) })
             guard await calendar.prepare() else {
@@ -1742,6 +2065,18 @@ func runCalendar(_ arguments: [String]) -> Never {
             try? FileManager.default.removeItem(at: ledgerURL)
             print("removed \(ledger.events.count) event(s) and the calendar itself")
             return 0
+            #else
+            // Said out loud rather than reported as a tidy success over an empty
+            // calendar. This build has no EventKit, so nothing was ever mirrored
+            // and there is nothing here to take back out — and the ledger is
+            // left alone, because deleting the record of a mirror that never
+            // happened would only make the next platform's undo lie.
+            print("""
+                this build has no system calendar, so no dated task was ever mirrored \
+                and there is nothing to remove. The tasks themselves are untouched in SAGE.
+                """)
+            return 1
+            #endif
         }
 
         let mcp = MCPClient(
@@ -1780,7 +2115,7 @@ func runCalendar(_ arguments: [String]) -> Never {
             return 0
         }
 
-        let sync = CalendarSync(calendar: EventKitCalendar(log: { print($0) }), log: { print($0) })
+        let sync = CalendarSync(calendar: SystemCalendar.make(log: { print($0) }), log: { print($0) })
         let outcome = await sync.run(tasks: tasks, ledger: ledger)
         if outcome.ledger != ledger { try? outcome.ledger.save(to: ledgerURL) }
 
@@ -1812,9 +2147,7 @@ func runCalendar(_ arguments: [String]) -> Never {
 /// consume the news: whatever it finds is still new to the daemon afterwards.
 func runCheck(_ arguments: [String]) -> Never {
     let flags = parseFlags(arguments)
-    let sagePath = flags["sage"]
-        ?? SageNodeChoice.resolve(vendored: SageNodeLocator.vendoredExecutableURL())?.executable.path
-        ?? "/Applications/SAGE.app/Contents/MacOS/sage-gui"
+    let sagePath = resolvedSagePath(flags)
 
     runAndExit {
         let mcp = MCPClient(

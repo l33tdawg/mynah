@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// The `//call` command: a link to talk to the appliance out loud.
 ///
@@ -145,10 +147,31 @@ public enum CallInvitation {
     /// end-to-end encrypted, readable only by the owner — so the only thing
     /// standing between a live microphone and anyone who can reach the port is
     /// that nobody else can guess the path. 32 hex characters is 128 bits.
+    ///
+    /// **Off Darwin the source changes and the guarantee must not.** There is no
+    /// `SecRandomCopyBytes` outside Apple's platforms, and the substitution that
+    /// must never be made here is a draw from anything reproducible — a token a
+    /// seeded generator could produce twice is a live microphone offered to
+    /// whoever can reach the port.
+    ///
+    /// `SystemRandomNumberGenerator` is the standard library's own promise of
+    /// exactly this: automatically seeded, safe across threads, and
+    /// cryptographically secure wherever the platform allows — `getrandom(2)` on
+    /// Linux, which is the same kernel pool `SecRandomCopyBytes` draws from on a
+    /// Mac. It is named explicitly rather than left to the `using:`-less
+    /// default, so that the choice is visible to whoever reads this next.
     public static func token() -> String {
+        #if canImport(Security)
         var bytes = [UInt8](repeating: 0, count: 16)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return bytes.map { String(format: "%02x", $0) }.joined()
+        #else
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<16).map { _ in
+            UInt8.random(in: UInt8.min...UInt8.max, using: &generator)
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+        #endif
     }
 
     /// The sentence sent to the owner with the link.

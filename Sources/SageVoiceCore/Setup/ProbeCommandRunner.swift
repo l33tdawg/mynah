@@ -1,6 +1,10 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 // MARK: - Result
@@ -180,17 +184,17 @@ public struct ProbeCommandRunner: ProbeCommandRunning {
             // Synchronous sleep: this path is already a failure and the window is
             // half a second. Doing it with `await` here would let a cancelled
             // task skip the escalation and leak the process.
-            usleep(20_000)
+            posixSleep(microseconds: 20_000)
         }
 
         guard process.isRunning else { return }
         let pid = process.processIdentifier
         if pid > 0 {
-            kill(pid, SIGKILL)
+            posixKill(pid, SIGKILL)
         }
         let reapDeadline = Date().addingTimeInterval(terminationGraceSeconds)
         while process.isRunning && Date() < reapDeadline {
-            usleep(20_000)
+            posixSleep(microseconds: 20_000)
         }
     }
 }
@@ -225,24 +229,198 @@ private final class ProbeOutputBuffer: @unchecked Sendable {
 
 // MARK: - Executable lookup
 
+/// What "installed" means, spelled the way each platform actually spells it.
+///
+/// Four separate assumptions hide inside a `PATH` lookup — what separates the
+/// entries, what the variable is called, what makes a file runnable, and
+/// whether a program's name is its file's name. On UNIX all four are the same
+/// assumption and it is right. On Windows all four are wrong, and they are
+/// wrong in the same direction: the code compiles, runs, and confidently
+/// reports "not installed" about a program sitting right there on `PATH`.
+///
+/// That is the worst shape a bug can take, because it reads as a *finding*. The
+/// install screen tells the owner to go and install something they already
+/// have, and nothing anywhere says otherwise.
+///
+/// Gathered in one type rather than solved at each call site, so the answer
+/// cannot drift between the two places that ask it.
+enum PlatformExecutable {
+
+    /// An environment variable, looked up the way the platform names it.
+    ///
+    /// Windows environment names are case-*insensitive*, and the block the OS
+    /// hands back spells this particular one `Path` — that is what `set` prints
+    /// and what `Get-ChildItem Env:` shows. `ProcessInfo.environment` is a plain
+    /// Swift `Dictionary`, which is case-*sensitive*, so `environment["PATH"]`
+    /// comes back `nil` on a Windows machine whose `PATH` is perfectly healthy.
+    ///
+    /// UNIX names genuinely are case-sensitive — `Path` and `PATH` are two
+    /// different variables there and conflating them would be its own bug — so
+    /// the fallback scan is compiled only where it is correct, and an exact
+    /// match still wins everywhere.
+    static func environmentValue(_ name: String, in environment: [String: String]) -> String? {
+        if let exact = environment[name] {
+            return exact
+        }
+        #if os(Windows)
+        // Windows will not let two names differ only in case, so "the first
+        // case-insensitive match" is also "the only one".
+        let wanted = name.lowercased()
+        return environment.first { $0.key.lowercased() == wanted }?.value
+        #else
+        return nil
+        #endif
+    }
+
+    /// The directories on `PATH`, in the order the platform searches them.
+    static func searchPathDirectories(in environment: [String: String]) -> [String] {
+        // `:` on every UNIX and `;` on Windows — see `PlatformPath`. Splitting a
+        // Windows `PATH` on a colon cuts every entry in half at its drive
+        // letter and reports "not installed" for a binary that is right there.
+        (environmentValue("PATH", in: environment) ?? "")
+            .split(separator: PlatformPath.searchPathSeparator)
+            .map { unquoted(String($0)) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// A Windows `PATH` entry is allowed to be quoted, because an unquoted one
+    /// cannot contain the `;` that separates entries. The quotes are
+    /// punctuation rather than part of the directory name, and a path built
+    /// with them still in refers to nothing at all.
+    private static func unquoted(_ directory: String) -> String {
+        #if os(Windows)
+        var trimmed = directory[...]
+        while trimmed.first == "\"" { trimmed = trimmed.dropFirst() }
+        while trimmed.last == "\"" { trimmed = trimmed.dropLast() }
+        return String(trimmed)
+        #else
+        return directory
+        #endif
+    }
+
+    /// The file names worth trying for a program the owner knows as `name`.
+    ///
+    /// Exactly one on UNIX, where a file is executable because of a permission
+    /// bit and its name is whatever it is. On Windows a file is runnable
+    /// because of its *extension*: `whisper-cli` names nothing and
+    /// `whisper-cli.exe` names the program, and `PATHEXT` is the list of
+    /// suffixes that count.
+    ///
+    /// The suffix is appended rather than substituted, so this is equally
+    /// correct handed a bare program name or a whole path. A name that already
+    /// carries a runnable extension is left alone.
+    static func executableNameCandidates(for name: String, in environment: [String: String]) -> [String] {
+        #if os(Windows)
+        let extensions = pathExtensions(in: environment)
+        let lowered = name.lowercased()
+        if extensions.contains(where: { lowered.hasSuffix($0) }) {
+            return [name]
+        }
+        // Deliberately no extension-less fallback: Windows cannot launch a file
+        // without one, and `CreateProcess` appends `.exe` itself — so the `.exe`
+        // candidate already covers the only case a bare name could have found.
+        return extensions.map { name + $0 }
+        #else
+        return [name]
+        #endif
+    }
+
+    /// The same list for a caller that has no injected environment.
+    static func executableNameCandidates(for name: String) -> [String] {
+        #if os(Windows)
+        return executableNameCandidates(for: name, in: ProcessInfo.processInfo.environment)
+        #else
+        return [name]
+        #endif
+    }
+
+    /// Whether the platform would actually run this file.
+    ///
+    /// UNIX keeps the answer it has always given — the execute bit, via
+    /// `isExecutableFile` — so macOS and Linux are byte-for-byte unchanged.
+    ///
+    /// Windows has no execute bit, and `isExecutableFile` there is backed by
+    /// `GetBinaryTypeW`, which reads the PE header and therefore answers
+    /// **false** for a `.bat` or a `.cmd`. A `.cmd` shim is precisely how npm
+    /// installs every CLI this probe hunts for, so believing it would report
+    /// the SAGE node, Codex and Claude Code all missing on a machine where all
+    /// three are installed and on `PATH`. Membership of `PATHEXT` is what
+    /// "runnable" means there — the same rule the shell itself uses.
+    static func isRunnableFile(
+        atPath path: String,
+        in environment: [String: String],
+        fileManager: FileManager = .default
+    ) -> Bool {
+        #if os(Windows)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return false
+        }
+        let lowered = path.lowercased()
+        return pathExtensions(in: environment).contains { lowered.hasSuffix($0) }
+        #else
+        return fileManager.isExecutableFile(atPath: path)
+        #endif
+    }
+
+    /// The same question for a caller that has no injected environment.
+    static func isRunnableFile(atPath path: String, fileManager: FileManager = .default) -> Bool {
+        #if os(Windows)
+        return isRunnableFile(atPath: path, in: ProcessInfo.processInfo.environment, fileManager: fileManager)
+        #else
+        return fileManager.isExecutableFile(atPath: path)
+        #endif
+    }
+
+    #if os(Windows)
+    /// `PATHEXT`, lower-cased and dot-prefixed.
+    ///
+    /// Defaulted to the four that are programs. Windows' real default also
+    /// carries `.VBS`, `.JS`, `.WSF` and friends, but those are scripts a shell
+    /// hands to an interpreter, and launching a `sage.vbs` somebody left lying
+    /// on their `PATH` is not a decision to take on the owner's behalf.
+    static func pathExtensions(in environment: [String: String]) -> [String] {
+        let fallback = [".com", ".exe", ".bat", ".cmd"]
+        let parsed = (environmentValue("PATHEXT", in: environment) ?? "")
+            .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { $0.count > 1 && $0.hasPrefix(".") }
+        return parsed.isEmpty ? fallback : parsed
+    }
+    #endif
+}
+
 /// Finds binaries without shelling out.
 ///
 /// `which` is itself a process launch, and on a machine where the probe is
 /// trying to decide whether anything is installed, launching a process to find
 /// out is both slower and more fragile than reading `PATH` ourselves. Same
-/// approach `LocalASRDiscovery` takes for `whisper-cli`.
+/// approach `LocalASRDiscovery` takes for `whisper-cli`, and since both now go
+/// through `PlatformExecutable`, the same answer.
 public enum ExecutableLookup {
-    /// First entry on `PATH` that is an executable file named `name`.
+    /// First entry on `PATH` that is a runnable file named `name`.
+    ///
+    /// Every spelling of the name is tried within a directory before moving to
+    /// the next directory, which is the order the Windows shell searches and a
+    /// no-op on UNIX, where there is only ever one spelling.
     public static func onPath(
         _ name: String,
         environment: [String: String],
         fileManager: FileManager = .default
     ) -> URL? {
-        let path = environment["PATH"] ?? ""
-        for directory in path.split(separator: ":") where !directory.isEmpty {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name)
-            if fileManager.isExecutableFile(atPath: candidate.path) {
-                return candidate
+        let names = PlatformExecutable.executableNameCandidates(for: name, in: environment)
+        for directory in PlatformExecutable.searchPathDirectories(in: environment) {
+            let base = URL(fileURLWithPath: directory)
+            for candidateName in names {
+                let candidate = base.appendingPathComponent(candidateName)
+                if PlatformExecutable.isRunnableFile(
+                    atPath: candidate.path,
+                    in: environment,
+                    fileManager: fileManager
+                ) {
+                    return candidate
+                }
             }
         }
         return nil
@@ -263,6 +441,8 @@ public enum ExecutableLookup {
                 return found
             }
         }
-        return extraCandidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+        return extraCandidates.first {
+            PlatformExecutable.isRunnableFile(atPath: $0.path, in: environment, fileManager: fileManager)
+        }
     }
 }

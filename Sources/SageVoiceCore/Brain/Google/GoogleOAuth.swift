@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// "Sign in with Google", for owners who will never paste an API key.
 ///
@@ -154,12 +161,20 @@ public struct GoogleTokenStore: Sendable {
         self.url = url
     }
 
+    /// Beside the provider keys, on whichever platform this is — which is why
+    /// the directory comes from `ApplianceSupportDirectory` and is not spelled
+    /// again here.
     public static func defaultURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("google-oauth.json")
+        ApplianceSupportDirectory.url(
+            for: "google-oauth.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     public func load() -> GoogleOAuthTokens? {

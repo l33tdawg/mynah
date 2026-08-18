@@ -202,16 +202,71 @@ public struct DocumentExporter: Sendable {
     }
 
     static func find(_ tool: String, override: String) -> URL? {
-        let manager = FileManager.default
         if let path = ProcessInfo.processInfo.environment[override] {
             let url = URL(fileURLWithPath: path)
-            return manager.isExecutableFile(atPath: url.path) ? url : nil
+            return runnableHere(url) ? url : nil
         }
         for root in searchRoots(tool) {
             let binary = root.appendingPathComponent("bin/\(tool)")
-            if manager.isExecutableFile(atPath: binary.path) { return binary }
+            if runnableHere(binary) { return binary }
         }
         return nil
+    }
+
+    /// Whether a file the search turned up is one *this* machine can actually
+    /// start.
+    ///
+    /// **The x-bit is a fact about permissions, not about the file.**
+    /// `isExecutableFile(atPath:)` reads that bit and stops, so a
+    /// `vendor/pandoc/bin/pandoc` staged on a Mac — mode 0755, Mach-O — answers
+    /// yes on a Linux box that cannot run a byte of it. `locate` then returns an
+    /// exporter, `canProduce(.docx)` promises a Word document, and every `exec`
+    /// fails with ENOEXEC: the binary never starts, so it writes nothing to
+    /// stdout and nothing to stderr, and the owner is told *"Making a Word
+    /// document failed — no reason given"*. A promise this appliance cannot keep
+    /// is the exact outcome the absent-rather-than-broken arrangement exists to
+    /// avoid, and a silent one is the worst shape it can take.
+    ///
+    /// So the first bytes are read as well, and they have to be the host
+    /// kernel's own: Mach-O on Darwin — thin or universal, either byte order —
+    /// and ELF everywhere else. A `#!` script passes on both, because wrapping
+    /// the real tool in two lines of shell is an ordinary way to stage one.
+    ///
+    /// Nothing about a Mac changes. `posix_spawn` on Darwin accepts Mach-O and
+    /// shebangs and refuses everything else, so every file that used to run
+    /// still runs; what stops being found is the file that was never going to
+    /// start. When nothing here is runnable the tool reads as *not staged*,
+    /// which is a state the caller already handles by saying so plainly.
+    static func runnableHere(_ url: URL) -> Bool {
+        let manager = FileManager.default
+        guard manager.isExecutableFile(atPath: url.path) else { return false }
+
+        // Regular files only. A directory carries the x-bit as a matter of
+        // course, and opening a FIFO for reading blocks until somebody writes to
+        // it — a probe that hangs would be worse than the bug it is closing.
+        // Symlinks are resolved first, because a staged tool is often a link to
+        // the real one and the type of the link says nothing about the target.
+        let resolved = url.resolvingSymlinksInPath()
+        let type = (try? manager.attributesOfItem(atPath: resolved.path))?[.type]
+        guard type as? FileAttributeType == .typeRegular else { return false }
+
+        guard let handle = try? FileHandle(forReadingFrom: resolved) else { return false }
+        defer { try? handle.close() }
+        let magic = Array((try? handle.read(upToCount: 4)) ?? Data())
+
+        // "#!", a wrapper script: both kernels run one.
+        if magic.count >= 2, magic[0] == 0x23, magic[1] == 0x21 { return true }
+        guard magic.count == 4 else { return false }
+        #if canImport(Darwin)
+        let word = magic.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        // Mach-O thin (0xfeedface, 0xfeedfacf) and universal (0xcafebabe), plus
+        // the byte-swapped spelling of each, which is how a binary built for the
+        // other byte order looks from here.
+        return [0xfeed_face, 0xfeed_facf, 0xcafe_babe,
+                0xcefa_edfe, 0xcffa_edfe, 0xbeba_feca].contains(word)
+        #else
+        return magic == [0x7f, 0x45, 0x4c, 0x46]  // "\u{7f}ELF"
+        #endif
     }
 
     static func searchRoots(_ tool: String) -> [URL] {
@@ -445,10 +500,20 @@ public struct DocumentExporter: Sendable {
             // The last line with anything in it. Pandoc puts the path and the
             // reason on separate lines and the reason is the half worth
             // repeating to somebody.
+            //
+            // **Silence is not a reason and is not reported as one.** A
+            // converter that exits without writing a word leaves nothing to pass
+            // on, and "no reason given" is a dead end with no door in it: it
+            // names no cause and no next thing to try. The exit code and the
+            // binary that produced it are the two facts there are, so they go in
+            // the sentence along with the one command that restages a converter
+            // that cannot run here.
             let reason = output
                 .split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-                .last { !$0.isEmpty } ?? "no reason given"
+                .last { !$0.isEmpty }
+                ?? "\(pandoc.lastPathComponent) exited \(process.terminationStatus) without "
+                    + "saying why — restage it with scripts/provision-pandoc.sh"
             throw Failure.conversionFailed(reason)
         }
     }

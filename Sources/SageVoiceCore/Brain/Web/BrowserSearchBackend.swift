@@ -1,6 +1,9 @@
 #if canImport(WebKit)
 import Foundation
 import WebKit
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Keyless search through a real browser engine instead of an HTTP scrape.
 ///

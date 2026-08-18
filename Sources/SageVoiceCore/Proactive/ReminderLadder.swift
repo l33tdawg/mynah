@@ -330,12 +330,25 @@ public enum ReminderLadder {
         return formatter.string(from: due)
     }
 
+    /// "10 am", "9:30 am" — the half of a reminder the owner actually acts on.
+    ///
+    /// The day period is written out here rather than left to the locale. The
+    /// `en_GB` day-period symbols are lowercase in Darwin's ICU and uppercase in
+    /// swift-corelibs-Foundation, so the same reminder read "at 10 am" on a Mac
+    /// and "at 10 AM" on Linux. Pinning the two symbols is the whole fix: the
+    /// locale still decides the rest, and every owner gets the sentence macOS
+    /// has been sending since 2.3.1.
+    ///
+    /// Assigning `locale` resets the symbols to that locale's data, so the two
+    /// assignments below must stay last.
     static func spokenClock(_ date: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_GB")
         formatter.dateFormat = calendar.component(.minute, from: date) == 0 ? "h a" : "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
         return formatter.string(from: date)
     }
 

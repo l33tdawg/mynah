@@ -23,12 +23,21 @@ public struct ProviderKeyStore: Sendable {
         self.url = url ?? Self.defaultURL()
     }
 
+    /// The appliance directory, resolved once for the whole product: the Mac
+    /// path is unchanged, and off Darwin the key lands under `$XDG_DATA_HOME`
+    /// with the rest of the appliance's state rather than in a `~/Library` the
+    /// owner never asked for and no uninstaller knows about.
     public static func defaultURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("provider-keys.json")
+        ApplianceSupportDirectory.url(
+            for: "provider-keys.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     /// The environment variable each provider is conventionally configured with.

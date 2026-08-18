@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Fetches the Kokoro voice model onto this Mac, once, in the background.
 ///
@@ -79,13 +86,27 @@ public enum KokoroAssets {
 
     // MARK: - Where they live
 
-    /// Beside everything else this appliance keeps for itself.
+    /// Beside everything else this appliance keeps for itself — the appliance
+    /// directory, which is `~/Library/Application Support/SAGE Voice Bridge` on
+    /// a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off Darwin.
+    ///
+    /// 354 MB of downloaded weights is the worst thing to put in a folder the
+    /// owner cannot find: it survives an uninstall, it is invisible to their
+    /// backup, and the only symptom is a home directory that is a third of a
+    /// gigabyte larger than they can account for. Off Darwin the native voice is
+    /// the *ordinary* path rather than an option, so this directory is the one
+    /// most likely to exist on a Linux box.
     public static func directory(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("Kokoro", isDirectory: true)
+        ApplianceSupportDirectory.directory(
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
+        .appendingPathComponent("Kokoro", isDirectory: true)
     }
 
     public static func location(
@@ -278,10 +299,7 @@ public enum KokoroAssets {
     }
 
     static func freeSpace(at url: URL, fileManager: FileManager) -> Int64? {
-        guard let values = try? url.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        ) else { return nil }
-        return values.volumeAvailableCapacityForImportantUsage
+        VolumeFreeSpace.availableBytes(at: url)
     }
 
     /// The real downloader: a transfer that streams to disk and reports how far

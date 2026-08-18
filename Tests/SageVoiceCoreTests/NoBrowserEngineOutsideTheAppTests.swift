@@ -1,3 +1,11 @@
+// **Mac-only, because the crash it guards is a WebKit one.**
+//
+// `WKWebViewConfiguration` in a process with no `NSApplication` is what killed
+// the daemon on 5 August 2026, and the guard is written against Darwin
+// machinery throughout: `BrowserEngineAvailability.isAnApplication` and the
+// Objective-C runtime, neither of which exists off Darwin. There is no browser
+// engine to arm on Linux, so there is nothing here for it to prove.
+#if os(macOS)
 import XCTest
 @testable import SageVoiceCore
 
@@ -198,3 +206,4 @@ final class NoBrowserEngineOutsideTheAppTests: XCTestCase {
         XCTAssertFalse(BrowserEngineAvailability.isAnApplication(NSObject.self))
     }
 }
+#endif  // os(macOS)

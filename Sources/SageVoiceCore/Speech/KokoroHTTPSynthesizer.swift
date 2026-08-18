@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Speaks via Kokoro running in the Python voice bridge on this machine.
 ///

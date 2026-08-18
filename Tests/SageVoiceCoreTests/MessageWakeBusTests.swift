@@ -1,6 +1,16 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import XCTest
 @testable import SageVoiceCore
+#if canImport(FoundationNetworking)
+// `URLRequest`, `URLSession` and `HTTPURLResponse` are in Foundation on a Mac
+// and in this second module everywhere else. Same convention as the twenty-eight
+// files under Sources/ that already reach for the network.
+import FoundationNetworking
+#endif
 
 /// The durable message wake bus, SAGE 11.18.12's `GET /v1/messages/wake`.
 ///
@@ -103,12 +113,24 @@ final class MessageWakeBusTests: XCTestCase {
         XCTAssertEqual(message.count, 56)
     }
 
-    /// Hedged signing has one consequence worth pinning, because the node's
-    /// replay cache is keyed on `(agentID, signature)`: two signings of the
-    /// same bytes are never the same signature. That is not what this product
-    /// relies on — `X-Nonce` is — but a CryptoKit that became deterministic
-    /// would make the nonce load-bearing rather than redundant, and this test
-    /// is where that shows up.
+    /// **Whether two signings of the same bytes collide is the platform's
+    /// choice, and the two platforms chose differently.**
+    ///
+    /// CryptoKit's Ed25519 is hedged — it mixes fresh randomness into every
+    /// signature, so signing identical bytes twice gives two different 64-byte
+    /// values. swift-crypto's is BoringSSL's, which is RFC 8032 to the letter
+    /// and therefore deterministic: the same key over the same bytes gives the
+    /// same signature every time.
+    ///
+    /// This matters because the node's replay cache is keyed on
+    /// `(agentID, signature)`. On a Mac the hedging made that key incidentally
+    /// unique; on Linux it does not, and the only thing keeping two identical
+    /// requests apart is `X-Nonce`. The nonce was always what this product
+    /// relies on — see `testEveryNonceIsFresh` — but off Darwin it is
+    /// load-bearing rather than redundant, and this is where that shows up.
+    ///
+    /// What both sides must agree on is the half below the split: whatever the
+    /// bytes are, they verify.
     func testSigningTheSameBytesTwiceGivesTwoValidSignatures() {
         let message = SageRequestSigning.message(
             method: "GET", path: vectorPath, body: Data(),
@@ -116,7 +138,11 @@ final class MessageWakeBusTests: XCTestCase {
         )
         let first = try! vectorKey.signature(for: message)
         let second = try! vectorKey.signature(for: message)
+        #if canImport(CryptoKit)
         XCTAssertNotEqual(first, second)
+        #else
+        XCTAssertEqual(first, second)
+        #endif
         XCTAssertTrue(vectorKey.publicKey.isValidSignature(first, for: message))
         XCTAssertTrue(vectorKey.publicKey.isValidSignature(second, for: message))
     }

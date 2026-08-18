@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(EventKit)
 import EventKit
+#endif
 
 // MARK: - What a calendar has to be able to do
 
@@ -21,6 +23,33 @@ public protocol CalendarWriting: Sendable {
     /// Removes an event. An event that is already gone is a success.
     func remove(eventID: String) async throws
 }
+
+// MARK: - Choosing one
+
+/// The calendar this platform can actually offer.
+///
+/// **One place that knows which implementation exists**, because the answer is
+/// a compile-time fact and every caller that asks it itself is a caller that can
+/// be missed when a third platform arrives. `sage-voiced` builds on Linux, where
+/// there is no EventKit and therefore no `EventKitCalendar` symbol at all — not
+/// a stub of one, deliberately, since a type called `EventKitCalendar` that has
+/// never seen EventKit is exactly the kind of lie that gets diagnosed as a bug
+/// in EventKit.
+public enum SystemCalendar {
+
+    /// The calendar to hand `CalendarSync`, whatever this platform can manage.
+    public static func make(
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) -> any CalendarWriting {
+        #if canImport(EventKit)
+        return EventKitCalendar(log: log)
+        #else
+        return UnavailableCalendar(log: log)
+        #endif
+    }
+}
+
+#if canImport(EventKit)
 
 // MARK: - The real one
 
@@ -402,3 +431,65 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         return offsets.filter { entry.starts.addingTimeInterval($0) > now }
     }
 }
+
+#else
+
+// MARK: - Everywhere else
+
+/// A calendar on a platform that does not have one Mynah can write to.
+///
+/// **It says so rather than succeeding quietly.** The mirror's entire value is
+/// that the OS does the reminding — an alert that fires from the system, reaches
+/// the owner's phone and watch, and survives the machine being shut. Nothing off
+/// Darwin in this package can do that, and a `CalendarWriting` that accepted
+/// every write and dropped it would leave a ledger full of event identifiers for
+/// events that do not exist: `CalendarSync` would report the tasks as mirrored,
+/// `ReminderLadder` would then stop nudging about them on the strength of that,
+/// and the dated task would go off nobody's alarm at all. Silence in two places
+/// instead of one.
+///
+/// So `prepare()` refuses, which is an answer `CalendarSync` already handles —
+/// it is the same shape as a Mac whose owner said no — and the writes throw if
+/// anything reaches them anyway.
+public struct UnavailableCalendar: CalendarWriting {
+
+    public enum Failure: Error, CustomStringConvertible, Equatable {
+        case noCalendarOnThisPlatform
+
+        public var description: String {
+            "there is no calendar Mynah can write to on this platform"
+        }
+    }
+
+    private let log: @Sendable (String) -> Void
+
+    public init(log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.log = log
+    }
+
+    /// Always `false`, and it says why once per pass rather than throwing —
+    /// `CalendarSync` reads this as "no calendar access", leaves the ledger
+    /// untouched and mirrors nothing, which is the correct behaviour here.
+    public func prepare() async -> Bool {
+        log("""
+            [calendar] the calendar mirror needs EventKit, which this platform does not have, \
+            so dated tasks are not mirrored. They stay in the task list and Mynah still \
+            mentions them; what is missing is the alert your OS would have raised.
+            """)
+        return false
+    }
+
+    public func add(_ entry: CalendarEntry) async throws -> String {
+        throw Failure.noCalendarOnThisPlatform
+    }
+
+    public func update(_ entry: CalendarEntry, eventID: String) async throws -> String {
+        throw Failure.noCalendarOnThisPlatform
+    }
+
+    public func remove(eventID: String) async throws {
+        throw Failure.noCalendarOnThisPlatform
+    }
+}
+
+#endif

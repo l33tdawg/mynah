@@ -196,7 +196,7 @@ public struct EspeakPhonemizer: Sendable {
         // exit — and it would only happen on long input.
         let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
         let stderrData = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExitWithoutBlockingTheRunLoop()
 
         guard process.terminationStatus == 0 else {
             throw Failure.espeakFailed(

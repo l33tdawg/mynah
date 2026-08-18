@@ -79,12 +79,33 @@ public struct PendingDeliveryStore: Sendable {
 
     public init(fileURL: URL = Self.defaultFileURL()) { self.fileURL = fileURL }
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off
+    /// Darwin.
+    ///
+    /// **Nobody asks for this file, which is why the hand-spelled path was the
+    /// bad kind of wrong.** A Linux daemon writes it on its own, the first time
+    /// an answer is finished before the transport is ready — so the owner got a
+    /// stray `~/Library` folder in their home from a message they sent, having
+    /// never touched a setting, and nothing on that system owns it, uninstalls
+    /// it or backs it up.
+    ///
+    /// Routed through `ApplianceSupportDirectory` rather than fenced with an
+    /// `#if` here, so this journal cannot drift away from the conversation
+    /// history it is only meaningful beside: `ConversationStore` already asks
+    /// that type, and a replay that found the completed answer in one root and
+    /// the history in another would resend a turn it had already delivered.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("pending-deliveries.json")
+        ApplianceSupportDirectory.url(
+            for: "pending-deliveries.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     private var mayTouch: Bool {

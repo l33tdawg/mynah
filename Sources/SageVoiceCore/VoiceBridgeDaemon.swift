@@ -1122,21 +1122,39 @@ public actor VoiceBridgeDaemon {
         // transcript too, and the owner got "I couldn't read that voice note"
         // for a message they had also typed out. Caught per item now, which is
         // what the sentence always claimed.
+        //
+        // The errors are kept, not counted. The count only ever fed a log line;
+        // the error itself is the only thing that knows *why*, and on Linux
+        // that reason is the difference between an owner who installs ffmpeg
+        // and an owner whose voice notes silently stop working. See
+        // `UnreadableVoiceNote`.
         var parts: [String] = []
-        var failures = 0
+        var failures: [Error] = []
         for item in batch {
             do {
                 if let raw = try await resolveTranscript(item) { parts.append(raw) }
             } catch {
-                failures += 1
+                failures.append(error)
                 log("[daemon] could not transcribe one of \(batch.count) message(s): \(error)")
             }
         }
         let transcript = MessageCoalescer.merge(parts)
         guard !transcript.isEmpty else {
-            guard failures == 0 else {
-                await reply("I couldn't read that voice note.", to: recipient)
-                return .failed("transcription failed for all \(failures) attachment(s)")
+            guard failures.isEmpty else {
+                // **Says why, when the failure knows why.**
+                //
+                // This replied one fixed sentence for every cause there is, and
+                // the commonest cause off Darwin is a missing ffmpeg — which
+                // the error names, with the install command and the directories
+                // it searched, all of which went to the log and none of which
+                // went to the owner. He got six words that read like his audio
+                // was bad, about a note he can play back perfectly.
+                //
+                // Unchanged where the reason is not fit to send: a whisper.cpp
+                // exit code and its stderr are for the log, and truly broken
+                // audio still gets the plain sentence and nothing else.
+                await reply(UnreadableVoiceNote.refusal(for: failures), to: recipient)
+                return .failed("transcription failed for all \(failures.count) attachment(s)")
             }
             return .ignoredEmpty
         }
@@ -1326,9 +1344,18 @@ public actor VoiceBridgeDaemon {
             // deadline wrapper takes the work off it. The closure handed to
             // `withDeadline` runs outside this actor's isolation and so cannot
             // read `histories`, call `resolveImages`, or touch `loop` directly.
-            let prompt = attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript
-            let priorTurns = histories[key] ?? []
+            // **The pictures first, then the sentence about them.** The note
+            // tells the model whether it can see the photo, and the only
+            // truthful answer to that is how many images this turn is actually
+            // carrying — which is not known until `resolveImages` has run.
+            // Written the other way round, the note was a claim about the
+            // backend and the array was the fact, and on any build without an
+            // image decoder the two disagreed on every photo the owner ever
+            // sent.
             let attachedImages = batch.flatMap { resolveImages($0) }
+            let prompt = attachmentNote(for: kept, imagesOnTheWire: attachedImages.count)
+                .map { "\(transcript)\n\n\($0)" } ?? transcript
+            let priorTurns = histories[key] ?? []
             let brain = loop
             let announceChosenTool: @Sendable ([String]) async -> Void = { [weak self] chosen in
                     guard let self else { return }
@@ -1703,7 +1730,31 @@ public actor VoiceBridgeDaemon {
     ///
     /// The title rather than the filename, because that is what `send_file`
     /// takes and therefore what the owner will need to ask for it back.
-    private func attachmentNote(for kept: [SignalAttachmentStore.Kept]) -> String? {
+    ///
+    /// - Parameter imagesOnTheWire: how many encoded images this turn is
+    ///   actually handing the model. **Not how many the owner sent, and not
+    ///   what the backend is capable of.**
+    ///
+    /// Sight was asked of the backend alone until 2.4, and the backend answers
+    /// a different question than the one the note asks. `backendSeesImages` is
+    /// *"does this class read `BrainMessage.images`"*; the note says *"you can
+    /// see it — say what it is, specifically"*, which is only true if there is
+    /// something in that array. Every step between the two can empty it: a
+    /// build with no image decoder (which is every Linux build, for every
+    /// photo), a file that is not really a picture, one over
+    /// `VisionAttachment.maximumSourceBytes`. `resolveImages` logs each of
+    /// those and returns nothing, by design — the turn is worth answering
+    /// without the picture.
+    ///
+    /// What was not by design is that the model was still told it could see.
+    /// Handed a caption, that instruction, and no bytes, it does what it was
+    /// asked to do and describes the photograph, confidently and out of
+    /// nothing, to an owner who is looking at the real one. Counting what
+    /// actually went is the only version of this that cannot say that.
+    private func attachmentNote(
+        for kept: [SignalAttachmentStore.Kept],
+        imagesOnTheWire: Int
+    ) -> String? {
         AttachmentArrivalNote.text(
             kept.map {
                 AttachmentArrivalNote.Arrival(
@@ -1711,7 +1762,17 @@ public actor VoiceBridgeDaemon {
                     isImage: $0.isImage
                 )
             },
-            seesImages: loop.backendSeesImages
+            // Both halves, and the second is the one with the teeth: a backend
+            // that reads images and a turn carrying none is exactly the shape
+            // of the lie.
+            //
+            // **Any, not all.** `ChannelMessage.maximumImagesPerMessage` caps a
+            // turn at three photos on purpose, so a gallery of ten arrives with
+            // ten kept and three sent — and a rule that demanded every kept
+            // image be on the wire would tell the model it was blind while it
+            // held three of them. That is the same fabrication pointing the
+            // other way: it would refuse to describe a picture it can see.
+            seesImages: loop.backendSeesImages && imagesOnTheWire > 0
         )
     }
 
@@ -1976,6 +2037,18 @@ public actor VoiceBridgeDaemon {
         await reply(text, to: recipient, allowSpeaking: false, as: .unprompted)
     }
 
+    // **The two after-the-call entry points, and they are Mac-only.**
+    //
+    // Both hand back an `AfterTheCallDelivery`, which lives in
+    // `Sources/SageVoiceCore/Call/` — excluded from the package off-Darwin,
+    // where the live voice call is not ported. Guarded out entirely rather than
+    // kept with a stand-in return value: every caller of these reads the result
+    // to decide whether a queue entry may be deleted, so a hard-coded `.failed`
+    // would quietly reshape the drain and a hard-coded `.sent` would delete
+    // work nobody ever received. Off-Darwin nothing queues after a call because
+    // nothing can call, so the honest shape is that these do not exist.
+    #if os(macOS)
+
     /// **Delivers one after-the-call result, and says honestly whether the files
     /// went with it.**
     ///
@@ -2116,6 +2189,8 @@ public actor VoiceBridgeDaemon {
             to: fallback
         )
     }
+
+    #endif
 
     /// Files a call's written record in the thread it belongs to.
     private func recordFromCall(_ text: String, for key: String) {

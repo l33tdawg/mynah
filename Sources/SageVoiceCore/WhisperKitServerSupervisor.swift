@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public enum WhisperKitServerSupervisorError: Error, CustomStringConvertible, Equatable {
     case missingExecutable(String)

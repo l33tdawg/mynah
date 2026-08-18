@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Errors
 
@@ -226,7 +229,16 @@ public final class OllamaClient: @unchecked Sendable {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForRequest = timeoutSeconds
             configuration.timeoutIntervalForResource = timeoutSeconds
+            // Darwin-only setter. `waitsForConnectivity` exists on
+            // swift-corelibs-foundation but is get-only there, so assigning to
+            // it is a hard compile error on Linux rather than a no-op. Nothing
+            // is lost: the corelibs session does not park a request waiting for
+            // an interface to appear in the first place, which is the exact
+            // behaviour this line asks Darwin for — a local Ollama that is not
+            // running should fail now, not in three minutes.
+            #if canImport(Darwin)
             configuration.waitsForConnectivity = false
+            #endif
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -359,7 +371,12 @@ public final class OllamaClient: @unchecked Sendable {
         let body: [String: Any] = ["model": model, "stream": true]
         request.httpBody = try PromptStableJSON.data(from: body)
 
-        let (bytes, response) = try await session.bytes(for: request)
+        // `session.bytes(for:)` on a Mac, and a delegate-fed equivalent
+        // elsewhere — the method itself is Darwin-only, and `data(for:)` is not
+        // a substitute here: it buffers the whole body, which turns the progress
+        // bar below into four silent minutes and then "done". See
+        // `PortableByteStream`.
+        let (bytes, response) = try await PortableByteStream.open(request, on: session)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw OllamaClientError.malformedResponse("/api/pull returned HTTP \(http.statusCode)")
         }
@@ -644,7 +661,37 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// answer rather than an attachment silently discarded three layers below
     /// it. What this asserts is narrower and checkable: the request built here
     /// carries the bytes (`object["images"]`), so a vision model receives them.
-    public let seesImages = true
+    ///
+    /// **Which is why it is not `true` off Darwin.** `canPutImageBytesOnTheWire`
+    /// below: on a platform with no image decoder, `images` is empty for every
+    /// turn no matter what the owner sent, so the sentence above is false there
+    /// and the claim built on it — *"You can see it — say what it is,
+    /// specifically"* — is a fabrication about a photograph the owner is
+    /// looking at.
+    public let seesImages = OllamaBackend.canPutImageBytesOnTheWire
+
+    /// Whether a photo on disk can become bytes in this process at all.
+    ///
+    /// `VisionAttachment.encoded` is the one and only road from a file the
+    /// owner sent to `BrainMessage.images` — `VoiceBridgeDaemon.resolveImages`
+    /// has no other — and off Darwin it has no decoder and throws for every
+    /// file, good ones included. So this is not a statement about Ollama or
+    /// about the model: on such a build the request this class writes cannot
+    /// carry a picture, and a backend that said otherwise would be promising
+    /// bytes that no code path can produce.
+    ///
+    /// Spelled here rather than read off `VisionAttachment` because the two are
+    /// separately owned and could drift apart in either direction. What keeps
+    /// them honest is a test that encodes a real PNG and demands this flag
+    /// agree with what actually came back — see
+    /// `TheModelIsToldWhatActuallyWentTests`.
+    public static let canPutImageBytesOnTheWire: Bool = {
+        #if canImport(ImageIO)
+        return true
+        #else
+        return false
+        #endif
+    }()
 
     /// Context window to ask Ollama for, in tokens.
     ///

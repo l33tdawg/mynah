@@ -1,3 +1,13 @@
+// **Mac-only, because it tests `MynahMac`.**
+//
+// `MynahMac` is the AppKit/SwiftUI half of this package, and Package.swift does
+// not declare that target off Darwin — so the import below resolves on a Mac
+// and nowhere else. The guard wraps the whole file rather than just the import,
+// because every test in here drives a Mac type: a file that compiled down to an
+// empty test class would let Linux report a green suite that ran nothing, which
+// is the exact failure this branch exists to stop. See `coreTestDependencies`
+// in Package.swift.
+#if os(macOS)
 import XCTest
 @testable import MynahMac
 @testable import SageVoiceCore
@@ -117,7 +127,14 @@ final class WhatTheAuditFoundTests: XCTestCase {
     /// The token lives with the session keys rather than in `$TMPDIR`: unlike the
     /// socket it has to survive a reboot.
     func testTheTokenSitsBesideTheSessionAndNotInTemp() {
-        let path = WhatsAppChannel.defaultTokenPath(homeDirectory: URL(fileURLWithPath: "/Users/someone"))
+        // Layout named rather than inherited, so this keeps asserting the Mac
+        // path when it runs on Linux — where the default is the XDG one and an
+        // implicit call would have turned a pinned path into a tautology.
+        let path = WhatsAppChannel.defaultTokenPath(
+            homeDirectory: URL(fileURLWithPath: "/Users/someone"),
+            layout: .darwin,
+            environment: [:]
+        )
         XCTAssertEqual(
             path,
             "/Users/someone/Library/Application Support/SAGE Voice Bridge/WhatsApp/api-token"
@@ -226,3 +243,4 @@ private struct InertBackgroundServices: SignalBackgroundServicing {
     func disable(because reason: String) async {}
     func state() async -> BackgroundHelperState { .absent }
 }
+#endif  // os(macOS)

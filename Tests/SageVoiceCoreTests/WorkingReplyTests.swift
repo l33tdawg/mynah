@@ -391,6 +391,7 @@ final class InterruptedOpeningTests: XCTestCase {
     /// test rather than the random pick doing it one run in three.
     private let first: (Int) -> Int = { _ in 0 }
 
+    #if os(macOS)
     func testItLeadsWithTheTurnRatherThanTheTask() {
         let opening = CallOpening.interruptedOpening(
             forRequest: "actually look up the flight times instead",
@@ -399,7 +400,9 @@ final class InterruptedOpeningTests: XCTestCase {
 
         XCTAssertTrue(opening?.line.hasPrefix("Right —") ?? false, opening?.line ?? "nil")
     }
+    #endif  // os(macOS)
 
+    #if os(macOS)
     func testASpecificRequestKeepsItsOwnOpener() {
         // Both halves in one sentence: heard you, and here is what I am doing.
         let opening = CallOpening.interruptedOpening(
@@ -415,7 +418,9 @@ final class InterruptedOpeningTests: XCTestCase {
         let second = line.dropFirst("Right — ".count).first
         XCTAssertEqual(second?.isLowercase, true, line)
     }
+    #endif  // os(macOS)
 
+    #if os(macOS)
     func testAVagueRequestSaysOnlyTheTruePart() {
         // Nothing specific to name. Inventing a subject here would be the
         // appliance guessing out loud on the one turn where the caller has just
@@ -425,7 +430,9 @@ final class InterruptedOpeningTests: XCTestCase {
         XCTAssertEqual(opening?.line, "Right — let me get that instead.")
         XCTAssertEqual(opening?.isSpecific, false)
     }
+    #endif  // os(macOS)
 
+    #if os(macOS)
     func testItNeverSoundsLikeAnUninterruptedTurn() {
         // The bug this exists to remove: being interrupted and being asked
         // produced the same sentence, which answers a question the caller did
@@ -435,7 +442,9 @@ final class InterruptedOpeningTests: XCTestCase {
 
         XCTAssertNotEqual(plain, cutIn)
     }
+    #endif  // os(macOS)
 
+    #if os(macOS)
     func testAlwaysSomethingToSay() {
         // `opening` may return nil — a fast write answers before an
         // acknowledgement would land. An interruption always gets a reply,
@@ -448,6 +457,7 @@ final class InterruptedOpeningTests: XCTestCase {
             )
         }
     }
+    #endif  // os(macOS)
 
     // MARK: The line that now carries the whole wait
 

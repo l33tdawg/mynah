@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Runs the browser half of "Sign in with Google".
 ///
@@ -46,6 +51,17 @@ public actor GoogleSignInSession {
         // code to our listener. Compared before the code is ever redeemed.
         let state = Data.secureRandom(count: 16).base64URLEncodedString()
 
+        #if !canImport(Network)
+        // Network.framework is Apple-only, so the loopback redirect listener
+        // this flow depends on cannot be built here. Refusing by name beats
+        // opening a consent page whose redirect nothing is listening for.
+        throw GoogleOAuthError.browserFlowFailed(
+            """
+            Browser sign-in needs Apple's Network framework and is not available \
+            on this platform. Set a Gemini API key instead.
+            """
+        )
+        #else
         let listener = try LoopbackCallbackListener()
         let port = try listener.start()
         defer { listener.stop() }
@@ -84,11 +100,13 @@ public actor GoogleSignInSession {
         try store.save(tokens)
         log("[google] signed in; refresh token \(tokens.refreshToken == nil ? "MISSING" : "stored")")
         return tokens
+        #endif
     }
 }
 
 // MARK: - Loopback listener
 
+#if canImport(Network)
 /// A single-shot HTTP listener for the OAuth redirect.
 ///
 /// Not a web server. It accepts one connection, reads the request line, answers
@@ -255,3 +273,5 @@ final class LoopbackCallbackListener: @unchecked Sendable {
         finish(.success(requestLine))
     }
 }
+
+#endif

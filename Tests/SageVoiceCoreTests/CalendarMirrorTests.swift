@@ -452,6 +452,7 @@ final class CalendarMirrorTests: XCTestCase {
 
     // MARK: - The alarms
 
+    #if canImport(EventKit)
     /// The ladder's own rungs, handed to the OS. What was wrong with them was
     /// the delivery, not the moments.
     func testATimedEventGetsTheLaddersOwnRungs() {
@@ -462,7 +463,9 @@ final class CalendarMirrorTests: XCTestCase {
             [-86_400, -7_200, -900]
         )
     }
+    #endif  // canImport(EventKit)
 
+    #if canImport(EventKit)
     /// All-day offsets are measured from midnight, so nine in the morning is
     /// `+9h` on the day and `-15h` the day before — exactly where
     /// `ReminderLadder` put them.
@@ -481,7 +484,9 @@ final class CalendarMirrorTests: XCTestCase {
             [morning]
         )
     }
+    #endif  // canImport(EventKit)
 
+    #if canImport(EventKit)
     /// **The first sync on a Mac that has been running for weeks writes every
     /// dated task at once, and several have been and gone.** Three alarms each
     /// would be a burst of notifications about things that already happened —
@@ -498,6 +503,7 @@ final class CalendarMirrorTests: XCTestCase {
             "the rung that has not passed yet still stands"
         )
     }
+    #endif  // canImport(EventKit)
 
     // MARK: - Who says what
 

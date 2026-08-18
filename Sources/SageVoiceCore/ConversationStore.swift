@@ -63,12 +63,22 @@ public struct ConversationStore: @unchecked Sendable {
         self.fileManager = fileManager
     }
 
+    /// In the appliance directory — `~/Library/Application Support/SAGE Voice
+    /// Bridge` on a Mac, unchanged, and `$XDG_DATA_HOME/SAGE Voice Bridge` off
+    /// Darwin. Spelled through `ApplianceSupportDirectory` rather than here so
+    /// the owner's conversations cannot end up in a second root from the one
+    /// holding their keys and their notes.
     public static func defaultFileURL(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        layout: ApplianceSupportDirectory.Layout = ApplianceSupportDirectory.current,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent("Library/Application Support/SAGE Voice Bridge", isDirectory: true)
-            .appendingPathComponent("conversations.json", isDirectory: false)
+        ApplianceSupportDirectory.url(
+            for: "conversations.json",
+            layout: layout,
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     // MARK: Wire shape

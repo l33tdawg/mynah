@@ -499,17 +499,25 @@ struct KeychainPresenceProbe {
 
 // MARK: - Hardware probe
 
-/// Reads capacity out of `sysctl` and the filesystem.
+/// Reads capacity out of the platform's own hardware tables and the filesystem.
 ///
-/// `sysctl` rather than `uname` or `#if arch(arm64)`: both of those describe the
-/// *process*, and a translated x86_64 process on an M-series Mac reports
-/// `x86_64` while `hw.optional.arm64` still reports the truth. Verified on the
-/// development machine, where `uname -m` says `x86_64` and
-/// `sysctl hw.optional.arm64` says `1`.
+/// On Darwin that means `sysctl` rather than `uname` or `#if arch(arm64)`: both
+/// of those describe the *process*, and a translated x86_64 process on an
+/// M-series Mac reports `x86_64` while `hw.optional.arm64` still reports the
+/// truth. Verified on the development machine, where `uname -m` says `x86_64`
+/// and `sysctl hw.optional.arm64` says `1`.
+///
+/// Off Darwin there is no `sysctl` to call, so the same three questions — how
+/// much memory, which CPU, how many cores — are put to `/proc`, which the kernel
+/// writes itself. Where `/proc` cannot answer, the field stays `nil` or falls
+/// back to the figure Foundation can vouch for. Nothing here fills a gap with a
+/// plausible number: this report is what Mynah repeats back to the owner about
+/// their own machine, so "unknown" has to survive all the way to the screen.
 public struct SystemHardwareProbe: HardwareProbing {
     public init() {}
 
     public func report(modelStorageDirectory: URL) -> HardwareReport {
+        #if canImport(Darwin)
         let cpuBrand = Self.sysctlString("machdep.cpu.brand_string")
         let arm64Flag = Self.sysctlInteger("hw.optional.arm64") ?? 0
         let isAppleSilicon = arm64Flag == 1 || (cpuBrand?.hasPrefix("Apple") ?? false)
@@ -523,6 +531,26 @@ public struct SystemHardwareProbe: HardwareProbing {
                 ?? Int64(ProcessInfo.processInfo.processorCount)),
             isAppleSilicon: isAppleSilicon
         )
+        #else
+        let cpu = Self.procCPUFacts()
+
+        return HardwareReport(
+            physicalMemoryBytes: Self.procPhysicalMemoryBytes(),
+            freeDiskBytes: Self.freeBytes(near: modelStorageDirectory),
+            modelStorageDirectory: modelStorageDirectory.path,
+            cpuBrand: cpu.brand,
+            physicalCoreCount: cpu.physicalCoreCount
+                ?? ProcessInfo.processInfo.activeProcessorCount,
+            // Neither a guess nor a shrug. `isAppleSilicon` is the gate on the
+            // local brain, and it gates it because that brain is llama.cpp on
+            // Metal — a Darwin framework. A non-Darwin build has no Metal even
+            // when the silicon underneath is Apple's (Asahi), so the honest
+            // answer to the question this flag actually asks is no. The setup
+            // planner then says so in words instead of quietly dropping the
+            // option.
+            isAppleSilicon: false
+        )
+        #endif
     }
 
     /// Free space on the volume that *would* hold the models. The directory
@@ -532,13 +560,7 @@ public struct SystemHardwareProbe: HardwareProbing {
         var candidate = directory.standardizedFileURL
         for _ in 0..<16 {
             if fileManager.fileExists(atPath: candidate.path) {
-                let values = try? candidate.resourceValues(
-                    forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-                )
-                if let available = values?.volumeAvailableCapacityForImportantUsage {
-                    return available
-                }
-                return nil
+                return VolumeFreeSpace.availableBytes(at: candidate)
             }
             let parent = candidate.deletingLastPathComponent().standardizedFileURL
             if parent.path == candidate.path { break }
@@ -546,6 +568,8 @@ public struct SystemHardwareProbe: HardwareProbing {
         }
         return nil
     }
+
+    #if canImport(Darwin)
 
     static func sysctlString(_ name: String) -> String? {
         var size = 0
@@ -573,4 +597,117 @@ public struct SystemHardwareProbe: HardwareProbing {
         }
         return value
     }
+
+    #else
+
+    // MARK: /proc — the off-Darwin answers
+
+    /// Total RAM. `MemTotal` is the kernel's own figure and the one every other
+    /// tool on the machine quotes; `ProcessInfo` derives the same number from
+    /// `sysconf`, and stands in for a process that cannot see `/proc` at all.
+    static func procPhysicalMemoryBytes() -> UInt64 {
+        guard let meminfo = readSystemFile("/proc/meminfo"),
+              let total = parseMemTotalBytes(meminfo) else {
+            return ProcessInfo.processInfo.physicalMemory
+        }
+        return total
+    }
+
+    /// `MemTotal:       16330048 kB`. The unit is spelled `kB` and has always
+    /// meant KiB, but it is read rather than assumed — assuming it would turn
+    /// any future change into a 1024x lie about the owner's machine. An unknown
+    /// unit is no answer, so the caller falls back instead of scaling blind.
+    static func parseMemTotalBytes(_ meminfo: String) -> UInt64? {
+        for line in meminfo.split(separator: "\n") where line.hasPrefix("MemTotal:") {
+            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard fields.count >= 2, let value = UInt64(fields[1]) else { return nil }
+            guard fields.count >= 3 else { return value }
+            switch fields[2].lowercased() {
+            case "kb": return scaled(value, by: 1024)
+            case "mb": return scaled(value, by: 1024 * 1024)
+            case "gb": return scaled(value, by: 1024 * 1024 * 1024)
+            default: return nil
+            }
+        }
+        return nil
+    }
+
+    /// A figure large enough to overflow is not a memory size, it is a corrupt
+    /// line — and this probe's whole contract is that it always returns an
+    /// answer, so it reports nothing rather than trapping on the multiply.
+    static func scaled(_ value: UInt64, by multiplier: UInt64) -> UInt64? {
+        let (product, overflowed) = value.multipliedReportingOverflow(by: multiplier)
+        return overflowed ? nil : product
+    }
+
+    /// The two facts Darwin takes from `machdep.cpu.brand_string` and
+    /// `hw.physicalcpu`. Both are optional because `/proc/cpuinfo` genuinely
+    /// omits them on some machines, and a missing fact is reported missing.
+    static func procCPUFacts() -> (brand: String?, physicalCoreCount: Int?) {
+        guard let cpuinfo = readSystemFile("/proc/cpuinfo") else { return (nil, nil) }
+        return parseCPUInfo(cpuinfo)
+    }
+
+    /// Keys that carry a chip name a person would recognise, best first. x86
+    /// kernels print `model name`. arm64 kernels print no name at all — only
+    /// `CPU implementer` and `CPU part` numbers — so a board-supplied
+    /// `Hardware`/`Model` line is the next best thing, and when there is none
+    /// the brand is `nil`. "Unknown" is a true statement about that machine;
+    /// "ARM Processor 0xd0c" would be a useless one.
+    static let cpuBrandKeys = ["model name", "hardware", "model", "cpu model", "machine"]
+
+    /// `/proc/cpuinfo` is one blank-line-separated stanza per *logical*
+    /// processor. Counting stanzas would count SMT threads and tell the owner of
+    /// an 8-core desktop they have 16, so cores are counted as distinct
+    /// `physical id`/`core id` pairs — which is what `hw.physicalcpu` means.
+    /// Kernels that print neither field (arm64, again) give `nil` rather than a
+    /// thread count wearing a core count's name; the caller then falls back to
+    /// the logical count, which on those machines *is* the core count.
+    static func parseCPUInfo(_ cpuinfo: String) -> (brand: String?, physicalCoreCount: Int?) {
+        var brands: [String: String] = [:]
+        var cores: Set<String> = []
+        var packageID: String?
+        var coreID: String?
+
+        func endStanza() {
+            if let package = packageID, let core = coreID {
+                cores.insert(package + "/" + core)
+            }
+            packageID = nil
+            coreID = nil
+        }
+
+        for rawLine in cpuinfo.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { endStanza(); continue }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+            switch key {
+            case "physical id": packageID = value
+            case "core id": coreID = value
+            default:
+                if cpuBrandKeys.contains(key), brands[key] == nil { brands[key] = value }
+            }
+        }
+        endStanza()
+
+        return (
+            cpuBrandKeys.lazy.compactMap { brands[$0] }.first,
+            cores.isEmpty ? nil : cores.count
+        )
+    }
+
+    /// `/proc` files report a size of zero, so anything that trusts `stat` reads
+    /// them as empty. `FileHandle` reads to EOF instead, which is the only way
+    /// to get bytes out of them.
+    static func readSystemFile(_ path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    #endif
 }

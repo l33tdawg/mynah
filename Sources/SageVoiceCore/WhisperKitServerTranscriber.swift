@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public struct WhisperKitServerTranscriber: AudioFileTranscribing {
     public static let streamingTimeoutSeconds: TimeInterval = 10.0

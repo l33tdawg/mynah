@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Gets this Mac its own credential for the call relay, without asking anyone.
 ///

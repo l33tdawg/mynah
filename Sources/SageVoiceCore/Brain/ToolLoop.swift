@@ -289,6 +289,13 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// read-only tool could let a false claim through until it is listed here —
     /// which is exactly the status quo, so the guard can only ever be an
     /// improvement on it.
+    ///
+    /// **Two lists, one entry apart.** `Call/` is excluded from the package
+    /// off-Darwin — the live voice call is a Mac feature — so
+    /// `AfterTheCallToolSource` does not exist there and the queueing tool is
+    /// never published to any model. The off-Darwin list below is this one
+    /// minus that single entry; anything added to either belongs in both.
+    #if os(macOS)
     static let readOnlyTools: Set<String> = [
         "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
         "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
@@ -306,6 +313,19 @@ public struct ToolLoopTrace: Sendable, Equatable {
         // built to end.
         AfterTheCallToolSource.toolName
     ]
+    #else
+    static let readOnlyTools: Set<String> = [
+        "sage_recall", "sage_list", "sage_backlog", "sage_inbox", "sage_timeline",
+        "sage_status", "sage_directory", "sage_find_agent", "sage_corroborate",
+        "sage_message_history",
+        "sage_scope_get", "sage_scope_list", "sage_federation", "sage_gov_status",
+        "web_search", "list_notes", "read_note",
+        // No `after_the_call` row here, and its absence is not an oversight:
+        // there is no call on this platform, so the tool is never offered and a
+        // name in this set for a tool no model can reach would be a claim that
+        // it exists.
+    ]
+    #endif
 
     /// Whether anything this turn actually changed something.
     ///
@@ -366,6 +386,11 @@ public struct ToolLoopTrace: Sendable, Equatable {
     /// agent's inbox afterwards, and there was no way to tell from the record
     /// whether it had been refused or had never been sent. A log that cannot
     /// answer "did it send" about a send is not a log.
+    ///
+    /// Split for the same reason `readOnlyTools` is: off-Darwin there is no
+    /// `Call/`, so no `after_the_call` to log. The two lists differ by that one
+    /// entry and nothing else.
+    #if os(macOS)
     static let sendingTools: Set<String> = [
         "sage_pipe", "sage_pipe_result", "sage_message_send", "sage_message_reply",
         "sage_task", "sage_remember", "sage_forget",
@@ -375,6 +400,13 @@ public struct ToolLoopTrace: Sendable, Equatable {
         // alone. This is the only record that the request was ever made.
         AfterTheCallToolSource.toolName
     ]
+    #else
+    static let sendingTools: Set<String> = [
+        "sage_pipe", "sage_pipe_result", "sage_message_send", "sage_message_reply",
+        "sage_task", "sage_remember", "sage_forget",
+        "sage_reflect", "sage_turn", "write_note",
+    ]
+    #endif
 
     /// What each acting call actually returned, short enough for one line.
     ///
@@ -1287,6 +1319,12 @@ public final class ToolLoop: @unchecked Sendable {
                     // is the thing to watch.
                 }
 
+                // Compiled only where a call can happen. `Call/` is excluded
+                // from the package off-Darwin, so `after_the_call` is never in
+                // the catalogue there, `knownToolNames.contains` could only
+                // ever be false, and the guard below would be dead code that
+                // still has to name types this platform does not have.
+                #if os(macOS)
                 // **A promise to do it after the call, with nothing queued.**
                 //
                 // The case below catches "I've sent it". This is the same lie in
@@ -1339,6 +1377,7 @@ public final class ToolLoop: @unchecked Sendable {
                     reply = AfterTheCall.couldNotQueue
                     break
                 }
+                #endif
 
                 if Self.readsAsCompletedAction(spoken), !trace.didSomething {
                     trace.unbackedClaims += 1
@@ -1875,6 +1914,10 @@ public final class ToolLoop: @unchecked Sendable {
     /// stating the fact the loop can see rather than scolding — and naming the
     /// one tool that would fix it, because the failure is precisely that the
     /// model reached for words instead of that tool.
+    ///
+    /// Mac-only, like the guard that sends it: this sentence orders a model to
+    /// call `after_the_call`, and off-Darwin there is no such tool to call.
+    #if os(macOS)
     static let unqueuedPromiseCorrection = """
         Stop. You just told them you would do that after the call, but you did not call \
         \(AfterTheCallToolSource.toolName), so nothing was written down and nothing will happen \
@@ -1882,6 +1925,7 @@ public final class ToolLoop: @unchecked Sendable {
         tell them plainly that you have not got it written down. Do not promise it again without \
         that tool call.
         """
+    #endif
 
     /// Whether a reply is the model refusing to produce a file it can produce.
     ///
@@ -1965,16 +2009,40 @@ public final class ToolLoop: @unchecked Sendable {
             with: " ",
             options: .regularExpression
         )
-        text = text.replacingOccurrences(
-            of: "^\\s*[*\\-\\u{2022}]\\s+",
-            with: "",
-            options: [.regularExpression]
-        )
-        text = text.replacingOccurrences(
-            of: "\\n\\s*[*\\-\\u{2022}]\\s+",
-            with: "\n",
-            options: [.regularExpression]
-        )
+        // **List markers are kept on purpose. Two calls that used to strip them
+        // stood here, and removing them is what fixed Linux.**
+        //
+        // They never stripped anything. The patterns were `^\\s*[*\\-\\u{2022}]\\s+`
+        // and its `\\n` twin, and `\\u` in a Swift literal is an escaped
+        // backslash followed by a literal `u` — so ICU was handed `\\u{2022}`,
+        // whose `\\u` escape takes four bare hex digits and rejects the brace.
+        // `NSRegularExpression(pattern:)` throws on both.
+        //
+        // The platforms then disagree about what an invalid pattern does, and
+        // that disagreement is the whole defect. Darwin returns the receiver
+        // unchanged, so these were a silent no-op for as long as they existed.
+        // swift-corelibs-Foundation returns the **empty string** — so on Linux
+        // every assistant reply came out of `speakable` as "", the owner was
+        // sent nothing, and the blank routed into the forced-summary path that
+        // then exhausted the backend.
+        //
+        // **Deleted rather than repaired, because repairing them would break a
+        // shipped feature the owner asked for twice.** Making the pattern valid
+        // would finally remove `- `, `* ` and `• ` — from the one string that
+        // needs to keep them. `AnswerLayout` gives the window real bullets and
+        // hanging indents, `SignalReplyText.spacingOutLists` puts the blank
+        // lines into the phone's plain text, and both parse those markers off
+        // this function's output. Both were written *after* these lines, on top
+        // of the no-op, in answer to "list replies are still all bunched
+        // together" — so a valid pattern here would delete the markers before
+        // either renderer could see them and hand that complaint straight back.
+        // No test would have caught it: both renderers are tested in isolation.
+        //
+        // Nothing else depended on the strip. Keeping markdown out of a spoken
+        // reply is `ReplyStyle`'s instruction to the model, and the one real
+        // hazard — `say` reading a leading dash as a command-line option — is
+        // handled in `SystemSpeechSynthesizer` by passing the text through a
+        // file instead of an argument.
         text = Self.flattenedLinks(text)
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "__", with: "")

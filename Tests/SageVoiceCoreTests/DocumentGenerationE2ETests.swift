@@ -1,3 +1,10 @@
+// **Mac-only, because it reads the produced PDF back with PDFKit.**
+//
+// This is the end-to-end pair: the real system prompt, the real local brain,
+// and then the page itself opened and inspected. The inspection is Apple's
+// PDFKit and has no counterpart off Darwin, and unlike `DocumentTemplateTests`
+// there is no half of this file that does not need it.
+#if canImport(PDFKit)
 import XCTest
 import PDFKit
 @testable import SageVoiceCore
@@ -186,3 +193,4 @@ final class DocumentGenerationE2ETests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 }
+#endif  // canImport(PDFKit)

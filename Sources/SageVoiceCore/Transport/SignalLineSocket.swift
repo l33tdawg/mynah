@@ -1,6 +1,14 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 /// A newline-delimited byte stream over a UNIX-domain or TCP socket.
@@ -72,9 +80,9 @@ final class SignalLineSocket: @unchecked Sendable {
                 destination[pathBytes.count] = 0
             }
         }
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        posixSetUNIXAddressLength(&address)
 
-        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        let descriptor = posixSocket(AF_UNIX, posixSocketStream, 0)
         guard descriptor >= 0 else {
             throw SignalTransportError.connectFailed("socket(AF_UNIX): \(errnoDescription())")
         }
@@ -82,12 +90,12 @@ final class SignalLineSocket: @unchecked Sendable {
 
         let status = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                Darwin.connect(descriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+                posixConnect(descriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard status == 0 else {
             let detail = errnoDescription()
-            Darwin.close(descriptor)
+            posixClose(descriptor)
             throw SignalTransportError.connectFailed("connect(\(path)): \(detail)")
         }
         return SignalLineSocket(descriptor: descriptor, label: "unix")
@@ -96,8 +104,8 @@ final class SignalLineSocket: @unchecked Sendable {
     private static func connectTCP(host: String, port: Int) throws -> SignalLineSocket {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-        hints.ai_protocol = IPPROTO_TCP
+        hints.ai_socktype = posixSocketStream
+        hints.ai_protocol = posixProtocolTCP
 
         var results: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, String(port), &hints, &results)
@@ -110,14 +118,14 @@ final class SignalLineSocket: @unchecked Sendable {
         var lastError = "no addresses returned"
         var candidate: UnsafeMutablePointer<addrinfo>? = head
         while let info = candidate {
-            let descriptor = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+            let descriptor = posixSocket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
             if descriptor >= 0 {
                 configure(descriptor: descriptor)
-                if Darwin.connect(descriptor, info.pointee.ai_addr, info.pointee.ai_addrlen) == 0 {
+                if posixConnect(descriptor, info.pointee.ai_addr, info.pointee.ai_addrlen) == 0 {
                     return SignalLineSocket(descriptor: descriptor, label: "tcp")
                 }
                 lastError = errnoDescription()
-                Darwin.close(descriptor)
+                posixClose(descriptor)
             } else {
                 lastError = errnoDescription()
             }
@@ -127,15 +135,18 @@ final class SignalLineSocket: @unchecked Sendable {
     }
 
     private static func configure(descriptor: Int32) {
-        var enabled: Int32 = 1
-        // Never let a dead peer kill the process with SIGPIPE.
-        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
+        // Never let a dead peer kill the process with SIGPIPE. Darwin takes that
+        // instruction here, as a socket option; Linux has no such option and
+        // takes it per-write instead, inside `posixWriteToSocket`. Both paths
+        // end up with a write that fails as an error rather than as a signal.
+        posixSuppressSIGPIPE(on: descriptor)
         // Keepalive so a wedged daemon eventually surfaces as a read error.
+        var enabled: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_KEEPALIVE, &enabled, socklen_t(MemoryLayout<Int32>.size))
     }
 
     private static func errnoDescription() -> String {
-        String(cString: strerror(errno))
+        posixErrorDescription()
     }
 
     // MARK: Reading
@@ -171,7 +182,7 @@ final class SignalLineSocket: @unchecked Sendable {
 
         while true {
             let count = chunk.withUnsafeMutableBytes { buffer -> Int in
-                Darwin.read(descriptor, buffer.baseAddress, buffer.count)
+                posixRead(descriptor, buffer.baseAddress, buffer.count)
             }
 
             if count > 0 {
@@ -246,13 +257,13 @@ final class SignalLineSocket: @unchecked Sendable {
             guard !isShutDown, !descriptorClosed else {
                 throw SignalTransportError.notConnected
             }
-            let duplicate = Darwin.dup(descriptor)
+            let duplicate = posixDuplicate(descriptor)
             guard duplicate >= 0 else {
                 throw SignalTransportError.socketWriteFailed(Self.errnoDescription())
             }
             return duplicate
         }()
-        defer { Darwin.close(fd) }
+        defer { posixClose(fd) }
 
         var offset = 0
         try frame.withUnsafeBytes { buffer in
@@ -260,7 +271,7 @@ final class SignalLineSocket: @unchecked Sendable {
                 return
             }
             while offset < buffer.count {
-                let written = Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
+                let written = posixWriteToSocket(fd, base.advanced(by: offset), buffer.count - offset)
                 if written > 0 {
                     offset += written
                     continue
@@ -308,7 +319,7 @@ final class SignalLineSocket: @unchecked Sendable {
         // close the descriptor between the check and the shutdown(). shutdown()
         // on a socket does not block.
         if !alreadyDown && !alreadyClosed {
-            Darwin.shutdown(descriptor, SHUT_RDWR)
+            posixShutdownReadAndWrite(descriptor)
         }
         lock.unlock()
     }
@@ -321,6 +332,6 @@ final class SignalLineSocket: @unchecked Sendable {
         guard !alreadyClosed else {
             return
         }
-        Darwin.close(descriptor)
+        posixClose(descriptor)
     }
 }

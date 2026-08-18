@@ -1,3 +1,13 @@
+// **Mac-only, because it tests `MynahMac`.**
+//
+// `MynahMac` is the AppKit/SwiftUI half of this package, and Package.swift does
+// not declare that target off Darwin — so the import below resolves on a Mac
+// and nowhere else. The guard wraps the whole file rather than just the import,
+// because every test in here drives a Mac type: a file that compiled down to an
+// empty test class would let Linux report a green suite that ran nothing, which
+// is the exact failure this branch exists to stop. See `coreTestDependencies`
+// in Package.swift.
+#if os(macOS)
 import XCTest
 @testable import MynahMac
 @testable import SageVoiceCore
@@ -107,3 +117,4 @@ final class BrainFactoryCoverageTests: XCTestCase {
         ("bare Mac", EnvironmentProbeResult())
     ]
 }
+#endif  // os(macOS)

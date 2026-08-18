@@ -43,10 +43,33 @@ final class SecondBridgeTests: XCTestCase {
                 message.localizedCaseInsensitiveContains("already running"),
                 "the second appliance was not told why it could not start"
             )
+            // The way out has to be one the owner can actually carry out on the
+            // machine they are standing at. `launchctl` does not exist off a
+            // Mac, so asserting it on every platform fails a product that is
+            // right: `SingleInstance.Failure.alreadyRunning` already splits the
+            // message, and the off-Darwin arm gives a real door. What must hold
+            // everywhere is that the refusal names how to stop the other one.
+            #if os(macOS)
             XCTAssertTrue(
                 message.contains("launchctl bootout"),
                 "the owner is not told how to stop the other one"
             )
+            #else
+            XCTAssertTrue(
+                message.contains("pgrep -fl \"sage-voiced daemon\""),
+                "the owner is not told how to find the other one"
+            )
+            XCTAssertTrue(
+                message.contains("kill"),
+                "the owner is not told how to stop the other one"
+            )
+            // A Mac command on a Linux box is a dead end with no door out of
+            // it, which is worse than saying nothing.
+            XCTAssertFalse(
+                message.contains("launchctl"),
+                "the owner is sent to a command this machine does not have"
+            )
+            #endif
         }
     }
 

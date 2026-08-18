@@ -1,6 +1,8 @@
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
 import UniformTypeIdentifiers
+#endif
 
 /// Turns a photo on disk into something safe to put in a prompt.
 ///
@@ -32,6 +34,15 @@ public enum VisionAttachment {
     public enum Failure: Error, Equatable {
         case tooLarge(bytes: Int)
         case unreadable
+        #if !canImport(ImageIO)
+        /// There is no ImageIO here, so there is no downscale, so there is no
+        /// image. **Distinct from `unreadable` on purpose** — that one means
+        /// "this file is not a picture", and the two want opposite responses:
+        /// one is the owner's file, the other is the build. A daemon that
+        /// reported an owner's perfectly good photograph as unreadable would
+        /// send them looking at the photograph.
+        case noImageDecoderOnThisPlatform
+        #endif
     }
 
     /// A downscaled JPEG of the image at `url`, ready to base64 into a request.
@@ -41,7 +52,20 @@ public enum VisionAttachment {
     /// photo never exists in memory at 12 MP. It also applies the EXIF
     /// orientation, without which a photo taken in portrait arrives at the model
     /// on its side.
+    ///
+    /// **Off Darwin this refuses rather than sending the file.** ImageIO is
+    /// where both halves of the guarantee live — the decode-at-target-size that
+    /// keeps a 12 MP photo out of memory, and the EXIF rotation without which a
+    /// portrait photo reaches the model on its side. Passing the raw file
+    /// through instead would be the context bomb this type exists to defuse:
+    /// a single screenshot costing more of the window than the whole tool
+    /// catalogue, on the one machine whose latency story is how many tokens it
+    /// has to read. The caller logs the refusal and carries on with the words,
+    /// which is a worse turn than a Mac gets and an honest one.
     public static func encoded(contentsOf url: URL) throws -> Data {
+        #if !canImport(ImageIO)
+        throw Failure.noImageDecoderOnThisPlatform
+        #else
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
         if let size, size > maximumSourceBytes {
             throw Failure.tooLarge(bytes: size)
@@ -73,5 +97,6 @@ public enum VisionAttachment {
             throw Failure.unreadable
         }
         return output as Data
+        #endif
     }
 }

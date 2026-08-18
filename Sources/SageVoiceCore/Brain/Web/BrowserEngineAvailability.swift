@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(ObjectiveC)
 import ObjectiveC.runtime
+#endif
 
 /// Whether this process may start a browser engine.
 ///
@@ -85,9 +87,25 @@ public struct BrowserEngineAvailability: Sendable, Equatable {
     /// that says "yes" to any object at all, in a codebase whose most-repeated
     /// defect is a change made at one call site while an identical one goes
     /// unwatched.
+    ///
+    /// **Off Darwin it is `.unavailable` and cannot be anything else**, which is
+    /// the truth rather than a stub: there is no `NSApplication` to be handed,
+    /// and `BrowserSearchBackend` — the only thing this gate has ever opened —
+    /// is not compiled at all, because it is `WKWebView` from top to bottom.
+    /// `WebSearchToolSource` already asks `canImport(WebKit)` before it reaches
+    /// for the browser backend, so this answer and that guard agree.
+    ///
+    /// The check is written as a whole-body `#if` rather than by stubbing
+    /// `isAnApplication` to `false`, so that a future port which does gain a
+    /// browser engine has to come here and say so, instead of inheriting a
+    /// permanently-closed door it cannot see.
     public static func hostedBy(_ application: AnyObject?) -> BrowserEngineAvailability {
+        #if canImport(ObjectiveC)
         guard let application else { return .unavailable }
         return isAnApplication(type(of: application)) ? BrowserEngineAvailability(isAvailable: true) : .unavailable
+        #else
+        return .unavailable
+        #endif
     }
 
     /// Whether `candidate` is `NSApplication` or descends from it.
@@ -95,6 +113,7 @@ public struct BrowserEngineAvailability: Sendable, Equatable {
     /// By name, walking the superclass chain, so a subclass — which an app is
     /// entitled to have, and which `NSApp`'s own `__kindof NSApplication`
     /// declaration anticipates — is still recognised.
+    #if canImport(ObjectiveC)
     static func isAnApplication(_ candidate: AnyClass) -> Bool {
         var cursor: AnyClass? = candidate
         while let current = cursor {
@@ -103,4 +122,5 @@ public struct BrowserEngineAvailability: Sendable, Equatable {
         }
         return false
     }
+    #endif
 }

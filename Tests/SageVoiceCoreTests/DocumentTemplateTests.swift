@@ -1,6 +1,17 @@
 import XCTest
-import PDFKit
 @testable import SageVoiceCore
+
+// **The rendering half of this file needs PDFKit, and only that half.**
+//
+// Reading the produced page back is the only honest check that the template
+// works, and Apple's PDFKit is what does the reading — there is no counterpart
+// off Darwin. The markdown-preparation tests above it are pure string work on
+// shared code, so they are left unguarded and do run on Linux; guarding the
+// whole file for the sake of the renderer would have taken nineteen portable
+// tests down with the thirteen that genuinely cannot travel.
+#if canImport(PDFKit)
+import PDFKit
+#endif
 
 /// **"i notice now asking the agent to make a pdf, just produces a .md looking
 /// file in pdf format instead of one that has rich text, headings, nice
@@ -227,6 +238,7 @@ final class DocumentTemplateTests: XCTestCase {
 
     // MARK: - The page itself
 
+    #if canImport(PDFKit)
     /// **The complaint, checked.** The title used to appear twice: once from the
     /// metadata and once from the note's own opening heading.
     func testTheTitleIsOnThePageExactlyOnce() async throws {
@@ -237,7 +249,9 @@ final class DocumentTemplateTests: XCTestCase {
 
         XCTAssertEqual(occurrences(of: "Quarterly brief", in: text), 1, text)
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// The date it was made is a fact this appliance knows. Upper-cased in the
     /// template, so that is how it comes back out.
     func testTheDateIsOnThePage() async throws {
@@ -249,7 +263,9 @@ final class DocumentTemplateTests: XCTestCase {
 
         XCTAssertTrue(text.uppercased().contains("3 AUGUST 2026"), text)
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// **The whole point of the exercise.** A `dot` fence has to come out as a
     /// drawn graph, which means the words inside it — `digraph`, the braces, the
     /// arrows — must not be on the page, and the labels must.
@@ -279,7 +295,9 @@ final class DocumentTemplateTests: XCTestCase {
         XCTAssertTrue(text.contains("Signal message"), "the drawn labels are missing:\n\(text)")
         XCTAssertTrue(text.contains("Local brain"), text)
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// A diagram wider than the measure is scaled down to it. Without this the
     /// graph runs off the right-hand side of the page and the PDF is unusable
     /// for the one thing it was asked to show.
@@ -309,7 +327,9 @@ final class DocumentTemplateTests: XCTestCase {
             "the diagram ran into the right margin"
         )
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// Tables come out as tables — a header row that is set apart, and cells that
     /// are not all centred, which is what Pandoc's own `align: auto` produces.
     func testATableSurvivesAsATable() async throws {
@@ -326,6 +346,7 @@ final class DocumentTemplateTests: XCTestCase {
             XCTAssertTrue(text.contains(cell), "\(cell) missing from:\n\(text)")
         }
     }
+    #endif  // canImport(PDFKit)
 
     // MARK: - A diagram that will not draw
 
@@ -369,6 +390,7 @@ final class DocumentTemplateTests: XCTestCase {
         XCTAssertEqual(DocumentTemplate.withoutDiagrams(markdown), markdown)
     }
 
+    #if canImport(PDFKit)
     /// **The failure that cost a report on this Mac.** The 4B's first diagram
     /// used `edge` as a node name and an unquoted `#FF6347`; Graphviz refused,
     /// Typst died, and the whole PDF failed — so asking for a report with a
@@ -400,7 +422,9 @@ final class DocumentTemplateTests: XCTestCase {
         XCTAssertTrue(text.contains("Every hop of it is on this Mac"), text)
         XCTAssertFalse(text.contains("digraph"), "the broken source ended up on the page:\n\(text)")
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// And a diagram that draws reports nothing, so the model has nothing to
     /// apologise for.
     func testAWorkingDiagramReportsNoLoss() async throws {
@@ -415,6 +439,7 @@ final class DocumentTemplateTests: XCTestCase {
 
         XCTAssertFalse(conversion.droppedDiagram)
     }
+    #endif  // canImport(PDFKit)
 
     // MARK: - Helpers
 
@@ -423,6 +448,7 @@ final class DocumentTemplateTests: XCTestCase {
         return exporter.drawsDiagrams ? exporter : nil
     }
 
+    #if canImport(PDFKit)
     private func renderedText(
         markdown: String,
         title: String,
@@ -430,7 +456,9 @@ final class DocumentTemplateTests: XCTestCase {
     ) async throws -> String {
         try await renderedPDF(markdown: markdown, title: title, date: date).string ?? ""
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     private func renderedPDF(
         markdown: String,
         title: String,
@@ -438,7 +466,9 @@ final class DocumentTemplateTests: XCTestCase {
     ) async throws -> PDFDocument {
         try await converted(markdown: markdown, title: title, date: date).pdf
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     private func converted(
         markdown: String,
         title: String,
@@ -462,9 +492,11 @@ final class DocumentTemplateTests: XCTestCase {
 
         return (conversion, try XCTUnwrap(PDFDocument(url: destination), "the PDF would not open"))
     }
+    #endif  // canImport(PDFKit)
 
     // MARK: - Links somebody can actually press
 
+    #if canImport(PDFKit)
     /// Every URL the rendered PDF carries as a real link annotation.
     ///
     /// Annotations rather than text, because the two come apart in exactly the
@@ -482,7 +514,9 @@ final class DocumentTemplateTests: XCTestCase {
         }
         return found
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// **A references section is written as bare addresses, and they were dead.**
     ///
     /// Pandoc links `[name](url)` on its own and the template has styled links
@@ -506,7 +540,9 @@ final class DocumentTemplateTests: XCTestCase {
         )
         XCTAssertEqual(links.count, 2, "both sources should be pressable: \(links)")
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// The form that already worked must keep working — this changed the reader,
     /// and a reader extension can alter how ordinary markdown parses.
     func testAWrittenLinkIsStillALink() async throws {
@@ -519,7 +555,9 @@ final class DocumentTemplateTests: XCTestCase {
             "a written link stopped being a link"
         )
     }
+    #endif  // canImport(PDFKit)
 
+    #if canImport(PDFKit)
     /// And an address inside a sentence is linked without swallowing the words
     /// after it — the reason this is a reader extension rather than a regular
     /// expression written by us.
@@ -538,6 +576,7 @@ final class DocumentTemplateTests: XCTestCase {
             "the words after the address were absorbed into it"
         )
     }
+    #endif  // canImport(PDFKit)
 
     private func occurrences(of needle: String, in haystack: String) -> Int {
         guard !needle.isEmpty else { return 0 }
