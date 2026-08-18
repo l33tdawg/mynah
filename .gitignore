@@ -34,3 +34,9 @@ whatsapp/session/
 # repository is provenance nobody can check.
 third_party/
 .opus-build/
+
+# The Linux per-test harness's scratch root (scripts/linux-test.sh). Kept out of
+# .build/ deliberately: the same checkout is mounted into a Linux container while
+# a Mac toolchain owns .build/, and two triples sharing one scratch root is a
+# failure that surfaces as nonsense module errors hours later.
+.build-linux/

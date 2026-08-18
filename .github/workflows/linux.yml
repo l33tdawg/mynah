@@ -1,0 +1,145 @@
+name: Linux
+
+# **This is the only place the Linux suite has ever run.** Before 9a7e797 nothing
+# under Tests/ had ever been compiled off Darwin — including the tests written to
+# prove the port, which sit inside `#if !os(macOS)` and were therefore compiled
+# out on the one platform that could build them. They had never executed
+# anywhere. A workflow is how that stops being true again the next time somebody
+# edits a file only the Mac compiles.
+#
+# It is a normal check, not a probe. Do not copy the triggers from
+# windows-probe.yml: that job sits on a platform CANCELLED on 17 Aug 2026, is
+# `continue-on-error`, and exists to produce an error list rather than a verdict.
+# This one produces a verdict.
+on:
+  push:
+    branches:
+      - main
+      - port/linux-windows
+  pull_request:
+    branches:
+      - main
+      - port/linux-windows
+  workflow_dispatch:
+
+# Read-only. This job compiles, tests and reports; it publishes nothing.
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an in-flight run worthless, and this job
+# is long — one process per test, roughly 1750 of them.
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # **The toolchain is pinned to the one the wedge was characterised on.**
+    # swift:6.0.3-jammy is the image commit 9a7e797 verified against, and
+    # docker/linux-test.Dockerfile pins the same tag for the build Mac, so a
+    # local run and a CI run are the same run. The corelibs run-loop bug this
+    # harness survives reproduces on 6.0, 6.1 and 6.2 as well — a floating tag
+    # would move the toolchain under the hang counts without moving anything in
+    # this repository, and two runs would stop being comparable.
+    container: swift:6.0.3-jammy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # **The whole job is one script, on purpose.** scripts/linux-test.sh is
+      # what a person runs on the build Mac through
+      # scripts/linux-test-in-docker.sh, so the runner and the build Mac cannot
+      # come to different conclusions about what counts as a verified suite —
+      # the same reason .github/workflows/release.yml calls
+      # scripts/assert-test-run.sh rather than restating its checks inline.
+      #
+      # What the script guarantees, so this step does not have to re-implement
+      # any of it:
+      #
+      #   * a build failure is reported as a build failure and NO test count is
+      #     printed for a suite that was never linked
+      #   * every test runs in its own process under `timeout`, because
+      #     corelibs-xctest routes every test through RunLoop.run, which can
+      #     block forever ignoring its deadline — the first test to lose a
+      #     libdispatch wake-up would otherwise park the whole suite at 0% CPU
+      #   * a test that hits the timeout is HUNG, is NAMED in the output and in
+      #     hung.txt, is never counted as passed, is never folded silently into
+      #     the failure list, and makes the run exit non-zero
+      #   * the executed count is what actually reached a verdict, so a run full
+      #     of hangs sinks under the floor rather than sliding under it
+      #
+      # A hang here must be read and not tuned away. Not a sleep, not a longer
+      # MYNAH_LINUX_TEST_TIMEOUT, not a skip: a suite that finishes because
+      # tests stopped running is the hollow suite scripts/assert-test-run.sh
+      # exists to catch. The wedge point MOVES between runs because it is a
+      # race, so a rerun that goes green has not fixed anything and has not
+      # disproved anything either.
+      - name: Per-test Linux suite
+        env:
+          # **The floor on ids enumerated, so a green badge cannot be bought by
+          # running fewer tests.** This is the check that catches a test target
+          # falling out of the graph: Package.swift decides what exists as it is
+          # READ, so a missing vendored library removes targets instead of
+          # failing anything, and the run would otherwise pass with less in it.
+          #
+          # Measured, not remembered: `--list-tests` in swift:6.0.3-jammy on
+          # this branch enumerated 1757 ids on 18 Aug 2026. 9a7e797's message
+          # says 1711, which is the count from a session that predates several
+          # of the commits on this branch — the measured number is the one to
+          # trust, and this is why the count now comes from a script anybody can
+          # rerun rather than from a shell nobody still has.
+          #
+          # 1740 is 17 under today's count. Raise it in the same commit that
+          # adds a batch of tests; lower it only in the same commit that deletes
+          # some, so the new floor is reviewed alongside the removal. If the
+          # first run here disagrees, it prints the true figure and says so —
+          # correct this to it rather than widening it.
+          MYNAH_LINUX_MIN_TESTS: "1740"
+
+          # Per-test wall clock. A test in this suite takes well under a second.
+          # **Raising this is not a fix for a hang** — it converts a named hang
+          # into a slower named hang, and far enough into a suite that never
+          # finishes.
+          MYNAH_LINUX_TEST_TIMEOUT: "60s"
+
+          # The ceiling on skips, which is the load-bearing half of
+          # scripts/assert-test-run.sh: XCTest counts a skipped test as an
+          # executed one, so a floor on the executed count alone is satisfied by
+          # a run in which everything skipped.
+          #
+          # This is deliberately NOT the build Mac's 24. The Linux container
+          # runs as root, and the settings failure-path tests skip under root
+          # because a root process can write a file whose permissions say it may
+          # not — so those skip here and run there. Left unset the harness would
+          # accept whatever this run happened to skip, which is a ceiling that
+          # cannot fail; 40 is a real one. If a run exceeds it, find out which
+          # tests stopped running before raising it:
+          #   grep 'Test skipped - ' <the log the step prints the path of>
+          MYNAH_MAX_SKIPPED_TESTS: "40"
+        run: |
+          set -euo pipefail
+          # coreutils `timeout` is what names a hang; the harness refuses to run
+          # without it rather than waiting forever and reporting nothing.
+          command -v timeout >/dev/null
+          swift --version
+          bash scripts/linux-test.sh
+
+      # The lists are the deliverable when this job is red: hung.txt names every
+      # test that wedged, and the wedge point moves between runs, so the union
+      # of several runs is worth more than any one of them. `always()` because
+      # the run that fails is the run whose artefacts are wanted.
+      - name: Upload the run's logs and id lists
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-test-run
+          path: |
+            .build-linux/test-run/tests.log
+            .build-linux/test-run/build.log
+            .build-linux/test-run/ids.txt
+            .build-linux/test-run/passed.txt
+            .build-linux/test-run/failed.txt
+            .build-linux/test-run/hung.txt
+            .build-linux/test-run/skipped.txt
+          if-no-files-found: warn
