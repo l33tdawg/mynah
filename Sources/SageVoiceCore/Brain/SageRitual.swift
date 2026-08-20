@@ -409,6 +409,11 @@ public actor SageRitual {
     /// the *node* permits this agent, which is a property of the identity and
     /// identical whichever process asks. Two copies could only ever disagree by
     /// being differently stale.
+    /// The outbox figures last written to the log, so an unchanged outbox is
+    /// not re-reported on every poll. See `reportOutboxChange`.
+    private var lastLoggedAnsweredCount: Int?
+    private var lastLoggedStrandedCount: Int?
+
     private let readableDomainsFile: URL
 
     private let readinessCheck: @Sendable () async -> ApplianceWriteReadiness
@@ -869,12 +874,27 @@ public actor SageRitual {
         // non-consuming, already polled, and its shape is in a captured fixture.
         let stranded = items.filter { !Self.wasAnswered($0) && Self.terminalFailure(in: $0) != nil }
         guard !results.isEmpty || !stranded.isEmpty else { return }
-        if !results.isEmpty {
-            log("[sage] \(results.count) answered send(s) in the outbox: \(String(describing: results).prefix(300))")
-        }
-        if !stranded.isEmpty {
-            log("[sage] \(stranded.count) send(s) that will never arrive: \(String(describing: stranded).prefix(300))")
-        }
+        // **Counts and ids, not payloads, and only when the number moves.**
+        //
+        // This logged `String(describing: results).prefix(300)` on every poll.
+        // Measured in the owner's bridge.log on 20 Aug 2026: 1,492 copies of
+        // that line, 512 KB of a 1,557 KB file — **a third of the whole log was
+        // this one sentence, repeated**. The outbox is retained, not a queue, so
+        // every poll re-reported the entire set: the count climbed 3, 5, 6 … 42
+        // and each value was written again every five minutes for as long as the
+        // daemon ran.
+        //
+        // Two things wrong with that, and the second is the one that matters.
+        // It is unbounded — the line grows with the outbox and never stops. And
+        // `String(describing:)` on the raw items writes MESSAGE BODIES and
+        // counterparty agent ids into a file on disk, over and over, for
+        // messages the owner has already been told about. A log is a diagnostic,
+        // not a second copy of the mail.
+        //
+        // The count and the ids are what a diagnosis actually needs: they say
+        // how many and which, and `sage_message_history(folder: "outbox")`
+        // fetches the bodies for anyone who needs them.
+        reportOutboxChange(answered: results, stranded: stranded)
 
         // Born on this turn. Everything the node is holding gets written down
         // and none of it is said — see `AlreadySaid.hasSeeded`.
@@ -942,6 +962,37 @@ public actor SageRitual {
             changed = true
         }
         if changed { alreadySaid.save(to: alreadySaidFile) }
+    }
+
+    /// Says what CHANGED in the outbox, once, rather than what is in it, always.
+    ///
+    /// Gated on the counts because the poll is unconditional and the outbox is
+    /// retained rather than drained: without this the same figure goes to disk
+    /// every five minutes for as long as the daemon runs.
+    ///
+    /// Gating on the count rather than on the id set is deliberate. An id set
+    /// that changes while its size does not means one send was answered and
+    /// another arrived inside the same window; the next change reports it
+    /// anyway, and paying a set comparison on every poll would spend exactly the
+    /// cost this exists to remove.
+    private func reportOutboxChange(
+        answered: [[String: Any]], stranded: [[String: Any]]
+    ) {
+        if !answered.isEmpty, answered.count != lastLoggedAnsweredCount {
+            lastLoggedAnsweredCount = answered.count
+            log("[sage] \(answered.count) answered send(s) in the outbox: \(Self.ids(of: answered))")
+        }
+        if !stranded.isEmpty, stranded.count != lastLoggedStrandedCount {
+            lastLoggedStrandedCount = stranded.count
+            log("[sage] \(stranded.count) send(s) that will never arrive: \(Self.ids(of: stranded))")
+        }
+    }
+
+    /// Ids alone, never the payload — see `reportOutboxChange` for why.
+    private static func ids(of items: [[String: Any]]) -> String {
+        let named = items.compactMap { $0["message_id"] as? String }
+        guard !named.isEmpty else { return "(none of them carried a message_id)" }
+        return named.joined(separator: ", ")
     }
 
     /// Whether the outbox says this send has been answered.
