@@ -22,7 +22,18 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # so once vendor/SAGE.app was staged, `latest` resolved to whatever was
 # already on disk forever. Mynah 2.0.0 shipped 11.17.15 that way, five
 # releases behind, and nothing anywhere said so. Bump this deliberately.
-TAG="${SAGE_RELEASE_TAG:-v11.18.14}"
+#
+# 11.18.14 -> 11.18.22 on 20 Aug 2026. The hold at .14 was the owner's — "we
+# wait for next sage release before we vendor in a new one" — and eight
+# releases have shipped since. .22 is the newest published, checked by sorting
+# the releases API on published_at rather than trusting its order, which does
+# NOT return newest first and once made 11.17.5 look newer than 11.18.11. It is
+# also exactly what is installed on the build Mac, so the vendored brain and the
+# one the appliance actually runs are the same build for once.
+#
+# Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
+# nothing while a bundle is already staged, which is the whole trap above.
+TAG="${SAGE_RELEASE_TAG:-v11.18.22}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
