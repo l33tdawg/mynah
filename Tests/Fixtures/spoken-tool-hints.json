@@ -1,0 +1,9 @@
+{
+  "_comment": "Sentences APPENDED to SAGE's own tool descriptions before a brain is asked to route on them. SAGE writes for a capable agent and writes precisely; these do not replace that prose, they add the phrasing the owner uses out loud. Read by scripts/measure-tool-routing.py under MYNAH_TOOL_HINTS=1 and mirrored in Swift, with a test asserting the two agree - the same arrangement voice-routing-utterances.json has, and for the same reason: this script's own tool list drifted out of the appliance for months under a comment saying it would not.",
+  "_measured": "19-20 Aug 2026, qwen3.5:4b, real 8300-char voice prompt. Without hints the shipped catalogue scores 9/12 at every composed size from 20 to 27. With these two it scores 10/12 across the same range. Nothing here moves the cliff at 32; catalogue size and description quality are separate axes.",
+  "_rejected": "Hints for sage_forget and sage_directory were written, measured, and removed for measuring nothing - see the rationale on those cases in voice-routing-utterances.json. Neither is a wording problem. sage_forget REQUIRES memory_id, which a spoken 'forget what I told you about X' cannot supply, so reaching for sage_recall first is the only route to the id rather than a misroute. sage_directory takes only scope and peer_cursor and lists recipients this caller may address; it does not answer who is working on what, and no tool in the catalogue does. Do not re-add wording for either without changing what the tools can do.",
+  "hints": {
+    "sage_timeline": "Use this when the owner asks what they HAVE BEEN DOING over a stretch of time: \"what have I been working on this week\", \"what did I get done yesterday\". It answers about a period that has passed. It is not sage_backlog, which answers about work still outstanding.",
+    "sage_backlog": "Answers what is STILL OUTSTANDING. If the owner is asking what they have already been doing over a period, that is sage_timeline."
+  }
+}

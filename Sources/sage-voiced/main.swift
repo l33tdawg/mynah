@@ -381,7 +381,7 @@ func makeToolSource(
             // prompt is followed most of the time, and "most of the time" fails
             // silently.
             provider: BoundedTimeline(
-                wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp)))
+                wrapping: SpokenToolHints(wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))))
             ),
             isRequired: true,
             expectedToolNames: BrainPrompts.voiceToolAllowlist
@@ -439,7 +439,7 @@ func makeCallToolSource(
     var sources: [CompositeToolSource.Source] = [
         .init(
             label: "SAGE MCP",
-            provider: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp))),
+            provider: SpokenToolHints(wrapping: DatedTaskWrites(wrapping: ScopedRecall(wrapping: KeyedSends(wrapping: mcp)))),
             isRequired: true,
             expectedToolNames: BrainPrompts.callToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])

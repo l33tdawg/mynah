@@ -1,42 +1,65 @@
 {
   "_comment": "The 12-utterance routing set. ONE file, read by both the Swift fixture test and scripts/measure-tool-routing.py, because two copies under a comment saying they match is exactly how deepseek-chat survived in this repo. Nine positives, all SAGE tools present in BOTH the 14-tool and 27-tool catalogues so a miss is never 'the model was never shown the tool'. Three negatives, because over-triggering is the failure curation exists to fix and twelve tool-calling utterances score 12/12 on a model that calls a tool for 'thanks bro that's all'.",
   "cases": [
-    { "utterance": "What did we decide about the DMG signing thing?",
+    {
+      "utterance": "What did we decide about the DMG signing thing?",
       "expected": "sage_recall",
-      "rationale": "Recall by topic. The commonest voice turn there is." },
-    { "utterance": "Remember that the Apple account for this is l33tdawg at hackinthebox dot org.",
+      "rationale": "Recall by topic. The commonest voice turn there is."
+    },
+    {
+      "utterance": "Remember that the Apple account for this is l33tdawg at hackinthebox dot org.",
       "expected": "sage_remember",
-      "rationale": "Storing a fact. Must not be confused with recall." },
-    { "utterance": "What's on my plate?",
+      "rationale": "Storing a fact. Must not be confused with recall."
+    },
+    {
+      "utterance": "What's on my plate?",
       "expected": "sage_backlog",
-      "rationale": "Idiomatic, not literal - no word here matches a tool name. gemma4:26b answers sage_turn at 27 tools." },
-    { "utterance": "Add a task to measure time to first token on DeepSeek.",
+      "rationale": "Idiomatic, not literal - no word here matches a tool name. gemma4:26b answers sage_turn at 27 tools."
+    },
+    {
+      "utterance": "Add a task to measure time to first token on DeepSeek.",
       "expected": "sage_task",
-      "rationale": "Creating work, adjacent to backlog and easily confused with it." },
-    { "utterance": "What have I been working on this week?",
+      "rationale": "Creating work, adjacent to backlog and easily confused with it."
+    },
+    {
+      "utterance": "What have I been working on this week?",
       "expected": "sage_timeline",
-      "rationale": "Time-scoped. Missed by both models at both sizes - a capability gap, not a catalogue one." },
-    { "utterance": "Is anything waiting for me from the other agents?",
+      "rationale": "Time-scoped. Missed by both models at both sizes - a capability gap, not a catalogue one. FIXED 20 Aug 2026 by appending spoken-phrasing hints to sage_timeline and sage_backlog - see Tests/Fixtures/spoken-tool-hints.json. 9/12 to 10/12 at every composed catalogue size from 20 to 27."
+    },
+    {
+      "utterance": "Is anything waiting for me from the other agents?",
       "expected": "sage_inbox",
-      "rationale": "Agent-to-agent. Sits near find_agent and federation." },
-    { "utterance": "Forget what I told you about the old relay address.",
+      "rationale": "Agent-to-agent. Sits near find_agent and federation."
+    },
+    {
+      "utterance": "Forget what I told you about the old relay address.",
       "expected": "sage_forget",
-      "rationale": "Destructive intent. Must not be served by recall, which is what both models reach for." },
-    { "utterance": "Which agent is handling the Chrome work?",
+      "rationale": "Destructive intent. Must not be served by recall, which is what both models reach for. MEASURED 20 Aug 2026: not reachable in one call and not a wording problem. sage_forget REQUIRES memory_id; a spoken \"forget what I told you about X\" carries no id, so reaching for sage_recall first is the only route to one. Appending trigger wording to the description was tried and changed nothing. What this case actually guards is that the TURN must end with the thing forgotten - which is a tool-loop question, not a routing one."
+    },
+    {
+      "utterance": "Which agent is handling the Chrome work?",
       "expected": "sage_directory",
-      "rationale": "Names a peer. Pulls towards inbox on 4B and recall on 26B. Was sage_find_agent until 11.16.4 replaced name-guessing with an enumerated roster; the pull this case tests is unchanged." },
-    { "utterance": "Is the SAGE node healthy?",
+      "rationale": "Names a peer. Pulls towards inbox on 4B and recall on 26B. Was sage_find_agent until 11.16.4 replaced name-guessing with an enumerated roster; the pull this case tests is unchanged. MEASURED 20 Aug 2026: the expectation may be aimed at the wrong tool. sage_directory takes only scope and peer_cursor and lists recipients this caller is authorized to ADDRESS; it does not report who is working on what, and nothing in the catalogue does. Trigger wording was tried and changed nothing. Settle what should answer this before treating the miss as a routing failure."
+    },
+    {
+      "utterance": "Is the SAGE node healthy?",
       "expected": "sage_status",
-      "rationale": "Health, not memory. Falls to sage_inception on 26B at 27 tools." },
-
-    { "utterance": "Thanks bro, that's all.",
+      "rationale": "Health, not memory. Falls to sage_inception on 26B at 27 tools."
+    },
+    {
+      "utterance": "Thanks bro, that's all.",
       "expected": null,
-      "rationale": "Sign-off. A tool call here is pure over-trigger. 26B answers sage_turn at 27 tools." },
-    { "utterance": "Can you say that again but shorter?",
+      "rationale": "Sign-off. A tool call here is pure over-trigger. 26B answers sage_turn at 27 tools."
+    },
+    {
+      "utterance": "Can you say that again but shorter?",
       "expected": null,
-      "rationale": "Refers to the reply just given. Needs conversation, not retrieval." },
-    { "utterance": "Good morning.",
+      "rationale": "Refers to the reply just given. Needs conversation, not retrieval."
+    },
+    {
+      "utterance": "Good morning.",
       "expected": null,
-      "rationale": "Pleasantry. 26B answers sage_inception at 27 tools - the clearest attractor case in the set." }
+      "rationale": "Pleasantry. 26B answers sage_inception at 27 tools - the clearest attractor case in the set."
+    }
   ]
 }

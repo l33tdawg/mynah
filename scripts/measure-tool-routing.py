@@ -101,6 +101,36 @@ _path = os.environ.get("SYSTEM_PROMPT_FILE")
 SYSTEM = open(_path).read() if _path else _default
 
 
+# Sentences appended to SAGE's own descriptions before routing, when
+# MYNAH_TOOL_HINTS=1. SAGE writes for a capable agent; the owner speaks like a
+# person, and three of the twelve utterances miss at EVERY catalogue size below
+# the cliff because of the gap between those two — a failure curation cannot
+# reach, since it is the same at 15 tools and at 22.
+#
+# Kept in a fixture rather than inline so the wording that wins here is the
+# wording Swift ships, checked by a test. Same arrangement as the utterances,
+# and for the same reason: two copies under a comment claiming they agree is how
+# this script's tool list silently stopped describing the appliance.
+_HINTS = (pathlib.Path(__file__).resolve().parent.parent
+          / "Tests/Fixtures/spoken-tool-hints.json")
+
+
+def apply_hints(tools):
+    if os.environ.get("MYNAH_TOOL_HINTS") != "1":
+        return tools
+    hints = json.loads(_HINTS.read_text())["hints"]
+    out = []
+    for t in tools:
+        t = {"type": t["type"], "function": dict(t["function"])}
+        hint = hints.get(t["function"]["name"])
+        if hint:
+            t["function"]["description"] = (
+                t["function"]["description"].rstrip() + " " + hint
+            )
+        out.append(t)
+    return out
+
+
 def load_tools():
     tools = None
     for line in open("/tmp/mcp_tools.jsonl"):
@@ -190,8 +220,10 @@ def sweep_sizes(full, curated):
 
 if __name__ == "__main__":
     model = sys.argv[1]
-    full = load_tools()
+    full = apply_hints(load_tools())
     curated = [t for t in full if t["function"]["name"] in ALLOWLIST]
+    if os.environ.get("MYNAH_TOOL_HINTS") == "1":
+        print("note: spoken hints applied from Tests/Fixtures/spoken-tool-hints.json")
 
     missing = ALLOWLIST - {t["function"]["name"] for t in full}
     if missing:
