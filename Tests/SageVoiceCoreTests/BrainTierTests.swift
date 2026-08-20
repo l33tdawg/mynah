@@ -176,14 +176,21 @@ final class BrainTierTests: XCTestCase {
 
     // MARK: The catalogue ratchet
 
-    /// **A ratchet, and the only job this field currently has.** Routing was
-    /// measured at 12/12 with 14 tools and 5–6/12 with 27; the allowlist holds
-    /// exactly twenty today, which sits between the two measurements and has
-    /// never itself been measured. A twenty-first tool turns this red and forces
-    /// somebody to run `scripts/measure-tool-routing.py` rather than letting the
-    /// catalogue drift past the cliff — which it already did once, past the "18"
-    /// its own comment claimed.
-    func testATwentyFirstToolForcesARemeasurement() {
+    /// **A ratchet, and the only job this field currently has.**
+    ///
+    /// The ceiling is 22 and the allowlist holds twenty, so there are two slots
+    /// of room — deliberately, and measured rather than guessed. The sweep on 19
+    /// Aug 2026 (qwen3.5:4b, real prompt, `scripts/measure-tool-routing.py`)
+    /// scored an identical 9/12 at composed sizes 20, 21, 22, 24 and 27, then
+    /// fell to 6/12 at 32. See `BrainCapabilities.maxRoutableTools` for the
+    /// table and for why the older "12/12 at 14, 5-6/12 at 27" is superseded and
+    /// not comparable — it was measured against a list the appliance never ran.
+    ///
+    /// A twenty-third tool turns this red and forces somebody to rerun the
+    /// measurement rather than letting the catalogue drift past the cliff —
+    /// which it already did once, past the "18" its own comment claimed. The
+    /// remedy is a rerun and a pasted table, never an argument.
+    func testATwentyThirdToolForcesARemeasurement() {
         XCTAssertLessThanOrEqual(
             BrainPrompts.voiceToolAllowlist.count,
             BrainCapabilities.onDevice.maxRoutableTools,

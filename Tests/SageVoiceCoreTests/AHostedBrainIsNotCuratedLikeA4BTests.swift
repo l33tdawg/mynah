@@ -20,11 +20,20 @@ import XCTest
 /// history returns a `message_id` on every item. From that day the model held
 /// the ids and had nothing to spend them on. Two decisions, each correct alone.
 ///
-/// **One list for every brain.** Routing was measured at 12/12 with 14 tools
-/// and 5-6/12 with 27 *on qwen3.5:4b*, and `BrainCapabilities.hosted
-/// .maxRoutableTools` is 27 precisely because that accuracy result was taken on
-/// local models only. The curated list was nevertheless applied to every brain,
-/// so a frontier model was refused a tool on evidence gathered from a 4B.
+/// **One list for every brain.** Catalogue size costs routing accuracy *on a
+/// small local model*, and `BrainCapabilities.hosted.maxRoutableTools` is
+/// larger precisely because that result was only ever taken on local models.
+/// The curated list was nevertheless applied to every brain, so a frontier
+/// model was refused a tool on evidence gathered from a 4B.
+///
+/// The figure this paragraph used to quote — "12/12 with 14 tools and 5-6/12
+/// with 27" — is superseded and was never comparable: it was measured against a
+/// tool list that had drifted out of the appliance, containing `sage_pipe` and
+/// `sage_pipe_result` and missing all three message tools. The 19 Aug 2026
+/// sweep against what actually ships is in `BrainCapabilities.maxRoutableTools`,
+/// and its shape is a flat 9/12 to composed 27 and a cliff after it — so size
+/// is not what costs the three misses that remain below the cliff. Colliding
+/// tool descriptions are.
 ///
 /// These assertions go through `ToolLoop.availableTools()` rather than reading
 /// the set out of `BrainPrompts`, because the set is not what the model is
@@ -88,10 +97,21 @@ final class AHostedBrainIsNotCuratedLikeA4BTests: XCTestCase {
 
     /// The other half, and the reason this is a split rather than an addition.
     ///
-    /// The local catalogue is what was measured, and
-    /// `BrainCapabilities.onDevice.maxRoutableTools` is ratcheted against its
-    /// size by `BrainTierTests`. Growing it here would spend the 4B's whole
-    /// budget to fix a brain that never had the problem.
+    /// The local catalogue is the one that was measured, and the hosted tier
+    /// must not quietly become the way things are added to it.
+    ///
+    /// **This asserted `count == maxRoutableTools` until 19 Aug 2026 and that
+    /// was right at the time**: the ceiling was 20, the catalogue was 20, and
+    /// zero headroom was the deliberate design — the twenty-first tool was
+    /// meant to be a refusal somebody had to read. The sweep then measured an
+    /// identical 9/12 at composed 20, 21, 22, 24 and 27, falling to 6/12 only at
+    /// 32, so the ceiling moved to 22 and the equality stopped being true. The
+    /// relationship is now `<=` with two measured slots of room, and the
+    /// assertion says so rather than being loosened quietly.
+    ///
+    /// What still has to hold exactly is the CONTENTS: the local brain is
+    /// offered the curated set and nothing else, whatever room the ceiling
+    /// leaves. Room is not an invitation.
     func testTheLocalBrainKeepsExactlyWhatWasMeasuredForIt() async throws {
         let local = try await offered(to: .onDevice)
 
@@ -103,9 +123,14 @@ final class AHostedBrainIsNotCuratedLikeA4BTests: XCTestCase {
             local, BrainPrompts.voiceToolAllowlist,
             "the local catalogue is no longer the curated set it was measured as"
         )
-        XCTAssertEqual(
+        XCTAssertLessThanOrEqual(
             local.count, BrainCapabilities.onDevice.maxRoutableTools,
-            "the local catalogue and its ceiling are the same number by design"
+            """
+            The local catalogue is over its own ceiling, which ToolLoop does not \
+            enforce on this release line — so this is the only thing standing \
+            between a 4B and a catalogue routing was never measured at. Rerun \
+            scripts/measure-tool-routing.py before raising either number.
+            """
         )
     }
 

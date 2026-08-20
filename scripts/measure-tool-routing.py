@@ -34,20 +34,44 @@ import json, pathlib, sys, time, urllib.request
 
 OLLAMA = "http://127.0.0.1:11434/api/chat"
 
-# The 14 SAGE names in BrainPrompts.voiceToolAllowlist. web_search and the note
-# tools are published locally rather than by SAGE, so they are out of scope for
-# a 14-vs-27 comparison — which is the comparison the disputed claim makes.
+# The SAGE names in BrainPrompts.voiceToolAllowlist. web_search and the note
+# tools are published locally rather than by SAGE, so they are out of scope
+# here — but they are NOT out of scope for the ceiling, see COMPOSED_EXTRAS.
+#
+# **This set had drifted, and the drift is exactly what the comment it replaces
+# said would end the numbers' meaning.** Checked against Swift on 19 Aug 2026:
+# it still measured `sage_list`, `sage_reflect`, `sage_find_agent`, `sage_pipe`
+# and `sage_pipe_result` — five names the appliance does not offer, two of them
+# (`sage_pipe`, `sage_pipe_result`) removed *because the model misused them*,
+# `sage_pipe_result` having written into another agent's inbox when the owner
+# asked for an update. It was missing `sage_directory`, `sage_message_send`,
+# `sage_message_reply` and `sage_message_history`, all four of which ship.
+#
+# So every score this produced described a catalogue nobody runs. Corrected to
+# the fifteen that ship. If you change `BrainPrompts.voiceToolAllowlist`, change
+# this in the same commit — `VoiceRoutingUtterances` pins the utterances, and
+# nothing pins this, which is how it drifted for months.
 ALLOWLIST = {
-    "sage_recall", "sage_remember", "sage_forget", "sage_list", "sage_task",
-    "sage_backlog", "sage_timeline", "sage_status", "sage_reflect",
-    "sage_inbox", "sage_find_agent", "sage_pipe", "sage_pipe_result",
-    "sage_federation",
-    # Added when 11.16.x published 27 tools. Kept in step with
-    # BrainPrompts.voiceToolAllowlist deliberately: this set is duplicated from
-    # Swift, and letting the two drift is exactly the decoupling the note above
-    # says ends the numbers' meaning.
-    "sage_corroborate", "sage_link",
+    "sage_recall", "sage_remember", "sage_forget", "sage_task",
+    "sage_backlog", "sage_timeline", "sage_status", "sage_inbox",
+    "sage_directory", "sage_federation", "sage_corroborate", "sage_link",
+    "sage_message_send", "sage_message_reply", "sage_message_history",
 }
+
+# What the composed catalogue carries besides SAGE: four note tools and
+# web_search. The ceiling in `BrainCapabilities.maxRoutableTools` counts the
+# COMPOSED total, not the SAGE slice, so a sweep that reports only the SAGE
+# count is answering a different question from the one the ceiling asks. Every
+# size below is therefore printed both ways.
+COMPOSED_EXTRAS = 5
+
+# The order distractors are added in for the sweep.
+#
+# `sage_message_status` first because it is the one actually being proposed —
+# so the second row of the sweep IS the catalogue a hosted brain is offered
+# today, rather than an abstraction near it. The rest follow in sorted order so
+# that a rerun measures the same catalogues in the same sequence.
+FIRST_DISTRACTOR = "sage_message_status"
 
 # Nine positives, all served by tools present in BOTH catalogue sizes, so a
 # miss is a routing failure and never "the model was never shown the tool".
@@ -138,14 +162,52 @@ def run(model, tools, label):
     return correct, total_t / 12
 
 
+def sweep_sizes(full, curated):
+    """Catalogues of growing size, holding WHICH tools matter constant.
+
+    The two-point curated-vs-full comparison this replaces answers "is a big
+    catalogue worse than a small one". It cannot answer "how much bigger may
+    this one get", which is the question a ceiling actually asks — and the
+    question somebody has to answer before moving one.
+
+    Every catalogue here contains all fifteen shipped names, so the nine
+    positives are always routable and a miss is always a routing failure rather
+    than a tool the model was never shown. Only the number of distractors
+    changes.
+    """
+    names = {t["function"]["name"] for t in curated}
+    rest = [t for t in full if t["function"]["name"] not in names]
+    rest.sort(key=lambda t: (t["function"]["name"] != FIRST_DISTRACTOR,
+                             t["function"]["name"]))
+    out = [("ships today", curated)]
+    for extra in (1, 2, 4, 7, 12):
+        if extra > len(rest):
+            break
+        out.append((f"+{extra}", curated + rest[:extra]))
+    out.append(("everything SAGE publishes", full))
+    return out
+
+
 if __name__ == "__main__":
     model = sys.argv[1]
     full = load_tools()
     curated = [t for t in full if t["function"]["name"] in ALLOWLIST]
-    results = {}
-    for label, tools in (("curated", curated), ("full", full)):
-        results[label] = run(model, tools, label)
-    c, ct = results["curated"]
-    f, ft = results["full"]
-    print(f"\nSUMMARY {model}: curated({len(curated)})={c}/12 @{ct:.1f}s  "
-          f"full({len(full)})={f}/12 @{ft:.1f}s  delta={c-f:+d}")
+
+    missing = ALLOWLIST - {t["function"]["name"] for t in full}
+    if missing:
+        print(f"warning: this node does not publish {sorted(missing)} — "
+              "the curated row is smaller than what ships", file=sys.stderr)
+
+    rows = []
+    for label, tools in sweep_sizes(full, curated):
+        correct, per_turn = run(model, tools, label)
+        rows.append((label, len(tools), correct, per_turn))
+
+    print(f"\nSUMMARY {model}")
+    print(f"  {'catalogue':28} {'sage':>4} {'composed':>8} {'score':>7} {'s/turn':>7}")
+    for label, n, correct, per_turn in rows:
+        print(f"  {label:28} {n:>4} {n + COMPOSED_EXTRAS:>8} {correct:>4}/12 {per_turn:>6.1f}")
+    print("\n  'composed' is what BrainCapabilities.maxRoutableTools bounds: the")
+    print(f"  SAGE slice plus {COMPOSED_EXTRAS} tools this repository publishes itself.")
+    print("  Quote a number from here with the model, the date and the count, or")
+    print("  it becomes the unfalsifiable claim this script was written to end.")

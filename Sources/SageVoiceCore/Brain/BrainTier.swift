@@ -180,20 +180,40 @@ public struct BrainCapabilities: Sendable, Equatable {
 
     /// How many tools a brain in this tier may be asked to choose between.
     ///
-    /// Measured on this Mac with `scripts/measure-tool-routing.py`: 14 tools
-    /// scored 12/12 on routing; 27 added ~9.5 KB of schema, cost 3.4 s per turn
-    /// on qwen3.5:4b and dropped a 26B model to 5–6/12. The published curve has
-    /// the same shape — 78% at 10 falling to 13.62% past 100 — and the research
-    /// on progressive disclosure says plainly that it "buys context, not
-    /// intelligence" and is redundant when the agent is already strong, which is
-    /// the owner's sentence arrived at from the other side.
+    /// **Re-measured on 19 Aug 2026, and the number moved because the
+    /// measurement said it could.** `scripts/measure-tool-routing.py` against
+    /// qwen3.5:4b, the real 8,300-character voice prompt, this Mac, sweeping
+    /// catalogue size with the shipped fifteen SAGE names always present so a
+    /// miss is a routing failure and never a tool the model was not shown.
+    /// "composed" is what this constant bounds — the SAGE slice plus the four
+    /// note tools and `web_search`:
     ///
-    /// 20 on device is **what ships**: `BrainPrompts.voiceToolAllowlist` holds
-    /// exactly twenty today. It sits between the two measurements and has not
-    /// itself been measured, so this number's job is to be a ratchet — a
-    /// twenty-first tool turns `BrainTierTests` red and forces the re-run,
+    ///     composed  20  21  22  24  27  32  38
+    ///     score      9   9   9   9   9   6   7   (of 12)
+    ///
+    /// Flat to 27 and identical at every step, then a cliff. So the old "14
+    /// scored 12/12, 27 dropped to 5-6/12" is superseded rather than refined,
+    /// and it is worth saying why it cannot simply be compared: it was measured
+    /// against a tool list that had DRIFTED out of the appliance — it contained
+    /// `sage_pipe` and `sage_pipe_result`, both since removed for being misused,
+    /// and lacked all three message tools. Whatever it measured, the appliance
+    /// never ran it.
+    ///
+    /// The three misses in the flat region are the same three every time —
+    /// `sage_timeline` answered with `sage_backlog`, `sage_forget` with
+    /// `sage_recall`, `sage_directory` with `sage_backlog`. Those are collisions
+    /// between tool DESCRIPTIONS and they do not move with catalogue size. Past
+    /// the cliff the failure changes shape: the model starts choosing
+    /// `sage_list`, a tool that is not in the shipped catalogue at all. That is
+    /// the size effect — distractors beginning to win — and it is the thing this
+    /// ceiling exists to stay clear of.
+    ///
+    /// 22 on device, chosen by the owner and supported with five composed tools
+    /// of margin under the first measured degradation. It is still a ratchet: a
+    /// twenty-third tool turns `BrainTierTests` red and forces the re-run,
     /// rather than letting the catalogue drift past the cliff the way it already
-    /// drifted past the "18" its own comment claimed.
+    /// drifted past the "18" its own comment claimed. Do not raise it again from
+    /// an argument; raise it from a rerun, and paste the table.
     ///
     /// 27 on hosted is a **permission, not a measurement** — the size of SAGE's
     /// full published catalogue. The half of the 27-tool result that forbids it,
@@ -247,7 +267,7 @@ public struct BrainCapabilities: Sendable, Equatable {
         mayCarryImages: true,
         servesOneCacheSlot: true,
         holdsARealtimeCall: false,
-        maxRoutableTools: 20
+        maxRoutableTools: 22
     )
 
     public static let hosted = BrainCapabilities(
