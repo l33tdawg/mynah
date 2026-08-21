@@ -1550,11 +1550,16 @@ public actor VoiceBridgeDaemon {
                 // appliance volunteering news on a timer — it is the result of
                 // an errand the owner themselves sent.
                 for reply in await ritual.drainReplies() {
-                    log("[daemon] a reply came back from \(reply.from)")
-                    // Another agent's prose by definition — the whole point of
-                    // this channel is that somebody else did the work.
+                    log("[daemon] the outbox has something to say about \(reply.from)")
+                    // **Not "another agent's prose by definition" any more, and
+                    // it never quite was.** A `.reply` is; a `.neverArrived` and
+                    // an `.unanswered` carry no foreign text at all — their
+                    // sentences are built by `SageRitual` out of the node's own
+                    // status words. `quotesAnotherAgent` is what knows which.
                     await announce(
-                        reply.spokenDescription, to: recipient, quotingAnotherAgent: true
+                        reply.spokenDescription,
+                        to: recipient,
+                        quotingAnotherAgent: reply.quotesAnotherAgent
                     )
                 }
             }

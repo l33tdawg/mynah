@@ -153,6 +153,21 @@ final class RelayedAgentTextTests: XCTestCase {
     /// concrete actor that shells out to `signal-cli` — so the daemon cannot be
     /// built in a test. Narrow on purpose: it asserts the one call that carries
     /// another agent's reply, not the shape of the file.
+    ///
+    /// **This asserted the literal `quotingAnotherAgent: true` until 21 Aug
+    /// 2026, and that was right at the time** — the only thing that path could
+    /// carry was another agent's reply, so a constant said it exactly. It
+    /// stopped being right when `PipeReply` grew a third kind: `.neverArrived`
+    /// and `.unanswered` carry no foreign prose at all, their sentences being
+    /// built by `SageRitual` out of the node's own status words, and a hardcoded
+    /// `true` was already handing our own sentence the untrusted frame. The
+    /// direction was the safe one, which is why it was a tidy rather than an
+    /// incident.
+    ///
+    /// So the assertion moved from a constant to the property that decides, and
+    /// the property's behaviour is pinned beside it — a source grep alone would
+    /// now pass if `quotesAnotherAgent` returned `false` for everything. See
+    /// `AnUnansweredSendHasANameTests.testOnlyARealReplyCountsAsQuotingAnotherAgent`.
     func testThePipeReplyPathAsksToBeQuoted() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
@@ -167,12 +182,20 @@ final class RelayedAgentTextTests: XCTestCase {
             "this test is reading the wrong file — the pipe reply announcement has moved"
         )
         XCTAssertTrue(
-            code.contains("quotingAnotherAgent: true"),
+            code.contains("quotingAnotherAgent: reply.quotesAnotherAgent"),
             """
             a reply from another agent is announced without asking to be quoted, \
             so it lands in the thread's history as Mynah's own assistant turn and \
             is replayed to the model with Mynah's own authority
             """
+        )
+        // The grep above proves the call site defers to the property. This
+        // proves the property still says yes for the kind that matters, so the
+        // two cannot drift into a pair that passes while quoting nothing.
+        XCTAssertTrue(
+            SageRitual.PipeReply(from: "Cerebrum", text: "the invoices are attached")
+                .quotesAnotherAgent,
+            "an actual reply stopped asking for the untrusted frame"
         )
     }
 

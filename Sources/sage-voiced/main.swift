@@ -1644,7 +1644,12 @@ func runDaemon(_ arguments: [String]) -> Never {
                 ),
                 arrivedReplies: {
                     guard let ritual else { return [] }
-                    return await ritual.collectArrivedReplies().map(\.spokenDescription)
+                    return await ritual.collectArrivedReplies().map {
+                        // `quotesAnotherAgent` rather than a hardcoded `true`:
+                        // only an actual reply carries a foreign agent's prose,
+                        // and an unanswered-send notice carries none at all.
+                        ($0.spokenDescription, $0.quotesAnotherAgent)
+                    }
                 },
                 wakeLatch: wakeLatch,
                 say: { message, quotingAnotherAgent, senders in
@@ -2169,7 +2174,7 @@ func runProactiveWatch(
     /// Mirrors dated tasks into the owner's Calendar. `nil` switches the whole
     /// thing off; everything else here behaves exactly as it did before.
     calendar: CalendarSync? = nil,
-    arrivedReplies: @escaping @Sendable () async -> [String] = { [] },
+    arrivedReplies: @escaping @Sendable () async -> [(String, Bool)] = { [] },
     /// Set by `MessageWakeBus` when the node reports canonical inbox work was
     /// durably inserted for this appliance. `nil` on a node with no wake bus,
     /// and on any build that has not started one, where this loop behaves
@@ -2298,9 +2303,9 @@ func runProactiveWatch(
         // `SageRitual.AlreadySaid` is what stops this repeating, and it is on
         // disk per surface, so a daemon restart between ticks does not replay
         // the morning. That bug shipped once and the owner read it twice.
-        for reply in await arrivedReplies() {
-            log("[watch] a reply came back; telling the owner")
-            await say(reply, true, [])
+        for (reply, quotesAnotherAgent) in await arrivedReplies() {
+            log("[watch] the outbox has something to say; telling the owner")
+            await say(reply, quotesAnotherAgent, [])
         }
 
         guard let message = report.message else { continue }

@@ -88,6 +88,21 @@ public actor SageRitual {
         /// `sage_messages_receive` cannot: claiming is destructive to whoever
         /// else might read the queue.
         public static let messageHistory = "sage_message_history"
+
+        /// How far one send this appliance made actually got.
+        ///
+        /// The outbox row does NOT carry this. Measured against the owner's
+        /// node on 21 Aug 2026: a pending row has `status`, `created_at`,
+        /// `claimed_at` and `completed_at` and nothing else — no
+        /// `delivered_at`, no `read_at`, no `transport_status`. So "delivered
+        /// and read four days ago, still nobody's job" is a sentence the
+        /// history alone cannot say, and this is the only tool that can.
+        ///
+        /// Payload-free by its own description — delivery, read confirmation
+        /// and workflow state for one exact message sent by this caller. It
+        /// costs one call per aged send, which is why `noteUnanswered` bounds
+        /// how many it will ask about.
+        public static let messageStatus = "sage_message_status"
     }
 
     /// What the phone appliance registers as.
@@ -731,6 +746,25 @@ public actor SageRitual {
             case reply
             /// Terminal, and nobody saw it. `why` is the node's own word.
             case neverArrived(why: String)
+            /// **Arrived, and then nothing.** Not an answer and not a failure,
+            /// which is exactly why it had no name here until 21 Aug 2026 and
+            /// was therefore invisible: `wasAnswered` is false for it and
+            /// `terminalFailure` is nil for it, so it fell between the two
+            /// filters and the owner's only view of it was the raw word
+            /// "pending" in a listing.
+            ///
+            /// What that cost: asked about a question he sent on 17 August,
+            /// Mynah called the row "a legacy row from the claim bug that may
+            /// never flip on its own" and said "there's nothing left on my side
+            /// or his to make that row move". The node's own answer was
+            /// delivered 08:56:56Z, read-confirmed 08:57:27Z — thirty-two
+            /// seconds — and `durable_until_handled`. Nothing was stuck and
+            /// nothing was lost; the recipient simply never handled it, which
+            /// is a live thing somebody can still do and not a bookkeeping
+            /// artefact.
+            ///
+            /// `how` is the furthest milestone the node will confirm, in words.
+            case unanswered(how: String)
         }
 
         /// Who answered, or who never received it, as the node names them.
@@ -747,6 +781,26 @@ public actor SageRitual {
             self.kind = kind
         }
 
+        /// Whether this carries another agent's prose, and therefore whether
+        /// the announcement has to be handled as untrusted relayed content.
+        ///
+        /// **Only `.reply` does, and both call sites passed a hardcoded `true`
+        /// before 21 Aug 2026.** That was already wrong for `.neverArrived`,
+        /// whose `text` is empty and whose sentence is built by this file out
+        /// of the node's own status word — there is no foreign prose in it to
+        /// quote. It would have been wrong for `.unanswered` in exactly the
+        /// same way, which is what made it worth fixing here rather than
+        /// inheriting.
+        ///
+        /// The direction of the old error was the safe one — treating our own
+        /// sentence as untrusted costs a little prompt discipline, where the
+        /// reverse would hand an agent's words the appliance's own standing —
+        /// so this is a correctness tidy, not an incident.
+        public var quotesAnotherAgent: Bool {
+            if case .reply = kind { return true }
+            return false
+        }
+
         /// One sentence for the owner, attributed.
         public var spokenDescription: String {
             switch kind {
@@ -759,6 +813,12 @@ public actor SageRitual {
                 // does not replay sends, so offering one here would promise
                 // something nothing in the appliance carries out.
                 return "Your message to \(from) never got there — \(why). Nobody has seen it."
+            case .unanswered(let how):
+                // Deliberately not "never got there" and deliberately not an
+                // apology. This one arrived, so the next action is chasing a
+                // person rather than re-sending a message — and re-sending is
+                // the thing the wrong sentence here would provoke.
+                return "\(from) still hasn't answered you — \(how)."
             }
         }
     }
@@ -807,6 +867,16 @@ public actor SageRitual {
                 arguments: ["folder": .string("outbox"), "limit": .int(100)]
             )
             noteResults(in: answer)
+            // Second pass, and it needs a second tool. `noteResults` sorts this
+            // same answer into answered and terminally-failed; everything else
+            // is left as "still in flight", which is true of a send from ten
+            // minutes ago and a lie about one from ten days ago.
+            //
+            // Only here, and not at the `sage_turn` call site that also runs
+            // `noteResults`: a turn's answer has no `items` at all since
+            // 11.17.9 made it payload-free, so asking there would be a second
+            // read of a surface that cannot answer.
+            await noteUnanswered(in: answer)
         } catch {
             // Silent by design, like every other proactive path: a check nobody
             // asked for must not put a failure on the owner's phone.
@@ -963,6 +1033,146 @@ public actor SageRitual {
         }
         if changed { alreadySaid.save(to: alreadySaidFile) }
     }
+
+    /// A send that arrived, was not refused, and has been nobody's answer for
+    /// long enough that "still in flight" has stopped being true.
+    ///
+    /// **Why this needs its own pass and its own tool.** `noteResults` splits
+    /// the outbox two ways and reads both off the row itself: answered carries
+    /// a `result`, failed carries a terminal `status`. A row that is merely
+    /// `pending` or `claimed` matches neither, and the row carries no delivery
+    /// or read state at all — measured on the owner's node 21 Aug 2026, a
+    /// pending row has `status`, `created_at`, `claimed_at` and `completed_at`
+    /// and nothing more. So a dropped send and a fresh one are the same row to
+    /// this file, and `sage_message_status` is the only surface that can tell
+    /// them apart.
+    ///
+    /// **Classified on `workflow_status`, not on read receipts, and that was
+    /// measured rather than assumed.** All six aged sends on that node were
+    /// `transport: delivered`; exactly ONE had `read_status: confirmed`. Four
+    /// were `workflow: claimed` — an agent explicitly took the work and then
+    /// stopped — which is the strongest signal of the set and the one a
+    /// read-receipt rule would have missed every time.
+    ///
+    /// **A fixed set of states, like `terminalFailure`, and for the same
+    /// reason.** An unrecognised `workflow_status` says nothing rather than
+    /// being read as neglect. Wrong in that direction is worse here: this
+    /// sentence sends the owner to chase a person, and chasing somebody over a
+    /// message they are actively working on is a cost that silence does not
+    /// have.
+    ///
+    /// Said once ever, under an `unanswered|` identity rather than the bare
+    /// message id. Sharing the id with `noteResults` would mean a send reported
+    /// here could never afterwards be reported as ANSWERED — the ledger would
+    /// already hold its id — which would turn a feature about unanswered mail
+    /// into a way of silencing the answer when it finally came.
+    func noteUnanswered(in answer: String, now: Date = Date()) async {
+        guard let root = SageReply.object(in: answer),
+              let items = root["items"] as? [[String: Any]], !items.isEmpty else { return }
+
+        // A day, because the point is to tell dropped from slow, and this
+        // owner's own agents answer in minutes to hours — Mini came back in two
+        // minutes on 21 Aug. Anything still silent after a full day is not
+        // being worked on.
+        let aged = items.filter { item in
+            guard !Self.wasAnswered(item), Self.terminalFailure(in: item) == nil else { return false }
+            guard let sent = Self.text(item, ["created_at"]).flatMap(BoundedTimeline.rfc3339) else {
+                return false
+            }
+            return now.timeIntervalSince(sent) >= Self.unansweredAfter
+        }
+        guard !aged.isEmpty else { return }
+
+        // Oldest first, so that if the cap bites it spends its calls on the
+        // ones that have been waiting longest.
+        let ordered = aged.sorted {
+            (Self.text($0, ["created_at"]) ?? "") < (Self.text($1, ["created_at"]) ?? "")
+        }
+        let asking = ordered.prefix(Self.unansweredProbeLimit)
+        if ordered.count > asking.count {
+            // Never a silent cap: a count that quietly stops at twelve reads as
+            // "twelve is all there were".
+            log("[sage] \(ordered.count) aged unanswered send(s); asking about the oldest "
+                + "\(asking.count) this tick")
+        }
+
+        var changed = false
+        var saidThisTick = 0
+        for item in asking {
+            // **Bounded per tick, and the reason is the first run.** The
+            // say-once ledger is already seeded on every appliance that has
+            // ever run, so nothing here gets the silent first look the answered
+            // and failed paths got — the whole aged backlog qualifies at once.
+            // Six on the owner's node the day this shipped, and six separate
+            // messages arriving together reads as a fault rather than as news.
+            // The remainder are not dropped: nothing is written to the ledger
+            // until it is actually said, so they come on the next tick.
+            guard saidThisTick < Self.unansweredPerTick else {
+                log("[sage] more aged unanswered sends than one tick will say; "
+                    + "the rest follow next tick")
+                break
+            }
+            guard let id = Self.text(item, ["message_id"]) else { continue }
+            let identity = "unanswered|" + id
+            guard !alreadySaid.has(identity) else { continue }
+            guard let how = await howFarItGot(id) else { continue }
+            // `counterparty` again, and here it is the agent who owes an answer.
+            let to = Self.text(item, ["counterparty", "to", "to_name", "agent", "recipient"])
+                ?? "one of your agents"
+            alreadySaid.remember(identity)
+            changed = true
+            saidThisTick += 1
+            arrivedReplies.append(
+                PipeReply(from: Self.shortened(to), text: "", kind: .unanswered(how: how))
+            )
+        }
+        if changed { alreadySaid.save(to: alreadySaidFile) }
+    }
+
+    /// The node's own account of one send, in words the owner can act on, or
+    /// `nil` when it is not yet a thing worth mentioning.
+    private func howFarItGot(_ messageID: String) async -> String? {
+        let raw: String
+        do {
+            raw = try await tools.call(
+                name: Tool.messageStatus,
+                arguments: ["message_id": .string(messageID)]
+            )
+        } catch {
+            note(error, whileDoing: "unanswered send check")
+            return nil
+        }
+        guard let status = SageReply.object(in: raw) else { return nil }
+        // Anything short of delivered belongs to one of the other two paths:
+        // either it is still travelling, or it has terminally failed and
+        // `terminalFailure` already owns the sentence for it.
+        guard Self.text(status, ["transport_status"]) == "delivered" else { return nil }
+
+        let read = Self.text(status, ["read_status"]) == "confirmed"
+        switch Self.text(status, ["workflow_status"])?.lowercased() {
+        case "claimed":
+            return "somebody there took it on and never finished"
+        case "pending" where read:
+            return "they read it and never picked it up"
+        case "pending":
+            return "it reached them and nobody has opened it"
+        default:
+            return nil
+        }
+    }
+
+    /// How long a send may go unanswered before it stops being "in flight".
+    static let unansweredAfter: TimeInterval = 24 * 60 * 60
+
+    /// How many `sage_message_status` calls one tick may spend. The proactive
+    /// poll is unconditional, so this is a recurring cost on the owner's node
+    /// rather than a one-off.
+    static let unansweredProbeLimit = 12
+
+    /// How many of these one tick may actually say out loud. Lower than the
+    /// probe limit on purpose — asking is cheap and lands on a node, saying is
+    /// a notification and lands on a person.
+    static let unansweredPerTick = 3
 
     /// Says what CHANGED in the outbox, once, rather than what is in it, always.
     ///
