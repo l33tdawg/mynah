@@ -31,9 +31,21 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # also exactly what is installed on the build Mac, so the vendored brain and the
 # one the appliance actually runs are the same build for once.
 #
+# 11.18.22 -> 11.18.25 on 21 Aug 2026, cutting 2.3.4, and the floor matters more
+# than the newness. That release gives the model `sage_message_handoff`, whose
+# own schema says "Pre-v11.18.24 federated claims are surfaced as legacy" — so
+# .22 would have shipped a tool that cannot complete a federated handoff, which
+# is the exact recovery the owner asked for. Anything below .24 is now wrong,
+# not merely old.
+#
+# .25 rather than the .24 that was verified end to end four hours earlier:
+# three SAGE releases landed inside sixteen hours, and pinning the newest at the
+# moment of the cut is what stops Mynah shipping a brain that was superseded
+# while its DMG uploaded. Sorted on published_at, again, not on API order.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.18.22}"
+TAG="${SAGE_RELEASE_TAG:-v11.18.25}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
