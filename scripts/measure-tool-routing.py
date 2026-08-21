@@ -51,11 +51,19 @@ OLLAMA = "http://127.0.0.1:11434/api/chat"
 # the fifteen that ship. If you change `BrainPrompts.voiceToolAllowlist`, change
 # this in the same commit — `VoiceRoutingUtterances` pins the utterances, and
 # nothing pins this, which is how it drifted for months.
+#
+# Sixteen since 21 Aug 2026: `sage_message_handoff` was added to both tiers once
+# 11.18.24 fenced it, so the curated row is composed 21 rather than 20. Note what
+# that row now is and is not — none of the twelve utterances asks for a handoff,
+# so this measures the COST of carrying the tool, not the ability to reach it.
+# Adding a thirteenth case would answer the second question and make every score
+# here incomparable with the ones already quoted; that trade has not been made.
 ALLOWLIST = {
     "sage_recall", "sage_remember", "sage_forget", "sage_task",
     "sage_backlog", "sage_timeline", "sage_status", "sage_inbox",
     "sage_directory", "sage_federation", "sage_corroborate", "sage_link",
     "sage_message_send", "sage_message_reply", "sage_message_history",
+    "sage_message_handoff",
 }
 
 # What the composed catalogue carries besides SAGE: four note tools and

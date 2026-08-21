@@ -138,25 +138,61 @@ final class AHostedBrainIsNotCuratedLikeA4BTests: XCTestCase {
     ///
     /// `sage_message_replies` duplicates `sage_message_history(folder: "outbox")`
     /// — its own schema calls it "the explicit sender-side pager behind
-    /// sage_inbox.reply_items" — and `sage_message_handoff` takes over work
-    /// another session has claimed, on a judgement about a foreign process's
-    /// liveness that a language model cannot make. Both were considered when the
-    /// tier split was made and both were refused; this pins that decision so the
-    /// next reader does not have to infer it from an absence.
+    /// sage_inbox.reply_items" — so it was refused when the tier split was made.
+    /// This pins that decision so the next reader does not have to infer it from
+    /// an absence.
+    ///
+    /// **`sage_message_handoff` was asserted here too and deliberately is not
+    /// any more.** The assertion was overturned on 21 Aug 2026 rather than
+    /// quietly dropped, and the difference matters: it was withheld because
+    /// taking over another session's claim rested on "a judgement about a
+    /// foreign process's liveness that a language model cannot make", and SAGE
+    /// 11.18.24 removed that judgement — handoff is now a compare-and-swap on a
+    /// `claimant_session_id` the node itself returns, with pre-fence claims
+    /// migrated to the literal `"legacy"`. What replaced this half of the test
+    /// is `testBothTiersCanReleaseAHeldClaim`, and the reasoning lives beside
+    /// the name in `BrainPrompts.voiceToolAllowlist`.
     func testHeadroomWasNotSpentOnEverythingTheNodeOffers() async throws {
         let hosted = try await offered(to: .hosted)
 
-        for withheld in ["sage_message_replies", "sage_message_handoff"] {
-            XCTAssertFalse(
-                hosted.contains(withheld),
-                "\(withheld) was added without the reasoning beside "
-                    + "BrainPrompts.sageToolsAHostedBrainAlsoGets being updated"
-            )
-        }
+        XCTAssertFalse(
+            hosted.contains("sage_message_replies"),
+            "sage_message_replies was added without the reasoning beside "
+                + "BrainPrompts.sageToolsAHostedBrainAlsoGets being updated"
+        )
         XCTAssertLessThanOrEqual(
             hosted.count, BrainCapabilities.hosted.maxRoutableTools,
             "the hosted catalogue passed its own ceiling"
         )
+    }
+
+    /// **The third time this list refused a tool the owner had just been told
+    /// to use**, and the reason it is asserted at both tiers.
+    ///
+    /// He asked Mynah to release a held claim and was answered
+    /// *"sage_message_handoff is not exposed in my current runtime's toolset —
+    /// I literally cannot call it."* The node had published it throughout: all
+    /// 33 tools reach the appliance key, probed 21 Aug 2026 against the vendored
+    /// 11.18.22 and the installed 11.18.24 alike.
+    ///
+    /// Asserted for `.onDevice` as well as `.hosted` because the hosted tier is
+    /// where a widening would hide. `sage-voiced check` prints
+    /// `sage_message_handoff` as the recovery for a claim nobody can announce,
+    /// and a local brain that reads that line to the owner has to be able to act
+    /// on it — the failure being fixed is precisely an appliance naming a door
+    /// it cannot open.
+    func testBothTiersCanReleaseAHeldClaim() async throws {
+        for tier in [BrainTier.onDevice, .hosted] {
+            let catalogue = try await offered(to: tier)
+
+            XCTAssertTrue(
+                catalogue.contains("sage_message_handoff"),
+                """
+                \(tier) cannot release a held claim, and this appliance's own \
+                check command names sage_message_handoff as the way to do it.
+                """
+            )
+        }
     }
 
     /// The widening may only ever add; every curated name a local brain gets, a

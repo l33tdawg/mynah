@@ -136,12 +136,25 @@ final class CheckReadsTheInboxOnceTests: XCTestCase {
 
     /// The verdict stays "nothing", and stops being unexplained.
     ///
-    /// Nothing is announced, which is correct — this appliance will not break
-    /// another session's claim, so a held message is not news for the owner's
-    /// phone. What was missing is the reason beside it, and the next action:
-    /// the rows are readable without claiming, and the claim ends by completion
-    /// or by a handoff a *person* decides on. SAGE's guidance is to judge the
-    /// prior claimant dead first and this appliance has no basis for that.
+    /// Nothing is announced, which is correct — a message held under another
+    /// session's claim is not news for the owner's phone. What was missing is
+    /// the reason beside it, and the next action: the rows are readable without
+    /// claiming, and the claim ends by completion or by a deliberate handoff.
+    ///
+    /// **The door named here changed on 21 Aug 2026 and the assertions changed
+    /// with it.** The note used to say the appliance "cannot take them" and hand
+    /// the owner a tool to run himself, because SAGE's guidance was to judge the
+    /// prior claimant dead and the appliance had no basis for that. 11.18.24
+    /// replaced that judgement with a compare-and-swap fence and
+    /// `sage_message_handoff` is now in the model's catalogue at both tiers — so
+    /// asking Mynah is a real route and printing only the by-hand one would be
+    /// the same defect one rung up.
+    ///
+    /// What `check` still declines is taking the claim ITSELF, and the reason
+    /// is now the honest one: its session ends with the command, so a claim
+    /// taken here is a claim re-stranded. That distinction is asserted rather
+    /// than described, because "will not break the claim" and "will not take
+    /// them into a session that is about to exit" look alike and are not.
     func testTheSilentVerdictComesWithItsReasonAndADoor() throws {
         let run = try runCheck(against: Self.heldElsewhereNodeScript)
 
@@ -150,7 +163,7 @@ final class CheckReadsTheInboxOnceTests: XCTestCase {
             "a message this appliance cannot take must not be announced:\n\(run.output)"
         )
         XCTAssertTrue(
-            run.output.contains("will not break the claim"),
+            run.output.contains("this run will not take them"),
             "the tool reported a held message without saying it declines to act:\n\(run.output)"
         )
         XCTAssertTrue(
@@ -161,6 +174,15 @@ final class CheckReadsTheInboxOnceTests: XCTestCase {
             run.output.contains("sage_message_handoff"),
             "no way for the claim to ever clear, which is a wall and not a door:"
                 + "\n\(run.output)"
+        )
+        XCTAssertTrue(
+            run.output.contains("ask Mynah"),
+            """
+            the only route offered is one the owner has to run himself, and the \
+            appliance can now do it — which is the defect this whole family is: \
+            naming a door somebody else has to open:
+            \(run.output)
+            """
         )
     }
 

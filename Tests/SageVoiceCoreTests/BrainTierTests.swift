@@ -178,11 +178,19 @@ final class BrainTierTests: XCTestCase {
 
     /// **A ratchet, and the only job this field currently has.**
     ///
-    /// The ceiling is 22 and the allowlist holds twenty, so there are two slots
-    /// of room — deliberately, and measured rather than guessed. The sweep on 19
-    /// Aug 2026 (qwen3.5:4b, real prompt, `scripts/measure-tool-routing.py`)
+    /// The ceiling is 22 and the allowlist holds twenty-one, so there is one
+    /// slot of room here — but not in the product. `PromptLatencyBudgetTests`
+    /// bounds the same count at 21, so the effective ceiling is that one and the
+    /// real headroom is zero. Two constants, one job, and they have disagreed
+    /// since 19 Aug 2026; read that file before quoting this one's slack. The sweep
+    /// on 19 Aug 2026 (qwen3.5:4b, real prompt, `scripts/measure-tool-routing.py`)
     /// scored an identical 9/12 at composed sizes 20, 21, 22, 24 and 27, then
-    /// fell to 6/12 at 32. See `BrainCapabilities.maxRoutableTools` for the
+    /// fell to 6/12 at 32. `sage_message_handoff` took the twenty-first slot on
+    /// 21 Aug 2026 and was re-measured the same day rather than read off that
+    /// table: composed 21 scores 10/12, flat to composed 28. Both tables are in
+    /// `BrainCapabilities.maxRoutableTools`, and they are not directly
+    /// comparable — the second carries the spoken hints, which did not exist
+    /// when the first was taken. See `BrainCapabilities.maxRoutableTools` for the
     /// table and for why the older "12/12 at 14, 5-6/12 at 27" is superseded and
     /// not comparable — it was measured against a list the appliance never ran.
     ///

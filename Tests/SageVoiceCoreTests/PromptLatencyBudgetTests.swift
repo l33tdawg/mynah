@@ -112,7 +112,34 @@ final class PromptLatencyBudgetTests: XCTestCase {
     ///
     /// The budget still has no headroom, on purpose. Tool twenty-one turns this
     /// red and whoever adds it re-runs the script.
-    static let voiceCatalogueBudget = 20
+    ///
+    /// **Tool twenty-one arrived on 21 Aug 2026 and this went red, which is the
+    /// ratchet doing its job.** `sage_message_handoff` was added to both tiers
+    /// after the owner was told by his own appliance that it could not call a
+    /// tool the node had published all along. The script was re-run before the
+    /// number moved, per the paragraph above — qwen3.5:4b, the real
+    /// 8,300-character voice prompt, `MYNAH_TOOL_HINTS=1` because the hints ship:
+    ///
+    ///     composed  21  22  23  25  28  33  38
+    ///     score     10  10  10  10  10   6   8   (of 12)
+    ///
+    /// Composed 21 IS this catalogue, and it scores what 22, 23, 25 and 28
+    /// score. The two misses are `sage_forget` and `sage_directory`, the same
+    /// description collisions that miss at every size below the cliff, and
+    /// neither is the new tool.
+    ///
+    /// **This number and `BrainCapabilities.onDevice.maxRoutableTools` bound the
+    /// same quantity and disagree**, which is worth seeing rather than
+    /// inheriting. Both count `BrainPrompts.voiceToolAllowlist`; that one says 22
+    /// with a measured table behind it and this one said 20 with the superseded
+    /// "27 = 5-6/12, 14 = 12/12" behind it — a claim `BrainCapabilities` itself
+    /// records as not reproducible against a list the appliance never ran. So the
+    /// effective ceiling has been the LOWER of the two all along, and the "two
+    /// slots of room" the other file describes were never really there. Both are
+    /// left standing rather than collapsed: two ratchets that both force a
+    /// re-measurement cost one re-run, and deleting the stricter one buys room
+    /// nobody measured for. Collapsing them is a decision, not a tidy-up.
+    static let voiceCatalogueBudget = 21
 
     func testTheVoiceCatalogueDoesNotSilentlyGrow() {
         let count = BrainPrompts.voiceToolAllowlist.count

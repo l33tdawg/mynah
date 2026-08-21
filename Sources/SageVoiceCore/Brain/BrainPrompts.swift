@@ -440,6 +440,46 @@ public enum BrainPrompts {
         // model guessed that two genuine sends never happened, confessed to
         // inventing their ids, and the retry guard sent both a second time.
         "sage_message_history",
+        // **The third time this list refused a tool the owner had just been
+        // told to use.** After `sage_message_history` and `sage_message_status`,
+        // he asked Mynah to release a held claim and was answered
+        // *"sage_message_handoff is not exposed in my current runtime's toolset
+        // — I literally cannot call it."* Accurate, and ours: the node publishes
+        // all 33 of its tools to the appliance key — probed 21 Aug 2026 as
+        // `74140c2d` against both the vendored 11.18.22 and the installed
+        // 11.18.24 — and this filter is the only thing that removed it.
+        //
+        // **The justification for withholding it stopped being true, and
+        // nothing re-read it.** It was "a judgement about a foreign process's
+        // liveness that a language model cannot make", which was right while
+        // SAGE had no fence. 11.18.24 made handoff a compare-and-swap on
+        // `claimant_session_id`: a stale or concurrent takeover fails visibly
+        // instead of duplicating ownership, and claims predating the fence were
+        // migrated to the literal value `"legacy"`. The model is no longer
+        // judging whether a process is alive — it is quoting a value the node
+        // handed it one row earlier.
+        //
+        // It passes the same test `sage_message_status` had to pass: its
+        // argument is a `from_session_id`, and `sage_message_history` — the line
+        // directly above — returns `claimant_session_id` on every row. A tool
+        // whose arguments the model cannot hold is an exclusion this list gets
+        // right. This was not one of those.
+        //
+        // **Both tiers, on the owner's ruling of 21 Aug 2026, and re-measured
+        // the same day rather than argued from the old table.** qwen3.5:4b, the
+        // real prompt, hints on: the shipped catalogue — composed 21, this tool
+        // in it — scored 10/12, the same as composed 22, 23, 25 and 28, with the
+        // cliff at 33. Carrying it costs nothing a measurement can see. The two
+        // misses that remain are `sage_forget` and `sage_directory`, the same
+        // two description collisions that miss at every size, and neither is
+        // this tool. Table in `BrainCapabilities.maxRoutableTools`.
+        //
+        // The daemon is the right holder, which is not obvious: a claim
+        // transfers to the CALLING session and dies with it, so whoever takes
+        // one must finish it in the same session or re-strand it. That is the
+        // long-lived surface, not a shell command — which is precisely how the
+        // sixteen claims stranded between 7 and 17 Aug were made.
+        "sage_message_handoff",
         "sage_federation",
         // Added for 11.16.x, and only these two of the thirteen it exposes that
         // this list does not.
@@ -523,7 +563,7 @@ public enum BrainPrompts {
     /// comprehension. It takes a `message_id`, which `sage_message_history` has
     /// been handing the model since that tool was added.
     ///
-    /// **Two more were considered and are deliberately still out**, because
+    /// **One more was considered and is deliberately still out**, because
     /// having room is not a reason to spend it:
     ///
     /// - `sage_message_replies` pages the replies to messages Mynah sent, and
@@ -531,11 +571,18 @@ public enum BrainPrompts {
     ///   own schema calls it "the explicit sender-side pager behind
     ///   sage_inbox.reply_items". Two tools for one question is the condition
     ///   the routing measurement punishes.
-    /// - `sage_message_handoff` takes over work another session has claimed,
-    ///   which SAGE's own guidance says to do "only after judging the prior
-    ///   claimant session dead or stale" — a judgement about a foreign
-    ///   process's liveness that a language model cannot make. Same family as
-    ///   `sage_rename` and `sage_register`.
+    ///
+    /// **`sage_message_handoff` was the second name on that list and has left
+    /// it.** It went into `voiceToolAllowlist` for both tiers on 21 Aug 2026,
+    /// once 11.18.24 replaced the liveness judgement it was refused over with a
+    /// compare-and-swap fence; the reasoning is written beside the name itself.
+    ///
+    /// Note what that says about every exclusion here rather than just that
+    /// one. A justification that is a property of the NODE expires when the node
+    /// ships, and nothing in this file re-reads it — the owner finds out by
+    /// being told a tool does not exist. That has now happened three times with
+    /// this list, and the third time it was a tool the appliance's own `check`
+    /// command had printed at him as the fix.
     ///
     /// **Not added to the system prompt, deliberately.** One prompt serves both
     /// tiers, and a prompt that names a tool the local brain does not have is

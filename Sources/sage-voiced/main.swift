@@ -1945,10 +1945,10 @@ func runCheck(_ arguments: [String]) -> Never {
         The one cost, which cannot be avoided from here: it calls sage_inbox
         once, and sage_inbox has no passive mode. Every message it lists is
         claimed for a session that ends with this command, and the receipt has
-        no expiry — so the daemon will not announce those again until you hand
-        them back with sage_message_handoff. To read the inbox without claiming
-        anything, use sage_message_history(folder: "inbox") instead of running
-        this.
+        no expiry — so the daemon will not announce those again until the claim
+        is handed back. Ask Mynah to hand it back, or run sage_message_handoff
+        yourself. To read the inbox without claiming anything, use
+        sage_message_history(folder: "inbox") instead of running this.
         """)
         exit(0)
     }
@@ -2025,23 +2025,37 @@ func runCheck(_ arguments: [String]) -> Never {
             // "wait and it clears" that can never come true is a wall painted
             // to look like a door.
             //
-            // Mynah is not that somebody. SAGE's guidance for taking work
-            // another session holds is to judge the prior claimant dead first,
-            // and this appliance has no basis for that judgement — so it says
-            // what it found, names who can act, and stops.
+            // **Mynah is that somebody now, and was not when this was
+            // written.** The appliance was left out of the recovery because
+            // SAGE's guidance was to judge the prior claimant dead first and it
+            // had no basis for that judgement. 11.18.24 replaced the judgement
+            // with a compare-and-swap on `claimant_session_id`, and
+            // `sage_message_handoff` went into the model's catalogue for both
+            // tiers — so the door this note names is one the owner can now ask
+            // for out loud instead of opening by hand. Naming only the hand
+            // route would be the same defect one rung up: an appliance that can
+            // do the thing, printing instructions for doing it without him.
+            //
+            // What has NOT changed is that `check` must not take them itself. A
+            // claim transfers to the CALLING session, and this one dies three
+            // lines from here — taking a claim in order to free it is exactly
+            // how these rows were made. The daemon outlives the call; this
+            // command does not, so it names the two surfaces that do and stops.
             //
             // Only for a count the node actually gave: `.notReported` and a
             // failed probe both already read on the line above, and neither is
             // grounds for telling anybody to go and look at a claim.
             if case .exactly(let held) = read.claimedElsewhere, held > 0 {
                 print("  note: \(held) message(s) held by another session under this same "
-                    + "agent identity — this appliance cannot take them, so it will not "
-                    + "announce them and will not break the claim. Read them without "
-                    + "claiming with sage_message_history(folder: \"inbox\") and compare "
-                    + "their claimant_session_id: a session still working will finish and "
-                    + "release the claim, but one that has already exited never will — the "
-                    + "receipt has no expiry — and only a sage_message_handoff you run "
-                    + "yourself frees those.")
+                    + "agent identity — this run will not take them, because the session it "
+                    + "would take them into ends with this command and a re-stranded claim "
+                    + "is how these were made. Read them without claiming with "
+                    + "sage_message_history(folder: \"inbox\") and compare their "
+                    + "claimant_session_id: a session still working will finish and release "
+                    + "the claim, but one that has already exited never will — the receipt "
+                    + "has no expiry. To free those, ask Mynah to hand them back — it holds "
+                    + "sage_message_handoff and a session that outlives the answer — or run "
+                    + "sage_message_handoff yourself with the claimant_session_id you just read.")
             }
             // **The command's own side effect, said out loud — with its door.**
             //
@@ -2061,9 +2075,10 @@ func runCheck(_ arguments: [String]) -> Never {
             // not apply.
             print("  note: reading the inbox claims what it lists, under a session that ends with "
                 + "this command, and the receipt has no expiry — so the daemon will not "
-                + "announce anything claimed here again until you hand it back with "
-                + "sage_message_handoff. sage_message_history(folder: \"inbox\") reads "
-                + "without claiming, and reopens what this run took.")
+                + "announce anything claimed here again until it is handed back. Ask Mynah "
+                + "to do it, or run sage_message_handoff yourself. "
+                + "sage_message_history(folder: \"inbox\") reads without claiming, and shows "
+                + "the claimant_session_id a handoff needs.")
         } catch {
             reachable = false
             print("inbox: could not ask — \(error)")

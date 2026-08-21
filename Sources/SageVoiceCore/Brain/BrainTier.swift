@@ -183,15 +183,43 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// **Re-measured on 19 Aug 2026, and the number moved because the
     /// measurement said it could.** `scripts/measure-tool-routing.py` against
     /// qwen3.5:4b, the real 8,300-character voice prompt, this Mac, sweeping
-    /// catalogue size with the shipped fifteen SAGE names always present so a
-    /// miss is a routing failure and never a tool the model was not shown.
+    /// catalogue size with every shipped SAGE name always present so a miss is a
+    /// routing failure and never a tool the model was not shown. That was
+    /// fifteen names on the day this table was taken and is sixteen since
+    /// `sage_message_handoff` was added on 21 Aug 2026, so the shipped row is
+    /// composed 21 rather than composed 20 — a column this table already holds.
     /// "composed" is what this constant bounds — the SAGE slice plus the four
     /// note tools and `web_search`:
     ///
     ///     composed  20  21  22  24  27  32  38
     ///     score      9   9   9   9   9   6   7   (of 12)
     ///
-    /// Flat to 27 and identical at every step, then a cliff. So the old "14
+    /// Flat to 27 and identical at every step, then a cliff.
+    ///
+    /// **Re-measured 21 Aug 2026 when `sage_message_handoff` was added**, same
+    /// model, same prompt, same Mac, and this one carries `MYNAH_TOOL_HINTS=1`
+    /// — which the row above does NOT, because the hints did not exist until
+    /// 20 Aug. Compare the two on shape, not on the digit:
+    ///
+    ///     composed  21  22  23  25  28  33  38
+    ///     score     10  10  10  10  10   6   8   (of 12)
+    ///     s/turn   9.6 18.5 21.9 22.2 15.0 26.3 24.8
+    ///
+    /// The gain is the hints, not the tool: `sage_timeline` answered with
+    /// `sage_backlog` in every row of the older table and is correct in every
+    /// row of this one, which is exactly the miss those two sentences were
+    /// written to fix. The two that still miss are the two they were not —
+    /// `sage_forget` answered with `sage_recall`, `sage_directory` with
+    /// `sage_backlog`.
+    ///
+    /// What it says about the addition is the part this was run for: the
+    /// shipped row IS composed 21, and it scores what composed 22, 23, 25 and 28
+    /// score. Carrying `sage_message_handoff` cost nothing measurable, and the
+    /// flat region now runs one step further than the ceiling does.
+    ///
+    /// Do not read the s/turn column as a size curve — 9.6 s at the smallest
+    /// catalogue and 15.0 s at composed 28 are not monotonic, and this Mac was
+    /// doing other work. Latency wants its own quiet run. So the old "14
     /// scored 12/12, 27 dropped to 5-6/12" is superseded rather than refined,
     /// and it is worth saying why it cannot simply be compared: it was measured
     /// against a tool list that had DRIFTED out of the appliance — it contained
@@ -221,13 +249,18 @@ public struct BrainCapabilities: Sendable, Equatable {
     /// somebody else's hardware here.
     ///
     /// **Read by `BrainTierTests` and by nothing at runtime**, and that is
-    /// stated rather than left to be discovered: `ToolLoop.Configuration`
-    /// applies `BrainPrompts.voiceToolAllowlist` unconditionally, so a hosted
-    /// brain is offered exactly what a local one is — nineteen after the 5 Aug
-    /// cuts (`sage_list`, `sage_reflect`) and the messages swap (`sage_pipe` out,
-    /// `sage_message_send` and `sage_message_reply` in). One slot of headroom
-    /// under the ceiling, deliberately. The ratchet is the
-    /// whole of its current job. How many tools a skill loader may expose is a
+    /// stated rather than left to be discovered.
+    ///
+    /// The sentence that stood here — "`ToolLoop.Configuration` applies
+    /// `BrainPrompts.voiceToolAllowlist` unconditionally, so a hosted brain is
+    /// offered exactly what a local one is — nineteen" — had already stopped
+    /// being true before this edit, twice over: the loop takes the tier through
+    /// `voiceToolAllowlist(for:)` since 2.3.2, and the count is 21 composed on
+    /// device and 22 hosted. It is corrected rather than deleted because a
+    /// comment that quietly stops describing the code is the same failure as a
+    /// tool list that quietly stops describing the node — the one this file's
+    /// own table exists to have caught. The ratchet is the whole of its current
+    /// job. How many tools a skill loader may expose is a
     /// tier field, not a global constant — which is what this becomes when that
     /// loader is written.
     public let maxRoutableTools: Int
