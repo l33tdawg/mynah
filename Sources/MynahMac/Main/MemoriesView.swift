@@ -2014,18 +2014,45 @@ struct MemoriesView: View {
 
 /// A shadow only while the card is raised.
 ///
-/// A branch rather than `.mynahShadow(...)` with a zero radius: a shadow with
-/// no size is still a shadow, composited under every card in a list the owner
-/// scrolls. This screen can hold hundreds of them.
+/// **The shadow is a layer behind the card, not a modifier on it.** The obvious
+/// spelling — `if isRaised { content.mynahShadow(.card) } else { content }` —
+/// was what shipped, and it is the SwiftUI conditional-modifier trap: the two
+/// branches are different types, so `_ConditionalContent` gives the card a
+/// *different identity* under the pointer than at rest. Every hover in and out
+/// tore the whole card down and built it again, and because the enclosing
+/// `.mynahAnimation(Motion.fade, value: isHovering)` was in scope for exactly
+/// that change, the teardown animated: the card cross-faded with itself, text
+/// ghosting over text. The owner, on his own screen: *"when you move your mouse
+/// over messages there's some weird kind of glitchy effect / animation thing"*.
+/// He was watching the card be replaced.
+///
+/// `compositingGroup()` — which `mynahShadow` applies first — made it worse by
+/// flattening the card into a single rasterised layer on the way in and letting
+/// it back apart on the way out, so the fade was between two differently
+/// composited pictures of the same card.
+///
+/// Still a branch, but a branch in the *background*, which owns no content: the
+/// card keeps one identity for its whole life and only an invisible shape
+/// behind it appears and disappears. That keeps the reason the original was a
+/// branch at all — a shadow with no size is still a shadow, composited under
+/// every card in a list the owner scrolls, and this screen can hold hundreds of
+/// them. A resting card now has no shadow layer and no compositing group,
+/// exactly as before; what it no longer has is a second identity.
+///
+/// The shape is filled rather than stroked because a shadow is cast by what a
+/// layer *paints*: an unfilled rectangle casts nothing. The fill is never seen
+/// — the card's own opaque `surface.raised` covers it to the pixel — so only
+/// the spill past the corners reads.
 private struct MemoryCardLift: ViewModifier {
     let isRaised: Bool
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if isRaised {
-            content.mynahShadow(.card)
-        } else {
-            content
+        content.background {
+            if isRaised {
+                RoundedRectangle.mynah(r.card)
+                    .fill(Palette.surface.raised)
+                    .mynahShadow(.card)
+            }
         }
     }
 }
