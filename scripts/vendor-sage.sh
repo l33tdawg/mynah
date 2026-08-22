@@ -139,6 +139,90 @@ EOF
   fi
 }
 
+# **Is the pin behind? Asked here rather than left to be noticed.**
+#
+# Twice now the only thing that caught a stale pin was `notarytool history`, run
+# to check the notary credential was alive, listing SAGE's own DMGs in passing.
+# That is luck wearing the costume of a process: 2.3.6 shipped .25 the same
+# afternoon .26 was published, and 2.4.0 nearly shipped .25 with .27 already
+# out. The block above says "bump this deliberately", and a comment cannot check
+# its own condition — the same lesson `BrainPrompts` learned when an exclusion
+# wrote down its own expiry trigger, the trigger fired, and nothing was watching.
+#
+# Modelled on scripts/assert-test-run.sh's rot check: rot arrives as a build
+# failure carrying the new number rather than as a silent hole. It runs before
+# both paths below, because force-downloading a stale TAG is still stale — which
+# is exactly the near-miss this is written for.
+#
+# **Unreachable is not stale.** No network, a rate limit, or an API answering
+# something other than a release list all say "could not check" and continue. A
+# release that cannot be cut because GitHub is down is a worse failure than the
+# one this prevents.
+#
+# Sorted on published_at, never on API order, for the reason the block above
+# gives: this endpoint once returned 11.17.5 ahead of 11.18.11.
+newest_published_tag() {
+  local json="$TMP/releases.json"
+  # `${auth[@]+...}` rather than a bare `"${auth[@]}"`. Under `set -u` an empty
+  # array is an unbound variable in bash 3.2, which is what /bin/bash still is on
+  # macOS — and the failure lands inside the `|| return 1` below, so the check
+  # reports "could not reach the API" and waves the build through. A guard that
+  # silently does not run is precisely what this replaced, and it did exactly
+  # that the first time it was run.
+  local auth=()
+  [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  curl -fsSL --max-time 20 \
+    -H "Accept: application/vnd.github+json" \
+    -H "User-Agent: SAGEVoiceBridge-Vendor" \
+    ${auth[@]+"${auth[@]}"} \
+    "https://api.github.com/repos/$REPO/releases?per_page=100" \
+    -o "$json" 2>/dev/null || return 1
+  python3 -c 'import json,sys
+releases = json.load(open(sys.argv[1]))
+if not isinstance(releases, list):
+    raise SystemExit(1)
+published = [r for r in releases if not r.get("draft") and r.get("published_at")]
+if not published:
+    raise SystemExit(1)
+print(max(published, key=lambda r: r["published_at"])["tag_name"])' "$json" 2>/dev/null || return 1
+}
+
+if [[ "$TAG" != "latest" && "${SAGE_ALLOW_STALE_PIN:-0}" != "1" ]]; then
+  if NEWEST="$(newest_published_tag)" && [[ -n "$NEWEST" ]]; then
+    if [[ "$NEWEST" != "$TAG" ]]; then
+      cat >&2 <<MSG
+error: this repository pins SAGE $TAG and $NEWEST is the newest published release.
+
+Bump it deliberately, in scripts/vendor-sage.sh, and re-vendor:
+
+  TAG="\${SAGE_RELEASE_TAG:-$NEWEST}"
+  SAGE_FORCE_DOWNLOAD=1 bash scripts/vendor-sage.sh
+
+SAGE_FORCE_DOWNLOAD=1 is not optional. This script keeps an already-staged
+bundle, so changing the tag alone leaves the old brain in vendor/ and says
+nothing — which is how Mynah 2.0.0 shipped a brain five releases behind.
+
+Read the new release notes against BrainPrompts.voiceToolAllowlist first. A SAGE
+release is what makes the exclusions there go stale, nothing re-reads them, and
+the owner finds out by being told a tool does not exist.
+
+If shipping the older brain is deliberate — the owner has held a pin before, and
+there is a floor at 11.18.24 that matters more than newness — say so rather than
+editing this check away:
+
+  SAGE_ALLOW_STALE_PIN=1 bash scripts/vendor-sage.sh
+MSG
+      exit 1
+    fi
+    echo "SAGE pin $TAG is the newest published release."
+  else
+    # Said out loud, because a check that silently did not run is the thing this
+    # replaced.
+    echo "note: could not reach the GitHub releases API, so whether $TAG is still" >&2
+    echo "      the newest published SAGE was not checked." >&2
+  fi
+fi
+
 # Already vendored: verify and stop. Re-downloading on every build would make
 # the build non-reproducible and would rate-limit CI.
 if [[ -d "$OUT" && "${SAGE_FORCE_DOWNLOAD:-0}" != "1" ]]; then

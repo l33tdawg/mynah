@@ -1111,7 +1111,13 @@ final class SettingsModel {
                 // Whole-calendar deletion is never right here: `own` is being
                 // left behind, not uninstalled, and the owner may put the mirror
                 // back on it tomorrow. Take out exactly what was written.
-                try? await calendar.takeBack(eventIDs: Array(held.events.values))
+                //
+                // The count is dropped rather than reported: this is a move, and
+                // the owner asked to change calendars, not to hear how many
+                // events were in the old one. `_ =` rather than a bare `try?`
+                // because `@discardableResult` does not survive being wrapped in
+                // an optional, so the bare form warns.
+                _ = try? await calendar.takeBack(eventIDs: Array(held.events.values))
             }
             try? FileManager.default.removeItem(at: calendarLedger)
         }
