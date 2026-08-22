@@ -64,21 +64,35 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
 
     private let store: EKEventStore
     private let title: String
+    private let target: @Sendable () -> CalendarTarget
     private let log: @Sendable (String) -> Void
     private let lock = NSLock()
     private var mynahCalendar: EKCalendar?
+    /// What `mynahCalendar` was resolved for, so a changed choice invalidates it.
+    private var resolvedFor: CalendarTarget?
 
     /// - Parameter title: the calendar's name. Overridden only by the end-to-end
     ///   test, which must not write into the owner's real one — everything else
     ///   uses `calendarTitle`, and two Mynahs sharing a Mac sharing a calendar is
     ///   the correct behaviour rather than a collision.
+    /// - Parameter target: which calendar to write into. **A closure, not a
+    ///   value, and that is load-bearing.** The daemon builds one of these once
+    ///   at launch and keeps it for weeks; a value captured there would mean the
+    ///   owner's choice did nothing until they quit Mynah, which is the shape of
+    ///   a setting that appears to work and does not. Reading the preference on
+    ///   each resolve costs one small file read at most once per tick, and only
+    ///   on ticks that have something to write. Defaults to `own`, so every
+    ///   caller with no opinion keeps the behaviour it had before there was a
+    ///   choice.
     public init(
         store: EKEventStore = EKEventStore(),
         title: String = EventKitCalendar.calendarTitle,
+        target: @escaping @Sendable () -> CalendarTarget = { .own },
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.store = store
         self.title = title
+        self.target = target
         self.log = log
     }
 
@@ -93,8 +107,70 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
         try store.removeCalendar(existing, commit: true)
         lock.lock()
         mynahCalendar = nil
+        resolvedFor = nil
         lock.unlock()
         log("[calendar] removed the “\(title)” calendar and everything in it")
+    }
+
+    /// Takes back exactly the events named, and nothing else.
+    ///
+    /// **The undo for a calendar Mynah did not make.** `forget()` deletes a
+    /// whole calendar, which is right for the one this appliance created and
+    /// catastrophic for one of the owner's own — it would take their
+    /// appointments with it. The identifiers come from `CalendarLedger.events`,
+    /// which only ever holds what `add` wrote down, so this can remove Mynah's
+    /// events out of a shared calendar and cannot touch anything else in it.
+    ///
+    /// An event that is already gone counts as taken back rather than as a
+    /// failure, for the reason `update` gives: the owner is entitled to delete
+    /// an event from their own calendar, and reporting a fault they caused on
+    /// purpose helps nobody.
+    ///
+    /// - Returns: how many were actually still there to remove.
+    @discardableResult
+    public func takeBack(eventIDs: [String]) async throws -> Int {
+        var removed = 0
+        for identifier in eventIDs {
+            guard let event = store.event(withIdentifier: identifier) else { continue }
+            try store.remove(event, span: Self.span(for: event), commit: true)
+            removed += 1
+        }
+        log("[calendar] took back \(removed) event(s) Mynah had added")
+        return removed
+    }
+
+    // MARK: What there is to choose from
+
+    /// Every calendar this Mac would let Mynah write to, in the order to show them.
+    ///
+    /// **Mynah's own is deliberately not in here.** It is offered by the screen
+    /// as `CalendarTarget.own`, above the owner's, because it is a different
+    /// kind of answer — a calendar that will be *made* rather than one that
+    /// exists — and because it must stay pickable on a Mac where this list is
+    /// empty.
+    ///
+    /// Sorted by account then title so the order does not shuffle between two
+    /// openings of the same screen. Read-only calendars — a subscribed holiday
+    /// feed, a colleague's shared calendar — are filtered out here rather than
+    /// shown and then refused on write, which is the shape that produces a
+    /// setting that appears to work and silently does not.
+    public func choices() -> [CalendarChoice] {
+        store.calendars(for: .event)
+            .filter { $0.allowsContentModifications && $0.title != title }
+            .map {
+                CalendarChoice(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title)
+            }
+            .sorted { ($0.account, $0.title) < ($1.account, $1.title) }
+    }
+
+    /// Whether this Mac has already said yes, without asking it anything.
+    ///
+    /// Lets a screen show the list to an owner who has granted access and show a
+    /// button to one who has not, instead of prompting for calendar access
+    /// merely because a settings tab was opened. See `prepare()`, which is
+    /// deliberately called at the first moment there is something to write.
+    public static var alreadyAllowed: Bool {
+        EKEventStore.authorizationStatus(for: .event) == .fullAccess
     }
 
     // MARK: Permission
@@ -187,8 +263,35 @@ public final class EventKitCalendar: CalendarWriting, @unchecked Sendable {
     private func calendar() throws -> EKCalendar {
         lock.lock()
         defer { lock.unlock() }
-        if let mynahCalendar, store.calendar(withIdentifier: mynahCalendar.calendarIdentifier) != nil {
+        let target = self.target()
+        // Compared as well as checked for existence: the cached calendar can be
+        // perfectly alive and simply not the one the owner now wants.
+        if let mynahCalendar,
+           resolvedFor == target,
+           store.calendar(withIdentifier: mynahCalendar.calendarIdentifier) != nil {
             return mynahCalendar
+        }
+        resolvedFor = target
+
+        // **The owner's choice, and what happens when it stops existing.**
+        //
+        // A chosen calendar can be deleted in Calendar.app, or arrive from an
+        // account that has since been signed out, and neither is a thing this
+        // appliance can prevent or should fail on. Falling back to Mynah's own
+        // calendar keeps the dated tasks reaching the owner's phone, which is
+        // the whole point; saying so in the log is what stops the next reader
+        // from concluding the picker never worked. It deliberately does not
+        // rewrite the preference — the owner chose that calendar, and if they
+        // put it back it should start being used again without them having to
+        // choose it twice.
+        if case .existing(let identifier) = target {
+            if let picked = store.calendar(withIdentifier: identifier), picked.allowsContentModifications {
+                mynahCalendar = picked
+                return picked
+            }
+            log("[calendar] the calendar you chose is not there any more, so this is going in "
+                + "Mynah's own “\(title)” calendar instead. Settings → General → Answering to "
+                + "pick another one.")
         }
 
         let existing = store.calendars(for: .event).first {

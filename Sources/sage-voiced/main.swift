@@ -1639,7 +1639,14 @@ func runDaemon(_ arguments: [String]) -> Never {
                 source: SageProactiveSource(tools: mcp, log: { note($0) }),
                 ownEdits: ownTaskEdits,
                 calendar: CalendarSync(
-                    calendar: EventKitCalendar(log: { note($0) }),
+                    calendar: EventKitCalendar(
+                        // Read per resolve rather than captured here. This
+                        // daemon runs for weeks; a value read at launch would
+                        // mean the owner picking a calendar in Settings did
+                        // nothing until they quit Mynah.
+                        target: { CalendarPreferences.load().target },
+                        log: { note($0) }
+                    ),
                     log: { note($0) }
                 ),
                 arrivedReplies: {
@@ -1785,7 +1792,13 @@ func runCalendar(_ arguments: [String]) -> Never {
             return 0
         }
 
-        let sync = CalendarSync(calendar: EventKitCalendar(log: { print($0) }), log: { print($0) })
+        let sync = CalendarSync(
+            calendar: EventKitCalendar(
+                target: { CalendarPreferences.load().target },
+                log: { print($0) }
+            ),
+            log: { print($0) }
+        )
         let outcome = await sync.run(tasks: tasks, ledger: ledger)
         if outcome.ledger != ledger { try? outcome.ledger.save(to: ledgerURL) }
 

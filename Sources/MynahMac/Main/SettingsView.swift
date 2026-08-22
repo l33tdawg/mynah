@@ -626,7 +626,11 @@ final class SettingsModel {
         self.checksEveryMinutes = proactive.clampedMinutes
         self.calendarPreferences = calendarPreferences
         self.calendarLedger = calendarLedger
-        self.mirrorsToCalendar = CalendarPreferences.load(from: calendarPreferences).isOn
+        // One read for both fields. Two `load` calls would be two chances for
+        // them to disagree about the same file.
+        let calendar = CalendarPreferences.load(from: calendarPreferences)
+        self.mirrorsToCalendar = calendar.isOn
+        self.calendarTarget = calendar.target
     }
 
     /// Which apps the owner wants to be able to message Mynah on.
@@ -982,6 +986,18 @@ final class SettingsModel {
     private(set) var checksOnThings: Bool
     private(set) var mirrorsToCalendar: Bool = true
     private(set) var calendarRemoval: CalendarRemoval = .idle
+    /// Which calendar the mirror writes into. See `CalendarTarget`.
+    private(set) var calendarTarget: CalendarTarget = .own
+    /// The owner's own calendars, once they have been asked for.
+    ///
+    /// Empty until `loadCalendarChoices()` runs, which is not on appearance —
+    /// see that method for why a settings tab must not be able to raise a
+    /// permission prompt on its own.
+    private(set) var calendarChoices: [CalendarChoice] = []
+    private(set) var isLoadingCalendarChoices = false
+    /// Set when macOS refused, so the row can say so instead of showing an
+    /// empty menu and letting the owner conclude they have no calendars.
+    private(set) var calendarChoicesRefused: String?
     private(set) var checksEveryMinutes: Int
 
     /// The intervals offered. Not a free-text field: the useful range is narrow,
@@ -1036,6 +1052,73 @@ final class SettingsModel {
         CalendarPreferences.amend(at: calendarPreferences) { $0.isOn = isOn }
     }
 
+    /// Fills the picker, asking macOS for access if it has never been asked.
+    ///
+    /// **Called from the button, never from `onAppear`.** `EventKitCalendar`
+    /// asks for calendar access at the first moment there is a dated task to
+    /// write, deliberately and with a comment saying why: a prompt that arrives
+    /// before the feature has done anything for the owner is one people decline
+    /// for ever, and a refusal is remembered permanently. Listing the calendars
+    /// needs the same access, so opening this tab must not be able to trigger
+    /// it — pressing a button that says "Choose a calendar" is the owner asking,
+    /// which is the only honest time.
+    func loadCalendarChoices() async {
+        isLoadingCalendarChoices = true
+        defer { isLoadingCalendarChoices = false }
+        let calendar = EventKitCalendar()
+        guard await calendar.prepare() else {
+            calendarChoicesRefused = EventKitCalendar.wasRefused
+                ? "macOS has not given Mynah access to your calendar. System Settings → Privacy "
+                    + "& Security → Calendars → turn on Mynah, then try again."
+                : "Mynah could not reach your calendars. System Settings → Privacy & Security → "
+                    + "Calendars."
+            return
+        }
+        calendarChoicesRefused = nil
+        calendarChoices = calendar.choices()
+    }
+
+    /// Moves the mirror to another calendar, taking what it already wrote with it.
+    ///
+    /// **The events move rather than being abandoned.** Leaving them behind
+    /// would orphan them in a calendar Mynah has stopped tracking, with nothing
+    /// able to take them back — the exact failure `CalendarPreferences` was
+    /// written to avoid, one field along. They are removed from the old calendar
+    /// here and the ledger is emptied, so the next tick re-adds every dated task
+    /// to the new one through `CalendarMirror.plan`. One tick of latency buys a
+    /// move that reuses the machinery already under test rather than a bespoke
+    /// one that is not.
+    ///
+    /// The preference is written **last and unconditionally**. A failure to
+    /// clear the old calendar must not strand the owner on a choice they have
+    /// already made — they would press it again and it would fail the same way
+    /// for ever.
+    func setCalendarTarget(_ target: CalendarTarget) async {
+        guard target != calendarTarget else { return }
+        calendarTarget = target
+
+        let held = CalendarLedger.load(from: calendarLedger)
+        if !held.events.isEmpty {
+            // **No target passed, and the old one is not needed either.**
+            // `takeBack` finds events by the identifiers the ledger holds, so it
+            // reaches into whichever calendar they are actually in — which is by
+            // definition the one being left behind. Handing it the outgoing
+            // target would imply the target steers it, and the next reader would
+            // reasonably conclude that a wrong target could take back the wrong
+            // events.
+            let calendar = EventKitCalendar()
+            if await calendar.prepare() {
+                // Whole-calendar deletion is never right here: `own` is being
+                // left behind, not uninstalled, and the owner may put the mirror
+                // back on it tomorrow. Take out exactly what was written.
+                try? await calendar.takeBack(eventIDs: Array(held.events.values))
+            }
+            try? FileManager.default.removeItem(at: calendarLedger)
+        }
+
+        CalendarPreferences.amend(at: calendarPreferences) { $0.target = target }
+    }
+
     /// What the undo button is doing, and what it did.
     enum CalendarRemoval: Equatable {
         case idle
@@ -1054,8 +1137,19 @@ final class SettingsModel {
     /// **The ledger goes too.** It maps task ids to event ids, so keeping it
     /// after the events are gone would leave the next tick believing it had
     /// already mirrored everything, and nothing would ever be written again.
+    ///
+    /// **Since the owner can choose a calendar, this button has two jobs and
+    /// must never do the wrong one.** Deleting a whole calendar is the right
+    /// uninstall for the one Mynah made and would destroy the owner's own
+    /// appointments if aimed at theirs. So it dispatches on the target: `own`
+    /// deletes the calendar, `existing` takes back exactly the events named in
+    /// the ledger and leaves everything else in that calendar untouched.
     func removeMynahCalendar() async {
         calendarRemoval = .removing
+        // The dispatch is the `switch` below, not this object. Neither branch
+        // reads a target: `forget` finds Mynah's calendar by title and
+        // `takeBack` finds events by identifier.
+        let target = calendarTarget
         let calendar = EventKitCalendar()
         // Asked rather than assumed. Without access `forget()` finds no calendar
         // and returns quietly, which would report success for having done
@@ -1068,19 +1162,21 @@ final class SettingsModel {
             )
             return
         }
-        let held = CalendarLedger.load(from: calendarLedger).events.count
+        let ledger = CalendarLedger.load(from: calendarLedger)
+        let held = ledger.events.count
         do {
-            try calendar.forget()
+            switch target {
+            case .own:
+                try calendar.forget()
+            case .existing:
+                try await calendar.takeBack(eventIDs: Array(ledger.events.values))
+            }
         } catch {
             calendarRemoval = .refused("The calendar could not be removed: \(error)")
             return
         }
         try? FileManager.default.removeItem(at: calendarLedger)
-        calendarRemoval = .removed(
-            held == 0
-                ? "Mynah's calendar is gone."
-                : "Removed Mynah's calendar and the \(held) event\(held == 1 ? "" : "s") in it."
-        )
+        calendarRemoval = .removed(target.removalSentence(held: held))
     }
 
     // MARK: Fetching a newer Mynah
@@ -2647,6 +2743,11 @@ struct SettingsView: View {
             }
             MynahDivider()
             calendarRow
+            if model.mirrorsToCalendar {
+                MynahDivider()
+                calendarTargetRow
+                calendarTargetTrouble
+            }
             MynahDivider()
             calendarUndoRow
             calendarRemovalResult
@@ -2678,16 +2779,113 @@ struct SettingsView: View {
         }
     }
 
+    /// **Which calendar, because until now nobody could say.**
+    ///
+    /// The owner, 22 August 2026: *"we need a ui interface to configure which
+    /// calendar it writes to so you can choose"*. Before this, the account was
+    /// picked by `EventKitCalendar.writableSource()` — iCloud, then any other
+    /// CalDAV account, then this Mac — and no screen anywhere said which one had
+    /// won, so an owner whose phone shows a Google calendar had no way to say so
+    /// and no way to find out where their events had gone.
+    ///
+    /// **The menu is empty until the owner presses the button, on purpose.**
+    /// Listing calendars needs the same permission as writing to them, and
+    /// `EventKitCalendar.prepare()` is deliberately called at the first moment
+    /// there is a dated task rather than at launch — a prompt that arrives
+    /// before the feature has done anything for you is one people decline for
+    /// ever, and macOS remembers a refusal permanently. Opening a settings tab
+    /// must therefore not be able to raise that prompt; pressing a button that
+    /// says "Choose a calendar" is the owner asking for it.
+    @ViewBuilder
+    private var calendarTargetRow: some View {
+        SettingsRow(
+            "Which calendar",
+            detail: model.calendarChoices.isEmpty
+                ? "Mynah keeps its own calendar unless you pick one of yours."
+                : "Pick one of your own calendars and dated tasks go straight there, so they show "
+                    + "up wherever that calendar already does."
+        ) {
+            if model.calendarChoices.isEmpty {
+                if model.isLoadingCalendarChoices {
+                    ProgressView().controlSize(.small).tint(Palette.accent.fill)
+                } else {
+                    MynahButton("Choose a calendar", kind: .secondary) {
+                        Task { await model.loadCalendarChoices() }
+                    }
+                }
+            } else {
+                Picker("", selection: Binding(
+                    get: { model.calendarTarget },
+                    set: { target in Task { await model.setCalendarTarget(target) } }
+                )) {
+                    // Mynah's own first and always, because it must stay
+                    // pickable on a Mac where the list below is empty — and
+                    // because "make me one" is a different kind of answer from
+                    // "use that one", not just another row.
+                    Text(CalendarTarget.own.name(among: model.calendarChoices))
+                        .tag(CalendarTarget.own)
+                    Divider()
+                    ForEach(model.calendarChoices) { choice in
+                        Text("\(choice.title) — \(choice.account)")
+                            .tag(CalendarTarget.existing(identifier: choice.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 240)
+            }
+        }
+        // **Only when macOS has already said yes.** `alreadyAllowed` reads the
+        // authorization status and asks nothing, so this cannot raise a prompt
+        // — which is the whole constraint. An owner who granted access weeks ago
+        // gets the list straight away; one who has not sees the button, and
+        // pressing it is them asking. Without the guard this would be exactly
+        // the launch-time prompt the subsystem refuses to make.
+        .task {
+            guard model.calendarChoices.isEmpty, EventKitCalendar.alreadyAllowed else { return }
+            await model.loadCalendarChoices()
+        }
+    }
+
+    /// Why the list is empty, when it is empty for a reason.
+    ///
+    /// An empty menu with no explanation reads as "you have no calendars", which
+    /// is almost never what happened — see `every dead end needs a door`: the
+    /// sentence names the System Settings pane rather than leaving the owner to
+    /// find it.
+    @ViewBuilder
+    private var calendarTargetTrouble: some View {
+        if let trouble = model.calendarChoicesRefused {
+            Text(trouble)
+                .mynahFont(.body)
+                .foregroundStyle(Palette.state.critical)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, s4)
+        }
+    }
+
     /// The undo, which is a real one: the calendar and everything in it.
     ///
     /// Same act as dragging it to the bin in Calendar.app, deliberately — a
     /// second mechanism the owner has to trust separately is a worse answer than
     /// the one they already know.
+    ///
+    /// **Both halves of the sentence change with the target.** Aimed at one of
+    /// the owner's own calendars this button does not delete a calendar at all —
+    /// it takes back the events named in the ledger — and a row that still said
+    /// "Deletes the Mynah calendar" would be describing something it is not
+    /// about to do, on the one control in this app that destroys data.
     private var calendarUndoRow: some View {
         SettingsRow(
-            "Remove Mynah's calendar",
-            detail: "Deletes the Mynah calendar and every event it put there. Your own calendars "
-                + "are untouched, and your tasks stay on the board."
+            model.calendarTarget == .own
+                ? "Remove Mynah's calendar"
+                : "Take Mynah's events back out",
+            detail: model.calendarTarget == .own
+                ? "Deletes the Mynah calendar and every event it put there. Your own calendars "
+                    + "are untouched, and your tasks stay on the board."
+                : "Removes only the events Mynah added to the calendar you chose. That calendar "
+                    + "and everything else in it stay exactly as they are, and your tasks stay "
+                    + "on the board."
         ) {
             if model.calendarRemoval == .removing {
                 ProgressView().controlSize(.small).tint(Palette.accent.fill)

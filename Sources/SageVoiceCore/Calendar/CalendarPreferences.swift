@@ -1,5 +1,120 @@
 import Foundation
 
+/// Which calendar the mirror writes into.
+///
+/// ## Why this exists
+///
+/// The owner, 22 August 2026: *"we need a ui interface to configure which
+/// calendar it writes to so you can choose"*.
+///
+/// Until now `EventKitCalendar.writableSource()` picked the account by itself —
+/// iCloud first, then any other CalDAV account, then the local store — and made
+/// a calendar named Mynah inside whichever it landed on. That is a reasonable
+/// default and it is *only* a default: an owner whose phone shows a Google
+/// account has no way to say so, and no screen anywhere tells them where their
+/// events went.
+///
+/// ## Mynah's own, or one of theirs
+///
+/// Both are offered because they answer different questions. `own` keeps the
+/// property the whole subsystem was built on — a calendar Mynah made, that
+/// nothing else writes to, whose deletion is a complete and obvious uninstall.
+/// `existing` puts the events where the owner already looks, which is the entire
+/// point of mirroring them at all.
+///
+/// **What `existing` costs, and it is paid for in `EventKitCalendar.forget`:**
+/// removing a calendar Mynah did not make would destroy the owner's own
+/// appointments. So the undo splits — Mynah's own calendar is deleted whole, and
+/// a calendar of theirs has exactly the events named in `CalendarLedger.events`
+/// taken out of it and nothing else. Every operation already goes through an
+/// event identifier this appliance wrote down itself, so it can only ever take
+/// back what it put there.
+public enum CalendarTarget: Hashable, Sendable, Codable {
+    /// A calendar named `Mynah`, made on first use in whichever account
+    /// `EventKitCalendar.writableSource()` picks. The shipped default, and what
+    /// every install before 2.4 did without being asked.
+    case own
+    /// One of the owner's own calendars, by `EKCalendar.calendarIdentifier`.
+    ///
+    /// The identifier rather than the title, because two accounts are each
+    /// entitled to a calendar called "Personal" and a title cannot tell them
+    /// apart. It is also the thing that goes stale — the owner may delete the
+    /// calendar they chose, and `EventKitCalendar.calendar()` falls back to
+    /// `own` and says so rather than letting the mirror quietly stop.
+    case existing(identifier: String)
+
+    // MARK: What a screen calls it
+
+    /// The name to show for this choice.
+    ///
+    /// Mynah's own is named as something that will be *made*, because on most
+    /// Macs it does not exist yet and a row naming a calendar the owner cannot
+    /// find in Calendar.app reads as a bug.
+    public func name(among choices: [CalendarChoice]) -> String {
+        switch self {
+        case .own:
+            return "Mynah's own calendar"
+        case .existing(let identifier):
+            guard let choice = choices.first(where: { $0.id == identifier }) else {
+                // The owner chose it and then deleted it. Named as gone rather
+                // than shown as a blank row — and meanwhile
+                // `EventKitCalendar.calendar()` is falling back to Mynah's own
+                // and saying so in the log, so the mirror has not stopped.
+                return "A calendar that is no longer there"
+            }
+            return "\(choice.title) — \(choice.account)"
+        }
+    }
+
+    /// What the undo says after it has run.
+    ///
+    /// **The two branches remove very different things and the sentence has to
+    /// say which.** An owner who pointed the mirror at their own calendar and
+    /// then pressed the button needs to be told their calendar is still there;
+    /// "Done" would leave them opening Calendar.app to find out.
+    public func removalSentence(held: Int) -> String {
+        let events = "\(held) event\(held == 1 ? "" : "s")"
+        switch self {
+        case .own:
+            return held == 0
+                ? "Mynah's calendar is gone."
+                : "Removed Mynah's calendar and the \(events) in it."
+        case .existing:
+            return held == 0
+                ? "Mynah had not put anything in your calendar."
+                : "Took \(events) back out of your calendar. Your calendar and everything else "
+                    + "in it are untouched."
+        }
+    }
+}
+
+/// One calendar the owner could pick, as a screen needs it.
+///
+/// **A value rather than an `EKCalendar`,** so the settings screen never holds a
+/// live EventKit object across a redraw — one signed-out account and the whole
+/// list is dangling references.
+///
+/// It lives here, beside `CalendarTarget` and in a file that imports nothing but
+/// Foundation, rather than inside `EventKitCalendar`. That keeps the wording in
+/// `CalendarTarget.name(among:)` testable without a calendar, without a
+/// permission prompt during `swift test`, and on a platform that has no EventKit
+/// at all — which the Linux port will be.
+public struct CalendarChoice: Identifiable, Hashable, Sendable {
+    /// `EKCalendar.calendarIdentifier`, which is what `CalendarTarget` stores.
+    public let id: String
+    public let title: String
+    /// The account it lives in — "iCloud", "Google", "On My Mac". Shown because
+    /// two accounts are each entitled to a calendar called "Personal", and
+    /// without this the owner is choosing between two rows with the same name.
+    public let account: String
+
+    public init(id: String, title: String, account: String) {
+        self.id = id
+        self.title = title
+        self.account = account
+    }
+}
+
 /// Whether Mynah may put dated tasks in the owner's calendar.
 ///
 /// ## Why this exists
@@ -43,8 +158,32 @@ public struct CalendarPreferences: Sendable, Equatable, Codable {
     /// it does would lose their events.
     public var isOn: Bool
 
-    public init(isOn: Bool = true) {
+    /// Which calendar the events go in. See `CalendarTarget`.
+    public var target: CalendarTarget
+
+    public init(isOn: Bool = true, target: CalendarTarget = .own) {
         self.isOn = isOn
+        self.target = target
+    }
+
+    // MARK: Reading a file written before this field existed
+
+    /// **Hand-written because the synthesised one would refuse every file on
+    /// disk today.** `Codable` treats a missing key as a failure, and
+    /// `CalendarPreferences.load` turns a failure into the default — which is
+    /// `isOn: true`, so nothing would break loudly. It would instead silently
+    /// discard an owner who had turned the mirror *off*, and start writing to
+    /// their calendar again on the next tick. A new field must never be able to
+    /// do that.
+    private enum CodingKeys: String, CodingKey {
+        case isOn
+        case target
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.isOn = try container.decodeIfPresent(Bool.self, forKey: .isOn) ?? true
+        self.target = try container.decodeIfPresent(CalendarTarget.self, forKey: .target) ?? .own
     }
 
     // MARK: Where it lives
