@@ -43,9 +43,31 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # moment of the cut is what stops Mynah shipping a brain that was superseded
 # while its DMG uploaded. Sorted on published_at, again, not on API order.
 #
+# 11.18.25 -> 11.18.27 on 22 Aug 2026, cutting 2.4.0. Two releases had landed
+# since the .25 pin and neither was noticed by anything in this repository —
+# .26 the same afternoon 2.3.6 shipped. The tell was `notarytool history`, run
+# only to check that the notary credential was alive, which listed
+# SAGE-v11.18.27-macOS-arm64.dmg accepted the previous evening. That is twice
+# now that a diagnostic aimed at something else has been the only thing to catch
+# a stale pin, which says the checking should not depend on somebody reading the
+# whole of an unrelated command's output.
+#
+# Both releases were read against `BrainPrompts.voiceToolAllowlist` before
+# bumping, because a SAGE release is what stales the exclusions there and
+# nothing re-reads them: .26 is dependency bumps plus "bind tokens to approved
+# managed identities", .27 discloses domain index-completeness on an empty
+# recall. Neither offers a tool or retires a reason, so the one remaining
+# deliberate exclusion — `sage_message_replies`, withheld because
+# `sage_message_history(folder:"outbox")` already answers the same question —
+# still stands. Recorded so the next bump knows this was checked rather than
+# assumed.
+#
+# The floor from the .25 note is unchanged and still binding: anything below
+# .24 ships a `sage_message_handoff` that cannot finish a federated handoff.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.18.25}"
+TAG="${SAGE_RELEASE_TAG:-v11.18.27}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
