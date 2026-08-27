@@ -1393,6 +1393,24 @@ func runDaemon(_ arguments: [String]) -> Never {
         }
         let channels = ChannelSet(enabledChannels)
 
+        // Calendar mirroring is independent of proactive messaging. The same
+        // coordinator serves immediate task writes and the periodic watch, so
+        // the two paths cannot race the on-disk ledger or EventKit.
+        let proactiveSource = SageProactiveSource(tools: mcp, log: { note($0) })
+        let calendarMirror = CalendarMirrorCoordinator(
+            source: proactiveSource,
+            calendar: CalendarSync(
+                calendar: EventKitCalendar(
+                    // Read per resolve: changing the target in Settings must
+                    // take effect without restarting the daemon.
+                    target: { CalendarPreferences.load().target },
+                    log: { note($0) }
+                ),
+                log: { note($0) }
+            ),
+            log: { note($0) }
+        )
+
         let daemon = VoiceBridgeDaemon(
             channels: channels,
             transcriber: transcriber,
@@ -1440,8 +1458,13 @@ func runDaemon(_ arguments: [String]) -> Never {
                 afterTheCall.expectCall(from: recipient)
                 await callServer.prepare()
             },
-            // What he changes himself is not news. See `OwnTaskEdits`.
-            onTaskWrites: { await ownTaskEdits.record() }
+            // What he changes himself is not news. It is, however, something
+            // Calendar must see immediately rather than at the next proactive
+            // interval (or never, when proactive messaging is switched off).
+            onTaskWrites: {
+                await ownTaskEdits.record()
+                await calendarMirror.refresh()
+            }
         )
         // After construction, because the transcript goes out through the same
         // Signal path as everything else and the daemon owns it.
@@ -1636,19 +1659,9 @@ func runDaemon(_ arguments: [String]) -> Never {
                 // Logged, because a backlog read that fails silently is what
                 // emptied the owner's calendar on 6 August and left nothing in
                 // the log to say why.
-                source: SageProactiveSource(tools: mcp, log: { note($0) }),
+                source: proactiveSource,
                 ownEdits: ownTaskEdits,
-                calendar: CalendarSync(
-                    calendar: EventKitCalendar(
-                        // Read per resolve rather than captured here. This
-                        // daemon runs for weeks; a value read at launch would
-                        // mean the owner picking a calendar in Settings did
-                        // nothing until they quit Mynah.
-                        target: { CalendarPreferences.load().target },
-                        log: { note($0) }
-                    ),
-                    log: { note($0) }
-                ),
+                calendar: calendarMirror,
                 arrivedReplies: {
                     guard let ritual else { return [] }
                     return await ritual.collectArrivedReplies().map {
@@ -2186,7 +2199,7 @@ func runProactiveWatch(
     ownEdits: OwnTaskEdits? = nil,
     /// Mirrors dated tasks into the owner's Calendar. `nil` switches the whole
     /// thing off; everything else here behaves exactly as it did before.
-    calendar: CalendarSync? = nil,
+    calendar: CalendarMirrorCoordinator? = nil,
     arrivedReplies: @escaping @Sendable () async -> [(String, Bool)] = { [] },
     /// Set by `MessageWakeBus` when the node reports canonical inbox work was
     /// durably inserted for this appliance. `nil` on a node with no wake bus,
@@ -2204,7 +2217,6 @@ func runProactiveWatch(
 ) async {
     let watch = ProactiveWatch(source: source)
     let ledgerURL = ProactiveLedger.defaultFileURL()
-    let calendarLedgerURL = CalendarLedger.defaultFileURL()
 
     while !Task.isCancelled {
         try? await Task.sleep(for: .seconds(ProactiveSchedule.tick))
@@ -2234,9 +2246,7 @@ func runProactiveWatch(
             // writes it runs on the owner's interval while this runs every
             // minute — and because a daemon restart between the two must not
             // resurrect the run-up nudges for things the calendar already has.
-            let mirrored = calendar == nil
-                ? []
-                : Set(CalendarLedger.load(from: calendarLedgerURL).events.keys)
+            let mirrored = await calendar?.mirroredTaskIDs() ?? []
             let nudges = ReminderLadder.due(
                 tasks: ledger.lastSeenTasks,
                 alreadySaid: ledger.saidReminders,
@@ -2293,15 +2303,7 @@ func runProactiveWatch(
         // `report.sawTasks` rather than the ledger's cache: `nil` there means
         // "could not ask", and the sync must not read that as "nothing is dated
         // any more" and empty the owner's calendar.
-        if let calendar {
-            let before = CalendarLedger.load(from: calendarLedgerURL)
-            let outcome = await calendar.run(tasks: report.sawTasks, ledger: before)
-            if outcome.ledger != before {
-                try? outcome.ledger.save(to: calendarLedgerURL)
-                log("[calendar] mirroring \(outcome.ledger.events.count) dated task(s)")
-            }
-            if let trouble = outcome.trouble { log("[calendar] \(trouble)") }
-        }
+        if let calendar { await calendar.sync(tasks: report.sawTasks) }
 
         // Said first and on its own, ahead of any "here is what changed"
         // digest. A reply is the answer to an errand the owner sent, so it is

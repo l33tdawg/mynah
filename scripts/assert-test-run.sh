@@ -102,7 +102,8 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2534   (2.4.0, choosing which calendar the mirror writes to;
+#   measured      2537   (2.4.1, immediate calendar mirroring after a dated task write;
+#                         2534 at 2.4.0, choosing which calendar the mirror writes to;
 #                         2501 at 2.3.1, the agent message the owner was never told about;
 #                         2460 at 2.3.0, a five-minute check the owner can choose;
 #                         2456 at 2.2.0, answering the exact agent rather than the label;
@@ -111,8 +112,8 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2496   (2534 - 38)
-#   floor           2522   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2499   (2537 - 38)
+#   floor           2525   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -485,6 +486,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # CI does not stage vendor/onnxruntime, so KokoroEngineTests is absent from its
 # graph and its measured count is 38 lower. Two environments, two floors, both to
 # be maintained — raising this one alone is what turned CI red the first time.
+# **Raised 2522 -> 2525 cutting 2.4.1.** Three calendar regression tests moved
+# the measured suite from 2534 to 2537; keeping the floor twelve under it keeps
+# the same 26-test margin above a build that silently loses KokoroEngineTests.
+#
 # **Raised 2489 -> 2522 cutting 2.4.0, and the gate is what asked for it.** The
 # suite reached 2534 and the check refused the run: losing KokoroEngineTests
 # would have left 2496, which still cleared 2489, so the one failure this floor
@@ -492,7 +497,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # the third time the rot check has fired on a green suite, which is the whole
 # reason it exists — arithmetic moves the gate out of position on its own, and
 # nobody notices a blind gate by looking at it.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2522}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2525}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

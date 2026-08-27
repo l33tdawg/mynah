@@ -63,11 +63,21 @@ public struct DatedTaskWrites: ToolProviding {
         guard name == Self.task, case .string(let title)? = arguments[Self.content] else {
             return try await wrapped.call(name: name, arguments: arguments)
         }
+        let datedTitle = Self.dated(title, now: now(), calendar: calendar)
         var stamped = arguments
-        stamped[Self.content] = .string(
-            Self.dated(title, now: now(), calendar: calendar)
-        )
-        return try await wrapped.call(name: name, arguments: stamped)
+        stamped[Self.content] = .string(datedTitle)
+        let result = try await wrapped.call(name: name, arguments: stamped)
+
+        // This belongs on the result rather than in the permanent system
+        // prompt. The model only needs it after a dated task write, and the
+        // result remains in conversation history for the owner's immediate
+        // "did you put that in Calendar?" follow-up. Keeping it here also
+        // avoids pretending an undated task can become an event.
+        guard SpokenDate.writtenDate(in: datedTitle, calendar: calendar) != nil else {
+            return result
+        }
+        return result + "\nCalendar mirror: dated tasks are mirrored automatically when Calendar "
+            + "is enabled. This is app behavior, not a separate calendar tool."
     }
 
     // MARK: The rewrite

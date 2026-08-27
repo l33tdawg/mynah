@@ -21,6 +21,15 @@ import XCTest
 /// the failures are silent.
 final class DatedTaskWritesTests: XCTestCase {
 
+    private final class Tools: ToolProviding, @unchecked Sendable {
+        var calledWith: [String: JSONValue] = [:]
+        func listTools() async throws -> [MCPTool] { [] }
+        func call(name: String, arguments: [String: JSONValue]) async throws -> String {
+            calledWith = arguments
+            return "Task created."
+        }
+    }
+
     /// Monday 3 August 2026, 07:13 in Kuala Lumpur — when he actually asked.
     private let now = Date(timeIntervalSince1970: 1_785_712_380)
 
@@ -148,5 +157,22 @@ final class DatedTaskWritesTests: XCTestCase {
     /// it had better be a function.
     func testItIsAFunction() {
         XCTAssertEqual(dated("chiro tomorrow at 11am"), dated("chiro tomorrow at 11am"))
+    }
+
+    /// The model cannot call EventKit directly, but saying it has no calendar
+    /// tool is still false: the app mirrors its successful dated task write.
+    /// Put that fact beside the result that earned it, where the immediate
+    /// follow-up retains it, rather than taxing every turn's system prompt.
+    func testADatedTaskResultExplainsTheAutomaticCalendarMirror() async throws {
+        let tools = Tools()
+        let writes = DatedTaskWrites(wrapping: tools, calendar: calendar, now: { Date() })
+
+        let result = try await writes.call(
+            name: "sage_task",
+            arguments: ["content": .string("Flight to Dubai, Monday 31 Aug 2026, 09:30")]
+        )
+
+        XCTAssertTrue(result.contains("mirrored automatically when Calendar is enabled"), result)
+        XCTAssertTrue(result.contains("not a separate calendar tool"), result)
     }
 }
