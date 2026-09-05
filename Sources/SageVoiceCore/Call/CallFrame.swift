@@ -38,6 +38,11 @@ public enum CallFrame: Sendable, Equatable {
     /// restarted, which means closing it no longer means anything.
     case endCall
 
+    /// Text surfaces use the same local framing without synthesizing audio.
+    case heardText(String)
+    case replyText(String)
+    case screenStatus(String)
+
     var kind: UInt8 {
         switch self {
         case .utterance: return 1
@@ -46,6 +51,9 @@ public enum CallFrame: Sendable, Equatable {
         case .replyEnd: return 4
         case .turnFailed: return 5
         case .endCall: return 6
+        case .heardText: return 7
+        case .replyText: return 8
+        case .screenStatus: return 9
         }
     }
 
@@ -55,7 +63,7 @@ public enum CallFrame: Sendable, Equatable {
             return data
         case .interrupted, .replyEnd, .endCall:
             return Data()
-        case .turnFailed(let reason):
+        case .turnFailed(let reason), .heardText(let reason), .replyText(let reason), .screenStatus(let reason):
             return Data(reason.utf8)
         }
     }
@@ -82,6 +90,9 @@ public enum CallFrame: Sendable, Equatable {
         case 4: return .replyEnd
         case 5: return .turnFailed(String(decoding: payload, as: UTF8.self))
         case 6: return .endCall
+        case 7: return .heardText(String(decoding: payload, as: UTF8.self))
+        case 8: return .replyText(String(decoding: payload, as: UTF8.self))
+        case 9: return .screenStatus(String(decoding: payload, as: UTF8.self))
         default: return nil
         }
     }

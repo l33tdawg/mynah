@@ -1433,6 +1433,8 @@ func runDaemon(_ arguments: [String]) -> Never {
             // Absent on a build that did not vendor it, in which case //call
             // says so rather than pretending.
             calls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath)),
+            glassesCalls: CallHost(endpointURL: callEndpointURL(sagePath: sagePath), screenOnly: true),
+            glassesPairings: GlassesPairingStore(),
             // Decided once. The backend used to be part of this and no longer
             // is — see `CallInvitation.refusal(isSetUpForCalls:)`.
             // The brain is part of this again, and this time as a declared
@@ -1468,6 +1470,36 @@ func runDaemon(_ arguments: [String]) -> Never {
         )
         // After construction, because the transcript goes out through the same
         // Signal path as everything else and the daemon owns it.
+        // G2 submits through the daemon's ordinary message inbox, with no
+        // second brain, prompt, tool catalogue, or conversation history.
+        var screenServerConfiguration = CallTurnServer.Configuration(
+            socketURL: URL(fileURLWithPath: CallTurnServer.defaultSocket().path + ".screen"),
+            turnCeilingSeconds: 360
+        )
+        screenServerConfiguration.textReplies = true
+        let screenServer = CallTurnServer(
+            configuration: screenServerConfiguration,
+            transcriber: transcriber,
+            synthesizer: callVoice,
+            answer: { [weak daemon] heard in
+                guard let daemon else { throw CancellationError() }
+                return try await daemon.answerFromGlasses(heard)
+            },
+            log: { note($0) }
+        )
+        await screenServer.onScreenAudio { [weak daemon] wav in
+            guard let daemon else { throw CancellationError() }
+            return try await daemon.answerFromGlasses(audio: wav)
+        }
+        await screenServer.onScreenStatus { [weak daemon] in
+            await daemon?.glassesStatus() ?? "{}"
+        }
+        let screenTask = Task {
+            do { try await screenServer.run() }
+            catch { note("[g2] glasses connection unavailable: \(error)") }
+        }
+        defer { screenTask.cancel() }
+
         await callServer.onTranscript { [weak daemon] transcript in
             await daemon?.postCallTranscript(transcript)
         }

@@ -13,6 +13,10 @@ public enum CallInvitation {
     /// "how do I use //call" — is a question, not a command.
     public static let command = "//call"
 
+    public static func isGlassesRequest(_ transcript: String) -> Bool {
+        transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "//g2"
+    }
+
     public static func isRequest(_ transcript: String) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed == command || trimmed.hasPrefix(command + " ")
@@ -54,6 +58,10 @@ public enum CallInvitation {
             Things you can say:
 
             \(calling)
+
+            //g2 — pair the Mynah Even G2 companion once. It remembers the pairing and reconnects automatically.
+
+            //g2 unpair — revoke the saved G2 pairing.
 
             //help — this.
 

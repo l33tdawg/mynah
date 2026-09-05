@@ -238,6 +238,7 @@ func readSecrets(path string) ([][]byte, error) {
 
 // appliance is one Mac, waiting.
 type appliance struct {
+	kind     string
 	offers   chan *call
 	lastSeen time.Time
 
@@ -324,10 +325,14 @@ type relay struct {
 // standing up a certificate authority.
 func (r *relay) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /g2/privacy.html", serveG2Page)
+	mux.HandleFunc("GET /g2/terms.html", serveG2Page)
 	mux.HandleFunc("POST /appliance/enrol", r.handleEnrol)
 	mux.HandleFunc("POST /appliance/listen", r.handleListen)
 	mux.HandleFunc("POST /appliance/answer", r.handleAnswer)
 	mux.HandleFunc("GET /{token}", r.handlePage)
+	mux.HandleFunc("GET /{token}/connect", r.handleCompanionConfig)
+	mux.HandleFunc("OPTIONS /{token}/offer", companionPreflight)
 	mux.HandleFunc("POST /{token}/offer", r.handleOffer)
 	mux.HandleFunc("POST /{token}/report", r.handleReport)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -480,12 +485,17 @@ func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
 	}
 	var body struct {
 		Token string `json:"token"`
+		Kind  string `json:"kind"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 4<<10)).Decode(&body); err != nil || body.Token == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
+	if body.Kind != "" && body.Kind != "g2" {
+		http.Error(w, "bad kind", http.StatusBadRequest)
+		return
+	}
 	r.mu.Lock()
 	waiting, known := r.appliances[body.Token]
 	if !known {
@@ -497,15 +507,15 @@ func (r *relay) handleListen(w http.ResponseWriter, req *http.Request) {
 		// predecessor serving a page forever, and old links in a Signal thread
 		// stayed usable indefinitely.
 		for token, other := range r.appliances {
-			if other.owner == who {
+			if other.owner == who && other.kind == body.Kind {
 				delete(r.appliances, token)
 				log.Printf("appliance %s issued a new link; the previous one is revoked", who)
 			}
 		}
-		waiting = &appliance{offers: make(chan *call, 1), owner: who}
+		waiting = &appliance{offers: make(chan *call, 1), owner: who, kind: body.Kind}
 		r.appliances[body.Token] = waiting
 		log.Printf("appliance %s is listening", who)
-	} else if waiting.owner != who {
+	} else if waiting.owner != who || waiting.kind != body.Kind {
 		// Somebody else's token. Refused rather than shared: two appliances on
 		// one token means whichever polls first takes the call, which is a
 		// wiretap wearing a race condition.
@@ -561,6 +571,7 @@ func (r *relay) handleAnswer(w http.ResponseWriter, req *http.Request) {
 
 // handleOffer hands a caller's SDP to the appliance and waits for its reply.
 func (r *relay) handleOffer(w http.ResponseWriter, req *http.Request) {
+	companionHeaders(w)
 	token := req.PathValue("token")
 	var body struct {
 		SDP string `json:"sdp"`
@@ -613,6 +624,35 @@ func (r *relay) handleOffer(w http.ResponseWriter, req *http.Request) {
 		delete(r.pending, outgoing.id)
 		r.mu.Unlock()
 	}
+}
+
+// The token is the capability, delivered through the owner's authenticated
+// chat. These public caller endpoints accept WebView origins without cookies;
+// appliance enrollment/listen/answer never receive these CORS permissions.
+func companionHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+func companionPreflight(w http.ResponseWriter, req *http.Request) {
+	companionHeaders(w)
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *relay) handleCompanionConfig(w http.ResponseWriter, req *http.Request) {
+	companionHeaders(w)
+	r.mu.Lock()
+	_, known := r.appliances[req.PathValue("token")]
+	r.mu.Unlock()
+	if !known {
+		http.Error(w, "This link has expired. Send //g2 in your chat for a new one.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"iceServers": r.iceServers(), "protocol": "mynah.g2.v1"})
 }
 
 // handlePage serves the call page, if that call exists.

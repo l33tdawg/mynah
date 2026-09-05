@@ -1,0 +1,20 @@
+{
+  "name": "mynah-g2",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "pack": "npm run build && evenhub pack app.json dist --sdk-ver 0.0.14 -o mynah-g2.ehpk"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.14"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.1.14",
+    "typescript": "5.9.3",
+    "vite": "8.2.2"
+  }
+}

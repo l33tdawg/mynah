@@ -61,7 +61,10 @@ const (
 
 	// KindTurnFailed travels down: nothing to say, and why. The endpoint has
 	// nothing useful to play, but the log should not have to infer silence.
-	KindTurnFailed Kind = 5
+	KindTurnFailed   Kind = 5
+	KindHeardText    Kind = 7
+	KindReplyText    Kind = 8
+	KindScreenStatus Kind = 9
 )
 
 // maximumPayload bounds a single frame.

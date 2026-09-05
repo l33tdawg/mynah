@@ -1,0 +1,25 @@
+{
+  "package_id": "com.mynah.g2",
+  "edition": "202601",
+  "name": "Mynah",
+  "version": "0.1.1",
+  "min_app_version": "2.2.9",
+  "min_sdk_version": "0.0.14",
+  "entrypoint": "index.html",
+  "supported_languages": [
+    "en"
+  ],
+  "permissions": [
+    {
+      "name": "g2-microphone",
+      "desc": "Record your question when you tap to talk."
+    },
+    {
+      "name": "network",
+      "desc": "Connect to your Mynah Mac through its call relay.",
+      "whitelist": [
+        "https://call.sage.delivery"
+      ]
+    }
+  ]
+}

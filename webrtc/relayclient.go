@@ -38,7 +38,7 @@ func serveViaRelay(ctx context.Context, endpoint, token, applianceID string, sec
 		Timeout: 2 * time.Minute,
 	}
 
-	log.Printf("waiting for a call at %s/%s", endpoint, token)
+	log.Printf("waiting for a connection at %s", endpoint)
 
 	// A link that is never used must not stay usable.
 	//
@@ -63,12 +63,16 @@ func serveViaRelay(ctx context.Context, endpoint, token, applianceID string, sec
 			}
 		}
 
-		if time.Since(idle) > idleLifetime {
+		if !calls.screenOnly && time.Since(idle) > idleLifetime {
 			log.Printf("no call in %s; this link is now closed", idleLifetime)
 			return nil
 		}
 
-		incoming, err := poll(ctx, client, endpoint, token, applianceID, secret)
+		kind := ""
+		if calls.screenOnly {
+			kind = "g2"
+		}
+		incoming, err := poll(ctx, client, endpoint, token, applianceID, secret, kind)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -135,8 +139,12 @@ func (c *incomingCall) iceServers() []webrtc.ICEServer {
 	return c.ICE
 }
 
-func poll(ctx context.Context, client *http.Client, endpoint, token, applianceID string, secret []byte) (*incomingCall, error) {
-	body, err := json.Marshal(map[string]string{"token": token})
+func poll(ctx context.Context, client *http.Client, endpoint, token, applianceID string, secret []byte, kinds ...string) (*incomingCall, error) {
+	kind := ""
+	if len(kinds) > 0 {
+		kind = kinds[0]
+	}
+	body, err := json.Marshal(map[string]string{"token": token, "kind": kind})
 	if err != nil {
 		return nil, err
 	}

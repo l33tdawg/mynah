@@ -24,6 +24,9 @@ public actor CallTurnServer {
         /// The voice for calls.
         public var voice: String?
 
+        /// A separate listener for voice input with written replies (G2).
+        public var textReplies: Bool = false
+
         /// How fast it speaks, as a multiplier on the voice's natural rate.
         ///
         /// Slightly quick, deliberately. A synthesiser at its default rate reads
@@ -115,6 +118,16 @@ public actor CallTurnServer {
     private let transcriber: any AudioFileTranscribing
     private let synthesizer: any SpeechSynthesizing
     private let answer: @Sendable (String) async throws -> String
+    private var screenStatus: @Sendable () async -> String = { "{}" }
+    private var screenAudio: (@Sendable (Data) async throws -> String)?
+
+    public func onScreenAudio(_ submit: @escaping @Sendable (Data) async throws -> String) {
+        screenAudio = submit
+    }
+
+    public func onScreenStatus(_ provide: @escaping @Sendable () async -> String) {
+        screenStatus = provide
+    }
 
     /// The last few things said in messages, for the opening to pick up on.
     ///
@@ -838,6 +851,16 @@ public actor CallTurnServer {
         }
         let reader = CallFrameReader(descriptor: connection)
         let writer = CallFrameWriter(live)
+        if configuration.textReplies {
+            guard let screenAudio else { return }
+            let screen = ScreenConversation(
+                submitAudio: screenAudio,
+                deadline: configuration.turnCeilingSeconds,
+                status: screenStatus
+            )
+            await screen.run(reader: reader, writer: writer)
+            return
+        }
         log("[call] a call connected")
         transcript = CallTranscript()
         let thisCall = UUID().uuidString
@@ -928,7 +951,7 @@ public actor CallTurnServer {
                 // kill answers. The turn is cancelled when words arrive, if
                 // they do.
                 log("[call] interrupted")
-            case .replyAudio, .replyEnd, .turnFailed, .endCall:
+            case .replyAudio, .replyEnd, .turnFailed, .endCall, .heardText, .replyText, .screenStatus:
                 break // Ours to send, not to receive.
             }
         }

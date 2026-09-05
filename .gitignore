@@ -16,6 +16,8 @@ webrtc/sage-voice-webrtc
 # scripts/provision-whatsapp-bridge.sh, pinned by whatsapp/package-lock.json,
 # which IS committed — the lock file is the reproducible part.
 whatsapp/node_modules/
+g2/node_modules/
+g2/*.ehpk
 
 # WhatsApp session state. Its real home is
 # ~/Library/Application Support/SAGE Voice Bridge/WhatsApp/, outside the

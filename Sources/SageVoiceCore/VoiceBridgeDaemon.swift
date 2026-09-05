@@ -247,6 +247,13 @@ public actor VoiceBridgeDaemon {
 
     /// Called the moment //call arrives, before the link is even built.
     private var onCallRequested: (@Sendable (ChannelRecipient) async -> Void)?
+    private var glassesRecipient: ChannelRecipient?
+    private let inbox = MessageInbox()
+    private var glassesWaiters: [String: CheckedContinuation<String, Error>] = [:]
+    private var glassesPending: Set<String> = []
+    private var lastGlassesReply = ""
+    private var glassesAudioFiles: [String: URL] = [:]
+    private var activeGlassesMessageID: String?
 
     /// Told after a turn that changed the owner's task list, so the proactive
     /// watch does not report his own edit back to him as news. See
@@ -409,6 +416,10 @@ public actor VoiceBridgeDaemon {
 
     /// Starts a call when the owner asks for one. `nil` disables `//call`.
     private let calls: CallHost?
+    private let glassesCalls: CallHost?
+    private let glassesPairings: GlassesPairingStore?
+    private var glassesPairing: GlassesPairingStore.Pairing?
+    private var glassesStarting = false
 
     /// Why a call cannot happen on this appliance, decided once at start-up
     /// from the backend rather than guessed per message.
@@ -499,6 +510,8 @@ public actor VoiceBridgeDaemon {
         pendingDeliveries: PendingDeliveryStore = PendingDeliveryStore(),
         synthesizer: SpeechSynthesizing? = nil,
         calls: CallHost? = nil,
+        glassesCalls: CallHost? = nil,
+        glassesPairings: GlassesPairingStore? = nil,
         callRefusal: CallInvitation.Refusal? = nil,
         onCallRequested: (@Sendable (ChannelRecipient) async -> Void)? = nil,
         onTaskWrites: (@Sendable () async -> Void)? = nil,
@@ -526,6 +539,8 @@ public actor VoiceBridgeDaemon {
         self.pendingDeliveries = pendingDeliveries
         self.synthesizer = synthesizer
         self.calls = calls
+        self.glassesCalls = glassesCalls
+        self.glassesPairings = glassesPairings
         self.callRefusal = callRefusal
         self.onCallRequested = onCallRequested
         self.onTaskWrites = onTaskWrites
@@ -540,6 +555,13 @@ public actor VoiceBridgeDaemon {
 
     /// Runs until every channel's message stream finishes (i.e. until `stop()`).
     public func run() async {
+        let pairingTask = Task { await maintainGlassesPairing() }
+        defer {
+            pairingTask.cancel()
+            for id in Array(glassesPending) {
+                finishGlasses(id, text: "Mynah's chat connection stopped. Check notes-to-self before repeating your request.")
+            }
+        }
         // **Reading starts before any of the slow work below, and that ordering
         // is load-bearing.**
         //
@@ -556,8 +578,7 @@ public actor VoiceBridgeDaemon {
         // follow-up sent while the previous one is still in flight lands
         // somewhere, instead of sitting unread in the stream behind a turn that
         // can now run five minutes.
-        let inbox = MessageInbox()
-        let reader = Task { [channels] in
+        let reader = Task { [channels, inbox] in
             for await message in channels.incomingMessages {
                 await inbox.append(message)
             }
@@ -1074,6 +1095,14 @@ public actor VoiceBridgeDaemon {
     /// turn. See `MessageCoalescer`.
     public func handle(_ batch: [ChannelMessage]) async -> Outcome {
         let started = Date()
+        let glassesID = batch.first.flatMap { $0.isGlassesInput ? $0.id : nil }
+        activeGlassesMessageID = glassesID
+        defer {
+            if let glassesID {
+                finishGlasses(glassesID, text: "Check your notes-to-self chat for the result. Mynah couldn't return an answer here.")
+            }
+            activeGlassesMessageID = nil
+        }
 
         // **The exchange boundary, and it is here rather than at the turn.**
         //
@@ -1184,6 +1213,23 @@ public actor VoiceBridgeDaemon {
         // instruction to this program, not a question for the assistant, and a
         // paused appliance the owner is trying to call should say why rather
         // than stay silent.
+        if transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "//g2 unpair" {
+            guard !recipient.isGroup else {
+                await reply("Manage G2 pairing from Notes to Self.", to: recipient, allowSpeaking: false)
+                return .replied(transcript: transcript, reply: "glasses pairing", seconds: 0)
+            }
+            do {
+                try glassesPairings?.remove()
+                glassesPairing = nil; glassesRecipient = nil
+                await glassesCalls?.stop()
+                await reply("G2 pairing revoked. Send //g2 when you want to pair again.", to: recipient, allowSpeaking: false)
+            } catch { await reply("I couldn't remove the G2 pairing. Please try again.", to: recipient, allowSpeaking: false) }
+            return .replied(transcript: transcript, reply: "glasses unpaired", seconds: 0)
+        }
+        if CallInvitation.isGlassesRequest(transcript) {
+            await handleCallRequest(from: recipient, glasses: true)
+            return .replied(transcript: transcript, reply: "glasses", seconds: 0)
+        }
         if CallInvitation.isRequest(transcript) {
             await handleCallRequest(from: recipient)
             return .replied(transcript: transcript, reply: "call", seconds: 0)
@@ -1200,6 +1246,9 @@ public actor VoiceBridgeDaemon {
             return .replied(transcript: transcript, reply: "help", seconds: 0)
         }
 
+        if message.isGlassesInput {
+            _ = await reply("From G2: \(transcript)", to: recipient, allowSpeaking: false, as: .unprompted)
+        }
         let thread = recipient.description
         if pause.isPaused() {
             if !hasSaidPaused.contains(thread) {
@@ -1763,12 +1812,39 @@ public actor VoiceBridgeDaemon {
     /// unavailable" would be true and useless; which model is too slow, and
     /// that voice notes still work, is the difference between a dead end and a
     /// choice.
-    private func handleCallRequest(from recipient: ChannelRecipient) async {
+    private func handleCallRequest(from recipient: ChannelRecipient, glasses: Bool = false) async {
+        if glasses, let host = glassesCalls, let store = glassesPairings {
+            guard !recipient.isGroup else {
+                await reply("Pair G2 from your Notes to Self chat.", to: recipient, allowSpeaking: false)
+                return
+            }
+            do {
+                let existing = try store.load()
+                let pairing = GlassesPairingStore.Pairing(token: existing?.recipient.description == recipient.description ? existing!.token : CallInvitation.token(), recipient: recipient)
+                try store.save(pairing)
+                glassesPairing = pairing
+                registerGlassesConnection(from: recipient)
+                if !glassesStarting {
+                    glassesStarting = true
+                    defer { glassesStarting = false }
+                    let active = await host.isCallActive
+                    if existing?.token != pairing.token || !active {
+                        _ = try await host.start(token: pairing.token)
+                    }
+                    if glassesPairing?.token != pairing.token { await host.stop(); return }
+                }
+                await reply("Pair Mynah G2 once with this private link: \(CallHost.defaultRelay)/\(pairing.token)\n\nThe companion will remember it and reconnect automatically. Send //g2 unpair here to revoke access.", to: recipient, allowSpeaking: false)
+            } catch {
+                log("[g2] pairing setup failed")
+                await reply("Mynah couldn't finish pairing right now. Please try //g2 again in a moment.", to: recipient, allowSpeaking: false)
+            }
+            return
+        }
         guard let calls else {
             await reply("Calling isn't set up on this Mac yet.", to: recipient)
             return
         }
-        if let refusal = callRefusal {
+        if let refusal = callRefusal, !glasses || refusal != .brainCannotHoldALine {
             await reply(refusal.sentence, to: recipient)
             return
         }
@@ -1778,13 +1854,21 @@ public actor VoiceBridgeDaemon {
         // itself already spoken.
         // Remembered so a transcript can be posted back to the thread that
         // asked for the call, once it ends.
-        lastCallRecipient = recipient
-        await onCallRequested?(recipient)
+        if !glasses {
+            lastCallRecipient = recipient
+            await onCallRequested?(recipient)
+        }
 
         do {
             let url = try await calls.start()
-            log("[daemon] call ready at \(url)")
-            await reply(CallInvitation.invitation(url: url), to: recipient)
+            if glasses {
+                registerGlassesConnection(from: recipient)
+            }
+            log("[daemon] connection ready")
+            let invitation = glasses
+                ? "Paste this link into the Mynah G2 companion in Even Hub: \(url)\n\nTap to record, then tap again to send. Replies appear on your glasses."
+                : CallInvitation.invitation(url: url)
+            await reply(invitation, to: recipient, allowSpeaking: !glasses)
         } catch {
             log("[daemon] could not start a call: \(error)")
             // The log above keeps the path and the exit status; the owner gets
@@ -1795,6 +1879,104 @@ public actor VoiceBridgeDaemon {
                 ?? "something went wrong setting it up. Try again in a moment."
             await reply(CallInvitation.Refusal.couldNotStart(reason).sentence, to: recipient)
         }
+    }
+
+    /// Submit through the same serial inbox as Signal and WhatsApp. Once
+    /// submitted, work belongs to the chat and survives the glasses leaving.
+    public func answerFromGlasses(_ text: String) async throws -> String {
+        try await enqueueFromGlasses(text: text, audio: nil)
+    }
+
+    private func maintainGlassesPairing() async {
+        guard let host = glassesCalls, let store = glassesPairings else { return }
+        do {
+            glassesPairing = try store.load()
+            if let pairing = glassesPairing { registerGlassesConnection(from: pairing.recipient) }
+        } catch { log("[g2] saved pairing could not be restored") }
+        while !Task.isCancelled {
+            if let pairing = glassesPairing, !glassesStarting {
+                glassesStarting = true
+                if !(await host.isCallActive) {
+                    do { _ = try await host.start(token: pairing.token) }
+                    catch { log("[g2] reconnecting to relay shortly") }
+                }
+                if glassesPairing?.token != pairing.token { await host.stop() }
+                glassesStarting = false
+            }
+            do { try await Task.sleep(for: .seconds(10)) } catch { break }
+        }
+        await host.stop()
+    }
+
+    public func answerFromGlasses(audio wav: Data) async throws -> String {
+        guard wav.count <= 60 * 32000 + 44, wav.count >= 12844 else {
+            return "The recording was too short or too long. Tap and try again."
+        }
+        return try await enqueueFromGlasses(text: nil, audio: wav)
+    }
+
+    private func enqueueFromGlasses(text: String?, audio: Data?) async throws -> String {
+        guard let recipient = glassesRecipient else {
+            return "Send //g2 in your notes-to-self chat and connect with that link."
+        }
+        guard glassesPending.isEmpty else {
+            return "I'm still working on your last question. The answer will appear here and in your chat."
+        }
+        guard await !inbox.isClosed else { return "Mynah's chat connection is closed. Restart Mynah on your Mac." }
+        try Task.checkCancellation()
+        let id = "g2-" + UUID().uuidString
+        var attachments: [ChannelAttachment] = []
+        if let audio {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(id)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let file = directory.appendingPathComponent("question.wav")
+            do { try audio.write(to: file, options: .atomic) }
+            catch { try? FileManager.default.removeItem(at: directory); throw error }
+            glassesAudioFiles[id] = file
+            attachments = [.init(id: id, contentType: "audio/wav", filename: "question.wav", size: Int64(audio.count), localURL: file)]
+        }
+        let message = ChannelMessage(
+            kind: recipient.kind, recipient: recipient, id: id, text: text, attachments: attachments,
+            timestamp: Int64(Date().timeIntervalSince1970), isGlassesInput: true
+        )
+        glassesPending.insert(id)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                glassesWaiters[id] = continuation
+                Task { await inbox.append(message) }
+            }
+        } onCancel: {
+            Task { await self.detachGlassesWaiter(id) }
+        }
+    }
+
+    /// Called only after //g2 has passed the channel's owner-only checks and
+    /// its connection link has been established.
+    func registerGlassesConnection(from recipient: ChannelRecipient) {
+        glassesRecipient = recipient
+    }
+
+    private func detachGlassesWaiter(_ id: String) {
+        glassesWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    }
+
+    private func finishGlasses(_ id: String, text: String) {
+        guard glassesPending.remove(id) != nil else { return }
+        lastGlassesReply = text
+        if let file = glassesAudioFiles.removeValue(forKey: id) {
+            try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+        }
+        glassesWaiters.removeValue(forKey: id)?.resume(returning: text)
+    }
+
+    /// Reconnection reads status without replaying a question or its tools.
+    public func glassesStatus() -> String {
+        let scalars = lastGlassesReply.unicodeScalars
+        let preview = scalars.count > 3000
+            ? String(String.UnicodeScalarView(scalars.prefix(3000))) + "\n\nFull reply in your notes-to-self chat."
+            : lastGlassesReply
+        let state = ["status": glassesPending.isEmpty ? "ready" : "working", "text": preview]
+        return String(decoding: (try? JSONEncoder().encode(state)) ?? Data(), as: UTF8.self)
     }
 
     /// The answer as an m4a, or nothing.
@@ -2210,6 +2392,17 @@ public actor VoiceBridgeDaemon {
         promising question: String? = nil,
         attachmentsAreThePoint: Bool = false
     ) async -> Bool {
+        let glassesID: String? = {
+            if case .answer = utterance { return activeGlassesMessageID }
+            return nil
+        }()
+        var deliveredToChat = false
+        defer {
+            if let glassesID {
+                finishGlasses(glassesID, text: deliveredToChat ? text
+                    : text + "\n\nThis reply hasn't reached your chat. Check the connection before repeating an action.")
+            }
+        }
         if case .answer = utterance {
             workingLines.answered()
             quietPeriod?.cancel()
@@ -2236,7 +2429,7 @@ public actor VoiceBridgeDaemon {
         // Spoken as well as written, never instead of. A voice note the owner
         // cannot play — on a watch, in a meeting, on a bad connection — would
         // otherwise be an answer they cannot read, and the text costs nothing.
-        let spoken = allowSpeaking
+        let spoken = allowSpeaking && activeGlassesMessageID == nil
             ? await voiceNote(for: text, attachments: attachments)
             : []
         defer {
@@ -2256,6 +2449,7 @@ public actor VoiceBridgeDaemon {
                 ),
                 to: recipient
             )
+            deliveredToChat = true
             if case .answer = utterance { answerReachedTheWire = true }
             // **After the wire call returned, and nowhere else.**
             //

@@ -68,13 +68,14 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", "127.0.0.1:8090", "listen address")
-		certFile = flag.String("cert", "", "TLS certificate (required unless -insecure)")
-		keyFile  = flag.String("key", "", "TLS private key (required unless -insecure)")
-		insecure = flag.Bool("insecure", false, "serve plain HTTP — localhost only; a phone will refuse the microphone")
-		stunURL  = flag.String("stun", "stun:stun.l.google.com:19302", "STUN server")
-		turnURL  = flag.String("turn", "", "TURN server for the local developer loop, e.g. turn:turn.example.com:3478")
-		token    = flag.String("token", "", "required path token; the call link is /<token>")
+		addr       = flag.String("addr", "127.0.0.1:8090", "listen address")
+		certFile   = flag.String("cert", "", "TLS certificate (required unless -insecure)")
+		keyFile    = flag.String("key", "", "TLS private key (required unless -insecure)")
+		insecure   = flag.Bool("insecure", false, "serve plain HTTP — localhost only; a phone will refuse the microphone")
+		stunURL    = flag.String("stun", "stun:stun.l.google.com:19302", "STUN server")
+		turnURL    = flag.String("turn", "", "TURN server for the local developer loop, e.g. turn:turn.example.com:3478")
+		screenOnly = flag.Bool("screen-only", false, "persistent G2 endpoint; rejects spoken calls")
+		token      = flag.String("token", "", "required path token; the call link is /<token>")
 
 		appliance       = flag.String("appliance", "", "unix socket where the appliance answers; without it, audio is looped back")
 		vadFactor       = flag.Float64("vad-factor", 0, "how far above the noise floor counts as speech (0 uses the default)")
@@ -116,10 +117,11 @@ what stands between a private microphone and anyone who can reach it.`)
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 		calls := &callServer{
-			ice:       iceServers(*stunURL, *turnURL),
-			token:     *token,
-			appliance: *appliance,
-			listening: listeningSettings(*vadFactor, *vadFloor),
+			screenOnly: *screenOnly,
+			ice:        iceServers(*stunURL, *turnURL),
+			token:      *token,
+			appliance:  *appliance,
+			listening:  listeningSettings(*vadFactor, *vadFloor),
 		}
 		if err := serveViaRelay(ctx, strings.TrimSuffix(*relayURL, "/"), *token, *applianceID, secret, calls); err != nil {
 			log.Fatal(err)
@@ -252,8 +254,9 @@ func selectedPair(peer *webrtc.PeerConnection) string {
 }
 
 type callServer struct {
-	ice   []webrtc.ICEServer
-	token string
+	screenOnly bool
+	ice        []webrtc.ICEServer
+	token      string
 
 	// Where the brain listens. Empty means loop the caller's audio back, which
 	// is how the transport gets tested without the appliance in the way.
@@ -264,8 +267,10 @@ type callServer struct {
 	// which is knowable from here.
 	listening speech.Settings
 
-	mu    sync.Mutex
-	calls int
+	mu        sync.Mutex
+	calls     int
+	screenMu  sync.Mutex
+	screenEnd func()
 }
 
 // iceOrigins lists the STUN and TURN URLs for the page's connect-src.
@@ -345,6 +350,14 @@ func (s *callServer) handleOffer(w http.ResponseWriter, r *http.Request) {
 // difference at the edges means the media path, which is the part that matters,
 // has exactly one implementation.
 func (s *callServer) answerOffer(offer string, ice []webrtc.ICEServer) (string, error) {
+	// A data-only offer is the glasses companion. Audio calls keep their
+	// existing RTP path and never connect to the screen listener.
+	if strings.Contains(offer, "m=application ") && !strings.Contains(offer, "m=audio ") && !strings.Contains(offer, "m=video ") {
+		return s.answerScreenOffer(offer, ice)
+	}
+	if s.screenOnly {
+		return "", fmt.Errorf("this pairing supports G2 data only")
+	}
 	if len(ice) == 0 {
 		ice = s.ice
 	}

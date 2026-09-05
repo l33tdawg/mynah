@@ -247,6 +247,8 @@ public struct ChannelAttachment: Equatable, Sendable {
 
 /// One inbound message, whichever channel it came in on.
 public struct ChannelMessage: Equatable, Sendable {
+    /// Set by the Mac's authenticated glasses adapter, never by an inbox peer.
+    public let isGlassesInput: Bool
     public let kind: ChannelKind
     /// Who to reply to. Carried rather than derived, because deriving it is
     /// where a reply to a group goes to a person and vice versa.
@@ -282,9 +284,11 @@ public struct ChannelMessage: Equatable, Sendable {
         attachments: [ChannelAttachment] = [],
         timestamp: Int64 = 0,
         acknowledgementToken: Int? = nil,
-        acknowledgementEpoch: String? = nil
+        acknowledgementEpoch: String? = nil,
+        isGlassesInput: Bool = false
     ) {
         self.kind = kind
+        self.isGlassesInput = isGlassesInput
         self.recipient = recipient
         self.id = id
         self.senderDisplayName = senderDisplayName

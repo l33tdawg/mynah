@@ -72,6 +72,9 @@ public struct MessageCoalescer: Sendable {
     ) -> Bool {
         guard batch.count < maximumMerged else { return false }
         guard let first = batch.first else { return true }
+        // A glasses recording already has an explicit end. Never mix its
+        // answer correlation with typing arriving in the same self-chat.
+        guard !first.isGlassesInput, !next.isGlassesInput else { return false }
         // `ChannelRecipient` carries its channel, so this is a same-thread test
         // and a same-channel one at once. Comparing addresses alone would let a
         // WhatsApp JID and a Signal group id that happened to match merge two
@@ -130,14 +133,18 @@ actor MessageInbox {
 
         var batch: [ChannelMessage] = []
         var deferred: [ChannelMessage] = []
+        var hitGlassesBoundary = false
         for message in pending {
-            if MessageCoalescer.belongsTogether(batch: batch, next: message) {
+            if message.isGlassesInput, !batch.isEmpty { hitGlassesBoundary = true }
+            if !hitGlassesBoundary, MessageCoalescer.belongsTogether(batch: batch, next: message) {
                 batch.append(message)
             } else {
                 deferred.append(message)
             }
         }
         pending = deferred
+
+        if batch.first?.isGlassesInput == true || hitGlassesBoundary { return batch }
 
         while batch.count < MessageCoalescer.maximumMerged {
             let sizeBeforeWaiting = batch.count
@@ -146,13 +153,15 @@ actor MessageInbox {
 
             var stillDeferred: [ChannelMessage] = []
             for message in pending {
-                if MessageCoalescer.belongsTogether(batch: batch, next: message) {
+                if message.isGlassesInput { hitGlassesBoundary = true }
+                if !hitGlassesBoundary, MessageCoalescer.belongsTogether(batch: batch, next: message) {
                     batch.append(message)
                 } else {
                     stillDeferred.append(message)
                 }
             }
             pending = stillDeferred
+            if hitGlassesBoundary { break }
             // Only *this batch* growing earns another window.
             //
             // The condition used to count everything queued, so a second thread

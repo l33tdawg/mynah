@@ -85,15 +85,18 @@ public actor CallHost {
     private let relayURL: String
     private let secretURL: URL
     private var running: Process?
+    private let screenOnly: Bool
 
     public init(
         endpointURL: URL,
         relayURL: String = CallHost.defaultRelay,
-        secretURL: URL = CallHost.defaultSecret()
+        secretURL: URL = CallHost.defaultSecret(),
+        screenOnly: Bool = false
     ) {
         self.endpointURL = endpointURL
         self.relayURL = relayURL
         self.secretURL = secretURL
+        self.screenOnly = screenOnly
     }
 
     public static let defaultRelay = "https://call.sage.delivery"
@@ -121,7 +124,7 @@ public actor CallHost {
     /// would both answer, but because a stale link should stop working the
     /// moment a new one is issued. A call link is a live microphone, and the
     /// owner assumes the last one they were sent is the only one that works.
-    public func start(probe: (String) async -> Bool = CallHost.linkIsLive) async throws -> String {
+    public func start(token savedToken: String? = nil, probe: (String) async -> Bool = CallHost.linkIsLive) async throws -> String {
         stop()
 
         guard FileManager.default.isExecutableFile(atPath: endpointURL.path) else {
@@ -131,7 +134,7 @@ public actor CallHost {
             throw Failure.noSharedSecret(secretURL.path)
         }
 
-        let token = CallInvitation.token()
+        let token = savedToken ?? CallInvitation.token()
         let process = Process()
         process.executableURL = endpointURL
         var arguments = [
@@ -144,6 +147,7 @@ public actor CallHost {
             // an appliance problem, in one call.
             "-appliance", CallTurnServer.defaultSocket().path
         ]
+        if screenOnly { arguments.append("-screen-only") }
         // Only when this Mac minted its own credential. A hand-provisioned
         // appliance has no id, sends no header, and the relay finds its secret
         // by scanning — which is what every Mac did before minting existed and
