@@ -28,6 +28,35 @@ final class GlassesMessageTests: XCTestCase {
         await running.value
     }
 
+    func testSettingsPairingRoutesWithoutChatCommandAndRevocationBlocksImmediately() async throws {
+        for kind in ChannelKind.allCases {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = GlassesPairingStore(url: directory.appendingPathComponent("pairing.json"))
+            let fixture = try Fixture(kind: kind, pairings: store)
+            let running = Task { await fixture.daemon.run() }
+            defer { fixture.channel.finish(); running.cancel() }
+            try store.save(.init(token: String(repeating: "a", count: 32), recipient: fixture.recipient))
+            await fixture.daemon.refreshGlassesPairing()
+            let answer = try await fixture.daemon.answerFromGlasses("from settings")
+            XCTAssertEqual(answer, "Answer 1")
+            try store.remove()
+            // No refresh: a revoked token must be refused even before the watcher runs.
+            let refused = try await fixture.daemon.answerFromGlasses("must not execute")
+            XCTAssertTrue(refused.contains("Pair G2"))
+            let count = await fixture.brain.requests.count
+            XCTAssertEqual(count, 1)
+            await fixture.daemon.refreshGlassesPairing()
+            try store.save(.init(token: String(repeating: "b", count: 32), recipient: fixture.recipient))
+            await fixture.daemon.refreshGlassesPairing()
+            let reconnected = try await fixture.daemon.answerFromGlasses("paired again")
+            XCTAssertEqual(reconnected, "Answer 2")
+            try Data("invalid".utf8).write(to: store.url)
+            let corrupt = try await fixture.daemon.answerFromGlasses("must not execute either")
+            XCTAssertTrue(corrupt.contains("Pair G2"))
+        }
+    }
+
     func testGlassesUseTheExistingChatHistoryAndAnswerInBothPlaces() async throws {
         for kind in ChannelKind.allCases {
             let fixture = try Fixture(kind: kind)
@@ -88,8 +117,14 @@ final class GlassesMessageTests: XCTestCase {
         try await fixture.waitForAnswers(1)
         let requests = await fixture.brain.requests
         XCTAssertTrue(requests[0].messages.last?.content.hasSuffix("the spoken question") == true)
-        let file = await transcriber.file
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file!.path), "temporary recording wasn't removed after the reply")
+        let recordedFile = await transcriber.file
+        let file = try XCTUnwrap(recordedFile)
+        // Delivery is observable before the daemon finishes cleanup.
+        try await withDeadline(3, label: "recording cleanup") {
+            while FileManager.default.fileExists(atPath: file.path) {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
         let status = await fixture.daemon.glassesStatus()
         XCTAssertTrue(status.contains("Answer 1"))
     }
@@ -123,7 +158,7 @@ private extension GlassesMessageTests {
         let daemon: VoiceBridgeDaemon
         let recipient: ChannelRecipient
         let directory: URL
-        init(kind: ChannelKind, delay: Duration = .zero, transcriber: any AudioFileTranscribing = NoopAudioFileTranscriber()) throws {
+        init(kind: ChannelKind, delay: Duration = .zero, transcriber: any AudioFileTranscribing = NoopAudioFileTranscriber(), pairings: GlassesPairingStore? = nil) throws {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent("g2-test-\(UUID())")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             recipient = ChannelRecipient(kind: kind, address: "+15550001111")
@@ -135,7 +170,7 @@ private extension GlassesMessageTests {
                 conversations: ConversationStore(fileURL: directory.appendingPathComponent("history.json")),
                 promises: PromisedAnswerStore(fileURL: directory.appendingPathComponent("promises.json")),
                 pendingDeliveries: PendingDeliveryStore(fileURL: directory.appendingPathComponent("pending.json")),
-                pause: PauseState(fileURL: directory.appendingPathComponent("paused")), log: { _ in }
+                glassesPairings: pairings, pause: PauseState(fileURL: directory.appendingPathComponent("paused")), log: { _ in }
             )
         }
         deinit { try? FileManager.default.removeItem(at: directory) }

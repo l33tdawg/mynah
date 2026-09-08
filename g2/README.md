@@ -6,7 +6,7 @@ answer. Recording is limited to one minute. Double-tap opens the exit flow.
 
 The phone runs the SDK companion; the Mac transcribes the G2 microphone audio.
 The recording enters the **same serial voice-note inbox** as Signal and
-WhatsApp, using the self-chat that issued `//g2`. There is no second brain,
+WhatsApp, using the linked self-chat selected in Mynah Settings. There is no second brain,
 prompt, tool catalogue, or glasses history. SAGE context, task handling, search,
 attachments, chat history, and turn housekeeping follow the existing daemon.
 The spoken question is labelled “From G2” in chat; the normal answer appears
@@ -39,8 +39,9 @@ or read the ordinary notes-to-self reply.
 
 4. Put the phone on the same Wi-Fi. In Even Hub choose **Scan QR** and scan the
    development QR. Keep Even foregrounded and the phone unlocked for QR tests.
-5. Send **`//g2`** in the Signal or WhatsApp notes-to-self chat Mynah answers.
-   Pair once with its private link. The companion saves the pairing and reconnects automatically, including after restarting Mynah. Allow G2 microphone access.
+5. On your Mac, open **Mynah Settings → General → Your phone → Pair G2**.
+   Link Signal or WhatsApp first; if both are linked, choose where G2 conversations appear.
+   Copy the private pairing link and paste it into Mynah G2 in the Even app. The companion saves the pairing and reconnects automatically, including after restarting Mynah. Allow G2 microphone access.
 6. Tap, speak, tap again. Check the listening/sending/working states, the
    recognized question in chat, and matching text replies in both places.
 7. Ask a follow-up and verify context. Ask for a task or lookup, leave the
@@ -93,7 +94,7 @@ Official references: [local testing](https://hub.evenrealities.com/docs/test/loc
   or chat transcript. The link is a bearer capability; keep it private.
 - G2 has a persistent data-only pairing, separate from temporary spoken calls.
   The Mac stores its token and self-chat recipient privately and restores the
-  endpoint on startup. Send `//g2 unpair` in chat to revoke it; Forget pairing
+  endpoint on startup. Choose **Unpair** under Even G2 glasses in Mynah Settings to revoke it; Forget pairing
   clears only the phone copy. Requests are never replayed by automatic reconnect.
 - Status/latest answer survives companion reconnection while the daemon runs.
   It is not a durable glasses-job database: a Mac daemon restart loses the

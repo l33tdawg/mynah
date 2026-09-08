@@ -59,9 +59,9 @@ public enum CallInvitation {
 
             \(calling)
 
-            //g2 — pair the Mynah Even G2 companion once. It remembers the pairing and reconnects automatically.
+            Pair Even G2 in Mynah Settings → General → Your phone. The companion remembers the pairing and reconnects automatically.
 
-            //g2 unpair — revoke the saved G2 pairing.
+            Manage or revoke G2 access in those settings. //g2 and //g2 unpair are also available here.
 
             //help — this.
 

@@ -1889,21 +1889,30 @@ public actor VoiceBridgeDaemon {
 
     private func maintainGlassesPairing() async {
         guard let host = glassesCalls, let store = glassesPairings else { return }
-        do {
-            glassesPairing = try store.load()
-            if let pairing = glassesPairing { registerGlassesConnection(from: pairing.recipient) }
-        } catch { log("[g2] saved pairing could not be restored") }
+        var retryAfter = Date.distantPast
         while !Task.isCancelled {
-            if let pairing = glassesPairing, !glassesStarting {
+            if !glassesStarting {
                 glassesStarting = true
-                if !(await host.isCallActive) {
+                // Settings authorizes and revokes through the same private store.
+                // Read failures fail closed, so an old connection cannot outlive
+                // an unreadable or removed authorization.
+                if await refreshGlassesPairing() { retryAfter = .distantPast }
+                if let pairing = glassesPairing, Date() >= retryAfter, !(await host.isCallActive) {
                     do { _ = try await host.start(token: pairing.token) }
-                    catch { log("[g2] reconnecting to relay shortly") }
+                    catch {
+                        log("[g2] reconnecting to relay shortly")
+                        retryAfter = Date().addingTimeInterval(10)
+                    }
                 }
-                if glassesPairing?.token != pairing.token { await host.stop() }
+                // Authorization may have changed while starting the relay.
+                let current = try? store.load()
+                if current?.token != glassesPairing?.token || current?.recipient != glassesPairing?.recipient {
+                    glassesPairing = nil; glassesRecipient = nil
+                    await host.stop()
+                }
                 glassesStarting = false
             }
-            do { try await Task.sleep(for: .seconds(10)) } catch { break }
+            do { try await Task.sleep(for: .seconds(1)) } catch { break }
         }
         await host.stop()
     }
@@ -1915,9 +1924,34 @@ public actor VoiceBridgeDaemon {
         return try await enqueueFromGlasses(text: nil, audio: wav)
     }
 
+    private var glassesAuthorizationIsCurrent: Bool {
+        guard let store = glassesPairings else { return true }
+        guard let authorized = try? store.load() else { return false }
+        return authorized.token == glassesPairing?.token && authorized.recipient == glassesRecipient
+    }
+
+    /// Reconcile authorization written by the Mac settings, stopping the old
+    /// transport before another recipient or token can take its place.
+    @discardableResult
+    func refreshGlassesPairing() async -> Bool {
+        guard let store = glassesPairings else { return false }
+        let saved = try? store.load()
+        guard saved?.token != glassesPairing?.token || saved?.recipient != glassesPairing?.recipient else { return false }
+        glassesPairing = nil
+        glassesRecipient = nil
+        await glassesCalls?.stop()
+        // No old connection may submit into the newly selected chat while
+        // stop suspends this actor. Re-read after it completes.
+        let current = try? store.load()
+        glassesPairing = current
+        glassesRecipient = current?.recipient
+        lastGlassesReply = ""
+        return true
+    }
+
     private func enqueueFromGlasses(text: String?, audio: Data?) async throws -> String {
-        guard let recipient = glassesRecipient else {
-            return "Send //g2 in your notes-to-self chat and connect with that link."
+        guard let recipient = glassesRecipient, glassesAuthorizationIsCurrent else {
+            return "Open Mynah Settings → General → Your phone → Pair G2, then connect with the pairing link."
         }
         guard glassesPending.isEmpty else {
             return "I'm still working on your last question. The answer will appear here and in your chat."
@@ -1971,6 +2005,7 @@ public actor VoiceBridgeDaemon {
 
     /// Reconnection reads status without replaying a question or its tools.
     public func glassesStatus() -> String {
+        guard glassesAuthorizationIsCurrent else { return "{\"status\":\"unpaired\"}" }
         let scalars = lastGlassesReply.unicodeScalars
         let preview = scalars.count > 3000
             ? String(String.UnicodeScalarView(scalars.prefix(3000))) + "\n\nFull reply in your notes-to-self chat."

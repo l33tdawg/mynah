@@ -181,7 +181,7 @@ disconnect.onclick = () => {
   savedPairing = undefined; clearTimeout(reconnectTimer); reconnectAttempt = 0;
   connection?.close(); el<HTMLInputElement>('link').value = '';
   void bridge?.setLocalStorage('mynah.connection', '');
-  status('Pairing forgotten on this phone. Send //g2 unpair in Notes to Self to revoke it on your Mac.');
+  status('Pairing forgotten on this phone. Choose Unpair under Even G2 glasses in Mynah Settings on your Mac to revoke access.');
   controls();
 };
 previous.onclick = () => { page = Math.max(0, page - 1); render(); };

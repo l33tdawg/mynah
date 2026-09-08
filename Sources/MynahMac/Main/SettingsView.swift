@@ -2583,6 +2583,8 @@ struct SettingsView: View {
 
             whatsAppPairingRow(app: app)
             MynahDivider()
+            GlassesPairingView(channels: model.channels)
+            MynahDivider()
 
             SettingsRow(
                 "Can Mynah reach it",
