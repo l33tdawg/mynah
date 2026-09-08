@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mynah — A Local AI Assistant for Mac, Reachable on Signal and WhatsApp</title>
-<meta name="description" content="Tell it once. Reach it anywhere. Mynah runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
+<title>Mynah — A Local AI Assistant for Mac, Reachable on Signal, WhatsApp and Even G2</title>
+<meta name="description" content="Tell it once. Reach it anywhere. Mynah runs on your Mac, remembers across conversations, and answers in Signal, WhatsApp, and Even G2 glasses.">
 <meta name="theme-color" content="#F4F4F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)">
 
@@ -15,14 +15,14 @@
 <meta property="og:site_name" content="Mynah">
 <meta property="og:url" content="https://l33tdawg.github.io/mynah/">
 <meta property="og:title" content="Mynah — Tell it once. Reach it anywhere.">
-<meta property="og:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
+<meta property="og:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal, WhatsApp, and Even G2 glasses.">
 <meta property="og:image" content="https://l33tdawg.github.io/mynah/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Mynah — a personal AI that lives on your Mac">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mynah — Tell it once. Reach it anywhere.">
-<meta name="twitter:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal or WhatsApp.">
+<meta name="twitter:description" content="A local AI assistant that runs on your Mac, remembers across conversations, and answers in Signal, WhatsApp, and Even G2 glasses.">
 <meta name="twitter:image" content="https://l33tdawg.github.io/mynah/og.png">
 <style>
 /* ---------------------------------------------------------------------------
@@ -685,6 +685,23 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* Even G2 companion */
+.g2-visuals { display: grid; grid-template-columns: 1.15fr 1fr; gap: 20px; margin: 28px 0; }
+.g2-visuals figure { margin: 0; min-width: 0; }
+.g2-photo { display: block; width: 100%; height: 310px; object-fit: cover; border-radius: var(--r-card); }
+.g2-display { height: 310px; padding: 20px; display: flex; align-items: center; background: #101812; border-radius: var(--r-card); }
+.g2-display img { display: block; width: 100%; height: auto; }
+.g2-visuals figcaption { margin-top: 10px; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+.g2-steps { margin: 24px 0; padding-left: 22px; }
+.g2-steps li { padding-left: 6px; margin: 12px 0; }
+.g2-link { display: inline-block; margin-top: 14px; color: #b9e1bf; font-size: 13px; }
+@media (max-width: 620px) {
+  .g2-visuals { grid-template-columns: 1fr; }
+  .g2-photo { height: auto; }
+  .g2-display { height: auto; min-height: 210px; }
+}
+
 </style>
 </head>
 <body>
@@ -703,7 +720,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 
       <p class="standfirst">
         Mynah runs on your Mac, remembers across conversations, and answers in
-        your Signal Note to Self or your WhatsApp. <strong>Local by default. No Mynah account.</strong>
+        your Signal Note to Self, WhatsApp, or Even G2 glasses. <strong>Local by default. No Mynah account.</strong>
       </p>
 
       <div class="get">
@@ -714,6 +731,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
           <span data-download-size></span>free and open source<span data-latest></span>
         </span>
       </div>
+      <a class="g2-link" href="#even-g2">New in 2.5 · Meet Mynah for Even G2 &rarr;</a>
     </div>
 
     <!-- The Mac it runs on, and the Signal thread it answers in. Both are real
@@ -726,6 +744,57 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 </header>
 
 <!-- ===================================================================== -->
+
+<section id="even-g2" aria-labelledby="g2-heading">
+  <p class="eyebrow">New in 2.5 · Even G2 companion beta</p>
+  <h2 class="title1 column" id="g2-heading">Speak a thought. Glance at the answer.</h2>
+  <p class="lede">The Mynah you already know, on your glasses. Ask about your tasks,
+    capture an idea, or look something up while your phone stays in your pocket.</p>
+
+  <div class="g2-visuals">
+    <figure>
+      <img class="g2-photo" src="images/even-g2.jpg" width="1200" height="857" loading="lazy"
+        alt="A person wearing Even G2 glasses beside a car, with a promotional green display overlay">
+      <figcaption>Even G2 promotional image from <a href="https://www.evenrealities.com/">Even Realities</a>.
+        The overlay shows Even&rsquo;s interface, not Mynah.</figcaption>
+    </figure>
+    <figure>
+      <div class="g2-display"><img src="images/mynah-g2-tasks.png" width="576" height="288" loading="lazy"
+        alt="Mynah on the G2 simulator showing three sample tasks and asking whether to add anything else"></div>
+      <figcaption>Mynah&rsquo;s actual simulator rendering with illustrative task data.
+        Replies appear inside the companion and in your self-chat.</figcaption>
+    </figure>
+  </div>
+
+  <div class="cards">
+    <div class="card"><h3 class="title3">Tap, speak, tap to send</h3>
+      <p>Use your G2 glasses or R1 ring to record a question. Read the answer on the display
+        and swipe through longer replies. No spoken playback.</p></div>
+    <div class="card"><h3 class="title3">Your existing conversation</h3>
+      <p>The same SAGE memory, tasks, search, and tools. Questions and answers also appear
+        in your linked Signal or WhatsApp self-chat, ready for a follow-up.</p></div>
+  </div>
+
+  <h3 class="title2" style="margin-top: 28px">Pair once, right in Mynah.</h3>
+  <ol class="g2-steps">
+    <li><strong>Set up Mynah on your Mac.</strong> Link Signal or WhatsApp and keep your Mac online with phone answering enabled.</li>
+    <li><strong>Install the companion through Even Hub beta testing.</strong> Pair your G2 glasses with the Even app on your phone. Beta access currently requires an invitation.</li>
+    <li><strong>On your Mac, open Settings → General → Your phone → Pair G2.</strong>
+      Choose the linked chat, then copy the private pairing link into the companion on your phone.</li>
+  </ol>
+  <p class="dim">The companion remembers the pairing and reconnects automatically.
+    Manage the link or revoke access with <strong>Unpair</strong> in Mynah settings.</p>
+  <div class="get">
+    <a class="button" href="https://github.com/l33tdawg/mynah/releases/download/v2.5.0/mynah-g2.ehpk">Download companion package</a>
+    <a href="https://www.evenrealities.com/">Explore Even G2 &rarr;</a>
+  </div>
+  <p class="callout dim" style="margin-top: 20px"><strong>Companion in beta.</strong> The package is for Even Hub developer installation; it does not grant beta access.
+    The public Even Hub listing is not available yet.
+    Requires Mynah 2.5.0 or later, Even G2,
+    Even app 2.2.9 or later, and a linked Signal or WhatsApp self-chat. Uses the local or cloud
+    model you choose in Mynah. Background reconnection depends on your phone and the Even app.
+    The companion cannot read other apps&rsquo; inboxes or reply to mirrored notifications.</p>
+</section>
 
 <!-- Why upgrade, for somebody arriving on 1.9. Every claim here is a thing
      2.0 actually added, not a thing 1.x already did: voice calls and the
@@ -1080,7 +1149,8 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     <p class="legal faint">
       Signal is a trademark of the Signal Foundation; WhatsApp is a trademark
       of Meta Platforms, Inc. Mynah is affiliated with neither and uses your
-      own accounts, as a linked device.
+      own accounts, as a linked device. Even G2 and Even R1 are products of Even Realities.
+      Mynah is an independent companion; product photography belongs to Even Realities.
     </p>
   </div>
 </footer>

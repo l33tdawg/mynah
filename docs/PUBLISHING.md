@@ -15,7 +15,9 @@ from anywhere"*. Adding a live download counter made that false, so **the claim 
 rather than quietly falsified** — the footer now says exactly what the page asks for and from
 whom. Keep it that way: if you add anything that fetches, say so there or do not add it.
 
-Everything else still holds. Any asset you add goes under `docs/` and is referenced by a
+Everything else still holds. The G2 section also uses locally served images under `docs/images/`; provenance is recorded in `docs/images/SOURCES.md`. Its outbound product link goes to Even Realities, and the companion package link goes to the GitHub release until a public Even Hub listing is available.
+
+Any asset you add goes under `docs/` and is referenced by a
 relative path. The moment one is hotlinked from somebody else's server, the footer is wrong
 again.
 
@@ -102,8 +104,7 @@ Expect `1`. Then check what the page reaches for, which is no longer nothing:
 curl -s https://l33tdawg.github.io/mynah/ | grep -oE '(src|href)="https?://[^"]*"' | sort -u
 ```
 
-Every line should be a `github.com/l33tdawg/…` link, or the `og:`/`twitter:` image on this same
-site. Anything else — a font host, a CDN, an analytics domain — is a regression, and the
+Outbound links may include `github.com/l33tdawg/…` and `www.evenrealities.com`. Image URLs must resolve to this site, including the `og:`/`twitter:` image. Anything else — a font host, a CDN, an analytics domain — is a regression, and the
 footer's promise to the reader is what it breaks.
 
 Check the screenshots actually resolve, since a relative path that is right locally and wrong
