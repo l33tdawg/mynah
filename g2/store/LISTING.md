@@ -61,6 +61,10 @@ Improved pairing, reconnection, and microphone recovery.
 
 ## Review status
 
+### Listing refresh — September 8, 2026
+
+Saved the 0.2.0 dashboard/queue description (1829/2000 characters), including Mac Settings pairing and the 2.5.1 minimum. Replaced the old task-list screenshot with the two actual dashboard simulator captures and selected the dashboard as cover. The portal displays microphone, network and opt-in location permissions. Public review approval is still pending; selecting a build is not submission.
+
 ### Short portal release notes
 
 Speak to Mynah and read answers on your G2 glasses, using your existing Mac assistant and self-chat.
