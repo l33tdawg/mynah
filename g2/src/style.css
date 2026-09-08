@@ -1,2 +1,29 @@
 :root{font-family:system-ui,sans-serif;color:#e9ece6;background:#141916;color-scheme:dark}*{box-sizing:border-box}body{margin:0}main{max-width:520px;margin:0 auto;padding:36px 24px 48px}.eyebrow{font-size:11px;letter-spacing:.2em;color:#b3c9a5}h1{font-size:38px;font-weight:500;letter-spacing:-.04em;margin:20px 0 12px}p{line-height:1.6;color:#b5bcb6}.hint{font-size:13px}form{margin:32px 0 20px}label{font-size:14px}input{width:100%;margin:4px 0 12px;border:1px solid #515d51;border-radius:8px;padding:14px;font:inherit;background:#202820;color:inherit}button{border:0;border-radius:8px;background:#c2d9ad;color:#172014;padding:13px 20px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.4;cursor:default}.secondary{background:#2d372e;color:#d7dfd4}.controls{display:flex;gap:10px;margin-top:14px}.controls button{flex:1}#status{font-size:14px;min-height:23px}.preview{border:1px solid #344a32;border-radius:12px;padding:20px;background:#090e09;min-height:205px}pre{font:15px/1.55 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#b8ee91;margin:0}button:focus-visible,input:focus-visible{outline:2px solid #e0fcbf;outline-offset:3px}
 :root a{color:#c2d9ad}.about{margin-top:32px;border-top:1px solid #344a32;padding-top:20px;font-size:14px}.about summary{cursor:pointer;color:#d7dfd4}.about a{line-height:1.8}
+
+/* The phone preview fades while G2 clears its monochrome text. */
+#display { transition: opacity 0.5s ease; }
+#display.waiting-quiet { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { #display { transition: none; } }
+
+.preview{display:grid;grid-template-columns:28% minmax(0,1fr);gap:12px;padding:12px;min-height:240px;align-items:center}
+#clock{font:16px/1.6 ui-monospace,monospace;white-space:pre;color:#b8ee91}
+.mynah-card{align-self:stretch;border:1px solid #769760;border-radius:8px;padding:12px;min-width:0}
+#display{font-size:13px;line-height:1.5}
+@media(max-width:380px){main{padding-inline:14px}.preview{gap:8px}.mynah-card{padding:8px}#clock{font-size:14px}#display{font-size:12px}}
+
+.home-left{align-self:stretch;display:flex;flex-direction:column;justify-content:space-between;color:#b8ee91;font:11px/1.4 ui-monospace,monospace;padding:4px 0}
+#home-battery{font-size:10px;margin-top:6px}#clock{font:200 52px/1.05 ui-monospace,monospace;letter-spacing:-.08em;padding:12px 0}#home-weather{font-size:11px;line-height:1.5}#weather-places{width:100%;padding:12px;margin-bottom:10px}#display{font-family:system-ui,sans-serif}.mynah-card{border-radius:5px}
+
+#clock{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);padding:0}#clock-led{display:block;width:100%;height:auto;margin:12px 0;image-rendering:pixelated}
+
+.home-top,.home-bottom{display:flex;align-items:center;justify-content:space-between;gap:6px}.home-top{white-space:nowrap;font-size:11px}.home-top canvas{flex:none;width:23px;height:auto}.home-bottom{justify-content:flex-start}.home-bottom canvas{width:20px;height:auto}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#home-weather{font-size:14px}
+
+.card-title{text-align:center;color:#b8ee91;font-size:14px;margin-bottom:18px;font-weight:400}
+
+.mynah-card{position:relative;padding-top:32px}.card-title{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#090e09;line-height:0;margin:0}.card-title canvas{width:116px;height:auto;image-rendering:pixelated}
+
+.home-bottom{justify-content:space-between}#home-weather{text-align:right}
+
+/* Keep the phone message pane independently scrollable, including full answers. */
+.mynah-card{height:280px;display:flex;flex-direction:column;min-height:0}#display{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch;padding-right:8px;scrollbar-width:thin}#display:focus-visible{outline:1px solid #b8ee91;outline-offset:3px}

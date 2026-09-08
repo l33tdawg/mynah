@@ -19,22 +19,39 @@
       <button id="connect">Pair Mynah</button>
     </form>
     <p id="status" role="status" aria-live="polite">Opening the glasses interface…</p>
-    <section class="preview" aria-label="Glasses display preview"><pre id="display">MYNAH
+    <section class="preview" aria-label="Glasses display preview"><div class="home-left"><div class="home-top"><div id="home-date"></div><canvas id="battery-led" width="28" height="20" aria-hidden="true"></canvas><span id="home-battery" class="sr-only"></span></div><pre id="clock" aria-label="Time"></pre><canvas id="clock-led" width="156" height="144" aria-hidden="true"></canvas><div class="home-bottom"><canvas id="weather-led" width="24" height="24" aria-hidden="true"></canvas><pre id="home-weather"></pre></div></div><div class="mynah-card"><div class="card-title"><canvas id="title-led" width="144" height="24" aria-hidden="true"></canvas><span class="sr-only">MYNAH G2</span></div><pre id="display" tabindex="0" role="region" aria-label="Messages">MYNAH
 
-Connect on your phone to begin.</pre></section>
+Connect on your phone to begin.</pre></div></section>
     <div class="controls">
       <button id="talk" disabled>Tap to talk</button>
       <button id="disconnect" class="secondary" disabled>Forget pairing</button>
     </div>
     <div class="controls">
       <button id="previous" class="secondary" disabled>Previous</button>
+      <button id="open-message" class="secondary" disabled>Open</button>
       <button id="next" class="secondary" disabled>Next</button>
     </div>
+    <p id="queue-count" class="hint"></p>
+    <div class="controls"><button id="home" class="secondary">Home / new ask</button><button id="follow-up" class="secondary" disabled>Follow up</button></div>
+    <p class="hint">On Home, swipe to select a card and tap to open it. Tap an answer to follow up; double tap returns Home. Select New ask for a separate conversation.</p>
     <p id="heard" class="hint"></p>
     <p class="hint">Tap the glasses or ring to start and stop recording. Swipe to read. Each recording can last up to one minute.</p>
+    <details class="about" id="permissions"><summary>Permissions &amp; help</summary>
+      <p id="permission-status" class="hint" role="status">If you previously declined access, you can enable it again.</p>
+      <p class="hint"><strong>Glasses microphone:</strong> return to Mynah's app details in Even Hub and review its permissions. If Even does not offer a permission control, reopen the companion and try the microphone check below. Phone microphone permission is separate from the G2 glasses microphone.</p>
+      <p class="hint"><strong>Location:</strong> on iPhone, open Settings → Apps → Even → Location and allow access while using the app. On Android, open Settings → Apps → Even → Permissions → Location. Return here and enable local weather again.</p>
+      <button id="check-microphone" class="secondary">Check microphone access</button>
+      <p class="hint">This briefly opens and closes the glasses microphone to check access. No recording is submitted. Even's current SDK does not provide a shortcut to phone permission settings.</p>
+    </details>
+    <details class="about"><summary>Weather</summary>
+      <p class="hint">Use the phone location provided by Even to show nearby weather. Rounded coordinates are sent to Open-Meteo only while weather is enabled; your location is not saved.</p>
+      <button id="weather-enable">Enable local weather</button>
+      <p id="weather-status" class="hint">Weather is off.</p><button id="weather-off" class="secondary">Turn weather off</button>
+      <p class="hint">Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>. Refreshes every 15 minutes while Mynah is open.</p>
+    </details>
     <details class="about">
       <summary>About Mynah</summary>
-      <p>Mynah 0.1.1 for Even G2<br>By Dhillon Kannabhiran (l33tdawg)</p>
+      <p>Mynah 0.2.0 for Even G2<br>By Dhillon Kannabhiran (l33tdawg)</p>
       <p>Your glasses connect to Mynah on your Mac, using your existing Signal or WhatsApp Notes to Self conversation and SAGE context.</p>
       <p><a href="https://github.com/l33tdawg/mynah" target="_blank" rel="noopener noreferrer">Project and setup</a> · <a href="mailto:dhillon@levelupctf.com">Support</a></p>
       <p><a href="./privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="./terms.html" target="_blank" rel="noopener noreferrer">Terms</a></p>

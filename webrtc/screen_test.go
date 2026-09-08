@@ -39,7 +39,9 @@ func TestScreenCaptureBoundsAndCommit(t *testing.T) {
 
 // A real reliable data channel, the actual SDP dispatch, and a fake Mac socket.
 // Proves G2 PCM reaches ASR framing and Unicode answers return without RTP/TTS.
-func TestScreenDataChannelRoundTrip(t *testing.T) {
+func TestScreenDataChannelRoundTrip(t *testing.T)       { screenRoundTrip(t, false) }
+func TestQueuedScreenDataChannelRoundTrip(t *testing.T) { screenRoundTrip(t, true) }
+func screenRoundTrip(t *testing.T, queued bool) {
 	// macOS UNIX paths are limited to 104 bytes; t.TempDir can exceed that.
 	listener, err := net.Listen("unix", filepath.Join("/tmp", "mynah-g2-"+time.Now().Format("150405.000000000")+".screen"))
 	if err != nil {
@@ -48,6 +50,7 @@ func TestScreenDataChannelRoundTrip(t *testing.T) {
 	defer listener.Close()
 	path := listener.Addr().String()
 	macDone := make(chan error, 1)
+	request := `{"command":"start","id":"g2-11111111-1111-4111-8111-111111111111"}`
 	reply := strings.Repeat("hello 世界 ", 1000)
 	go func() {
 		conn, err := listener.Accept()
@@ -57,6 +60,13 @@ func TestScreenDataChannelRoundTrip(t *testing.T) {
 		}
 		defer conn.Close()
 		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		if queued {
+			kind, meta, err := callaudio.ReadFrame(conn)
+			if err != nil || kind != callaudio.KindScreenStatus || string(meta) != request {
+				macDone <- net.InvalidAddrError("lost request metadata")
+				return
+			}
+		}
 		kind, wav, err := callaudio.ReadFrame(conn)
 		if err != nil {
 			macDone <- err
@@ -115,7 +125,11 @@ func TestScreenDataChannelRoundTrip(t *testing.T) {
 		case event := <-events:
 			switch event["type"] {
 			case "ready":
-				if err := dc.SendText("start"); err != nil {
+				command := "start"
+				if queued {
+					command = request
+				}
+				if err := dc.SendText(command); err != nil {
 					t.Fatal(err)
 				}
 				if err := dc.Send(make([]byte, 12800)); err != nil {
@@ -150,5 +164,21 @@ func TestPersistentGlassesEndpointRejectsSpokenCalls(t *testing.T) {
 	s := &callServer{screenOnly: true}
 	if _, err := s.answerOffer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", nil); err == nil {
 		t.Fatal("pairing allowed a spoken call")
+	}
+}
+
+func TestQueuedCaptureAcceptsNextRecordingWithoutWaitingForReply(t *testing.T) {
+	c := screenCapture{}
+	for _, id := range []string{"g2-11111111-1111-4111-8111-111111111111", "g2-22222222-2222-4222-8222-222222222222"} {
+		if _, err := c.receive([]byte(`{"command":"start","id":"`+id+`"}`), true); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = c.receive(make([]byte, 12800), false)
+		if _, err := c.receive([]byte("stop"), true); err != nil {
+			t.Fatal(err)
+		}
+		if c.busy {
+			t.Fatal("queued turn blocked the next recording")
+		}
 	}
 }

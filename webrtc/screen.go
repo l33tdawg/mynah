@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type screenCapture struct {
 	pcm       []byte
 	recording bool
 	busy      bool
+	request   string
 }
 
 func (c *screenCapture) receive(data []byte, text bool) ([]byte, error) {
@@ -30,14 +32,33 @@ func (c *screenCapture) receive(data []byte, text bool) ([]byte, error) {
 		c.pcm = append(c.pcm, data...)
 		return nil, nil
 	}
-	if len(data) > 128 {
+	if len(data) > 256 {
 		return nil, errors.New("oversized control")
 	}
-	switch string(data) {
+	command := string(data)
+	if len(data) > 0 && data[0] == '{' {
+		var request struct {
+			Command  string `json:"command"`
+			ID       string `json:"id"`
+			ParentID string `json:"parentId"`
+		}
+		if json.Unmarshal(data, &request) != nil || request.Command != "start" || len(request.ID) != 39 || !strings.HasPrefix(request.ID, "g2-") || (request.ParentID != "" && len(request.ParentID) != 39) {
+			return nil, errors.New("invalid queued request")
+		}
+		if c.recording || c.busy {
+			return nil, errors.New("recording already in progress")
+		}
+		c.request = command
+		c.pcm = nil
+		c.recording = true
+		return nil, nil
+	}
+	switch command {
 	case "start":
 		if c.recording || c.busy {
 			return nil, errors.New("a turn is already in progress")
 		}
+		c.request = ""
 		c.pcm = nil
 		c.recording = true
 	case "stop":
@@ -47,7 +68,7 @@ func (c *screenCapture) receive(data []byte, text bool) ([]byte, error) {
 		wav := callaudio.WAV(callaudio.Samples(c.pcm), 16000)
 		c.pcm = nil
 		c.recording = false
-		c.busy = true
+		c.busy = c.request == ""
 		return wav, nil
 	case "cancel":
 		c.pcm = nil
@@ -178,11 +199,19 @@ func serveScreenChannel(dc *webrtc.DataChannel, conn net.Conn, finish func()) {
 		}
 		if wav != nil {
 			_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+			if capture.request != "" {
+				if err := callaudio.WriteFrame(conn, callaudio.KindScreenStatus, []byte(capture.request)); err != nil {
+					go finish()
+					return
+				}
+			}
 			if err := callaudio.WriteFrame(conn, callaudio.KindUtterance, wav); err != nil {
 				go finish()
 				return
 			}
-			_ = send("thinking", "Thinking…")
+			if capture.request == "" {
+				_ = send("thinking", "Thinking…")
+			}
 		}
 	})
 	if err := send("ready", "Tap to talk"); err != nil {

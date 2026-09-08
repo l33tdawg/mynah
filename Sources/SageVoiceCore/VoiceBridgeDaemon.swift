@@ -251,6 +251,18 @@ public actor VoiceBridgeDaemon {
     private let inbox = MessageInbox()
     private var glassesWaiters: [String: CheckedContinuation<String, Error>] = [:]
     private var glassesPending: Set<String> = []
+    private struct GlassesCard: Codable {
+        var id: String
+        var threadId: String
+        var question: String
+        var answer: String
+        var status: String
+    }
+    private var glassesCards: [GlassesCard] = []
+    private var glassesHistories: [String: [BrainMessage]] = [:]
+    private var glassesOwners: [String: String] = [:]
+    private var glassesScope: String { (glassesPairing?.token ?? "legacy") + (glassesRecipient?.description ?? "") }
+
     private var lastGlassesReply = ""
     private var glassesAudioFiles: [String: URL] = [:]
     private var activeGlassesMessageID: String?
@@ -1097,6 +1109,14 @@ public actor VoiceBridgeDaemon {
         let started = Date()
         let glassesID = batch.first.flatMap { $0.isGlassesInput ? $0.id : nil }
         activeGlassesMessageID = glassesID
+        if let id = glassesID, glassesOwners[id] != nil {
+            guard glassesOwners[id] == glassesScope, glassesAuthorizationIsCurrent else {
+                finishGlasses(id, text: "Pairing changed before this request started.")
+                activeGlassesMessageID = nil
+                return .ignoredEmpty
+            }
+            if let index = glassesCards.firstIndex(where: { $0.id == id }) { glassesCards[index].status = "working" }
+        }
         defer {
             if let glassesID {
                 finishGlasses(glassesID, text: "Check your notes-to-self chat for the result. Mynah couldn't return an answer here.")
@@ -1162,6 +1182,9 @@ public actor VoiceBridgeDaemon {
             }
         }
         let transcript = MessageCoalescer.merge(parts)
+        if let id = glassesID, let index = glassesCards.firstIndex(where: { $0.id == id }) {
+            glassesCards[index].question = String(transcript.prefix(300))
+        }
         guard !transcript.isEmpty else {
             guard failures == 0 else {
                 await reply("I couldn't read that voice note.", to: recipient)
@@ -1376,7 +1399,8 @@ public actor VoiceBridgeDaemon {
             // `withDeadline` runs outside this actor's isolation and so cannot
             // read `histories`, call `resolveImages`, or touch `loop` directly.
             let prompt = attachmentNote(for: kept).map { "\(transcript)\n\n\($0)" } ?? transcript
-            let priorTurns = histories[key] ?? []
+            let card = glassesID.flatMap { id in glassesCards.first { $0.id == id } }
+            let priorTurns = card.map { glassesHistories[$0.threadId] ?? [] } ?? histories[key] ?? []
             let attachedImages = batch.flatMap { resolveImages($0) }
             let brain = loop
             let announceChosenTool: @Sendable ([String]) async -> Void = { [weak self] chosen in
@@ -1946,6 +1970,7 @@ public actor VoiceBridgeDaemon {
         glassesPairing = current
         glassesRecipient = current?.recipient
         lastGlassesReply = ""
+        glassesCards.removeAll(); glassesHistories.removeAll()
         return true
     }
 
@@ -1996,11 +2021,64 @@ public actor VoiceBridgeDaemon {
 
     private func finishGlasses(_ id: String, text: String) {
         guard glassesPending.remove(id) != nil else { return }
-        lastGlassesReply = text
+        if glassesOwners[id] == nil || glassesOwners[id] == glassesScope { lastGlassesReply = text }
+        if let index = glassesCards.firstIndex(where: { $0.id == id }), glassesOwners[id] == glassesScope {
+            glassesCards[index].answer = text.count > 1000 ? String(text.prefix(1000)) + "\nFull answer in notes-to-self." : text
+            glassesCards[index].status = "ready"
+            let card = glassesCards[index]
+            glassesHistories[card.threadId] = Self.trimmed(
+                (glassesHistories[card.threadId] ?? []) + [.user(card.question), .assistant(text)],
+                keepingLastTurns: configuration.historyTurnLimit
+            )
+        }
         if let file = glassesAudioFiles.removeValue(forKey: id) {
             try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
         }
         glassesWaiters.removeValue(forKey: id)?.resume(returning: text)
+    }
+
+    /// Admission is separate from execution: the existing inbox processes these in order.
+    /// IDs are retained for this daemon session so reconnects cannot replay tools.
+    public func submitGlassesRequest(audio: Data, metadata: String) async throws {
+        struct Request: Decodable { var id: String; var parentId: String? }
+        let request = try JSONDecoder().decode(Request.self, from: Data(metadata.utf8))
+        guard request.id.hasPrefix("g2-"), UUID(uuidString: String(request.id.dropFirst(3))) != nil else {
+            throw NSError(domain: "GlassesQueue", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid request ID."])
+        }
+        let inboxClosed = await inbox.isClosed
+        guard let recipient = glassesRecipient, glassesAuthorizationIsCurrent else { throw CancellationError() }
+        if glassesOwners[request.id] != nil { return }
+        guard glassesPending.count < 5, glassesOwners.count < 500 else {
+            throw NSError(domain: "GlassesQueue", code: 2, userInfo: [NSLocalizedDescriptionKey: "Queue full. Wait for an answer before asking again."])
+        }
+        guard audio.count >= 12844, audio.count <= 60 * 32000 + 44, !inboxClosed else {
+            throw NSError(domain: "GlassesQueue", code: 3, userInfo: [NSLocalizedDescriptionKey: "Recording unavailable. Try again."])
+        }
+        var thread = request.id
+        if let parent = request.parentId {
+            guard let card = glassesCards.first(where: { $0.id == parent && $0.status == "ready" }), glassesOwners[parent] == glassesScope else {
+                throw NSError(domain: "GlassesQueue", code: 4, userInfo: [NSLocalizedDescriptionKey: "Open a completed answer before following up."])
+            }
+            thread = card.threadId
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(request.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = directory.appendingPathComponent("question.wav")
+        do { try audio.write(to: file, options: .atomic) }
+        catch { try? FileManager.default.removeItem(at: directory); throw error }
+        // Revalidate after the inbox actor await above before accepting any work.
+        guard glassesAuthorizationIsCurrent, recipient == glassesRecipient else {
+            try? FileManager.default.removeItem(at: directory); throw CancellationError()
+        }
+        glassesOwners[request.id] = glassesScope
+        glassesPending.insert(request.id); glassesAudioFiles[request.id] = file
+        glassesCards.append(.init(id: request.id, threadId: thread, question: "Voice question", answer: "", status: "queued"))
+        while glassesCards.count > 10, let old = glassesCards.firstIndex(where: { $0.status == "ready" }) {
+            glassesCards.remove(at: old)
+        }
+        await inbox.append(ChannelMessage(kind: recipient.kind, recipient: recipient, id: request.id,
+            attachments: [.init(id: request.id, contentType: "audio/wav", filename: "question.wav", size: Int64(audio.count), localURL: file)],
+            timestamp: Int64(Date().timeIntervalSince1970), isGlassesInput: true))
     }
 
     /// Reconnection reads status without replaying a question or its tools.
@@ -2010,7 +2088,9 @@ public actor VoiceBridgeDaemon {
         let preview = scalars.count > 3000
             ? String(String.UnicodeScalarView(scalars.prefix(3000))) + "\n\nFull reply in your notes-to-self chat."
             : lastGlassesReply
-        let state = ["status": glassesPending.isEmpty ? "ready" : "working", "text": preview]
+        struct Snapshot: Encodable { var status: String; var text: String; var queueVersion = 1; var cards: [GlassesCard] }
+        let state = Snapshot(status: glassesPending.isEmpty ? "ready" : "working", text: preview,
+                             cards: glassesCards.filter { glassesOwners[$0.id] == glassesScope })
         return String(decoding: (try? JSONEncoder().encode(state)) ?? Data(), as: UTF8.self)
     }
 

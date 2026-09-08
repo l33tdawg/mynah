@@ -1,0 +1,11 @@
+# Mynah G2 0.2.0 dashboard and queue
+
+Dashboard follows the supplied Even reference: stacked dot-matrix digits, date/day and battery icon on one line, weather icon beside temperature, framed conversation panel with drawn status icons. Twelve SDK containers; only the text card captures gestures. Native double-tap exit remains on Home. Weather is opt-in using the Even SDK phone location, rounded before querying Open-Meteo and never persisted. Permission recovery help is available in the companion.
+
+Five requests may be queued/working. Requests carry stable IDs over the existing reliable channel and enter the Mac serial inbox separately. New asks use separate context; follow-ups use the selected thread. Ten recent cards and deduplication state survive companion reconnects while the daemon is running. They do not survive a daemon restart; no automatic replay is attempted. Full replies remain in notes-to-self; the glasses preview is bounded.
+
+Validation: 22 companion tests pass, including queueing during work, deferred completion focus during recording, independent card selection, clock bounds, pairing races, and microphone lifecycle. Full Mac suite: 2547 tests, 21 skipped, zero failures; 2526 executed, release assertion passes. New Mac integration test verifies two distinct queued asks, deduplication, and isolated explicit follow-up context. All Go packages pass, including actual WebRTC request metadata round trip and nonblocking recording capture. TypeScript and production packaging pass. Signed release app: dist/release-2.5.1/Mynah.app (2.5.1 build 91). Companion: g2/mynah-g2.ehpk (0.2.0).
+
+Official simulator render inspected on a dark browser background: its PNG uses transparency and otherwise appears solid green in some image viewers. This confirms the native clock, frame, and status icons. Sample queue data are injected only by the serve-only capture config, never production.
+
+Pending physical checks: icon readability, live battery/weather display, long-answer swipes, multiple voice asks with matching answers in G2/chat, explicit follow-up, reconnect without replay, unpair with work queued, and five minutes with phone locked. Public review submission remains pending hardware verification.

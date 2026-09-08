@@ -144,6 +144,29 @@ final class GlassesMessageTests: XCTestCase {
         XCTAssertFalse(MessageCoalescer.belongsTogether(batch: [glasses], next: chat))
     }
 
+    func testQueuedAsksStaySeparateAndFollowUpUsesOnlySelectedThread() async throws {
+        let fixture = try Fixture(kind: .signal, delay: .milliseconds(100), transcriber: SlowTranscriber())
+        let running = Task { await fixture.daemon.run() }
+        defer { fixture.channel.finish(); running.cancel() }
+        await fixture.daemon.registerGlassesConnection(from: fixture.recipient)
+        let first = "g2-" + UUID().uuidString, second = "g2-" + UUID().uuidString
+        let wav = CallCeilingTests.aSecondOfSpeech()
+        try await fixture.daemon.submitGlassesRequest(audio: wav, metadata: "{\"id\":\"\(first)\"}")
+        try await fixture.daemon.submitGlassesRequest(audio: wav, metadata: "{\"id\":\"\(second)\"}")
+        try await fixture.daemon.submitGlassesRequest(audio: wav, metadata: "{\"id\":\"\(first)\"}")
+        try await fixture.waitForAnswers(2)
+        let third = "g2-" + UUID().uuidString
+        try await fixture.daemon.submitGlassesRequest(audio: wav, metadata: "{\"id\":\"\(third)\",\"parentId\":\"\(first)\"}")
+        try await fixture.waitForAnswers(3)
+        let requests = await fixture.brain.requests
+        XCTAssertEqual(requests.count, 3, "duplicate IDs must never execute twice")
+        XCTAssertFalse(requests[1].messages.contains { $0.content == "Answer 1" }, "new asks have separate context")
+        XCTAssertTrue(requests[2].messages.contains { $0.content == "Answer 1" })
+        XCTAssertFalse(requests[2].messages.contains { $0.content == "Answer 2" })
+        let snapshot = await fixture.daemon.glassesStatus()
+        XCTAssertTrue(snapshot.contains(first)); XCTAssertTrue(snapshot.contains(second)); XCTAssertTrue(snapshot.contains(third))
+    }
+
     func testGlassesCommandIsExplicitAndAnchored() {
         XCTAssertTrue(CallInvitation.isGlassesRequest(" //G2\n"))
         XCTAssertFalse(CallInvitation.isGlassesRequest("how do I use //g2"))

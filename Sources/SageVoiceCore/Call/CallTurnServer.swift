@@ -119,6 +119,8 @@ public actor CallTurnServer {
     private let synthesizer: any SpeechSynthesizing
     private let answer: @Sendable (String) async throws -> String
     private var screenStatus: @Sendable () async -> String = { "{}" }
+    private var screenRequest: (@Sendable (Data, String) async throws -> Void)?
+    public func onScreenRequest(_ submit: @escaping @Sendable (Data, String) async throws -> Void) { screenRequest = submit }
     private var screenAudio: (@Sendable (Data) async throws -> String)?
 
     public func onScreenAudio(_ submit: @escaping @Sendable (Data) async throws -> String) {
@@ -856,6 +858,7 @@ public actor CallTurnServer {
             let screen = ScreenConversation(
                 submitAudio: screenAudio,
                 deadline: configuration.turnCeilingSeconds,
+                submitRequest: screenRequest,
                 status: screenStatus
             )
             await screen.run(reader: reader, writer: writer)

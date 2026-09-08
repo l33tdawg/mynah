@@ -1491,6 +1491,10 @@ func runDaemon(_ arguments: [String]) -> Never {
             guard let daemon else { throw CancellationError() }
             return try await daemon.answerFromGlasses(audio: wav)
         }
+        await screenServer.onScreenRequest { [weak daemon] wav, metadata in
+            guard let daemon else { throw CancellationError() }
+            try await daemon.submitGlassesRequest(audio: wav, metadata: metadata)
+        }
         await screenServer.onScreenStatus { [weak daemon] in
             await daemon?.glassesStatus() ?? "{}"
         }

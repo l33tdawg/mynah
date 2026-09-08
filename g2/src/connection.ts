@@ -57,6 +57,11 @@ export class MynahConnection {
     await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
   }
 
+  startRequest(id: string, parentId?: string) {
+    if (this.channel?.readyState !== 'open') throw new Error('Mynah is disconnected.');
+    this.channel.send(JSON.stringify({command:'start', id, parentId}));
+  }
+
   control(command: 'start' | 'stop' | 'cancel') {
     if (this.channel?.readyState !== 'open') throw new Error('Mynah is disconnected. Connect again.');
     this.channel.send(command);

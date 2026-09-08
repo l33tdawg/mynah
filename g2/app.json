@@ -2,7 +2,7 @@
   "package_id": "com.mynah.g2",
   "edition": "202601",
   "name": "Mynah",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "min_app_version": "2.2.9",
   "min_sdk_version": "0.0.14",
   "entrypoint": "index.html",
@@ -16,10 +16,15 @@
     },
     {
       "name": "network",
-      "desc": "Connect to your Mynah Mac through its call relay.",
+      "desc": "Connect to your Mynah Mac; optionally fetch weather near your current location.",
       "whitelist": [
-        "https://call.sage.delivery"
+        "https://call.sage.delivery",
+        "https://api.open-meteo.com"
       ]
+    },
+    {
+      "name": "location",
+      "desc": "Show local weather using your phone location, only when you enable weather."
     }
   ]
 }
