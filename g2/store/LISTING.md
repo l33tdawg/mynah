@@ -66,6 +66,10 @@ Improved pairing, reconnection, and microphone recovery.
 
 ## Review status
 
+### Public submission — September 8, 2026, 8:16 PM MYT
+
+Companion 0.2.1 was submitted through Publish to hub. The portal confirmed “In review”, “Review in progress…” and “Awaiting review…”. It is not publicly listed yet. Both screenshots and the cover show the refined clock. Earlier pending-submission notes below are historical.
+
 ### Listing refresh — September 8, 2026
 
 Saved the 0.2.0 dashboard/queue description (1829/2000 characters), including Mac Settings pairing and the 2.5.1 minimum. Replaced the old task-list screenshot with the two actual dashboard simulator captures and selected the dashboard as cover. The portal displays microphone, network and opt-in location permissions. Public review approval is still pending; selecting a build is not submission.
