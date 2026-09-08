@@ -33,6 +33,11 @@ Weather is optional and uses phone location. Permission help is available in the
 
 Created by Dhillon Kannabhiran (l33tdawg).
 
+## Release notes — 0.2.1
+
+Wider, centered dot-matrix clock with tighter spacing between digits.
+Requires Mynah 2.5.1 or later on your Mac.
+
 ## Release notes — 0.2.0
 
 A dashboard with a dot-matrix clock, live battery icon, and optional local weather.

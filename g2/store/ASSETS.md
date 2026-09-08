@@ -61,3 +61,5 @@ The same capture is used on GitHub Pages as `mynah-g2-dashboard.png`.
 `simulator-dashboard-selected.png` shows the same dashboard after scrolling to select the first question. Both updated screenshots preserve simulator alpha.
 
 Both dashboard captures replaced the old task-list screenshot in Even Hub on September 8, 2026, with the first dashboard selected as the Home-background cover. The website uses only the Even promotional photo and the first dashboard capture, per the owner’s two-image layout preference.
+
+The two dashboard captures were refreshed for 0.2.1 with wider, centered clock digits and a 12-pixel inter-digit gap.

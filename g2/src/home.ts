@@ -13,8 +13,8 @@ export function clockPixels(now: Date): number[] {
   const segments = ['abcdef','bc','abdeg','abcdg','bcfg','acdfg','acdefg','abc','abcdefg','abcdfg'];
   const digits = now.getHours().toString().padStart(2,'0') + now.getMinutes().toString().padStart(2,'0');
   Array.from(digits).forEach((digit,i) => {
-    const x = 18 + (i % 2) * 66, y = 4 + Math.floor(i / 2) * 72;
-    const pieces: Record<string, number[]> = {a:[5,0,39,5],b:[44,5,5,24],c:[44,34,5,24],d:[5,59,39,5],e:[0,34,5,24],f:[0,5,5,24],g:[5,29,39,5]};
+    const x = 15 + (i % 2) * 69, y = 4 + Math.floor(i / 2) * 72;
+    const pieces: Record<string, number[]> = {a:[5,0,47,5],b:[52,5,5,24],c:[52,34,5,24],d:[5,59,47,5],e:[0,34,5,24],f:[0,5,5,24],g:[5,29,47,5]};
     for (const part of segments[Number(digit)]) { const [dx,dy,w,h]=pieces[part]; rect(x+dx,y+dy,w,h); }
   });
   return Array.from(pixels);
