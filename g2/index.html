@@ -33,15 +33,15 @@ Connect on your phone to begin.</pre></div></section>
     </div>
     <p id="queue-count" class="hint"></p>
     <div class="controls"><button id="home" class="secondary">Home / new ask</button><button id="follow-up" class="secondary" disabled>Follow up</button></div>
-    <p class="hint">On Home, swipe to select a card and tap to open it. Tap an answer to follow up; double tap returns Home. Select New ask for a separate conversation.</p>
+    <p class="hint">On Home, swipe to select a card and tap to open it. Tap an answer to follow up; double tap returns Home (and cancels an active recording). You can also choose Mynah Home from Even’s tap-then-long-press menu. Select New ask for a separate conversation.</p>
     <p id="heard" class="hint"></p>
     <p class="hint">Tap the glasses or ring to start and stop recording. Swipe to read. Each recording can last up to one minute.</p>
     <details class="about" id="permissions"><summary>Permissions &amp; help</summary>
-      <p id="permission-status" class="hint" role="status">If you previously declined access, you can enable it again.</p>
-      <p class="hint"><strong>Glasses microphone:</strong> return to Mynah's app details in Even Hub and review its permissions. If Even does not offer a permission control, reopen the companion and try the microphone check below. Phone microphone permission is separate from the G2 glasses microphone.</p>
+      <p id="permission-status" class="hint" role="status">Check the glasses microphone connection or get help with local weather access.</p>
+      <p class="hint"><strong>Glasses microphone:</strong> Mynah records from your glasses through Even. A failed start can mean the glasses connection is unavailable; it does not by itself mean permission was denied. Reopen Mynah in Even and retry.</p>
       <p class="hint"><strong>Location:</strong> on iPhone, open Settings → Apps → Even → Location and allow access while using the app. On Android, open Settings → Apps → Even → Permissions → Location. Return here and enable local weather again.</p>
-      <button id="check-microphone" class="secondary">Check microphone access</button>
-      <p class="hint">This briefly opens and closes the glasses microphone to check access. No recording is submitted. Even's current SDK does not provide a shortcut to phone permission settings.</p>
+      <button id="check-microphone" class="secondary">Check glasses microphone</button>
+      <p class="hint">This briefly opens and closes the glasses microphone to check the connection. No recording is submitted. Even's current SDK does not provide a shortcut to phone permission settings.</p>
     </details>
     <details class="about"><summary>Weather</summary>
       <p class="hint">Use the phone location provided by Even to show nearby weather. Rounded coordinates are sent to Open-Meteo only while weather is enabled; your location is not saved.</p>

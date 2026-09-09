@@ -1,5 +1,5 @@
 import {
-  AudioInputSource, AppLocationAccuracy, CreateStartUpPageContainer, OsEventTypeList,
+  MenuContainerProperty, MenuItemProperty, AudioInputSource, AppLocationAccuracy, CreateStartUpPageContainer, OsEventTypeList,
   StartUpPageCreateResult, TextContainerProperty, TextContainerUpgrade, RebuildPageContainer, ImageContainerProperty, ImageRawDataUpdate, ImageRawDataUpdateResult,
   waitForEvenAppBridge, type EvenAppBridge
 } from '@evenrealities/even_hub_sdk';
@@ -30,6 +30,13 @@ let recordingTimer: ReturnType<typeof setTimeout> | undefined;
 let operation = Promise.resolve();
 let desiredDisplay = '';
 let drawing = false;
+let activeDraw = Promise.resolve();
+let audioOperation: Promise<unknown> = Promise.resolve();
+function audioControl(open: boolean): Promise<boolean> {
+  const next = audioOperation.catch(() => {}).then(() => bridge ? bridge.audioControl(open, AudioInputSource.Glasses) : false);
+  audioOperation = next;
+  return next;
+}
 let desiredClock = '';
 let desiredWeather = '--°C';
 let sentWeather = '';
@@ -178,7 +185,12 @@ function render() {
   controls();
   void draw();
 }
-async function draw() {
+function draw(): Promise<void> {
+  if (drawing) return activeDraw;
+  activeDraw = drawFrame();
+  return activeDraw;
+}
+async function drawFrame() {
   if (!bridge || drawing || exiting) return;
   drawing = true;
   try {
@@ -240,7 +252,7 @@ async function stopMicrophone() {
   // Change the phase before awaiting the bridge, so late audio is discarded.
   if (phase === 'listening') phase = 'ready';
   try {
-    if (bridge && !await bridge.audioControl(false)) status('Check the glasses connection; microphone stop could not be confirmed.');
+    if (bridge && !await audioControl(false)) status('Check the glasses connection; microphone stop could not be confirmed.');
   } catch { status('Check the glasses connection; microphone stop could not be confirmed.'); }
 }
 function receive(event: ReplyEvent) {
@@ -323,7 +335,14 @@ async function toggleRecording() {
     if (queueEnabled) { requestID = 'g2-' + crypto.randomUUID(); connection.startRequest(requestID, parentID); }
     else connection.control('start');
     phase = 'listening'; controls();
-    if (!await bridge.audioControl(true, AudioInputSource.Glasses)) { showPermissionHelp('Microphone unavailable. Review Mynah permissions in Even Hub, then check microphone access below.'); throw new Error('Microphone unavailable. Open Permissions & help on your phone.'); }
+    // Finish the home-to-recording rebuild before opening the hardware stream.
+    show('Listening…\nTap again to send.');
+    await draw();
+    if (phase !== 'listening' || connection !== current || exiting) return;
+    if (!await audioControl(true)) {
+      throw new Error('Could not start the glasses microphone. Check the glasses connection and tap to retry.');
+    }
+    el('permission-status').textContent = 'Glasses microphone connected. No phone microphone setting is needed for this recording.';
     // A disconnect or background event may have happened during audioControl.
     if (phase !== 'listening') { await stopMicrophone(); return; }
     status('Listening · tap again to send'); show('Listening…\nTap again to send.');
@@ -372,7 +391,7 @@ el<HTMLFormElement>('connect-form').addEventListener('submit', event => {
 });
 talk.onclick = () => { if (phase !== 'listening') parentID = undefined; queue(toggleRecording); };
 el('open-message').onclick = () => { if (phase === 'listening' || cards.selected < 0) return; cards.open(); stopWaitingDisplay(); render(); };
-el('home').onclick = () => { if (phase === 'listening') return; cards.home(); stopWaitingDisplay(); render(); };
+el('home').onclick = () => queue(returnHome);
 el('follow-up').onclick = () => { if (cards.current?.status !== 'ready' || phase === 'listening') return; parentID = cards.current.id; queue(toggleRecording); };
 disconnect.onclick = () => forgetPairing('Pairing forgotten on this phone. Choose Unpair under Even G2 glasses in Mynah Settings on your Mac to revoke access.');
 previous.onclick = () => { if (queueEnabled && !cards.detail) { cards.select(-1); stopWaitingDisplay(); render(); return; } page = Math.max(0, page - 1); render(); };
@@ -397,6 +416,7 @@ void (async () => {
   void draw();
   clearTimeout(bridgeTimer);
   bridge.onEvenHubEvent(event => {
+    if (event.menuItemClickEvent?.itemID === 1) { queue(returnHome); return; }
     if (event.sysEvent?.eventType === OsEventTypeList.SYSTEM_EXIT_EVENT || event.sysEvent?.eventType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
       exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer);
       void stopMicrophone(); connection?.close(); return;
@@ -429,13 +449,7 @@ void (async () => {
         } else { if (phase !== 'listening') parentID = undefined; queue(toggleRecording); }
         break;
       case OsEventTypeList.DOUBLE_CLICK_EVENT:
-        if (queueEnabled && cards.detail && phase !== 'listening') { cards.home(); stopWaitingDisplay(); render(); break; }
-        queue(async () => {
-          const wasRecording = phase === 'listening';
-          await stopMicrophone();
-          if (wasRecording) { connection?.control('cancel'); show('Recording cancelled. Tap to talk.'); }
-          await bridge?.shutDownPageContainer(1);
-        });
+        queue(returnHome);
         break;
       case OsEventTypeList.SCROLL_TOP_EVENT: previous.click(); break;
       case OsEventTypeList.SCROLL_BOTTOM_EVENT: next.click(); break;
@@ -507,10 +521,23 @@ function showPermissionHelp(text: string) {
 el('check-microphone').onclick = () => queue(async () => {
   if (!bridge || phase === 'listening') return;
   let allowed = false;
-  try { allowed = await bridge.audioControl(true, AudioInputSource.Glasses); }
-  finally { await bridge.audioControl(false); }
-  showPermissionHelp(allowed ? 'Microphone access is ready. Tap to talk when connected.' : 'Microphone access is still unavailable. Review the permissions in Even, then retry.');
+  try { allowed = await audioControl(true); }
+  finally { await audioControl(false); }
+  showPermissionHelp(allowed ? 'Glasses microphone connected. Tap to talk when connected to Mynah.' : 'Could not open the glasses microphone. Check the glasses connection, reopen Mynah in Even, and retry. This does not establish that a permission was denied.');
 });
+
+async function returnHome() {
+  const wasRecording = phase === 'listening';
+  if (wasRecording) {
+    await stopMicrophone();
+    connection?.control('cancel');
+  }
+  parentID = undefined;
+  cards.home(); stopWaitingDisplay();
+  if (!queueEnabled) { reading = ['Tap to talk.']; page = 0; }
+  status(wasRecording ? 'Recording cancelled · Home' : 'Home');
+  render();
+}
 
 function layoutKey() { return iconKinds.length ? `home:${cards.selected}:${iconKinds.length}` : 'reading'; }
 function homeRows(): string[] {
@@ -523,6 +550,7 @@ function homeRows(): string[] {
 }
 function pageLayout() { return {
     containerTotalNum: 10,
+    menuObject: new MenuContainerProperty({ menuItems: [new MenuItemProperty({ itemID: 1, itemName: 'Mynah Home' })] }),
     textObject: [new TextContainerProperty({
       containerID: 1, containerName: 'mynah', xPosition: 176, yPosition: 12,
       width: 392, height: 264, paddingLength: 12, borderWidth: 1, borderColor: 4, borderRadius: 8, isEventCapture: 1,

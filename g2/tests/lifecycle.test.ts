@@ -1,3 +1,4 @@
+import { MenuContainerProperty, MenuItemProperty, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -26,6 +27,9 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const weatherURLs: string[] = [];
   let layout: any;
   const microphones: boolean[] = [];
+  const hardware: string[] = [];
+  const shutdowns: number[] = [];
+  let micResult = true;
   let onEvent: Function = () => {};
   let stop: Promise<any> | undefined;
   const validateLayout = (value: any) => {
@@ -45,11 +49,11 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const bridge = {
     createStartUpPageContainer: async (value: any) => { validateLayout(value); return 0; },
     textContainerUpgrade: async (value: any) => { assert.ok(layout.textObject.some((c: any) => c.containerID === value.containerID && c.containerName === value.containerName), 'text updates must target an existing container'); assert.equal(typeof value.content, 'string'); displays.push(value); return true; },
-    rebuildPageContainer: async (value: any) => { validateLayout(value); layouts.push(value); return true; },
+    rebuildPageContainer: async (value: any) => { hardware.push('rebuild'); validateLayout(value); layouts.push(value); return true; },
     getAppLocation: async () => options.location ?? null,
     getDeviceInfo: async () => null, onDeviceStatusChanged() {}, updateImageRawData: async () => 0,
-    audioControl: async (enabled: boolean) => { microphones.push(enabled); return !enabled && stop ? stop : true; },
-    shutDownPageContainer: async () => true,
+    audioControl: async (enabled: boolean) => { hardware.push(enabled ? 'mic-start' : 'mic-stop'); microphones.push(enabled); return !enabled && stop ? stop : micResult; },
+    shutDownPageContainer: async (mode: number) => { shutdowns.push(mode); return true; },
     onEvenHubEvent: (cb: Function) => { onEvent = cb; },
     getLocalStorage: async (key: string) => key === 'mynah.connection' && options.saved ? options.saved : '',
     setLocalStorage: async (key: string, value: string) => { writes.push(value); storage.set(key, value); },
@@ -87,11 +91,11 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     RebuildPageContainer: class { constructor(value: any) { Object.assign(this, value); } },
     ImageContainerProperty: class { constructor(value: any) { Object.assign(this, value); } }, ImageRawDataUpdate: class {}, ImageRawDataUpdateResult: {success:0},
     StartUpPageCreateResult: { success: 0 }, AudioInputSource: { Glasses: 1 },
-    OsEventTypeList: { CLICK_EVENT: 0, SCROLL_TOP_EVENT: 1, SCROLL_BOTTOM_EVENT: 2, DOUBLE_CLICK_EVENT: 3, SYSTEM_EXIT_EVENT: 4, ABNORMAL_EXIT_EVENT: 5 },
+    OsEventTypeList, MenuContainerProperty, MenuItemProperty,
   });
   const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
   await flush();
-  return { get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, listeners,
+  return { hardware, shutdowns, failMic: () => { micResult = false; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, listeners,
     expireWaiting: () => { for (const [id, t] of timers) if (t.delay === 10000) { timers.delete(id); t.fn(); } },
     event: (event: any) => onEvent(event), blockStop: (value: Promise<any>) => { stop = value; },
     pair: async () => { get('link').value = link; get('connect-form').submit({ preventDefault() {} }); await flush(); },
@@ -246,4 +250,58 @@ test('weather uses rounded SDK location and disabling cancels a pending location
   h.get('weather-enable').click();await h.flush();
   assert.ok(h.weatherURLs[0].includes('latitude=3.14&longitude=101.69'));
   assert.equal(h.get('home-weather').textContent,'24°C');
+});
+
+
+test('follow-up display rebuild finishes before the microphone opens', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'one',threadId:'one',question:'First',answer:'Answer',status:'ready'}]})});
+  await h.flush(); h.get('home').click(); await h.flush(); h.hardware.length = 0;
+  h.get('talk').click(); await h.flush();
+  assert.ok(h.hardware.indexOf('rebuild') >= 0);
+  assert.ok(h.hardware.indexOf('mic-start') > h.hardware.indexOf('rebuild'));
+  assert.equal(h.hardware.at(-1), 'mic-start');
+});
+
+test('double tap cancels recording and returns home without ending the feature', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('talk').click(); await h.flush();
+  h.event({sysEvent:{eventType:3}}); await h.flush();
+  assert.equal(h.microphones.at(-1), false);
+  assert.ok(h.peers[0].commands.includes('cancel'));
+  assert.equal(h.shutdowns.length, 0);
+  h.event({sysEvent:{eventType:3}}); await h.flush();
+  assert.equal(h.shutdowns.length, 0);
+});
+
+test('menu Home survives overlay events and returns to the message list', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'one',threadId:'one',question:'First',answer:'Answer',status:'ready'}]})}); await h.flush();
+  h.event({textEvent:{eventType:2}}); await h.flush(); h.event({textEvent:{eventType:0}}); await h.flush();
+  h.event({sysEvent:{eventType:4}});
+  h.event({menuItemClickEvent:{itemID:1}});
+  h.event({sysEvent:{eventType:5}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  assert.equal(h.peers[0].closed, false);
+  assert.equal(h.layouts.at(-1).menuObject.menuItems[0].itemName, 'Mynah Home');
+});
+
+test('failed mic start is recoverable and does not assert permission denial', async () => {
+  const h = await harness(); await h.pair(); await h.ready(); h.failMic();
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('status').textContent, /Check the glasses connection/);
+  assert.equal(h.get('permissions').open, undefined);
+  assert.equal(h.get('talk').disabled, false);
+  assert.ok(h.peers[0].commands.includes('cancel'));
+});
+
+test('a pending microphone stop completes before a subsequent start', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('talk').click(); await h.flush();
+  const stopped = deferred(); h.blockStop(stopped.promise);
+  h.peers[0].event({type:'error',text:'First request failed'}); await h.flush();
+  h.get('talk').click(); await h.flush();
+  assert.equal(h.microphones.filter(Boolean).length, 1);
+  stopped.resolve(true); await h.flush();
+  assert.equal(h.microphones.filter(Boolean).length, 2);
 });
