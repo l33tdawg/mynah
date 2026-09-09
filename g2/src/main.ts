@@ -19,6 +19,7 @@ let bridge: EvenAppBridge | undefined;
 let connection: MynahConnection | undefined;
 const cards = new Cards();
 let queueEnabled = false;
+let atHome = true;
 let requestID: string | undefined;
 let parentID: string | undefined;
 let phase: 'offline' | 'connecting' | 'ready' | 'listening' | 'thinking' = 'offline';
@@ -152,6 +153,7 @@ function controls() {
   el('queue-count').textContent = queueEnabled ? `${cards.pending} queued / working · ${cards.items.filter(c => c.unread).length} unread` : '';
 }
 function show(text: string) {
+  atHome = false;
   reading = cardPages(text); page = 0; render();
 }
 function render() {
@@ -169,6 +171,7 @@ function render() {
       page = 0;
     }
   }
+  if (queueEnabled) atHome = iconKinds.length > 0;
   // Only the card goes quiet; the home clock remains visible.
   const cardText = `\n\n${reading[page]}${reading.length > 1 ? `\n${page + 1} / ${reading.length}` : ''}`;
   desiredDisplay = waitingHidden || iconKinds.length ? ' ' : cardText;
@@ -449,7 +452,10 @@ void (async () => {
         } else { if (phase !== 'listening') parentID = undefined; queue(toggleRecording); }
         break;
       case OsEventTypeList.DOUBLE_CLICK_EVENT:
-        queue(returnHome);
+        queue(async () => {
+          if (atHome && phase !== 'listening') await bridge?.shutDownPageContainer(1);
+          else await returnHome();
+        });
         break;
       case OsEventTypeList.SCROLL_TOP_EVENT: previous.click(); break;
       case OsEventTypeList.SCROLL_BOTTOM_EVENT: next.click(); break;
@@ -537,6 +543,7 @@ async function returnHome() {
   if (!queueEnabled) { reading = ['Tap to talk.']; page = 0; }
   status(wasRecording ? 'Recording cancelled · Home' : 'Home');
   render();
+  atHome = true;
 }
 
 function layoutKey() { return iconKinds.length ? `home:${cards.selected}:${iconKinds.length}` : 'reading'; }

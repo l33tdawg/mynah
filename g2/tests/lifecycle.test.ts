@@ -271,7 +271,7 @@ test('double tap cancels recording and returns home without ending the feature',
   assert.ok(h.peers[0].commands.includes('cancel'));
   assert.equal(h.shutdowns.length, 0);
   h.event({sysEvent:{eventType:3}}); await h.flush();
-  assert.equal(h.shutdowns.length, 0);
+  assert.deepEqual(h.shutdowns, [1]);
 });
 
 test('menu Home survives overlay events and returns to the message list', async () => {
@@ -304,4 +304,19 @@ test('a pending microphone stop completes before a subsequent start', async () =
   assert.equal(h.microphones.filter(Boolean).length, 1);
   stopped.resolve(true); await h.flush();
   assert.equal(h.microphones.filter(Boolean).length, 2);
+});
+
+
+test('system double tap with an empty text envelope goes back one level, then exits from Home', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'one',threadId:'one',question:'First',answer:'Answer',status:'ready'}]})}); await h.flush();
+  h.get('home').click(); await h.flush();
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  h.event({sysEvent:{eventSource:1}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('? First'));
+  h.event({textEvent:{},sysEvent:{eventType:3,eventSource:1}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  assert.equal(h.shutdowns.length, 0);
+  h.event({textEvent:{},sysEvent:{eventType:3,eventSource:1}}); await h.flush();
+  assert.deepEqual(h.shutdowns, [1]);
 });

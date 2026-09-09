@@ -1,6 +1,10 @@
 // Protobuf may omit CLICK_EVENT because its wire value is zero.
 type Input = { eventType?: number; eventSource?: number };
 export function inputType(event: { textEvent?: Input; listEvent?: Input; sysEvent?: Input }): number | undefined {
+  // Explicit non-zero events take precedence over protobuf's omitted tap value.
+  for (const envelope of [event.sysEvent, event.textEvent, event.listEvent]) {
+    if (envelope?.eventType !== undefined && envelope.eventType !== 0) return envelope.eventType;
+  }
   const container = event.textEvent ?? event.listEvent;
   if (container) return container.eventType ?? 0;
   const system = event.sysEvent;

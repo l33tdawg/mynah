@@ -15,3 +15,10 @@ test('audio-only and empty system events never start recording; lifecycle stays 
   assert.equal(inputType({sysEvent:{eventType:5,eventSource:2}}), 5);
   assert.equal(inputType({textEvent:{eventType:0},sysEvent:{eventType:0}}), 0);
 });
+
+
+test('explicit system double tap and lifecycle events beat empty tap envelopes', () => {
+  assert.equal(inputType({textEvent:{},sysEvent:{eventType:3,eventSource:1}}), 3);
+  assert.equal(inputType({textEvent:{eventType:0},sysEvent:{eventType:5}}), 5);
+  assert.equal(inputType({sysEvent:{eventSource:1},textEvent:{eventType:2}}), 2);
+});
