@@ -28,10 +28,24 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const microphones: boolean[] = [];
   let onEvent: Function = () => {};
   let stop: Promise<any> | undefined;
+  const validateLayout = (value: any) => {
+    const text = value.textObject ?? [], images = value.imageObject ?? [];
+    assert.ok(text.length <= 8, 'hardware supports at most eight text containers');
+    assert.ok(images.length <= 4, 'hardware supports at most four image containers');
+    const all = [...text, ...images];
+    assert.equal(value.containerTotalNum, all.length);
+    assert.ok(all.length <= 12);
+    assert.equal(new Set(all.map(c => c.containerID)).size, all.length);
+    for (const image of images) {
+      assert.ok(image.width >= 20 && image.width <= 288);
+      assert.ok(image.height >= 20 && image.height <= 144);
+    }
+    layout = value;
+  };
   const bridge = {
-    createStartUpPageContainer: async (value: any) => { layout = value; return 0; },
-    textContainerUpgrade: async (value: any) => { displays.push(value); return true; },
-    rebuildPageContainer: async (value: any) => { layouts.push(value); return true; },
+    createStartUpPageContainer: async (value: any) => { validateLayout(value); return 0; },
+    textContainerUpgrade: async (value: any) => { assert.ok(layout.textObject.some((c: any) => c.containerID === value.containerID && c.containerName === value.containerName), 'text updates must target an existing container'); assert.equal(typeof value.content, 'string'); displays.push(value); return true; },
+    rebuildPageContainer: async (value: any) => { validateLayout(value); layouts.push(value); return true; },
     getAppLocation: async () => options.location ?? null,
     getDeviceInfo: async () => null, onDeviceStatusChanged() {}, updateImageRawData: async () => 0,
     audioControl: async (enabled: boolean) => { microphones.push(enabled); return !enabled && stop ? stop : true; },
@@ -182,7 +196,7 @@ test('waiting explanation appears once, clears after ten seconds, and the answer
 
 test('home has a persistent clock and exactly one framed input panel', async () => {
   const h = await harness();
-  assert.equal(h.layout.containerTotalNum, 12);
+  assert.equal(h.layout.containerTotalNum, 10);
   const panels = h.layout.textObject;
   assert.equal(panels.filter((p: any) => p.isEventCapture === 1).length, 1);
   assert.equal(panels[0].borderWidth, 1);

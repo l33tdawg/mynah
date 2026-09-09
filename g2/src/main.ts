@@ -5,7 +5,7 @@ import {
 } from '@evenrealities/even_hub_sdk';
 import { MynahConnection } from './connection.ts';
 import { connectionURL, cardPages, type ReplyEvent } from './protocol.ts';
-import { clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels } from './home.ts';
+import { clockPixels, batteryLabel, weatherLabel, batteryPixels, weatherPixels, titlePixels } from './home.ts';
 import { Cards, cardIcon } from './cards.ts';
 import { inputType } from './input.ts';
 
@@ -35,7 +35,6 @@ let desiredWeather = '--°C';
 let sentWeather = '';
 let iconKinds: string[] = [];
 let iconFocus = -1;
-let sentIconKey = '';
 let desiredPixels: number[] = [];
 let sentClockMinute = '';
 let clockMinute = '';
@@ -187,11 +186,11 @@ async function draw() {
       const layout = layoutKey();
       if (sentLayoutKey !== layout) {
         if (!await bridge.rebuildPageContainer(new RebuildPageContainer(pageLayout()))) throw Error('Could not move the selection on the glasses.');
-        sentLayoutKey = layout; sentTitle = false; sentRows = []; sentIconKey = ''; sentClockMinute = ''; sentIndicators = '';
+        sentLayoutKey = layout; sentTitle = false; sentRows = []; sentClockMinute = ''; sentIndicators = '';
       }
       if (!sentTitle) { await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:8,containerName:'title',imageData:titlePixels()})); sentTitle = true; }
       const rowText = homeRows();
-      for (let i=0;i<4;i++) if (sentRows[i] !== rowText[i]) {
+      for (let i=0;i<rowText.length;i++) if (sentRows[i] !== rowText[i]) {
         const id = i === 0 ? 12 : 8+i;
         await bridge.textContainerUpgrade(new TextContainerUpgrade({containerID:id,containerName:`row-${id}`,contentOffset:0,contentLength:0,content:rowText[i]}));
         sentRows[i] = rowText[i];
@@ -214,12 +213,6 @@ async function draw() {
         await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:7,containerName:'weather-icon',imageData:weatherPixels(weatherCode)}));
         sentIndicators = indicators;
       }
-      const iconKey = JSON.stringify([iconKinds,iconFocus]);
-      if (sentIconKey !== iconKey) {
-        await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:5,containerName:'icons',imageData:statusPixels(iconKinds.slice(1,2), -1, 20)}));
-        await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:13,containerName:'icon-second',imageData:statusPixels(iconKinds.slice(2,3), -1, 20)}));
-        sentIconKey = iconKey;
-      }
       if (sentClockMinute !== clockMinute) {
         const minute = clockMinute;
         const result = await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:4,containerName:'digits',imageData:desiredPixels}));
@@ -229,7 +222,7 @@ async function draw() {
         }
         sentClockMinute = minute;
       }
-    } while (sentClock !== desiredClock || sentDisplay !== desiredDisplay || sentWeather !== desiredWeather || sentClockMinute !== clockMinute || sentLayoutKey !== layoutKey() || sentRows.join('\n') !== homeRows().join('\n') || sentIconKey !== JSON.stringify([iconKinds,iconFocus]) || sentIndicators !== JSON.stringify([batteryLevel,weatherCode]));
+    } while (sentClock !== desiredClock || sentDisplay !== desiredDisplay || sentWeather !== desiredWeather || sentClockMinute !== clockMinute || sentLayoutKey !== layoutKey() || sentRows.join('\n') !== homeRows().join('\n') || sentIndicators !== JSON.stringify([batteryLevel,weatherCode]));
   } catch (error) { status(message(error)); }
   finally { drawing = false; }
 }
@@ -397,7 +390,7 @@ const bridgeTimer = setTimeout(() => status('Open this companion inside Even Hub
 void (async () => {
   const available = await waitForEvenAppBridge();
   const result = await available.createStartUpPageContainer(new CreateStartUpPageContainer(pageLayout()));
-  if (result !== StartUpPageCreateResult.success) throw new Error('Could not open the glasses display. Reopen the companion in Even Hub.');
+  if (result !== StartUpPageCreateResult.success) throw new Error(`Could not open the glasses display (SDK result: ${result}). Reopen the companion in Even Hub.`);
   bridge = available; sentLayoutKey = layoutKey();
   void bridge.getDeviceInfo().then(info => { glassesSN = info?.sn; batteryLevel = info?.status.batteryLevel; battery = batteryLabel(batteryLevel, info?.status.isCharging); updateClock(); }).catch(() => {});
   bridge.onDeviceStatusChanged(device => { if (!glassesSN || device.sn !== glassesSN) return; batteryLevel = device.batteryLevel; battery = batteryLabel(batteryLevel, device.isCharging); updateClock(); });
@@ -525,11 +518,11 @@ function homeRows(): string[] {
   const first = Math.max(0,cards.selected-1);
   return ['   + New ask', ...[0,1].map(i => {
     const c=cards.items[first+i];
-    return c ? `       ${c.question.slice(0,22)}\n       ${c.unread ? '* ' : ''}${c.status}` : ' ';
+    return c ? ` ${cardIcon(c)} ${c.question.slice(0,22)}\n    ${c.unread ? '* ' : ''}${c.status}` : ' ';
   })];
 }
 function pageLayout() { return {
-    containerTotalNum: 12,
+    containerTotalNum: 10,
     textObject: [new TextContainerProperty({
       containerID: 1, containerName: 'mynah', xPosition: 176, yPosition: 12,
       width: 392, height: 264, paddingLength: 12, borderWidth: 1, borderColor: 4, borderRadius: 8, isEventCapture: 1,
@@ -544,5 +537,5 @@ function pageLayout() { return {
       const id=i===0?12:8+i, visible=iconKinds.length > 0 && (i===0 || !!cards.items[Math.max(0,cards.selected-1)+i-1]);
       return new TextContainerProperty({containerID:id,containerName:`row-${id}`,xPosition:188,yPosition:y,width:368,height:i===0?46:80,paddingLength:i===0?6:8,isEventCapture:0,borderWidth:visible?(iconFocus===i?2:1):0,borderColor:iconFocus===i?4:1,borderRadius:4,textColor:iconFocus===i?4:2,content:homeRows()[i]});
     })],
-    imageObject: [new ImageContainerProperty({containerID:8,containerName:'title',xPosition:300,yPosition:0,width:144,height:24}), new ImageContainerProperty({containerID:4,containerName:'digits',xPosition:8,yPosition:66,width:156,height:144}), new ImageContainerProperty({containerID:5,containerName:'icons',xPosition:209,yPosition:106,width:20,height:20}), new ImageContainerProperty({containerID:13,containerName:'icon-second',xPosition:209,yPosition:196,width:20,height:20}), new ImageContainerProperty({containerID:6,containerName:'battery',xPosition:132,yPosition:18,width:28,height:20}), new ImageContainerProperty({containerID:7,containerName:'weather-icon',xPosition:12,yPosition:240,width:24,height:24})]
+    imageObject: [new ImageContainerProperty({containerID:8,containerName:'title',xPosition:300,yPosition:0,width:144,height:24}), new ImageContainerProperty({containerID:4,containerName:'digits',xPosition:8,yPosition:66,width:156,height:144}), new ImageContainerProperty({containerID:6,containerName:'battery',xPosition:132,yPosition:18,width:28,height:20}), new ImageContainerProperty({containerID:7,containerName:'weather-icon',xPosition:12,yPosition:240,width:24,height:24})]
   }; }
