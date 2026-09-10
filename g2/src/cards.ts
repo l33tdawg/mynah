@@ -4,6 +4,7 @@ export class Cards {
   selected = -1;
   detail = false;
   pendingFocus?: string;
+  private receivedSnapshot = false;
   get current() { return this.items[this.selected]; }
   get pending() { return this.items.filter(c => ['queued','working'].includes(c.status)).length; }
   merge(raw: unknown, speaking: boolean) {
@@ -13,9 +14,10 @@ export class Cards {
       if (!c || typeof c.id !== 'string' || typeof c.threadId !== 'string' || typeof c.question !== 'string' || typeof c.answer !== 'string' || !['queued','working','ready'].includes(c.status)) throw Error('Invalid Mynah card');
       const old = this.items.find(item => item.id === c.id);
       const arrived = c.status === 'ready' && old?.status !== 'ready';
-      if (arrived && !this.detail && this.selected === -1) this.pendingFocus = c.id;
+      if (arrived && (this.receivedSnapshot || old !== undefined) && !this.detail && this.selected === -1) this.pendingFocus = c.id;
       return {...c, unread: arrived || old?.unread || false};
     });
+    this.receivedSnapshot = true;
     // Local submissions remain visible until the Mac acknowledges them.
     this.items = [...incoming, ...this.items.filter(c => !incoming.some(n => n.id === c.id) && c.status !== 'ready')].slice(-15);
     this.selected = selectedID ? this.items.findIndex(c => c.id === selectedID) : -1;

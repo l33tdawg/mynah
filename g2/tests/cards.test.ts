@@ -23,3 +23,11 @@ test('clock bitmap is bounded and unknown battery is never a fake reading', () =
   assert.equal(batteryLabel(undefined),'[--]'); assert.ok(batteryLabel(75).includes('75%'));
   assert.equal(weatherLabel(0,21.2),'21°C\n☀ Clear');
 });
+
+
+test('saved answers do not steal Home on first snapshot, but new completions are revealed', () => {
+  const c = new Cards(); c.merge([card('old','ready'),card('pending')],false);
+  assert.equal(c.detail, false); assert.equal(c.selected, -1);
+  c.merge([card('old','ready'),card('pending','ready')],false);
+  assert.equal(c.detail, true); assert.equal(c.current?.id, 'pending');
+});

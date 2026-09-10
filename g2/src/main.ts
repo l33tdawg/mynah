@@ -19,6 +19,8 @@ let bridge: EvenAppBridge | undefined;
 let connection: MynahConnection | undefined;
 const cards = new Cards();
 let queueEnabled = false;
+let backendChecked = false;
+let microphoneRequested = false;
 let atHome = true;
 let requestID: string | undefined;
 let parentID: string | undefined;
@@ -34,7 +36,14 @@ let drawing = false;
 let activeDraw = Promise.resolve();
 let audioOperation: Promise<unknown> = Promise.resolve();
 function audioControl(open: boolean): Promise<boolean> {
-  const next = audioOperation.catch(() => {}).then(() => bridge ? bridge.audioControl(open, AudioInputSource.Glasses) : false);
+  const next = audioOperation.catch(() => {}).then(async () => {
+    if (!bridge) return false;
+    if (!open && !microphoneRequested) return true;
+    if (open) microphoneRequested = true;
+    const result = await bridge.audioControl(open, AudioInputSource.Glasses);
+    if (!open && result) microphoneRequested = false;
+    return result;
+  });
   audioOperation = next;
   return next;
 }
@@ -129,7 +138,7 @@ function savePairing(link: string) {
 }
 function forgetPairing(reason: string) {
   pairingRevision++;
-  cards.items = []; cards.home(); queueEnabled = false;
+  cards.items = []; cards.home(); queueEnabled = false; backendChecked = false;
   savedPairing = undefined; clearTimeout(reconnectTimer); reconnectAttempt = 0;
   connection?.close(); connection = undefined; phase = 'offline';
   void stopMicrophone();
@@ -150,6 +159,7 @@ function controls() {
   previous.disabled = queueEnabled && !cards.detail ? cards.selected === -1 : page === 0;
   next.disabled = queueEnabled && !cards.detail ? cards.selected >= cards.items.length - 1 : page >= reading.length - 1;
   el<HTMLButtonElement>('follow-up').disabled = !queueEnabled || cards.current?.status !== 'ready' || phase === 'listening' || !connection;
+  el('backend-status').textContent = queueEnabled ? 'Mac chat list connected' : backendChecked ? 'The connected Mac service has not reported chat-list support. If Mynah 2.5.1 or newer is installed, restart Mynah on the paired Mac and reconnect.' : 'Checking the paired Mac for chat-list support…';
   el('queue-count').textContent = queueEnabled ? `${cards.pending} queued / working · ${cards.items.filter(c => c.unread).length} unread` : '';
 }
 function show(text: string) {
@@ -158,7 +168,7 @@ function show(text: string) {
 }
 function render() {
   iconKinds = []; iconFocus = -1;
-  if (queueEnabled && !['listening','offline','connecting'].includes(phase) && !waitingActive && !waitingHidden) {
+  if ((queueEnabled || atHome) && !['listening','offline','connecting'].includes(phase) && !waitingActive && !waitingHidden) {
     if (cards.detail && cards.current) {
       const c = cards.current;
       reading = cardPages(`? ${c.question}\n\n${c.status === 'ready' ? '✓ ' + c.answer : cardIcon(c) + ' ' + c.status + (c.status === 'failed' ? '\n'+c.answer : '')}`);
@@ -277,6 +287,7 @@ function receive(event: ReplyEvent) {
       break;
     case 'state': {
       const snapshot = JSON.parse(event.text);
+      backendChecked = true;
       if (snapshot.queueVersion === 1 && snapshot.status !== 'unpaired') {
         queueEnabled = true;
         const speaking = phase === 'listening';
@@ -308,7 +319,7 @@ function receive(event: ReplyEvent) {
         phase = 'ready';
         if (state.text && state.text !== answer) {
           answer = state.text; status('Answer ready'); show(answer);
-        } else if (!answer && !turnError) { status('Connected to Mynah'); show('Tap to talk.'); }
+        } else if (!answer && !turnError) { status('Connected to Mynah'); atHome = true; render(); }
         else render();
       }
       break;
@@ -363,7 +374,7 @@ function scheduleReconnect() {
 async function connectPaired() {
     if (!savedPairing || exiting) return;
     if (!bridge || phase !== 'offline') return;
-    phase = 'connecting'; status('Connecting to Mynah…'); controls();
+    backendChecked = false; phase = 'connecting'; status('Connecting to Mynah…'); controls();
     const current = new MynahConnection(event => { if (connection === current && !exiting) receive(event); }, () => {
       if (connection !== current) return;
       stopWaitingDisplay();
@@ -540,6 +551,7 @@ async function returnHome() {
   }
   parentID = undefined;
   cards.home(); stopWaitingDisplay();
+  atHome = true;
   if (!queueEnabled) { reading = ['Tap to talk.']; page = 0; }
   status(wasRecording ? 'Recording cancelled · Home' : 'Home');
   render();

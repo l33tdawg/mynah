@@ -93,7 +93,7 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     StartUpPageCreateResult: { success: 0 }, AudioInputSource: { Glasses: 1 },
     OsEventTypeList, MenuContainerProperty, MenuItemProperty,
   });
-  const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
   await flush();
   return { hardware, shutdowns, failMic: () => { micResult = false; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, listeners,
     expireWaiting: () => { for (const [id, t] of timers) if (t.delay === 10000) { timers.delete(id); t.fn(); } },
@@ -319,4 +319,37 @@ test('system double tap with an empty text envelope goes back one level, then ex
   assert.equal(h.shutdowns.length, 0);
   h.event({textEvent:{},sysEvent:{eventType:3,eventSource:1}}); await h.flush();
   assert.deepEqual(h.shutdowns, [1]);
+});
+
+
+test('older Mac still shows the Home menu and explains missing shared chat support', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  assert.match(h.get('backend-status').textContent, /has not reported chat-list support/);
+  h.get('talk').click(); await h.flush();
+  h.event({sysEvent:{eventType:3}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  assert.equal(h.shutdowns.length, 0);
+});
+
+test('idle disconnect does not ask Even to stop a microphone that was never opened', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.peers[0].close(); await h.flush();
+  assert.equal(h.microphones.length, 0);
+  assert.match(h.get('status').textContent, /offline/);
+});
+
+
+test('connecting to a Mac with saved answers starts on the chat list', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'saved',threadId:'saved',question:'Saved question',answer:'Saved answer',status:'ready'}]})}); await h.flush();
+  assert.match(h.get('backend-status').textContent, /Mac chat list connected/);
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  assert.ok(h.get('display').textContent.includes('Saved question'));
+  assert.ok(!h.get('display').textContent.includes('Saved answer'));
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  h.event({sysEvent:{eventType:0}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('Saved answer'));
+  h.event({sysEvent:{eventType:3}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
 });
