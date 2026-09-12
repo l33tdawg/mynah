@@ -27,9 +27,10 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const weatherURLs: string[] = [];
   let layout: any;
   const microphones: boolean[] = [];
+  const micCalls: { enabled: boolean; source?: any }[] = [];
   const hardware: string[] = [];
   const shutdowns: number[] = [];
-  let micResult = true;
+  let micFailures = 0;
   let onEvent: Function = () => {};
   let stop: Promise<any> | undefined;
   const validateLayout = (value: any) => {
@@ -52,7 +53,11 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     rebuildPageContainer: async (value: any) => { hardware.push('rebuild'); validateLayout(value); layouts.push(value); return true; },
     getAppLocation: async () => options.location ?? null,
     getDeviceInfo: async () => null, onDeviceStatusChanged() {}, updateImageRawData: async () => 0,
-    audioControl: async (enabled: boolean) => { hardware.push(enabled ? 'mic-start' : 'mic-stop'); microphones.push(enabled); return !enabled && stop ? stop : micResult; },
+    audioControl: async (enabled: boolean, source?: any) => {
+      hardware.push(enabled ? 'mic-start' : 'mic-stop'); microphones.push(enabled); micCalls.push({ enabled, source });
+      if (enabled && micFailures > 0) { micFailures--; return false; }
+      return !enabled && stop ? stop : true;
+    },
     shutDownPageContainer: async (mode: number) => { shutdowns.push(mode); return true; },
     onEvenHubEvent: (cb: Function) => { onEvent = cb; },
     getLocalStorage: async (key: string) => key === 'mynah.connection' && options.saved ? options.saved : '',
@@ -84,7 +89,10 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   runInNewContext(code, {
     fetch: async (url: string) => { weatherURLs.push(url); return {ok:true,json:async()=>({current:{weather_code:61,temperature_2m:24.4}})}; }, AbortSignal,
     crypto: {randomUUID}, document: { getElementById: get }, window: { addEventListener: (name: string, cb: Function) => { listeners[name] = cb; } },
-    setTimeout: (fn: Function, delay: number) => { timers.set(++timer, {fn, delay}); return timer; }, clearTimeout: (id: number) => timers.delete(id),
+    // Short waits (the microphone retry) resolve on the next microtask, so a
+    // test does not have to drive a clock to see a retry; the minute-long
+    // recording and ten-second waiting timers stay real.
+    setTimeout: (fn: Function, delay: number) => { const id = ++timer; timers.set(id, { fn, delay }); if (delay <= 250) Promise.resolve().then(() => { if (timers.delete(id)) fn(); }); return id; }, clearTimeout: (id: number) => timers.delete(id),
     waitForEvenAppBridge: async () => bridge, MynahConnection: Connection, connectionURL, cardPages, inputType, Cards, cardIcon, clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels,
     CreateStartUpPageContainer: class { constructor(value: any) { Object.assign(this, value); } }, TextContainerProperty: class { constructor(value: any) { Object.assign(this, value); } }, TextContainerUpgrade: class { constructor(value: any) { Object.assign(this, value); } },
     AppLocationAccuracy:{Low:'low'},
@@ -95,7 +103,7 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   });
   const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
   await flush();
-  return { hardware, shutdowns, failMic: () => { micResult = false; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, listeners,
+  return { hardware, shutdowns, failMic: (times = Infinity) => { micFailures = times; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, micCalls, listeners,
     expireWaiting: () => { for (const [id, t] of timers) if (t.delay === 10000) { timers.delete(id); t.fn(); } },
     event: (event: any) => onEvent(event), blockStop: (value: Promise<any>) => { stop = value; },
     pair: async () => { get('link').value = link; get('connect-form').submit({ preventDefault() {} }); await flush(); },
@@ -289,7 +297,8 @@ test('menu Home survives overlay events and returns to the message list', async 
 test('failed mic start is recoverable and does not assert permission denial', async () => {
   const h = await harness(); await h.pair(); await h.ready(); h.failMic();
   h.get('talk').click(); await h.flush();
-  assert.match(h.get('status').textContent, /Check the glasses connection/);
+  assert.match(h.get('status').textContent, /Could not start the glasses microphone/);
+  assert.doesNotMatch(h.get('status').textContent, /permission was denied/);
   assert.equal(h.get('permissions').open, undefined);
   assert.equal(h.get('talk').disabled, false);
   assert.ok(h.peers[0].commands.includes('cancel'));
@@ -352,4 +361,113 @@ test('connecting to a Mac with saved answers starts on the chat list', async () 
   assert.ok(h.get('display').textContent.includes('Saved answer'));
   h.event({sysEvent:{eventType:3}}); await h.flush();
   assert.ok(h.get('display').textContent.includes('New ask'));
+});
+
+// A tap the app cannot honour used to end with the owner looking at the home
+// list and nothing else: the reason went to the phone status line and the next
+// render replaced it with the menu.
+test('a failed microphone start explains itself on the glasses, not the home menu', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'one',threadId:'one',question:'First question',answer:'First answer',status:'ready'}]})}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+  h.failMic();
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /Could not start the glasses microphone/);
+  assert.ok(!h.get('display').textContent.includes('New ask'), 'the home list must not replace the reason');
+  assert.match(h.displays.filter((d: any) => d.containerID === 1).at(-1).content, /glasses microphone/, 'the reason must reach the glasses card');
+  h.get('home').click(); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'), 'Home still returns to the list');
+});
+
+test('a rejected ask keeps its reason on the glasses', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.get('talk').click(); await h.flush();
+  h.event({audioEvent:{source:1,audioPcm:new Uint8Array(16000)}});
+  h.get('talk').click(); await h.flush();
+  const id = JSON.parse(h.peers[0].commands.find((c: string) => c.startsWith('{'))!).id;
+  h.peers[0].event({type:'state',text:JSON.stringify({rejected:id,reason:'Queue full. Wait for an answer before asking again.'})}); await h.flush();
+  assert.match(h.get('display').textContent, /Queue full/);
+  assert.ok(!h.get('display').textContent.includes('New ask'));
+});
+
+test('a too-short recording keeps its retry prompt on the glasses', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.get('talk').click(); await h.flush();
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /little more audio/);
+  assert.ok(!h.get('display').textContent.includes('New ask'));
+});
+
+// The list stays reachable: swiping is how the owner gets from a message the
+// app is holding back to the conversations.
+test('swiping from a held message returns to the chat list', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[{id:'one',threadId:'one',question:'First question',answer:'First answer',status:'ready'}]})}); await h.flush();
+  h.failMic();
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('display').textContent, /glasses microphone/);
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'), 'swiping must restore the list');
+  assert.ok(h.get('display').textContent.includes('First question'));
+});
+
+test('a held message on an empty list can still be swiped away', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.failMic();
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /glasses microphone/);
+  assert.equal(h.get('next').disabled, false, 'a swipe has to reach the list even with nothing in it');
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  assert.ok(h.get('display').textContent.includes('New ask'));
+});
+
+// Even owns the capture and refuses an open while it still holds one of ours -
+// the state a suspended or replaced WebView leaves behind. The companion clears
+// it and tries again rather than declaring the microphone broken.
+test('a refused microphone open is cleared and retried', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.failMic(1);
+  h.get('talk').click(); await h.flush();
+  assert.deepEqual(h.micCalls.map((c: any) => c.enabled), [true, false, true], 'a refused open is cleared, then retried');
+  assert.equal(h.get('talk').textContent, 'Tap to send', 'the second attempt starts the recording');
+  assert.ok(!h.get('display').textContent.includes('Could not start'), 'no failure reaches the owner');
+  assert.ok(h.micCalls.every((c: any) => c.enabled || c.source === undefined), 'a stop carries no source');
+  assert.deepEqual(h.micCalls.filter((c: any) => c.enabled).map((c: any) => c.source), [1, 1], 'an open names the glasses source');
+});
+
+test('a microphone that stays refused is tried three times, then explains itself', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.failMic();
+  h.get('talk').click(); await h.flush();
+  assert.equal(h.micCalls.filter((c: any) => c.enabled).length, 3, 'three opens, each after a clearing stop');
+  assert.equal(h.micCalls.filter((c: any) => !c.enabled).length, 2);
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /Reopen Mynah in Even/);
+});
+
+// The docs are explicit: a capture stops while the WebView is suspended and the
+// app has to re-arm it on the way back, never assuming the stream is still live.
+test('returning to the foreground re-arms a recording capture', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.get('talk').click(); await h.flush();
+  const opens = h.micCalls.filter((c: any) => c.enabled).length;
+  h.event({sysEvent:{eventType:4,eventSource:1}}); await h.flush();
+  assert.equal(h.micCalls.filter((c: any) => c.enabled).length, opens + 1, 'the capture is re-armed');
+  assert.equal(h.get('talk').textContent, 'Tap to send', 'the recording is still live');
+});
+
+test('a capture that cannot be re-armed ends the recording instead of recording silence', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',cards:[]})}); await h.flush();
+  h.get('talk').click(); await h.flush();
+  h.failMic();
+  h.event({sysEvent:{eventType:4,eventSource:1}}); await h.flush();
+  assert.ok(h.peers[0].commands.includes('cancel'), 'the dead recording is dropped');
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /microphone stopped while you were away/);
+  assert.equal(h.get('talk').textContent, 'Tap to talk');
 });

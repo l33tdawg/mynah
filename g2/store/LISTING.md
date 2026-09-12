@@ -33,6 +33,18 @@ Weather is optional and uses phone location. Permission help is available in the
 
 Created by Dhillon Kannabhiran (l33tdawg).
 
+## Release notes — 0.2.7
+
+A tap that cannot start a recording now says why on the glasses — a failed
+glasses microphone, a full queue, or a Mac that is not connected yet — instead
+of leaving the home list in place. Rejections and retry prompts stay on the
+glasses rather than being replaced by the chat list; swipe down to reach the list
+again.
+The glasses microphone is opened the way Even documents (stop without a source)
+and a refused open clears Even's own capture and retries, so a phone that was
+locked mid-recording no longer leaves the microphone unusable. Returning to the
+foreground re-arms a recording, as Even's lifecycle guidance requires.
+
 ## Release notes — 0.2.1
 
 Wider, centered dot-matrix clock with tighter spacing between digits.

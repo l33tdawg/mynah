@@ -22,6 +22,7 @@ let queueEnabled = false;
 let backendChecked = false;
 let microphoneRequested = false;
 let atHome = true;
+let holdingMessage = false;
 let requestID: string | undefined;
 let parentID: string | undefined;
 let phase: 'offline' | 'connecting' | 'ready' | 'listening' | 'thinking' = 'offline';
@@ -35,17 +36,42 @@ let desiredDisplay = '';
 let drawing = false;
 let activeDraw = Promise.resolve();
 let audioOperation: Promise<unknown> = Promise.resolve();
-function audioControl(open: boolean): Promise<boolean> {
+// The Even host owns the capture, and refuses an open while it still holds one
+// of ours. `force` exists for that: the recovery path clears the host's capture
+// even though this session never opened one — the state a WebView that was
+// suspended or replaced mid-recording leaves behind. A stop is the documented
+// `audioControl(false)`, with no source.
+function microphoneControl(open: boolean, force = false): Promise<boolean> {
   const next = audioOperation.catch(() => {}).then(async () => {
     if (!bridge) return false;
-    if (!open && !microphoneRequested) return true;
-    if (open) microphoneRequested = true;
-    const result = await bridge.audioControl(open, AudioInputSource.Glasses);
-    if (!open && result) microphoneRequested = false;
+    // Only a confirmed open counts as "the microphone is on": a failed start
+    // used to leave the flag set, so a later stop was sent to Even for a stream
+    // that had never opened.
+    if (!open && !force && !microphoneRequested) return true;
+    const result = open
+      ? await bridge.audioControl(true, AudioInputSource.Glasses)
+      : await bridge.audioControl(false);
+    if (result) microphoneRequested = open;
     return result;
   });
   audioOperation = next;
   return next;
+}
+function audioControl(open: boolean) { return microphoneControl(open); }
+function clearMicrophoneCapture() { return microphoneControl(false, true); }
+const microphoneRetryDelay = 200;
+const pause = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); });
+/// Opening the glasses microphone is Even's decision, not ours, so a refusal is
+/// retried after clearing whatever the host still believes it holds. Even stops a
+/// capture when the WebView is suspended — and its own record of that capture is
+/// what refuses the next open, which is why the microphone "stopped working"
+/// after a locked phone or a relaunch rather than after any code change.
+async function openMicrophone(attempts = 3): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) { await clearMicrophoneCapture(); await pause(microphoneRetryDelay); }
+    if (await audioControl(true)) return true;
+  }
+  return false;
 }
 let desiredClock = '';
 let desiredWeather = '--°C';
@@ -118,8 +144,11 @@ function showWaiting() {
   if (!waitingHintSeen) {
     waitingHintSeen = true;
     void bridge?.setLocalStorage('mynah.waitingHintSeen', '1').catch(() => {});
-    show('You can carry on.\nThe answer will appear here and in your notes-to-self chat.');
-  } else { show('Working…'); }
+    // Transient on purpose: while the app is waiting, waitingActive/waitingHidden
+    // already keep the list away, and once the wait ends the answer — a card or a
+    // held message — is what should decide what the glasses show next.
+    showTransient('You can carry on.\nThe answer will appear here and in your notes-to-self chat.');
+  } else { showTransient('Working…'); }
   waitingTimer = setTimeout(() => {
     waitingTimer = undefined;
     if (phase !== 'thinking') return;
@@ -146,7 +175,7 @@ function forgetPairing(reason: string) {
   answer = ''; turnError = false; el('heard').textContent = '';
   el<HTMLInputElement>('link').value = '';
   void savePairing('').catch(() => status('Could not clear the saved link. Unpair in Mynah settings to revoke access.'));
-  status(reason); show('Pair on your phone to begin.');
+  status(reason); showTransient('Pair on your phone to begin.');
 }
 
 function status(text: string) { el('status').textContent = text; }
@@ -156,24 +185,41 @@ function controls() {
   disconnect.disabled = !savedPairing;
   el('connect-form').hidden = !!savedPairing;
   connect.disabled = !bridge || phase !== 'offline';
-  previous.disabled = queueEnabled && !cards.detail ? cards.selected === -1 : page === 0;
-  next.disabled = queueEnabled && !cards.detail ? cards.selected >= cards.items.length - 1 : page >= reading.length - 1;
+  const listing = queueEnabled && !cards.detail;
+  // While a message is held the list is one swipe away, so the arrows stay
+  // usable even when the list itself has nothing to select yet.
+  const leaveMessage = holdingMessage && listing;
+  previous.disabled = listing ? !leaveMessage && cards.selected === -1 : page === 0;
+  next.disabled = listing ? !leaveMessage && cards.selected >= cards.items.length - 1 : page >= reading.length - 1;
   el<HTMLButtonElement>('follow-up').disabled = !queueEnabled || cards.current?.status !== 'ready' || phase === 'listening' || !connection;
   el('backend-status').textContent = queueEnabled ? 'Mac chat list connected' : backendChecked ? 'The connected Mac service has not reported chat-list support. If Mynah 2.5.1 or newer is installed, restart Mynah on the paired Mac and reconnect.' : 'Checking the paired Mac for chat-list support…';
   el('queue-count').textContent = queueEnabled ? `${cards.pending} queued / working · ${cards.items.filter(c => c.unread).length} unread` : '';
 }
+// `show` is how the app tells the owner something on the glasses — an answer, a
+// rejected recording, a failed microphone. It is remembered (`holdingMessage`)
+// because the home list is the resting view and must never be the answer to a
+// failure: without this, every message the app tried to show was overwritten by
+// the list on the next render, which is what "tap to ask and it goes back to the
+// main menu" looked like. Connection chatter is explicitly transient so a later
+// state snapshot can put the list back.
 function show(text: string) {
   atHome = false;
+  holdingMessage = true;
   reading = cardPages(text); page = 0; render();
+}
+function showTransient(text: string) {
+  holdingMessage = false;
+  show(text);
 }
 function render() {
   iconKinds = []; iconFocus = -1;
-  if ((queueEnabled || atHome) && !['listening','offline','connecting'].includes(phase) && !waitingActive && !waitingHidden) {
+  const settled = !['listening','offline','connecting'].includes(phase) && !waitingActive && !waitingHidden;
+  if (settled && (queueEnabled || atHome)) {
     if (cards.detail && cards.current) {
       const c = cards.current;
       reading = cardPages(`? ${c.question}\n\n${c.status === 'ready' ? '✓ ' + c.answer : cardIcon(c) + ' ' + c.status + (c.status === 'failed' ? '\n'+c.answer : '')}`);
       page = Math.min(page, reading.length - 1);
-    } else {
+    } else if (!holdingMessage) {
       const first = Math.max(0, cards.selected - 1);
       iconFocus = cards.selected === -1 ? 0 : cards.selected - first + 1;
       iconKinds = ['new', ...cards.items.slice(first, first + 2).map(c => c.status)];
@@ -302,7 +348,9 @@ function receive(event: ReplyEvent) {
       if (typeof snapshot.rejected === 'string') {
         const card = cards.items.find(c => c.id === snapshot.rejected);
         if (card) { card.status = 'failed'; card.answer = snapshot.reason || 'Request rejected'; }
-        if (phase !== 'listening') { phase = 'ready'; stopWaitingDisplay(); status(snapshot.reason); render(); }
+        // The reason is the whole point of the message: it stays on the glasses,
+        // with the failed card one swipe away in the list.
+        if (phase !== 'listening') { phase = 'ready'; stopWaitingDisplay(); status(snapshot.reason); show(snapshot.reason || 'Request rejected'); }
         return;
       }
       let state: { status?: string; text?: string };
@@ -328,9 +376,20 @@ function receive(event: ReplyEvent) {
   controls();
 }
 async function toggleRecording() {
-  if (!bridge || !connection || exiting) return;
+  if (!bridge || exiting) return;
   const current = connection;
-  if (queueEnabled && phase !== 'listening' && cards.pending >= 5) { status('Queue full · wait for an answer'); return; }
+  // A tap the app cannot honour has to say so. Returning silently left the owner
+  // looking at the home list with no way to tell whether anything had happened.
+  if (!current) {
+    status(savedPairing ? 'Mynah is offline · reconnecting automatically' : 'Pair your Mynah to begin.');
+    showTransient(savedPairing ? 'Mynah is offline.\nReconnecting automatically; tap again in a moment.' : 'Pair on your phone to begin.');
+    controls(); return;
+  }
+  if (queueEnabled && phase !== 'listening' && cards.pending >= 5) {
+    status('Queue full · wait for an answer');
+    showTransient('Queue full.\nWait for an answer, then tap to ask again.');
+    controls(); return;
+  }
   if (phase === 'listening') {
     phase = 'thinking';
     await stopMicrophone();
@@ -346,21 +405,29 @@ async function toggleRecording() {
     stopWaitingDisplay();
     answer = ''; turnError = false; recorded = 0;
     el('heard').textContent = '';
-    if (queueEnabled) { requestID = 'g2-' + crypto.randomUUID(); connection.startRequest(requestID, parentID); }
-    else connection.control('start');
+    if (queueEnabled) { requestID = 'g2-' + crypto.randomUUID(); current.startRequest(requestID, parentID); }
+    else current.control('start');
     phase = 'listening'; controls();
     // Finish the home-to-recording rebuild before opening the hardware stream.
     show('Listening…\nTap again to send.');
     await draw();
     if (phase !== 'listening' || connection !== current || exiting) return;
-    if (!await audioControl(true)) {
-      throw new Error('Could not start the glasses microphone. Check the glasses connection and tap to retry.');
+    if (!await openMicrophone()) {
+      throw new Error('Could not start the glasses microphone. Reopen Mynah in Even, then tap to retry.');
     }
     el('permission-status').textContent = 'Glasses microphone connected. No phone microphone setting is needed for this recording.';
     // A disconnect or background event may have happened during audioControl.
     if (phase !== 'listening') { await stopMicrophone(); return; }
     status('Listening · tap again to send'); show('Listening…\nTap again to send.');
     recordingTimer = setTimeout(() => queue(async () => { if (phase === 'listening') await toggleRecording(); }), 59000);
+  } else if (phase === 'connecting') {
+    status('Still connecting to Mynah…');
+    showTransient('Still connecting to Mynah.\nTap again in a moment.');
+  } else if (phase === 'thinking') {
+    // Older Mac builds answer one question at a time; say so rather than
+    // appearing to ignore the tap.
+    status('Mynah is still working on your last question');
+    showTransient('Mynah is still working.\nIts answer will appear here.');
   }
   controls();
 }
@@ -381,7 +448,7 @@ async function connectPaired() {
       phase = 'offline'; connection = undefined; queueEnabled = false; cards.disconnected();
       void stopMicrophone();
       status(savedPairing ? 'Mynah is offline · reconnecting automatically' : 'Pair your Mynah to begin.');
-      show(savedPairing ? 'Reconnecting to Mynah…\nYour submitted question stays on your Mac.' : 'Pair on your phone to begin.');
+      showTransient(savedPairing ? 'Reconnecting to Mynah…\nYour submitted question stays on your Mac.' : 'Pair on your phone to begin.');
       scheduleReconnect();
     });
     connection = current;
@@ -404,12 +471,14 @@ el<HTMLFormElement>('connect-form').addEventListener('submit', event => {
   });
 });
 talk.onclick = () => { if (phase !== 'listening') parentID = undefined; queue(toggleRecording); };
-el('open-message').onclick = () => { if (phase === 'listening' || cards.selected < 0) return; cards.open(); stopWaitingDisplay(); render(); };
+el('open-message').onclick = () => { if (phase === 'listening' || cards.selected < 0) return; cards.open(); holdingMessage = false; stopWaitingDisplay(); render(); };
 el('home').onclick = () => queue(returnHome);
 el('follow-up').onclick = () => { if (cards.current?.status !== 'ready' || phase === 'listening') return; parentID = cards.current.id; queue(toggleRecording); };
 disconnect.onclick = () => forgetPairing('Pairing forgotten on this phone. Choose Unpair under Even G2 glasses in Mynah Settings on your Mac to revoke access.');
-previous.onclick = () => { if (queueEnabled && !cards.detail) { cards.select(-1); stopWaitingDisplay(); render(); return; } page = Math.max(0, page - 1); render(); };
-next.onclick = () => { if (queueEnabled && !cards.detail) { cards.select(1); stopWaitingDisplay(); render(); return; } page = Math.min(reading.length - 1, page + 1); render(); };
+// Swiping is how the list is reached from a message the app is holding, so it
+// releases that message rather than scrolling something that is not on screen.
+previous.onclick = () => { if (queueEnabled && !cards.detail) { holdingMessage = false; cards.select(-1); stopWaitingDisplay(); render(); return; } page = Math.max(0, page - 1); render(); };
+next.onclick = () => { if (queueEnabled && !cards.detail) { holdingMessage = false; cards.select(1); stopWaitingDisplay(); render(); return; } page = Math.min(reading.length - 1, page + 1); render(); };
 // A hidden WebView is normal when the paired phone is locked. Do not gate
 // glasses input on document.visibilityState. Page teardown still stops capture.
 window.addEventListener('pagehide', () => { exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer); clearTimeout(weatherTimer); void stopMicrophone(); connection?.close(); });
@@ -435,6 +504,8 @@ void (async () => {
       exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer);
       void stopMicrophone(); connection?.close(); return;
     }
+    // Coming back from a suspended WebView: Even has stopped any capture we had.
+    if (event.sysEvent?.eventType === OsEventTypeList.FOREGROUND_ENTER_EVENT) { void rearmMicrophone(); }
     if (event.audioEvent && phase === 'listening') {
       const audio = event.audioEvent;
       if (audio.source !== undefined && audio.source !== AudioInputSource.Glasses) return;
@@ -538,10 +609,26 @@ function showPermissionHelp(text: string) {
 el('check-microphone').onclick = () => queue(async () => {
   if (!bridge || phase === 'listening') return;
   let allowed = false;
-  try { allowed = await audioControl(true); }
+  try { allowed = await openMicrophone(2); }
   finally { await audioControl(false); }
   showPermissionHelp(allowed ? 'Glasses microphone connected. Tap to talk when connected to Mynah.' : 'Could not open the glasses microphone. Check the glasses connection, reopen Mynah in Even, and retry. This does not establish that a permission was denied.');
 });
+
+/// Even stops a glasses capture while the WebView is suspended and asks apps to
+/// re-arm on foreground rather than assume the stream is still live. Best effort:
+/// a refusal can simply mean the capture never stopped, and the clear-then-open
+/// retry inside `openMicrophone` covers that. Only a capture that stays refused
+/// ends the recording, so the owner never speaks into a dead stream.
+async function rearmMicrophone() {
+  if (phase !== 'listening' || !bridge || exiting) return;
+  if (await openMicrophone(2)) { status('Listening · tap again to send'); return; }
+  if (phase !== 'listening') return;
+  phase = 'ready';
+  connection?.control('cancel');
+  status('The glasses microphone stopped while the phone was asleep.');
+  show('The glasses microphone stopped while you were away.\nTap to ask again.');
+  controls();
+}
 
 async function returnHome() {
   const wasRecording = phase === 'listening';
@@ -551,6 +638,7 @@ async function returnHome() {
   }
   parentID = undefined;
   cards.home(); stopWaitingDisplay();
+  holdingMessage = false;
   atHome = true;
   if (!queueEnabled) { reading = ['Tap to talk.']; page = 0; }
   status(wasRecording ? 'Recording cancelled · Home' : 'Home');

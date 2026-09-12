@@ -106,6 +106,11 @@ Official references: [local testing](https://hub.evenrealities.com/docs/test/loc
 - Recording that has not been submitted is discarded on exit. Once submitted,
   transcription and work continue in the serial chat inbox. Repeating a task
   request is a new request, so check chat before retrying an uncertain delivery.
+- Even stops a glasses capture while the WebView is suspended, and its own record
+  of that capture is what refuses the next open — which is why a phone locked
+  mid-recording used to leave the microphone unusable until Even restarted. The
+  companion re-arms the capture on foreground and clears Even's stale capture
+  before retrying a refused open; only then does it report a failure.
 
 See [background lifecycle](https://hub.evenrealities.com/docs/build/background-lifecycle)
 and [device APIs](https://hub.evenrealities.com/docs/build/device-apis).
