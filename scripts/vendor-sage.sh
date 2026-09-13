@@ -104,9 +104,16 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # 11.18.27), so the live-node tests in the suite exercise this exact node rather
 # than a fixture that agrees with whatever the code expects.
 #
+# 11.19.21 -> 11.19.22 on 13 Sep 2026, before the same release was published.
+# .22 landed ten minutes after .21 and is a build and dependency refresh — a Go
+# floor raise and seven dependabot updates, no MCP change and nothing touching a
+# tool. The pin was moved rather than shipping .21 because the newer name was
+# already published when the artifact was built, and "the newest published at
+# the moment of the cut" is the rule this file has followed since .25.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.19.21}"
+TAG="${SAGE_RELEASE_TAG:-v11.19.22}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
