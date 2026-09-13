@@ -89,9 +89,11 @@ Official references: [local testing](https://hub.evenrealities.com/docs/test/loc
   notifications. This companion addresses only Mynah's authorized self-chat.
   Replying to third-party contacts is not implemented.
 - The companion stores the validated connection link in Even SDK local storage
-  for reopening, and clears it on Forget pairing. That storage has no documented
-  encryption guarantee. It stores no microphone recordings, model credentials,
-  or chat transcript. The link is a bearer capability; keep it private.
+  for reopening, and clears it on Forget pairing — which asks for a second tap
+  on the control first, because the first version cleared the link on one touch
+  with no undo. That storage has no documented encryption guarantee. It stores no
+  microphone recordings, model credentials, or chat transcript. The link is a
+  bearer capability; keep it private.
 - G2 has a persistent data-only pairing, separate from temporary spoken calls.
   The Mac stores its token and self-chat recipient privately and restores the
   endpoint on startup. Choose **Unpair** under Even G2 glasses in Mynah Settings to revoke it; Forget pairing
@@ -111,6 +113,16 @@ Official references: [local testing](https://hub.evenrealities.com/docs/test/loc
   mid-recording used to leave the microphone unusable until Even restarted. The
   companion re-arms the capture on foreground and clears Even's stale capture
   before retrying a refused open; only then does it report a failure.
+
+- Every call into Even's bridge — microphone, page containers, storage, location
+  — is treated as refusable. When the host rejects one it answers with its own
+  internal text, and that is not something an owner can act on, so the companion
+  turns it into a sentence about the glasses with a retry. A tap to talk reports
+  a failed microphone, a full queue or an unconnected Mac, and never the host's
+  wording. A Mac whose screen endpoint refuses the command — a Mynah that was
+  updated but not restarted, which is the one case where the companion and the
+  Mac are different vintages — is named as the Mac rather than quoted as
+  `unknown control`.
 
 See [background lifecycle](https://hub.evenrealities.com/docs/build/background-lifecycle)
 and [device APIs](https://hub.evenrealities.com/docs/build/device-apis).

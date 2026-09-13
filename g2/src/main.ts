@@ -36,6 +36,16 @@ let desiredDisplay = '';
 let drawing = false;
 let activeDraw = Promise.resolve();
 let audioOperation: Promise<unknown> = Promise.resolve();
+/// Even's host, not this companion, owns the microphone, the glasses page, the
+/// saved link and the phone's location. When it refuses one of those calls the
+/// native bridge can reject with its own internal message instead of answering
+/// false — and that message used to be what a tap to talk showed the owner: a
+/// code where a sentence belongs. Every call goes through here, so a refusal
+/// arrives as a value the app can branch on and every tap ends in something
+/// true that the owner can act on.
+async function evenBridge<T>(call: () => Promise<T>): Promise<T | undefined> {
+  try { return await call(); } catch { return undefined; }
+}
 // The Even host owns the capture, and refuses an open while it still holds one
 // of ours. `force` exists for that: the recovery path clears the host's capture
 // even though this session never opened one — the state a WebView that was
@@ -43,16 +53,18 @@ let audioOperation: Promise<unknown> = Promise.resolve();
 // `audioControl(false)`, with no source.
 function microphoneControl(open: boolean, force = false): Promise<boolean> {
   const next = audioOperation.catch(() => {}).then(async () => {
-    if (!bridge) return false;
+    const host = bridge;
+    if (!host) return false;
     // Only a confirmed open counts as "the microphone is on": a failed start
     // used to leave the flag set, so a later stop was sent to Even for a stream
-    // that had never opened.
+    // that had never opened. A refusal counts as a failed open for the same
+    // reason — it must not leave the flag set either.
     if (!open && !force && !microphoneRequested) return true;
-    const result = open
-      ? await bridge.audioControl(true, AudioInputSource.Glasses)
-      : await bridge.audioControl(false);
-    if (result) microphoneRequested = open;
-    return result;
+    const result = await evenBridge(() => open
+      ? host.audioControl(true, AudioInputSource.Glasses)
+      : host.audioControl(false));
+    if (result === true) microphoneRequested = open;
+    return result === true;
   });
   audioOperation = next;
   return next;
@@ -128,6 +140,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectAttempt = 0;
 let exiting = false;
 let pairingRevision = 0;
+let confirmingForget = false;
+let forgetConfirmTimer: ReturnType<typeof setTimeout> | undefined;
 let waitingHintSeen = false;
 let waitingTimer: ReturnType<typeof setTimeout> | undefined;
 let waitingHidden = false;
@@ -143,7 +157,7 @@ function showWaiting() {
   waitingActive = true;
   if (!waitingHintSeen) {
     waitingHintSeen = true;
-    void bridge?.setLocalStorage('mynah.waitingHintSeen', '1').catch(() => {});
+    void evenBridge(() => bridge!.setLocalStorage('mynah.waitingHintSeen', '1'));
     // Transient on purpose: while the app is waiting, waitingActive/waitingHidden
     // already keep the list away, and once the wait ends the answer — a card or a
     // held message — is what should decide what the glasses show next.
@@ -161,11 +175,14 @@ let storageWrites = Promise.resolve();
 function savePairing(link: string) {
   // Serialize writes so a delayed save cannot overwrite a later Forget.
   storageWrites = storageWrites.catch(() => {}).then(async () => {
-    await bridge?.setLocalStorage('mynah.connection', link);
+    const host = bridge;
+    if (!host) return;
+    await evenBridge(() => host.setLocalStorage('mynah.connection', link));
   });
   return storageWrites;
 }
 function forgetPairing(reason: string) {
+  disarmForget();
   pairingRevision++;
   cards.items = []; cards.home(); queueEnabled = false; backendChecked = false;
   savedPairing = undefined; clearTimeout(reconnectTimer); reconnectAttempt = 0;
@@ -178,11 +195,42 @@ function forgetPairing(reason: string) {
   status(reason); showTransient('Pair on your phone to begin.');
 }
 
+/// Forget pairing is a control on a phone, tapped by a thumb, and it threw the
+/// saved link away on the first touch — the owner found that by losing the
+/// pairing he was using, on a screen with no undo. Ask once, and let the second
+/// tap be the one that means it. Revocation from Mynah Settings still calls
+/// `forgetPairing` directly: there the owner has already made the decision on
+/// the Mac, and the phone is only catching up.
+function armForget() {
+  confirmingForget = true;
+  clearTimeout(forgetConfirmTimer);
+  forgetConfirmTimer = setTimeout(() => {
+    if (!confirmingForget) return;
+    confirmingForget = false;
+    status('Forget pairing cancelled.');
+    controls();
+  }, 8000);
+  status('Tap Forget pairing again to unpair this phone.');
+  controls();
+}
+function disarmForget() {
+  clearTimeout(forgetConfirmTimer); forgetConfirmTimer = undefined;
+  if (!confirmingForget) return;
+  confirmingForget = false;
+  controls();
+}
+function forgetPairingAsked() {
+  if (!confirmingForget) { armForget(); return; }
+  disarmForget();
+  forgetPairing('Pairing forgotten on this phone. Choose Unpair under Even G2 glasses in Mynah Settings on your Mac to revoke access.');
+}
+
 function status(text: string) { el('status').textContent = text; }
 function controls() {
   talk.disabled = !bridge || !(['ready','listening'].includes(phase) || queueEnabled && phase === 'thinking') || queueEnabled && phase !== 'listening' && cards.pending >= 5;
   talk.textContent = phase === 'listening' ? 'Tap to send' : phase === 'thinking' && !queueEnabled ? 'Thinking…' : 'Tap to talk';
   disconnect.disabled = !savedPairing;
+  disconnect.textContent = confirmingForget ? 'Tap again to unpair' : 'Forget pairing';
   el('connect-form').hidden = !!savedPairing;
   connect.disabled = !bridge || phase !== 'offline';
   const listing = queueEnabled && !cards.detail;
@@ -250,20 +298,21 @@ function draw(): Promise<void> {
   return activeDraw;
 }
 async function drawFrame() {
-  if (!bridge || drawing || exiting) return;
+  const host = bridge;
+  if (!host || drawing || exiting) return;
   drawing = true;
   try {
     do {
       const layout = layoutKey();
       if (sentLayoutKey !== layout) {
-        if (!await bridge.rebuildPageContainer(new RebuildPageContainer(pageLayout()))) throw Error('Could not move the selection on the glasses.');
+        if (await evenBridge(() => host.rebuildPageContainer(new RebuildPageContainer(pageLayout()))) !== true) throw Error('Could not move the selection on the glasses.');
         sentLayoutKey = layout; sentTitle = false; sentRows = []; sentClockMinute = ''; sentIndicators = '';
       }
-      if (!sentTitle) { await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:8,containerName:'title',imageData:titlePixels()})); sentTitle = true; }
+      if (!sentTitle) { await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:8,containerName:'title',imageData:titlePixels()}))); sentTitle = true; }
       const rowText = homeRows();
       for (let i=0;i<rowText.length;i++) if (sentRows[i] !== rowText[i]) {
         const id = i === 0 ? 12 : 8+i;
-        await bridge.textContainerUpgrade(new TextContainerUpgrade({containerID:id,containerName:`row-${id}`,contentOffset:0,contentLength:0,content:rowText[i]}));
+        await evenBridge(() => host.textContainerUpgrade(new TextContainerUpgrade({containerID:id,containerName:`row-${id}`,contentOffset:0,contentLength:0,content:rowText[i]})));
         sentRows[i] = rowText[i];
       }
       const clock = desiredClock, card = desiredDisplay;
@@ -271,25 +320,25 @@ async function drawFrame() {
         [2, 'clock', clock, sentClock], [3, 'weather', desiredWeather, sentWeather], [1, 'mynah', card, sentDisplay]
       ] as const) {
         if (content === previous) continue;
-        const ok = await bridge.textContainerUpgrade(new TextContainerUpgrade({
+        const ok = await evenBridge(() => host.textContainerUpgrade(new TextContainerUpgrade({
           containerID, containerName, contentOffset: 0,
           contentLength: 0, content
-        }));
-        if (!ok) throw new Error('Could not update the glasses. Check their connection.');
+        })));
+        if (ok !== true) throw new Error('Could not update the glasses. Check their connection.');
         if (containerID === 2) sentClock = content; else if (containerID === 3) sentWeather = content; else sentDisplay = content;
       }
       const indicators = JSON.stringify([batteryLevel, weatherCode]);
       if (sentIndicators !== indicators) {
-        await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:6,containerName:'battery',imageData:batteryPixels(batteryLevel)}));
-        await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:7,containerName:'weather-icon',imageData:weatherPixels(weatherCode)}));
+        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:6,containerName:'battery',imageData:batteryPixels(batteryLevel)})));
+        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:7,containerName:'weather-icon',imageData:weatherPixels(weatherCode)})));
         sentIndicators = indicators;
       }
       if (sentClockMinute !== clockMinute) {
         const minute = clockMinute;
-        const result = await bridge.updateImageRawData(new ImageRawDataUpdate({containerID:4,containerName:'digits',imageData:desiredPixels}));
+        const result = await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:4,containerName:'digits',imageData:desiredPixels})));
         if (result !== ImageRawDataUpdateResult.success) {
           // Keep a truthful text clock if the host cannot update the bitmap.
-          await bridge.textContainerUpgrade(new TextContainerUpgrade({containerID:2,containerName:'clock',contentOffset:0,contentLength:0,content:desiredClock+'\n'+minute}));
+          await evenBridge(() => host.textContainerUpgrade(new TextContainerUpgrade({containerID:2,containerName:'clock',contentOffset:0,contentLength:0,content:desiredClock+'\n'+minute})));
         }
         sentClockMinute = minute;
       }
@@ -323,9 +372,18 @@ function receive(event: ReplyEvent) {
       if (answer.length + event.text.length > 100000) { connection?.close(); return; }
       answer += event.text; break;
     case 'error':
+      // `unknown control` is the Mac's screen endpoint refusing the command this
+      // companion sent: the two are different vintages, because a running Mynah
+      // keeps the endpoint it started with until it is restarted. On its own
+      // that reads as an unexplained failure to the owner, and it names neither
+      // the machine nor the remedy — so it is replaced rather than repeated.
+      // Anything else the Mac says is passed through as it arrives.
       turnError = true; stopWaitingDisplay();
       void stopMicrophone();
-      status(event.text); show(event.text); break;
+      const failure = /unknown control/i.test(event.text)
+        ? 'Your Mac’s Mynah refused this recording. Update Mynah on the Mac, restart it, then tap to talk again.'
+        : event.text;
+      status(failure); show(failure); break;
     case 'done':
       stopWaitingDisplay();
       phase = 'ready';
@@ -470,11 +528,11 @@ el<HTMLFormElement>('connect-form').addEventListener('submit', event => {
     await connectPaired();
   });
 });
-talk.onclick = () => { if (phase !== 'listening') parentID = undefined; queue(toggleRecording); };
+talk.onclick = () => { disarmForget(); if (phase !== 'listening') parentID = undefined; queue(toggleRecording); };
 el('open-message').onclick = () => { if (phase === 'listening' || cards.selected < 0) return; cards.open(); holdingMessage = false; stopWaitingDisplay(); render(); };
 el('home').onclick = () => queue(returnHome);
 el('follow-up').onclick = () => { if (cards.current?.status !== 'ready' || phase === 'listening') return; parentID = cards.current.id; queue(toggleRecording); };
-disconnect.onclick = () => forgetPairing('Pairing forgotten on this phone. Choose Unpair under Even G2 glasses in Mynah Settings on your Mac to revoke access.');
+disconnect.onclick = () => forgetPairingAsked();
 // Swiping is how the list is reached from a message the app is holding, so it
 // releases that message rather than scrolling something that is not on screen.
 previous.onclick = () => { if (queueEnabled && !cards.detail) { holdingMessage = false; cards.select(-1); stopWaitingDisplay(); render(); return; } page = Math.max(0, page - 1); render(); };
@@ -490,11 +548,14 @@ window.addEventListener('online', () => { if (savedPairing && phase === 'offline
 controls(); render(); updateClock();
 const bridgeTimer = setTimeout(() => status('Open this companion inside Even Hub to connect your G2. This browser shows the display preview only.'), 8000);
 void (async () => {
-  const available = await waitForEvenAppBridge();
-  const result = await available.createStartUpPageContainer(new CreateStartUpPageContainer(pageLayout()));
-  if (result !== StartUpPageCreateResult.success) throw new Error(`Could not open the glasses display (SDK result: ${result}). Reopen the companion in Even Hub.`);
+  const available = await evenBridge(() => waitForEvenAppBridge());
+  if (!available) throw new Error('Could not reach the Even app. Reopen Mynah inside Even Hub.');
+  const result = await evenBridge(() => available.createStartUpPageContainer(new CreateStartUpPageContainer(pageLayout())));
+  if (result !== StartUpPageCreateResult.success) throw new Error(result === undefined
+    ? 'Even refused to open the glasses display. Reopen Mynah in Even Hub and try again.'
+    : `Could not open the glasses display (SDK result: ${result}). Reopen the companion in Even Hub.`);
   bridge = available; sentLayoutKey = layoutKey();
-  void bridge.getDeviceInfo().then(info => { glassesSN = info?.sn; batteryLevel = info?.status.batteryLevel; battery = batteryLabel(batteryLevel, info?.status.isCharging); updateClock(); }).catch(() => {});
+  void evenBridge(() => bridge!.getDeviceInfo()).then(info => { glassesSN = info?.sn; batteryLevel = info?.status.batteryLevel; battery = batteryLabel(batteryLevel, info?.status.isCharging); updateClock(); });
   bridge.onDeviceStatusChanged(device => { if (!glassesSN || device.sn !== glassesSN) return; batteryLevel = device.batteryLevel; battery = batteryLabel(batteryLevel, device.isCharging); updateClock(); });
   void draw();
   clearTimeout(bridgeTimer);
@@ -535,7 +596,7 @@ void (async () => {
         break;
       case OsEventTypeList.DOUBLE_CLICK_EVENT:
         queue(async () => {
-          if (atHome && phase !== 'listening') await bridge?.shutDownPageContainer(1);
+          if (atHome && phase !== 'listening') await evenBridge(() => bridge!.shutDownPageContainer(1));
           else await returnHome();
         });
         break;
@@ -544,11 +605,11 @@ void (async () => {
     }
   });
   status('Paste your Mynah connection link to begin.'); controls();
-  weatherEnabled = await bridge.getLocalStorage('mynah.weatherEnabled').catch(() => '') === '1';
+  weatherEnabled = await evenBridge(() => bridge!.getLocalStorage('mynah.weatherEnabled')) === '1';
   if (weatherEnabled) void refreshWeather();
-  waitingHintSeen = await bridge.getLocalStorage('mynah.waitingHintSeen').catch(() => '') === '1';
+  waitingHintSeen = await evenBridge(() => bridge!.getLocalStorage('mynah.waitingHintSeen')) === '1';
   const revision = pairingRevision;
-  const saved = await bridge.getLocalStorage('mynah.connection');
+  const saved = await evenBridge(() => bridge!.getLocalStorage('mynah.connection'));
   if (saved && revision === pairingRevision && !exiting) {
     try {
       el<HTMLInputElement>('link').value = connectionURL(saved).toString();
@@ -563,7 +624,7 @@ async function refreshWeather() {
   const revision = weatherRevision;
   if (!weatherEnabled || !bridge || exiting) return;
   try {
-    const location = await bridge.getAppLocation({accuracy:AppLocationAccuracy.Low,timeoutMs:12000});
+    const location = await evenBridge(() => bridge!.getAppLocation({accuracy:AppLocationAccuracy.Low,timeoutMs:12000}));
     if (revision !== weatherRevision || exiting) return;
     if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) { showPermissionHelp('Location unavailable. Allow location for Even in phone settings, then enable local weather again.'); throw Error('Location permission needed. Open Permissions & help below.'); }
     // Weather needs the surrounding area, not a precise device position.
@@ -586,13 +647,13 @@ async function refreshWeather() {
 el('weather-enable').onclick = () => {
   if (!bridge) { el('weather-status').textContent = 'Open Mynah inside Even Hub to use the phone location.'; return; }
   weatherRevision++; weatherEnabled = true;
-  void bridge.setLocalStorage('mynah.weatherEnabled','1').catch(() => {});
+  void evenBridge(() => bridge!.setLocalStorage('mynah.weatherEnabled','1'));
   void refreshWeather();
 };
 el('weather-off').onclick = () => {
   weatherRevision++; weatherEnabled = false; clearTimeout(weatherTimer); desiredWeather = '--°C'; weatherCode = undefined;
   el('weather-status').textContent = 'Weather disabled.';
-  void bridge?.setLocalStorage('mynah.weatherEnabled','').catch(() => {}); updateClock();
+  void evenBridge(() => bridge!.setLocalStorage('mynah.weatherEnabled','')); updateClock();
 };
 function paintIndicator(id: string, width: number, height: number, pixels: number[]) {
   const context = el<HTMLCanvasElement>(id).getContext?.('2d');

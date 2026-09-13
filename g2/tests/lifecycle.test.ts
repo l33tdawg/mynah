@@ -31,6 +31,7 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const hardware: string[] = [];
   const shutdowns: number[] = [];
   let micFailures = 0;
+  let micRejection: string | undefined;
   let onEvent: Function = () => {};
   let stop: Promise<any> | undefined;
   const validateLayout = (value: any) => {
@@ -55,6 +56,9 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     getDeviceInfo: async () => null, onDeviceStatusChanged() {}, updateImageRawData: async () => 0,
     audioControl: async (enabled: boolean, source?: any) => {
       hardware.push(enabled ? 'mic-start' : 'mic-stop'); microphones.push(enabled); micCalls.push({ enabled, source });
+      // Even's native bridge can reject with its own message instead of
+      // answering false. That text must never reach the glasses.
+      if (enabled && micRejection) throw new Error(micRejection);
       if (enabled && micFailures > 0) { micFailures--; return false; }
       return !enabled && stop ? stop : true;
     },
@@ -105,16 +109,38 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   await flush();
   return { hardware, shutdowns, failMic: (times = Infinity) => { micFailures = times; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, micCalls, listeners,
     expireWaiting: () => { for (const [id, t] of timers) if (t.delay === 10000) { timers.delete(id); t.fn(); } },
+    expireForget: () => { for (const [id, t] of timers) if (t.delay === 8000) { timers.delete(id); t.fn(); } },
+    rejectMic: (text: string) => { micRejection = text; },
     event: (event: any) => onEvent(event), blockStop: (value: Promise<any>) => { stop = value; },
     pair: async () => { get('link').value = link; get('connect-form').submit({ preventDefault() {} }); await flush(); },
     ready: async () => { peers.at(-1).event({ type: 'state', text: JSON.stringify({status:'ready',text:''}) }); await flush(); }
   };
 }
 
+test('Forget pairing needs a second tap, and one tap alone changes nothing', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('disconnect').click(); await h.flush();
+  assert.equal(h.storage.get('mynah.connection'), link, 'the first tap must not clear the saved link');
+  assert.match(h.get('disconnect').textContent, /again/i);
+  assert.match(h.get('status').textContent, /again/i);
+  h.get('disconnect').click(); await h.flush();
+  assert.equal(h.storage.get('mynah.connection'), '');
+  assert.equal(h.get('connect-form').hidden, false);
+});
+
+test('an armed Forget pairing expires on its own without unpairing', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('disconnect').click(); await h.flush();
+  h.expireForget(); await h.flush();
+  assert.equal(h.storage.get('mynah.connection'), link);
+  assert.equal(h.get('disconnect').textContent, 'Forget pairing');
+  assert.equal(h.peers[0].closed, false);
+});
+
 test('Forget pairing wins over a connection that completes later', async () => {
   const connecting = deferred();
   const h = await harness({connect:connecting.promise});
-  await h.pair(); h.get('disconnect').click(); await h.flush();
+  await h.pair(); h.get('disconnect').click(); h.get('disconnect').click(); await h.flush();
   connecting.resolve(); await h.flush();
   assert.equal(h.storage.get('mynah.connection'), '');
   assert.equal(h.get('connect-form').hidden, false);
@@ -122,7 +148,7 @@ test('Forget pairing wins over a connection that completes later', async () => {
 
 test('Forget pairing wins over delayed startup storage read', async () => {
   const saved = deferred(); const h = await harness({saved:saved.promise});
-  h.get('disconnect').click(); await h.flush(); saved.resolve(link); await h.flush();
+  h.get('disconnect').click(); h.get('disconnect').click(); await h.flush(); saved.resolve(link); await h.flush();
   assert.equal(h.peers.length, 0);
 });
 
@@ -164,7 +190,7 @@ test('restoring the page reconnects without recording or replaying a question', 
 
 test('events from a forgotten connection cannot show an old answer', async () => {
   const h = await harness(); await h.pair(); await h.ready();
-  h.get('disconnect').click(); await h.flush();
+  h.get('disconnect').click(); h.get('disconnect').click(); await h.flush();
   h.peers[0].event({type:'reply',text:'Old private answer'});
   h.peers[0].event({type:'done',text:''}); await h.flush();
   assert.equal(h.get('display').textContent.includes('Old private answer'), false);
@@ -313,6 +339,36 @@ test('a pending microphone stop completes before a subsequent start', async () =
   assert.equal(h.microphones.filter(Boolean).length, 1);
   stopped.resolve(true); await h.flush();
   assert.equal(h.microphones.filter(Boolean).length, 2);
+});
+
+test('a bridge that rejects the microphone open says so plainly, not in its own words', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.rejectMic('SomeNativeBridgeFailure 0x11');
+  h.get('talk').click(); await h.flush();
+  assert.match(h.get('status').textContent, /Could not start the glasses microphone/);
+  assert.doesNotMatch(h.get('status').textContent, /SomeNativeBridgeFailure/);
+  assert.equal(h.get('display').textContent.includes('SomeNativeBridgeFailure'), false);
+  assert.equal(h.get('talk').disabled, false, 'a refused open has to leave the owner able to retry');
+  assert.ok(h.peers[0].commands.includes('cancel'));
+});
+
+test('a Mac that refuses the recording command is named by machine, not by code', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('talk').click(); await h.flush();
+  h.peers[0].event({type:'error',text:'unknown control'}); await h.flush();
+  assert.match(h.get('status').textContent, /Update Mynah on the Mac/);
+  assert.doesNotMatch(h.get('status').textContent, /unknown control/);
+  // The card is wrapped to the glasses width, so the sentence is compared with
+  // its line breaks closed up.
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /Update Mynah on the Mac/);
+  assert.equal(h.get('talk').disabled, false);
+});
+
+test('every other refusal from the Mac is repeated exactly as it arrived', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('talk').click(); await h.flush();
+  h.peers[0].event({type:'error',text:'Queue full. Wait for an answer before asking again.'}); await h.flush();
+  assert.equal(h.get('status').textContent, 'Queue full. Wait for an answer before asking again.');
 });
 
 

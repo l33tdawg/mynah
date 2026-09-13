@@ -8,6 +8,7 @@ struct GlassesPairingView: View {
     @State private var showingLink = false
     @State private var selected: ChannelKind = .signal
     @State private var error: String?
+    @State private var isConfirmingUnpair = false
     private let store = GlassesPairingStore()
 
     private var recipients: [ChannelRecipient] {
@@ -29,7 +30,7 @@ struct GlassesPairingView: View {
                 if pairing != nil {
                     HStack {
                         MynahButton("Pairing link", kind: .secondary) { showingLink = true }
-                        MynahButton("Unpair", kind: .secondary) { unpair() }
+                        MynahButton("Unpair", kind: .secondary) { isConfirmingUnpair = true }
                     }
                 } else {
                     MynahButton("Pair G2", kind: .secondary) { authorize() }
@@ -59,6 +60,25 @@ struct GlassesPairingView: View {
                 refresh()
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
+        }
+        // Asked before doing it, and on the one control that cannot be undone
+        // from this screen. Unpair used to be a single tap: the row went
+        // straight from "Authorized" to "Pair G2", the glasses stopped being
+        // answered, and the only way back was the phone and a new link. The
+        // destructive verb stays on the button rather than on "OK", so the
+        // choice is readable without reading the sentence above it.
+        .confirmationDialog(
+            "Unpair Even G2 glasses?",
+            isPresented: $isConfirmingUnpair,
+            titleVisibility: .visible
+        ) {
+            Button("Unpair", role: .destructive) { unpair() }
+            Button("Keep them paired", role: .cancel) { isConfirmingUnpair = false }
+        } message: {
+            Text("Mynah will stop answering this pairing and the companion on your phone "
+                 + "will lose access. Your glasses and the other apps on them are untouched. "
+                 + "Pairing again means opening the phone, copying a new link and pasting it "
+                 + "into Mynah G2.")
         }
         .sheet(isPresented: $showingLink) {
             VStack(alignment: .leading, spacing: 20) {

@@ -65,9 +65,48 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # The floor from the .25 note is unchanged and still binding: anything below
 # .24 ships a `sage_message_handoff` that cannot finish a federated handoff.
 #
+# 11.18.27 -> 11.19.21 on 13 Sep 2026, cutting 2.6.1. Twenty-three releases
+# landed while the pin sat still, and every one of their notes was read against
+# `BrainPrompts.voiceToolAllowlist` before this line moved — the same check the
+# paragraph above demands, done at the scale the gap had reached rather than one
+# release at a time.
+#
+# **Three things in those notes touch a tool this appliance offers, and only one
+# of them is an addition.**
+#
+#  - **`sage_get_links` is new in 11.19.6** (typed-link read endpoint). Mynah has
+#    had `sage_link` — the write half — since 2.2.0, so the model can now be told
+#    to create a relationship it cannot read back. It is deliberately NOT added
+#    to the allowlist in this release: the on-device ceiling is a measurement,
+#    and `BrainTier.maxRoutableTools` says to raise it from a rerun of
+#    scripts/measure-tool-routing.py with the table pasted, never from an
+#    argument. A brain bump is not the place to spend a measurement.
+#  - **`sage_directory` searches local and federated agents by default** from
+#    11.19.16. This is a behaviour change to a tool we DO offer, and the reason
+#    it is safe here is narrow and checkable: the appliance calls it through
+#    MCP against its own node, remote agents are only included when *both* peers
+#    are 11.19.16 or newer, and older peers keep the export-based behaviour. Root
+#    identities stay excluded and explicit messaging blocks still apply, which
+#    are the two properties `AgentMessaging` relies on.
+#  - **11.19.21 closes a tombstone bypass and lets the node own the duplicate
+#    rule.** Nothing in this repository decides duplicates — `sage_remember` is
+#    passed through and its answer is read — so this is the node getting
+#    stricter underneath an unchanged caller, which is the direction that needs
+#    no change here.
+#
+# Nothing was removed or renamed, so nothing in the allowlist expired. The one
+# deliberate exclusion on the list — `sage_message_replies`, withheld because
+# `sage_message_history(folder:"outbox")` already answers the same question —
+# still stands, and the notes do not touch outbox reads.
+#
+# **The newer brain is also the one already installed on the build Mac**
+# (`/Applications/SAGE.app` reports 11.19.21, the vendored copy reported
+# 11.18.27), so the live-node tests in the suite exercise this exact node rather
+# than a fixture that agrees with whatever the code expects.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.18.27}"
+TAG="${SAGE_RELEASE_TAG:-v11.19.21}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
