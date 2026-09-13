@@ -102,7 +102,10 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # arrives as a build failure carrying the new number rather than as a silent
 # hole. See the check on SMALLEST_TEST_TARGET.
 #
-#   measured      2560   (2.6.0, pictures reaching every brain that can read one —
+#   measured      2566   (2.6.2, the empty state learning to offer a photo when the
+#                         appliance's brain can read one — four for `TalkInvitation`
+#                         and two for the capability it reads; 2560 at 2.6.0,
+#                         pictures reaching every brain that can read one —
 #                         twelve in `APictureReachesTheModelTests` plus the two the
 #                         capability flip rewrote; 2537 at 2.4.1,
 #                         immediate calendar mirroring after a dated task write;
@@ -115,8 +118,8 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 #                         2348 at 2.0.0-beta.11, 2316 at beta.10, 2313 at beta.9,
 #                         2312 at beta.8, 2304 at beta.7, 2298 at beta.6,
 #                         2111 at 1.9.0)
-#   without Kokoro  2522   (2560 - 38)
-#   floor           2548   (12 under measured, 26 above the failure it must catch)
+#   without Kokoro  2528   (2566 - 38)
+#   floor           2554   (12 under measured, 26 above the failure it must catch)
 #
 # 2111 to 2157 is fifteen tests for the WhatsApp Swift transport, four for the
 # menu-bar mark, eighteen for the channel abstraction that lets Signal and
@@ -500,7 +503,7 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # the third time the rot check has fired on a green suite, which is the whole
 # reason it exists — arithmetic moves the gate out of position on its own, and
 # nobody notices a blind gate by looking at it.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2548}"
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2554}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

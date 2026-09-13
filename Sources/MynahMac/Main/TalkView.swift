@@ -3,6 +3,52 @@ import SwiftUI
 
 // MARK: - Talk
 
+/// The two sentences that invite somebody to use their phone, and the one fact
+/// that changes them.
+///
+/// **Separated out because a promise about a picture is the easiest thing on
+/// this screen to get wrong.** Mynah reads images on every brain it ships by
+/// default — the local one is multimodal and all three offered providers have a
+/// vision model — but an owner who has pulled a text-only model and pointed
+/// Mynah at it gets a brain with no eyes, and an empty state that says "send it
+/// a photo" is then telling them to do something the appliance will answer with
+/// *"saved, but I can't look at pictures."*
+///
+/// So the copy follows the capability rather than assuming it, which is the rule
+/// the empty state already followed for readiness ("An empty state must never
+/// promise something the screen below it is currently blocking") — and the fact
+/// comes from `ApplianceStatus`, because these sentences are about the phone and
+/// the phone is answered by the daemon, not by this window.
+enum TalkInvitation {
+
+    /// The empty state's teaching line. `seesImages` is the appliance's answer,
+    /// not this window's brain's.
+    static func sendItSomething(seesImages: Bool) -> String {
+        let remembers = "It remembers what you tell it, so you can pick up where you left off."
+        guard seesImages else {
+            // Unchanged from before vision, and it has to stay that way: the
+            // words "or a photo" are the promise, and this is the branch where
+            // the promise would be false.
+            return "Send it a voice note from your phone — that is what it is for, and its "
+                + "answer appears here too. " + remembers
+        }
+        return "Send it a voice note or a photo from your phone — that is what it is for, and "
+            + "its answer appears here too. Photograph the thing you are asking about and it "
+            + "will tell you what it is. " + remembers
+    }
+
+    /// The line under the composer on a Mac that cannot record. Shorter than the
+    /// empty state's, because it sits inside the writing area rather than in the
+    /// space left for teaching.
+    static func alsoFromYourPhone(seesImages: Bool) -> String {
+        seesImages
+            ? "You can also send Mynah a voice note or a photo from your phone — the answer "
+                + "appears here too."
+            : "You can also send Mynah a voice note from your phone — the answer "
+                + "appears here too."
+    }
+}
+
 /// Where the owner spends their time.
 ///
 /// Four regions and nothing else: one line of health, the board, the
@@ -88,6 +134,15 @@ struct TalkView: View {
     /// the first case; in the second, taking the page away mid-sentence is the
     /// rudest thing a live transcript can do.
     @State private var isAtBottom = true
+
+    /// What the appliance says it is running, read once when this pane appears.
+    ///
+    /// Only for the two invitations below, and read rather than observed: the
+    /// daemon publishes it at start-up, so a value that changed while somebody
+    /// was looking at this screen is a daemon that restarted, which reloads the
+    /// window anyway. `nil` — nobody has answered a phone here — keeps the copy
+    /// on the branch that promises nothing.
+    @State private var appliance: ApplianceStatus?
 
     /// `nil` means the one shared conversation. Defaulted in the body rather
     /// than in the signature: a default argument is evaluated in the caller's
@@ -184,6 +239,7 @@ struct TalkView: View {
         // And its own again, so a node that is slow to answer cannot hold up the
         // conversation underneath it.
         .task { await board.follow() }
+        .task { appliance = ApplianceStatus.current() }
         .onChange(of: model.isBusy) { _, _ in app.presence = presence }
         .onChange(of: model.readiness) { _, _ in app.presence = presence }
     }
@@ -458,12 +514,12 @@ struct TalkView: View {
         // "Say something to Mynah" told the owner nothing they did not already
         // know from the box below it, and the twenty seconds it promised was
         // measured against a local model on other hardware. This is the one
-        // screen every owner sees and nobody reads twice, so it says the two
-        // things that are not obvious: the phone is the real way in, and it
-        // remembers.
-        return "Send it a voice note from your phone — that is what it is for, and its "
-            + "answer appears here too. It remembers what you tell it, so you can pick up "
-            + "where you left off."
+        // screen every owner sees and nobody reads twice, so it says the things
+        // that are not obvious: the phone is the real way in, what it can be
+        // sent, and that it remembers.
+        //
+        // The photo sentence is conditional, and `TalkInvitation` carries why.
+        return TalkInvitation.sendItSomething(seesImages: appliance?.seesImages == true)
     }
 
     private var transcript: some View {
@@ -740,8 +796,7 @@ struct TalkView: View {
                 }
             field
             if !model.canHoldToTalk {
-                Text("You can also send Mynah a voice note from your phone — the answer "
-                    + "appears here too.")
+                Text(TalkInvitation.alsoFromYourPhone(seesImages: appliance?.seesImages == true))
                     .mynahFont(.callout)
                     .foregroundStyle(Palette.ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)

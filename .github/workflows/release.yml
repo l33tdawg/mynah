@@ -174,6 +174,10 @@ jobs:
           # Raise both in one commit. They are one subtraction apart and setting
           # only one is how this first went red.
           #
+          # 2510 -> 2516 cutting 2.6.2, alongside the script's 2548 -> 2554.
+          # Six tests were added, so the runner graph is 2528 and twelve under
+          # that is 2516.
+          #
           # 2487 -> 2510 cutting 2.6.0, alongside the script's 2525 -> 2548.
           # Twelve tests were added, so the runner graph is 2522 and twelve
           # under that is 2510. (2484 -> 2487 cutting 2.4.1, alongside the
@@ -184,7 +188,7 @@ jobs:
           # under that is 2484. Derived rather than measured here, for the reason
           # the block above gives: the subtraction is the whole relationship
           # between the two numbers.
-          MYNAH_MIN_EXECUTED_TESTS: "2510"
+          MYNAH_MIN_EXECUTED_TESTS: "2516"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -241,7 +245,7 @@ jobs:
           # the step above. Kept correct even though this step is gated on
           # signing secrets this repository does not hold, because a value that
           # is only wrong when it finally runs is the worst kind.
-          MYNAH_MIN_EXECUTED_TESTS: "2548"
+          MYNAH_MIN_EXECUTED_TESTS: "2554"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

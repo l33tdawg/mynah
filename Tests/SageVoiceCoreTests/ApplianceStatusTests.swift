@@ -101,4 +101,42 @@ final class ApplianceStatusTests: XCTestCase {
         XCTAssertNotNil(read)
         XCTAssertEqual(read!.timeIntervalSince1970, started.timeIntervalSince1970, accuracy: 1)
     }
+
+    /// The window's copy asks this, so it has to survive the round trip.
+    ///
+    /// `TalkView`'s empty state tells the owner they can send a photo, and the
+    /// only thing that makes that sentence honest is this field coming back from
+    /// the daemon that actually answers the phone.
+    func testTheApplianceReportsWhetherItsBrainLooksAtPictures() {
+        ApplianceStatus.publish(
+            ApplianceStatus(
+                provider: "deepseek", model: "deepseek-flash",
+                keepsWordsOnDevice: false, seesImages: true
+            ),
+            to: file
+        )
+        XCTAssertTrue(ApplianceStatus.current(from: file)?.seesImages ?? false)
+    }
+
+    /// **A status file written before this field existed must not be thrown
+    /// away.** Decoding it whole-or-nothing would take `provider` and
+    /// `keepsWordsOnDevice` down with it, and the window would go back to
+    /// claiming nobody has answered a phone here — a worse lie than the one this
+    /// field was added to prevent.
+    func testAReportFromBeforeVisionStillReads() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let older = """
+        {"provider":"ollama","model":"qwen3.5:4b","keepsWordsOnDevice":true,
+         "startedAt":"2026-09-01T10:00:00Z","speaksReplies":true}
+        """
+        try Data(older.utf8).write(to: file)
+
+        let status = try XCTUnwrap(ApplianceStatus.current(from: file))
+        XCTAssertEqual(status.provider, "ollama")
+        XCTAssertEqual(status.destination, "This Mac")
+        XCTAssertFalse(
+            status.seesImages,
+            "a build that never said reads as blind, which is the direction that promises nothing"
+        )
+    }
 }

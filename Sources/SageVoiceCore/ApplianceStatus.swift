@@ -30,18 +30,58 @@ public struct ApplianceStatus: Sendable, Codable, Equatable {
     /// an appliance running in written mode.
     public var speaksReplies: Bool
 
+    /// Whether the brain answering the phone can look at a picture the owner
+    /// sends it.
+    ///
+    /// Published for the same reason `keepsWordsOnDevice` is: the window cannot
+    /// work it out, and the window is where the owner is told what they can send.
+    /// `TalkView`'s empty state offers the phone as the way in, so a window that
+    /// guessed "yes" would be promising a photograph gets looked at on an
+    /// appliance running a model with no eyes — and the owner would find out by
+    /// being told their picture was saved but not read.
+    ///
+    /// Decoded as `false` when the key is absent. `appliance-status.json` is
+    /// written once, by whichever daemon is running, so a file written by a
+    /// build from before vision has nothing here — and "this build never said"
+    /// reads pessimistically, the same direction `BrainBackend.seesImages`
+    /// defaults to. It corrects itself on the next daemon start, which is also
+    /// when a brain change takes effect.
+    public var seesImages: Bool
+
     public init(
         provider: String,
         model: String,
         keepsWordsOnDevice: Bool,
         startedAt: Date = Date(),
-        speaksReplies: Bool = false
+        speaksReplies: Bool = false,
+        seesImages: Bool = false
     ) {
         self.provider = provider
         self.model = model
         self.keepsWordsOnDevice = keepsWordsOnDevice
         self.startedAt = startedAt
         self.speaksReplies = speaksReplies
+        self.seesImages = seesImages
+    }
+
+    /// Hand-written for one reason: `seesImages` has to survive a file that
+    /// predates it, and a synthesised decoder refuses the whole record instead.
+    /// That would be the worse failure by a distance — every other fact in here
+    /// would vanish with it, and the window would go back to saying nobody has
+    /// answered the phone.
+    ///
+    /// `speaksReplies` is deliberately still required. A record missing it is a
+    /// record from before the reply style existed, and the code that reads it
+    /// distinguishes "written mode" from "cannot tell"; defaulting it here would
+    /// quietly collapse those two into one.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try container.decode(String.self, forKey: .provider)
+        model = try container.decode(String.self, forKey: .model)
+        keepsWordsOnDevice = try container.decode(Bool.self, forKey: .keepsWordsOnDevice)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        speaksReplies = try container.decode(Bool.self, forKey: .speaksReplies)
+        seesImages = try container.decodeIfPresent(Bool.self, forKey: .seesImages) ?? false
     }
 
     /// The company the words reach, or `nil` when they stay put.

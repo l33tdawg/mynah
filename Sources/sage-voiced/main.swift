@@ -1080,7 +1080,11 @@ func runDaemon(_ arguments: [String]) -> Never {
             provider: backend.identifier,
             model: backend.modelName,
             keepsWordsOnDevice: backend.isLocal,
-            speaksReplies: style.usesVoiceNotes
+            speaksReplies: style.usesVoiceNotes,
+            // The same call the turn itself makes, so the window's copy and the
+            // attachment note cannot disagree about whether this brain looks at
+            // pictures. See `ApplianceStatus.seesImages`.
+            seesImages: backend.seesImages
         )
     )
     // Driven against the raw MCP client, not the composed catalogue: these are
