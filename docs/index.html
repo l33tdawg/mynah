@@ -794,7 +794,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
   </div>
   <p class="callout dim" style="margin-top: 20px"><strong>Awaiting store approval.</strong> Companion 0.2.1 is in review. The Even Hub link above will offer public installation once Even approves the app.
     Developers can still <a href="https://github.com/l33tdawg/mynah/releases/download/v2.6.1/mynah-g2-0.2.8.ehpk">download the companion package</a> for developer installation — beta 0.2.8 asks before it forgets a pairing, and reports a refused microphone or an out-of-date Mac in words rather than an internal error code.
-    Requires Mynah 2.6.1 or later, Even G2,
+    Requires Mynah 2.5.1 or later — 2.6.1 is the current Mac release — Even G2,
     Even app 2.2.9 or later, and a linked Signal or WhatsApp self-chat. Uses the local or cloud
     model you choose in Mynah. Background reconnection depends on your phone and the Even app.
     The companion cannot read other apps&rsquo; inboxes or reply to mirrored notifications.</p>
@@ -1094,6 +1094,21 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
         <p>Processed on your Mac. Signal and WhatsApp carry your encrypted messages and attachments.</p>
       </div>
       <span class="pill stays">Stays here</span>
+    </div>
+    <!-- A picture is the one attachment whose destination depends on the brain:
+         the local model reads it here, a cloud model that can read pictures is
+         sent it, and a cloud model that cannot is sent nothing. Stated as the
+         rule rather than as a snapshot, for the same reason the app's Privacy
+         screen states it that way — the phone's brain and the window's are
+         allowed to disagree, so no single row can name one destination. -->
+    <div class="row">
+      <div class="text">
+        <p class="title3">A picture you send</p>
+        <p>Filed on your Mac either way. Read there by the local brain, or sent to
+          your cloud model when it is one that can read pictures — a model that
+          cannot is never sent an image.</p>
+      </div>
+      <span class="pill leaves">Only if it can see</span>
     </div>
     <div class="row">
       <div class="text">

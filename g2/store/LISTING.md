@@ -22,7 +22,7 @@ Tap to speak, then tap to send. Each new ask has its own question-and-answer car
 Ask about tasks, capture ideas, save notes or look things up. Actions and processing depend on the tools and local or cloud model configured in Mynah. There is no spoken playback on G2.
 
 GET STARTED
-1. Install Mynah 2.6.1 or later: https://github.com/l33tdawg/mynah
+1. Install Mynah (2.6.1 is the current release): https://github.com/l33tdawg/mynah
 2. Keep your Mac online with phone answering enabled and Signal or WhatsApp self-chat linked.
 3. Pair G2 with the Even app and install this companion.
 4. In Mynah on your Mac, open Settings → General → Your phone → Pair G2. Paste the private pairing link into the phone companion.
