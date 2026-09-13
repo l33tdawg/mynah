@@ -32,13 +32,18 @@ import Foundation
 /// `BrainBackend.seesImages`, and `VoiceBridgeDaemon` passes that to the
 /// attachment note.
 ///
-/// **With one exception, named because the 1.7.2 audit went looking for it:**
-/// `mayCarryImages` is the tier's half of that AND and nothing reads it yet.
-/// The backend half is what decides today, and it defaults to pessimistic — so
-/// the behaviour is correct and the field is inert. It flips in one place when
-/// the two wire encoders land (#36); until then, changing it changes nothing,
-/// and a reader who assumes otherwise will believe they granted vision and will
-/// not have.
+/// **That AND used to have a dead half, and it is worth remembering how it
+/// read.** `mayCarryImages` was the tier's side of it and *nothing* consulted
+/// it: the backend half decided everything, defaulted to pessimistic, and the
+/// field sat there being true for local and false for hosted while the two wire
+/// encoders did not exist (#36). A reader could flip it and change no
+/// behaviour at all while believing they had granted vision.
+///
+/// Both halves are now live. `mayCarryImages` is `true` on `.hosted` since the
+/// encoders landed, and every hosted backend routes its answer through
+/// `brain.mayCarryImages && CloudBrainModelCatalog.seesImages(model:forProvider:)`
+/// — so the tier is still a ceiling over a per-model fact, and a model nobody
+/// has listed reads as blind.
 public enum BrainTier: String, Sendable, Equatable, Hashable, Codable, CaseIterable {
 
     /// A model running on this Mac, whether through Ollama or an OpenAI-shaped
@@ -115,16 +120,23 @@ public struct BrainCapabilities: Sendable, Equatable {
 
     /// Whether a brain in this tier can be sent a photo at all.
     ///
-    /// A ceiling, never a grant. `false` on `.hosted` states a fact about this
-    /// repository rather than about the vendors: the word "image" does not
-    /// appear in `AnthropicBackend.swift` or `OpenAICompatBackend.swift`, so a
-    /// hosted backend declaring vision today would be claiming to have seen a
-    /// picture it dropped on the floor — the exact fabrication
-    /// `BrainBackend.seesImages`'s pessimistic default exists to prevent.
+    /// A ceiling, never a grant. `true` on `.hosted` since the two wire encoders
+    /// landed: `AnthropicBackend` sends image blocks and
+    /// `OpenAICompatBackend` sends `image_url` parts, so a hosted brain can now
+    /// carry a photograph instead of dropping it on the floor.
     ///
-    /// Flips to `true` in this one place when the two wire encoders land, and
-    /// `CloudBrainModelCatalog` then narrows it per model — a model missing from
-    /// that table must still read as blind.
+    /// **It was `false` for the honest reason and the sentence is worth
+    /// keeping.** Until those encoders existed the word "image" appeared in
+    /// neither file, so a hosted backend declaring vision would have been
+    /// claiming to have seen a picture it discarded — the exact fabrication
+    /// `BrainBackend.seesImages`'s pessimistic default exists to prevent. The
+    /// flag was flipped in the same commit as the encoders, which is the only
+    /// order in which flipping it means anything.
+    ///
+    /// `CloudBrainModelCatalog` narrows it per model, and that narrowing is the
+    /// live half of the AND: **a model missing from that table still reads as
+    /// blind**, so this says "a hosted brain may be sent a picture" and never
+    /// "the one you are talking to can see".
     public let mayCarryImages: Bool
 
     /// Whether the prompt cache lives in one slot on this machine.
@@ -330,7 +342,7 @@ public struct BrainCapabilities: Sendable, Equatable {
         minimumOutputTokens: 16_384,
         directoryResultBytes: 16_000,
         contentResultBytes: 32_000,
-        mayCarryImages: false,
+        mayCarryImages: true,
         servesOneCacheSlot: false,
         holdsARealtimeCall: true,
         maxRoutableTools: 27

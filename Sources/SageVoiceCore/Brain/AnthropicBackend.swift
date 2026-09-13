@@ -16,6 +16,24 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     /// The owner's transcript is sent to Anthropic.
     public let isLocal = false
 
+    /// Whether this model can be sent a picture, asked of the one table that
+    /// knows — see `CloudBrainModelCatalog.seesImages`.
+    ///
+    /// Not `true` just because this backend now knows how to encode an image.
+    /// Anthropic's whole current line takes them, and a name absent from the
+    /// table still reads as blind, which is what keeps the answer honest the day
+    /// somebody points this at a model that cannot.
+    ///
+    /// **Static so a test can ask the question the request asks**, rather than
+    /// reading the source and hoping. See the note on
+    /// `OpenAICompatBackend.seesImages(model:provider:)`.
+    static func seesImages(model: String) -> Bool {
+        BrainCapabilities.hosted.mayCarryImages
+            && CloudBrainModelCatalog.seesImages(model: model, forProvider: "anthropic")
+    }
+
+    public var seesImages: Bool { Self.seesImages(model: modelName) }
+
     /// Wire version pinned per Anthropic's versioning policy. Bumping it is a
     /// deliberate act, not something to leave floating.
     public static let apiVersion = "2023-06-01"
@@ -157,7 +175,7 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
         var body: [String: Any] = [
             "model": modelName,
             "max_tokens": maxTokens,
-            "messages": try Self.encodeMessages(request.messages)
+            "messages": try Self.encodeMessages(request.messages, includingImages: seesImages)
         ]
 
         // Anthropic carries the system prompt in a top-level field, not as a
@@ -292,7 +310,10 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
     ///    from `content` + `toolCalls` would drop it and the request would be
     ///    rejected. `providerPayload` holds the original content array for
     ///    exactly this.
-    static func encodeMessages(_ messages: [BrainMessage]) throws -> [[String: Any]] {
+    static func encodeMessages(
+        _ messages: [BrainMessage],
+        includingImages: Bool = false
+    ) throws -> [[String: Any]] {
         var encoded: [[String: Any]] = []
         var pendingToolResults: [[String: Any]] = []
 
@@ -326,10 +347,17 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
 
             case .user:
                 flushToolResults()
-                encoded.append([
-                    "role": "user",
-                    "content": [["type": "text", "text": message.content]]
-                ])
+                var blocks: [[String: Any]] = []
+                if includingImages {
+                    blocks.append(contentsOf: message.images.map(Self.imageBlock))
+                }
+                // The text block is kept even when it is empty and the turn is
+                // one long caption-less photo: an image-only user turn is legal
+                // but a turn with *no* blocks is not, and a message that is
+                // entirely a picture is exactly what a photo with no caption
+                // produces.
+                blocks.append(["type": "text", "text": message.content])
+                encoded.append(["role": "user", "content": blocks])
 
             case .assistant:
                 flushToolResults()
@@ -382,6 +410,29 @@ public final class AnthropicBackend: BrainBackend, @unchecked Sendable {
             merged[merged.count - 1] = previous
         }
         return merged
+    }
+
+    /// One image, in the Messages API's base64 source shape.
+    ///
+    /// `media_type` is hardcoded to JPEG and that is not an assumption about
+    /// what the owner sent: every image reaching here has been through
+    /// `VisionAttachment.encoded`, which re-encodes to JPEG after downscaling.
+    /// Naming the type of the bytes on the wire is the whole job of this field,
+    /// and a guess at the original format would be wrong for every photo
+    /// straight off a phone.
+    ///
+    /// **Images go before the text.** Anthropic's own guidance for a
+    /// mixed turn is image-first; it also means a model that reads the turn as a
+    /// sequence has the picture before it starts answering a question about it.
+    static func imageBlock(_ data: Data) -> [String: Any] {
+        [
+            "type": "image",
+            "source": [
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": data.base64EncodedString()
+            ]
+        ]
     }
 
     // MARK: Parsing

@@ -110,6 +110,33 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     public let modelName: String
     public var isLocal: Bool { provider.isLocal }
 
+    public var seesImages: Bool { Self.seesImages(model: modelName, provider: provider) }
+
+    /// Whether a model on this provider can be sent a picture.
+    ///
+    /// Two tables answer this and which one applies depends on where the model
+    /// is running. A hosted provider's models are the ones this product chose,
+    /// so `CloudBrainModelCatalog` knows them by name. A local OpenAI-shaped
+    /// server — LM Studio — runs whatever the owner pulled, so the question is
+    /// the same one `OllamaBackend.seesImages` asks, and it is answered by the
+    /// same list.
+    ///
+    /// Unknown reads as blind in both directions.
+    ///
+    /// **Static, and `requestBody` calls it, because a decision that lives
+    /// only behind a live `complete()` is a decision no test can see.** This
+    /// file has already paid for that once: the hosted token floor was correct
+    /// in a helper with zero production callers while `requestBody` went on
+    /// hardcoding the local one, and no test could tell.
+    static func seesImages(model: String, provider: OpenAICompatProvider) -> Bool {
+        let tier: BrainTier = provider.isLocal ? .onDevice : .hosted
+        guard tier.capabilities.mayCarryImages else { return false }
+        if provider.isLocal {
+            return LocalBrainModelCatalog.seesImages(model: model)
+        }
+        return CloudBrainModelCatalog.seesImages(model: model, forProvider: provider.identifier)
+    }
+
     private let provider: OpenAICompatProvider
     private let credential: BrainCredential
     private let session: URLSession
@@ -204,7 +231,10 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
-            "messages": encodeMessages(request.messages),
+            "messages": encodeMessages(
+                request.messages,
+                includingImages: seesImages(model: model, provider: provider)
+            ),
             "stream": false
         ]
         if !request.tools.isEmpty {
@@ -304,8 +334,11 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
     /// are the two easy-to-get-wrong details handled in `openAIWireObject`:
     /// `arguments` is a JSON-encoded *string*, and a pure tool-call assistant
     /// turn carries null content.
-    static func encodeMessages(_ messages: [BrainMessage]) -> [[String: Any]] {
-        messages.map(\.openAIWireObject)
+    static func encodeMessages(
+        _ messages: [BrainMessage],
+        includingImages: Bool = false
+    ) -> [[String: Any]] {
+        messages.map { $0.openAIWireObject(includingImages: includingImages) }
     }
 
     // MARK: Parsing
@@ -409,7 +442,18 @@ public final class OpenAICompatBackend: BrainBackend, @unchecked Sendable {
 // MARK: - Wire encoding
 
 extension BrainMessage {
-    var openAIWireObject: [String: Any] {
+    var openAIWireObject: [String: Any] { openAIWireObject(includingImages: false) }
+
+    /// The chat-completions message shape.
+    ///
+    /// `includingImages` turns a user turn's `content` from the plain string
+    /// every provider understands into the array-of-parts form that carries a
+    /// picture. **Only a turn that actually has one changes shape**, and that is
+    /// deliberate rather than tidy: these bytes are the prompt-cache prefix,
+    /// DeepSeek and Moonshot both price a cache hit about ten times cheaper than
+    /// a miss, and a content array sent for every text turn would move every
+    /// turn's prefix for no gain at all.
+    func openAIWireObject(includingImages: Bool) -> [String: Any] {
         var object: [String: Any] = ["role": role.rawValue]
 
         switch role {
@@ -444,9 +488,38 @@ extension BrainMessage {
             }
 
         case .system, .user:
-            object["content"] = content
+            if includingImages, !images.isEmpty {
+                // Text first, then the picture: that is the order both
+                // DeepSeek's and Moonshot's own reference examples use, and it
+                // keeps the owner's words at the front of the turn for a model
+                // that reads the parts in sequence.
+                var parts: [[String: Any]] = []
+                if !content.isEmpty {
+                    parts.append(["type": "text", "text": content])
+                }
+                parts.append(contentsOf: images.map(Self.imageURLPart))
+                object["content"] = parts
+            } else {
+                object["content"] = content
+            }
         }
         return object
+    }
+
+    /// One image as a data URL part.
+    ///
+    /// Inline base64 rather than an uploaded file: the picture is already on
+    /// this Mac, the owner's phone is not a URL this process can hand to a
+    /// vendor, and DeepSeek's guide names inline base64 as the simplest option
+    /// for a local file. The 48 MiB request-body ceiling their limits page
+    /// states is not reachable from here — `VisionAttachment` re-encodes every
+    /// image to a 1024 px JPEG first, so a phone photo arrives at roughly 100 KB
+    /// of base64 rather than the 4 MB it left the camera as.
+    static func imageURLPart(_ data: Data) -> [String: Any] {
+        [
+            "type": "image_url",
+            "image_url": ["url": "data:image/jpeg;base64,\(data.base64EncodedString())"]
+        ]
     }
 }
 

@@ -106,6 +106,77 @@ public enum LocalBrainModelCatalog {
     public static func preferredInstalledModel(installed: [String]) -> String? {
         toolCapableModels(installed: installed).first
     }
+
+    // MARK: - Which local models can look at a picture
+
+    /// Families where every model the library publishes takes image input.
+    ///
+    /// Read off the Ollama library on 2026-09-13, per family rather than per
+    /// size, because the capability is a property of the family's architecture —
+    /// every size shares one vision encoder. `qwen3.5` is the one that matters
+    /// most here: its own page says *"Qwen 3.5 is a family of open-source
+    /// multimodal models"*, and each of its 64 tags lists `Text, Image input`,
+    /// including the `4b` the appliance installs.
+    ///
+    /// **This is the list the appliance's own local brain is judged by.** The
+    /// constant next to it said `seesImages = true` flatly, which was a
+    /// statement about the *wire* — that Ollama is sent an `images` array — read
+    /// by everyone else as a statement about the *model*. Those come apart the
+    /// moment somebody runs a text-only model, and the owner then gets the one
+    /// sentence this codebase exists to never say: told the picture was read by
+    /// something that cannot see.
+    ///
+    /// Deliberately a prefix list rather than a set of exact tags. `qwen3.5:4b`
+    /// has siblings the appliance has never pulled and a quantisation suffix
+    /// (`:4b-q8_0`) that is still multimodal; a table of ids would mark both
+    /// blind and turn every new pull into a re-release.
+    private static let multimodalFamilies: [String] = [
+        "qwen3.5",          // every size, 0.8b through 122b
+        "qwen3.8",          // library badge: vision
+        "qwen3-vl",
+        "qwen3vl",
+        "qwen2.5-vl",
+        "qwen2.5vl",
+        "gemma3",           // includes medgemma, built on it
+        "gemma4",
+        "llava",
+        "llama3.2-vision",
+        "minicpm-v",
+        "moondream"
+    ]
+
+    /// Whether this locally-run model can be shown a picture.
+    ///
+    /// Pessimistic about anything unrecognised, for the reason
+    /// `CloudBrainModelCatalog.seesImages` gives: an image handed to a model
+    /// that cannot parse one is a failure that presents as the appliance, not
+    /// as the model.
+    public static func seesImages(model: String) -> Bool {
+        let key = normalize(model)
+        return multimodalFamilies.contains { key.hasPrefix($0) }
+    }
+
+    /// A small multimodal model that can read a picture *for* a local brain that
+    /// cannot read one itself.
+    ///
+    /// Chosen from the same family as the installed brain, and for the reason
+    /// that matters here rather than for benchmark placement: `qwen3.5:0.8b` is
+    /// the smallest tag of the family whose vision encoder the appliance already
+    /// ships, it is 1.0 GB against the brain's 3.4 GB, and it shares the
+    /// tokeniser's idea of what an image block is. A second family would be a
+    /// second set of image-token quirks to get wrong.
+    ///
+    /// **`qwen3.8-flash-next` was checked and is not it.** It reads as the
+    /// obvious upgrade — "flash" in the name, newer — and it is multimodal, but
+    /// its six tags are all 125B mixture-of-experts builds between 105 GB and
+    /// 360 GB. "Flash" is a claim about tokens per second, not about size, and
+    /// nothing of that shape runs beside a brain on a 16 GB Mac. The finding is
+    /// written down so the next person does not spend the same afternoon on it.
+    public static let visionModel = "qwen3.5:0.8b"
+
+    /// Weights for `visionModel`, read off its own tag line: 1.0 GB, as against
+    /// the 3.4 GB the brain weighs.
+    public static let approximateVisionModelDownloadBytes: Int64 = 1_000_000_000
 }
 
 // MARK: - Local model runtime

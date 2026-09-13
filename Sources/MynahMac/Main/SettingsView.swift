@@ -3870,6 +3870,24 @@ private struct BrainModelSheet: View {
                                     .mynahFont(.callout)
                                     .foregroundStyle(Palette.ink.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
+                                // Whether this one can look at a photo, on the
+                                // rows where the answer differs. See
+                                // `CloudBrainModelCatalog.pictureNote`.
+                                if let note = provider.flatMap({
+                                    CloudBrainModelCatalog.pictureNote(
+                                        forProvider: $0,
+                                        tier: tier
+                                    )
+                                }) {
+                                    Text(note)
+                                        .mynahFont(.callout)
+                                        .foregroundStyle(
+                                            note.hasPrefix("Can't")
+                                                ? Palette.state.caution
+                                                : Palette.state.good
+                                        )
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 Text(candidate)
                                     .mynahFont(.mono)
                                     .foregroundStyle(Palette.ink.tertiary)

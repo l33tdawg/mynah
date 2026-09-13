@@ -409,10 +409,28 @@ final class CloudBrainModelCatalogTests: XCTestCase {
         XCTAssertNil(CloudBrainModelCatalog.model(forProvider: "a-provider-nobody-has-heard-of"))
     }
 
-    /// The specific regression: the alias that stopped resolving must not
-    /// come back, from either direction.
-    func testDeepSeekDoesNotRegressToTheAliasThatStoppedResolving() {
-        XCTAssertEqual(CloudBrainModelCatalog.model(forProvider: "deepseek"), "deepseek-v4-flash")
+    /// The regression this test was written for, and its second act.
+    ///
+    /// It existed to stop the catalogue falling back to `deepseek-chat`, an
+    /// alias DeepSeek retired on 2026-07-24. It asserted `deepseek-v4-flash` as
+    /// the good name — and by 2026-09-13 that name had been retired too, in the
+    /// same way and for the same reason. The default is now the name DeepSeek's
+    /// own Models & Pricing page prints, which is also the model that takes
+    /// images: `deepseek-flash`.
+    ///
+    /// Both dead names stay asserted, because the failure mode this test
+    /// guards — a plausible-looking id that no longer resolves — is the one
+    /// thing here that costs the owner a working appliance rather than a
+    /// sentence.
+    func testDeepSeekDoesNotRegressToEitherAliasThatStoppedResolving() {
+        XCTAssertEqual(CloudBrainModelCatalog.model(forProvider: "deepseek"), "deepseek-flash")
+        for retired in ["deepseek-chat", "deepseek-v4-flash"] {
+            XCTAssertNotEqual(
+                CloudBrainModelCatalog.model(forProvider: "deepseek"),
+                retired,
+                "\(retired) no longer resolves at DeepSeek and must not be handed out"
+            )
+        }
     }
 
     /// **Every provider offers the same two things.** *"only show like the 2
@@ -463,7 +481,16 @@ final class CloudBrainModelCatalogTests: XCTestCase {
             CloudBrainModelCatalog.tier(ofModel: "deepseek-v4-pro", forProvider: "deepseek"), .pro
         )
         XCTAssertEqual(
-            CloudBrainModelCatalog.tier(ofModel: "deepseek-v4-flash", forProvider: "deepseek"), .fast
+            CloudBrainModelCatalog.tier(ofModel: "deepseek-flash", forProvider: "deepseek"), .fast
+        )
+        // The name DeepSeek retired when it renamed this model to
+        // `deepseek-flash`. Still accepted by the vendor, still served from the
+        // current Flash model, and still listed in the vision table — but no
+        // longer one of the two names this catalogue offers, so the sheet shows
+        // it as a bare id rather than labelling it Quick.
+        XCTAssertEqual(
+            CloudBrainModelCatalog.tier(ofModel: "deepseek-v4-flash", forProvider: "deepseek"),
+            nil
         )
         // A name an older build stored and the catalogue has since moved off.
         // `nil` rather than a guess: the sheet shows it as a bare id, which is
@@ -473,16 +500,17 @@ final class CloudBrainModelCatalogTests: XCTestCase {
         )
     }
 
-    /// **The two ids that look wrong and are right.** Both were arrived at by
-    /// reading the vendor's own documentation on 2026-08-01 after the obvious
-    /// guess turned out to be wrong, and both are the kind of thing a later
-    /// tidy-up "corrects" back into a 404.
+    /// **The two ids that look wrong and are right**, re-read against the
+    /// vendors' own pages on 2026-09-13.
     func testTheTwoPicksThatLookLikeMistakes() {
-        // Google ships no `gemini-3.6-pro`. The 3.6 family is Flash-only and the
-        // newest Pro is a preview, which has no business in a shipped appliance.
+        // Google's pro row is older than its fast row, and stays that way: the
+        // 3.x family ships Flash models, and *Gemini 3.1 Pro* is still marked a
+        // preview, which has no business in a shipped appliance. So the fast
+        // row tracks the newest stable Flash — 3.8 since this sweep — and the
+        // pro row is the last stable Pro.
         XCTAssertEqual(
             CloudBrainModelCatalog.pick(forProvider: "gemini"),
-            .init(fast: "gemini-3.6-flash", pro: "gemini-2.5-pro")
+            .init(fast: "gemini-3.8-flash", pro: "gemini-2.5-pro")
         )
         // Moonshot's fast tier is not the faster-sounding
         // `kimi-k2.7-code-highspeed`: that is a coding specialist, and this is

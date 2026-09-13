@@ -67,6 +67,29 @@ extension PrivacyClaim {
 
     static let recordings = "They are turned into words on this Mac and never sent anywhere."
 
+    /// A picture is the second thing that can leave with the owner's words, and
+    /// the one that surprises people: sending a photo into a chat is the action
+    /// that feels most like it happened on the device.
+    ///
+    /// **Written to be true on all three of the states it describes, because
+    /// the alternative is a claim that is checked against no code at all.** A
+    /// hosted model that can see is sent the image; a hosted model that cannot
+    /// is sent nothing and the picture stays here; a local brain reads it here.
+    /// The row that carries this cannot know which of the three the owner is in
+    /// — the window's brain and the appliance's are allowed to disagree, which
+    /// is the whole reason the two rows above it exist — so the claim states the
+    /// rule rather than a snapshot, and every clause is false only if the
+    /// attachment path is false.
+    ///
+    /// It also has to avoid the sentence this release exists to delete: *"Mynah
+    /// can see your pictures"* was never true of a text-only local model, and
+    /// nothing here may promise a capability that a model the owner can switch
+    /// to does not have.
+    static let pictureYouSend = "A picture you send is read on this Mac when your brain runs "
+        + "here. On a cloud model that can read pictures, the picture itself goes with your "
+        + "message — that is the only way it can look at one. A model that cannot read pictures "
+        + "is never sent an image; the picture is kept here instead."
+
     static let memories = "Kept on this Mac, in a folder only you can read."
 
     static let webSearch = "When a question needs the internet, the words Mynah searches for go "
@@ -242,6 +265,10 @@ struct PrivacyView: View {
             }
 
             SettingsGroup("Sometimes") {
+                PrivacyRow("Sending a picture", detail: PrivacyClaim.pictureYouSend) {
+                    StatusPill("Only if it can see", tone: .neutral)
+                }
+                MynahDivider()
                 PrivacyRow("Looking something up on the web", detail: PrivacyClaim.webSearch) {
                     StatusPill("Only when needed", tone: .neutral)
                 }

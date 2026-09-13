@@ -122,7 +122,7 @@ final class BrainSwitchingTests: XCTestCase {
             defaults: scratchDefaults()
         )
 
-        XCTAssertEqual(choice.selected?.modelName, "deepseek-v4-flash")
+        XCTAssertEqual(choice.selected?.modelName, "deepseek-flash")
         XCTAssertEqual(
             choice.selected?.modelName,
             CloudBrainModelCatalog.pick(forProvider: "deepseek")?.fast,
@@ -162,7 +162,7 @@ final class BrainSwitchingTests: XCTestCase {
             LastBrainModelStore.cloudModel(
                 for: .deepSeekAPIKey, provider: "deepseek", defaults: defaults
             ),
-            "deepseek-v4-flash",
+            "deepseek-flash",
             "a discontinued model was restored from history"
         )
     }

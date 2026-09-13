@@ -52,7 +52,16 @@ public enum OllamaClientError: Error, CustomStringConvertible, Equatable {
 
 extension BrainMessage {
     /// Ollama's `/api/chat` message shape.
-    var ollamaWireObject: [String: Any] {
+    var ollamaWireObject: [String: Any] { ollamaWireObject(includingImages: true) }
+
+    /// - Parameter includingImages: whether the model this is being sent to can
+    ///   look at a picture at all. `OllamaClient.chat` answers this from
+    ///   `LocalBrainModelCatalog.seesImages(model:)`, because the alternative —
+    ///   sending an `images` array to a text-only model — is a request the
+    ///   runner may answer with an error and will otherwise answer with the
+    ///   model pretending, which reads to the owner as the appliance having
+    ///   looked and found nothing.
+    func ollamaWireObject(includingImages: Bool) -> [String: Any] {
         var object: [String: Any] = [
             "role": role.rawValue,
             "content": content
@@ -62,7 +71,7 @@ extension BrainMessage {
             // ignore the key, so sending it is always safe.
             object["tool_name"] = toolName
         }
-        if !images.isEmpty {
+        if includingImages, !images.isEmpty {
             // Ollama takes bare base64 on the message — no data: prefix, no
             // content array. Only sent when there is one, so a text turn's
             // bytes are unchanged and the prompt cache prefix still matches.
@@ -426,6 +435,19 @@ public final class OllamaClient: @unchecked Sendable {
         }
     }
 
+    /// The message array for one request, with each turn's pictures included
+    /// only when this model can look at one.
+    ///
+    /// Hoisted out of `chat` so the decision is reachable without a daemon:
+    /// `chat` needs a live socket, and a rule that can only be checked by
+    /// talking to Ollama is a rule this suite cannot hold. The same reasoning
+    /// `AnthropicBackend.encodeMessages` and
+    /// `OpenAICompatBackend.requestBody` are static for.
+    static func wireMessages(_ messages: [BrainMessage], model: String) -> [[String: Any]] {
+        let includingImages = LocalBrainModelCatalog.seesImages(model: model)
+        return messages.map { $0.ollamaWireObject(includingImages: includingImages) }
+    }
+
     /// One non-streaming `/api/chat` round trip.
     ///
     /// - Parameters:
@@ -453,7 +475,7 @@ public final class OllamaClient: @unchecked Sendable {
 
         var body: [String: Any] = [
             "model": model,
-            "messages": messages.map(\.ollamaWireObject),
+            "messages": Self.wireMessages(messages, model: model),
             "stream": false
         ]
         if !tools.isEmpty {
@@ -637,14 +659,25 @@ public final class OllamaBackend: BrainBackend, @unchecked Sendable {
     /// Ollama runs on this machine; nothing leaves it.
     public let isLocal = true
 
-    /// The only backend that has ever read `BrainMessage.images`.
+    /// Whether *this* local model can be shown a picture.
     ///
-    /// Not a claim that every Ollama model has eyes — a text-only model handed
-    /// an image will say it cannot see one, and that is the model's own honest
-    /// answer rather than an attachment silently discarded three layers below
-    /// it. What this asserts is narrower and checkable: the request built here
-    /// carries the bytes (`object["images"]`), so a vision model receives them.
-    public let seesImages = true
+    /// **This used to be a flat `true`, and that was a claim about the wrong
+    /// thing.** What is checkable here is narrow: the request built by this
+    /// backend carries `object["images"]`, so a model with a vision encoder
+    /// receives the bytes. Read as "the model can see", it was false the moment
+    /// somebody ran anything text-only, and the cost was not a failed request —
+    /// it was `AttachmentArrivalNote` telling the model *"the owner sent a
+    /// picture and you can see it"* while the model looked at a caption and
+    /// answered, honestly, that it could not see any image. That is the single
+    /// sentence this whole capability path exists to never produce.
+    ///
+    /// So the answer is asked of the model, from the one list of families that
+    /// take image input — see `LocalBrainModelCatalog.seesImages(model:)`. The
+    /// installed brain `qwen3.5:4b` is multimodal, so the default local setup
+    /// sees pictures with no second model and no extra memory.
+    public var seesImages: Bool {
+        LocalBrainModelCatalog.seesImages(model: modelName)
+    }
 
     /// Context window to ask Ollama for, in tokens.
     ///

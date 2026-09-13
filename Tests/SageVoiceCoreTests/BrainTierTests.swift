@@ -223,12 +223,22 @@ final class BrainTierTests: XCTestCase {
 
     // MARK: Vision
 
-    /// `false` on hosted states a fact about this repository, not about the
-    /// vendors: the word "image" does not appear in either hosted encoder, so a
-    /// hosted backend declaring vision would be claiming to have seen a picture
-    /// it dropped on the floor.
-    func testAHostedBrainIsStillBlindBecauseNobodyWroteTheEncoder() throws {
-        XCTAssertFalse(BrainCapabilities.hosted.mayCarryImages)
+    /// **The inverted twin of the test that stood here.** That one read the two
+    /// hosted encoders' source and asserted the word "image" appeared in
+    /// neither, on the reasoning that a tier permitting images while no encoder
+    /// existed would be claiming to have seen a picture it dropped on the floor.
+    /// It was right, and it was written to fail the moment somebody built the
+    /// feature — which is what happened.
+    ///
+    /// The replacement asserts both halves, and the file check survives in the
+    /// direction that still catches something: **a permission with no encoder
+    /// behind it is the fabrication, and so is an encoder with the permission
+    /// switched back off.** Either edit alone leaves the other one meaningless.
+    func testTheHostedTierMayCarryAPictureNowThatTheEncodersExist() throws {
+        XCTAssertTrue(
+            BrainCapabilities.hosted.mayCarryImages,
+            "hosted backends encode images now; leaving the tier at false makes every one of them blind"
+        )
 
         for file in ["AnthropicBackend.swift", "OpenAICompatBackend.swift"] {
             let source = try String(
@@ -238,15 +248,32 @@ final class BrainTierTests: XCTestCase {
                     .appendingPathComponent("Sources/SageVoiceCore/Brain/\(file)"),
                 encoding: .utf8
             )
-            XCTAssertFalse(
+            XCTAssertTrue(
                 source.lowercased().contains("image"),
                 """
-                \(file) mentions images now. If the encoder has landed, flip \
-                BrainCapabilities.hosted.mayCarryImages and narrow it per model in \
-                CloudBrainModelCatalog — a model missing from that table must read as blind.
+                \(file) no longer mentions images. If the encoder was removed, \
+                BrainCapabilities.hosted.mayCarryImages has to go back to false in \
+                the same commit — a tier that permits a picture nothing can encode \
+                is a backend claiming to have looked at one.
                 """
             )
         }
+    }
+
+    /// The AND has two live halves, and both have to be asked.
+    ///
+    /// This is the half that was inert: `mayCarryImages` was read by nothing at
+    /// all, so flipping it changed no behaviour while looking exactly like
+    /// granting vision. It is now read — by both hosted backends — and the
+    /// per-model table is what narrows it.
+    func testTheTierPermissionIsOnlyAPermission() {
+        // A hosted model the catalogue knows to be blind is blind whatever the
+        // tier says.
+        XCTAssertFalse(
+            OpenAICompatBackend.seesImages(model: "deepseek-v4-pro", provider: .deepSeek)
+        )
+        // And nothing local is affected by the hosted half of the AND.
+        XCTAssertEqual(BrainCapabilities.onDevice.mayCarryImages, true)
     }
 
     // MARK: The wire, which is where the floor actually has to happen

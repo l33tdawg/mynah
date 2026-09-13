@@ -110,6 +110,7 @@ final class PrivacyClaimTests: XCTestCase {
             PrivacyClaim.recordings,
             PrivacyClaim.memories,
             PrivacyClaim.webSearch,
+            PrivacyClaim.pictureYouSend,
             PrivacyClaim.calling,
             PrivacyClaim.callTranscript,
             PrivacyClaim.checkingOnThings,
@@ -128,6 +129,7 @@ final class PrivacyClaimTests: XCTestCase {
             PrivacyClaim.recordings,
             PrivacyClaim.memories,
             PrivacyClaim.webSearch,
+            PrivacyClaim.pictureYouSend,
             PrivacyClaim.calling,
             PrivacyClaim.callTranscript,
             PrivacyClaim.checkingOnThings

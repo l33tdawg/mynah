@@ -68,8 +68,9 @@ once-a-day update check against GitHub.
   put there.
 - Keeps whatever you send it — photos, tickets, PDFs — and sends any of it back
   when you ask, as a Signal attachment or as a file to click in the window. What
-  it does with one depends on the kind: a picture is described where the brain
-  can see (see [What the model can do](#what-the-model-can-do)); a document is
+  it does with one depends on the kind: a picture is shown to the brain when the
+  model behind it can read one, and kept on this Mac either way (see
+  [What the model can do](#what-the-model-can-do)); a document is
   filed and not read, because that is what a booking confirmation is sent for.
 - Reminds you about dated work as the day approaches rather than on a fixed
   alarm, so a Mac that was asleep says "in about two hours" rather than
@@ -255,9 +256,24 @@ made "your provider retired this model" indistinguishable from "your Wi-Fi is
 down". "I could not tell" gets its own case rather than being laundered into
 "yes".
 
-Photos are attached only on the Ollama backend today: it is the one wire encoder
-that emits image content. The Anthropic and OpenAI-compatible encoders build
-their messages from text, tool calls and tool results.
+Photos reach every brain that can actually read one, and each family gets them in
+the shape it asks for: Ollama takes bare base64 on the message, Anthropic takes an
+`image` block ahead of the text, and the OpenAI-compatible wire — DeepSeek,
+OpenAI, Kimi, Gemini's compatibility layer, LM Studio — takes an `image_url` part
+beside the text. The image is downscaled and re-encoded to a 1024 px JPEG first,
+so a 12 MP phone photo arrives as roughly 100 KB rather than several megabytes of
+vision tokens.
+
+**Which models can see is a per-model fact, not a provider one**, and it is
+carried in `CloudBrainModelCatalog.visionModels` (hosted) and
+`LocalBrainModelCatalog` (local). DeepSeek is the case that makes it concrete:
+its Quick model takes images and its Careful model does not, and the model picker
+says so on the row. A model nobody has listed reads as blind.
+
+Locally, the brain Mynah installs — `qwen3.5:4b` — is itself multimodal, so
+"fully on this Mac" reads pictures with no second model and no extra memory.
+That is what makes the privacy-preserving path the *default* path rather than a
+configuration the owner has to find.
 
 **Keeping a file never depends on that.** Whatever arrives is stored and noted
 before the brain is asked anything, so an attachment survives a turn that fails,

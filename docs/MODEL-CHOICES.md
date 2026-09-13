@@ -88,19 +88,25 @@ measurement, and it is not what this table records.
 
 ## The picks
 
-| Provider | Quick (default) | Careful | Offered in setup | Grounded |
+| Provider | Quick (default) | Careful | Reads pictures | Offered in setup | Grounded |
 |---|---|---|---|---|
-| Anthropic | `claude-haiku-4-5` | `claude-sonnet-5` | **yes** — in use and known | 2026-08-01 |
-| OpenAI | `gpt-5.6-luna` | `gpt-5.6-sol` | **yes** — in use and known | 2026-08-01 |
-| DeepSeek | `deepseek-v4-flash` | `deepseek-v4-pro` | **yes** — owner's own evidence | 2026-08-01 |
-| Groq | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | no — unmeasured | 2026-08-01 |
-| Kimi (Moonshot) | `kimi-k2.6` | `kimi-k3` | no — unmeasured | 2026-08-01 |
-| Gemini (Google) | `gemini-3.6-flash` | `gemini-2.5-pro` | no — legacy resolution only | 2026-08-01 |
-| GLM (Zhipu) | *not confirmed on our endpoint* | — | no | 2026-07-29 |
+| Anthropic | `claude-haiku-4-5` | `claude-sonnet-5` | both | **yes** — in use and known | 2026-09-13 |
+| OpenAI | `gpt-5.6-luna` | `gpt-6-astra` | both | **yes** — in use and known | 2026-09-13 |
+| DeepSeek | `deepseek-flash` | `deepseek-v4-pro` | **Quick only** | **yes** — owner's own evidence | 2026-09-13 |
+| Groq | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | neither | no — unmeasured | 2026-09-13 |
+| Kimi (Moonshot) | `kimi-k2.6` | `kimi-k3` | both | no — unmeasured | 2026-09-13 |
+| Gemini (Google) | `gemini-3.8-flash` | `gemini-2.5-pro` | both | no — legacy resolution only | 2026-09-13 |
+| GLM (Zhipu) | *not confirmed on our endpoint* | — | — | no | 2026-07-29 |
 
 **Grounded** means both ids were read off the vendor's own current documentation
 on the date shown, not recalled. **Offered** is a separate question and a higher
 bar: naming a model is not measuring it.
+
+The sweep on **2026-09-13** re-read every provider's catalogue rather than
+trusting the 2026-08-01 rows, and moved three picks: OpenAI's pro end, DeepSeek's
+whole row (see below), and Gemini's quick end. It also added a **Reads pictures**
+column, because a model name is not the only thing that decides what an owner can
+send.
 
 ### Anthropic — `claude-haiku-4-5` / `claude-sonnet-5`
 
@@ -108,34 +114,70 @@ $1/$5 per million tokens against $3/$15, both with full tool use. 200K context,
 far more than a spoken conversation reaches. The quick one is the cheapest thing
 in the range that meets (1) and (2), which is the rule applied exactly.
 
-### OpenAI — `gpt-5.6-luna` / `gpt-5.6-sol`
+### OpenAI — `gpt-5.6-luna` / `gpt-6-astra`
 
-$0.20/$1.20 against $5/$30 — the cost-optimised and frontier ends of one family,
-both with function calling. `gpt-5.6-terra` at $2/$12 is the middle option left
-out for the reason given above.
+$0.20/$1.20 against $10/$50 — the cost-optimised and frontier ends of the range,
+both with function calling and both listing `Input modalities: text, image`.
+`gpt-5.6-terra` at $2/$12 is the middle option left out for the reason given
+above.
+
+**The pro end moved from `gpt-5.6-sol` ($5/$30) to `gpt-6-astra` on
+2026-09-13.** Not because sol had gone away — it has not, and it stays in the
+vision table so an owner stored on it keeps its eyes — but because the Careful
+row exists to offer the best answer available, and Astra is described by its own
+model page as the most capable the vendor has. An owner reaching for Careful
+should not have to know that a model shipped since the last sweep.
 
 *(An earlier revision of this file put luna at $1/$6 and terra at $2.50/$15,
 recalled rather than read. Corrected against the vendor's page on 2026-08-01 —
 which is the whole argument for the "Grounded" column existing.)*
 
-### DeepSeek — `deepseek-v4-flash` / `deepseek-v4-pro`
+### DeepSeek — `deepseek-flash` / `deepseek-v4-pro`, and a difference that matters
 
-$0.14/$0.28 per million on a cache miss against $0.435/$0.87 — an order of
-magnitude below everything else here at both ends. 1M context, 384K output.
-Offered on the owner's direct evidence: he uses it and reports it fast. That
-counts, and it is better evidence than a spec sheet.
+$0.15/$0.60 per million at peak against $1.32/$3.96 — an order of magnitude
+below everything else here at the quick end. 1M context, 384K output. Offered on
+the owner's direct evidence: he uses it and reports it fast. That counts, and it
+is better evidence than a spec sheet.
+
+**Renamed on 2026-09-13, and the rename is not cosmetic.** DeepSeek's Models &
+Pricing page now lists exactly two models — `deepseek-flash` (DeepSeek-V4.1-Flash)
+and `deepseek-v4-pro` (DeepSeek-V4-Pro-0813) — and one feature row separates
+them for this product:
+
+| | `deepseek-flash` | `deepseek-v4-pro` |
+|---|---|---|
+| Vision | **✓** | Not supported |
+
+So **DeepSeek is the one provider here where Careful cannot see a picture.** That
+is the vendor's split. Nothing in this app can fix it, and the honest thing is to
+say it on the model picker rather than let an owner discover it by sending a
+photo of something they wanted read: the Careful row carries "Can't read
+pictures — Quick can."
+
+The names `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` this file used
+to list are retired but still accepted, and DeepSeek serves both from the current
+Flash model. They stay in `CloudBrainModelCatalog.visionModels` for exactly that
+reason: every owner who set their brain up before this release is stored on one
+of them, and a name refresh that took their vision away would be the worst
+possible way to ship this feature.
 
 The legacy aliases `deepseek-chat` and `deepseek-reasoner` were **discontinued
 on 2026-07-24**. Neither may come back; a test asserts it.
 
-### Gemini — `gemini-3.6-flash` / `gemini-2.5-pro`, and why that looks wrong
+### Gemini — `gemini-3.8-flash` / `gemini-2.5-pro`, and why that still looks wrong
 
-**There is no `gemini-3.6-pro`.** The naming convention every other provider here
-follows does not hold for Google: the 3.6 family ships Flash, and the newest Pro
-is `gemini-3.1-pro-preview`. A preview id has no business in a shipped
+**The pro row is older than the quick row, on purpose.** The naming convention
+every other provider here follows does not hold for Google: the 3.x family ships
+Flash models, and the newest Pro — Gemini 3.1 Pro — is still marked a **preview**.
+A preview id has no business in a shipped
 appliance — previews get withdrawn without a deprecation window — so the careful
 tier is the current stable `gemini-2.5-pro`, deliberately an older family than
 its own quick tier.
+
+The quick row moved to `gemini-3.8-flash` on 2026-09-13: Google's models page
+describes 3.8 as "our most intelligent Flash model" and marks it **Stable**, with
+3.7 and 3.6 listed as previous-generation. Nothing was broken on 3.6; the pick
+was two releases behind.
 
 This is the pick most likely to be "tidied up" by someone who notices the
 mismatch. Doing so produces a 404 on the owner's key. Recorded here and asserted
@@ -150,6 +192,56 @@ right speed and the wrong shape. `kimi-k2.6` is the general-purpose model.
 
 This replaces `kimi-k2-0905-preview`, which Moonshot had already deprecated and
 which this repo was still carrying.
+
+## What reads a picture
+
+A model id says nothing about whether it can look at the photograph the owner
+sends, and the two are decided together in practice: a provider whose Quick row
+cannot see is not the provider to send a ticket photo to.
+
+**Hosted.** `CloudBrainModelCatalog.visionModels` is the table, one entry per
+provider, and it was read off the vendors' pages on 2026-09-13. A model missing
+from it reads as **blind** — the pessimistic direction on purpose, because
+putting an image block on the wire for a model that cannot parse one turns a
+photo into a failed turn, and a model that silently ignores it turns a photo
+into a confident wrong answer about something it never saw.
+
+**Local.** The appliance's own brain, `qwen3.5:4b`, is **multimodal** — the
+family's page calls it "a family of open-source multimodal models" and every one
+of its 64 tags lists `Text, Image input`. So the default fully-local setup reads
+pictures with no second model, no extra memory, and nothing leaving the Mac.
+`LocalBrainModelCatalog.seesImages(model:)` carries the family list
+(`qwen3.5`, `qwen3.8`, the `-vl` Qwens, `gemma3`/`gemma4`, `llava`,
+`minicpm-v`, `moondream`) and everything else local reads as blind, which is what
+stopped a text-only local model being told it could see.
+
+### `qwen3.8-flash-next` — checked, rejected, written down
+
+It reads as the obvious upgrade: "flash", newer, multimodal. **It is not a small
+model.** Its six published tags are all 125B mixture-of-experts builds between
+105 GB and 360 GB. "Flash" is a claim about tokens per second, not about size,
+and nothing of that shape runs beside a brain on a 16 GB Mac.
+
+Recorded here because the name invites exactly the same afternoon twice.
+
+### The small describer, and why it is not in this release
+
+The plan for a local brain that cannot see was a second, tiny local model to
+describe the picture for it: `qwen3.5:0.8b` at 1.0 GB, the smallest tag of the
+family whose vision encoder the appliance already installs. It is a real idea
+and it stays written down here rather than half-built.
+
+What stopped it is that **the default local brain does not need it.** Mynah
+installs `qwen3.5:4b` and sets it up itself, and that model sees. A describer
+would be a gigabyte of weights downloaded for every owner, to cover a
+configuration — a text-only local model pulled by hand — that Mynah does not
+create. Pulling it lazily has no good moment either: the only trigger is a
+picture arriving mid-turn, and a 1 GB download inside a voice turn is worse than
+the honest sentence it would replace.
+
+So a local owner on a text-only model is told the picture was kept and not
+looked at, which is true, and switching to the local brain Mynah installs — or
+to any hosted model with a check in the Reads pictures column — is one move away.
 
 ### Groq — `llama-3.1-8b-instant`, named but not offered
 
