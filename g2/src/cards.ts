@@ -36,8 +36,23 @@ export class Cards {
     this.selected = Math.max(-1, Math.min(this.items.length - 1, this.selected + delta));
   }
   open() { if (this.current) { this.detail = true; this.current.unread = false; } }
+  /// Every turn of the conversation a card belongs to, oldest first.
+  ///
+  /// **The card and the conversation stopped being the same thing the moment
+  /// follow-ups existed.** A follow-up arrives as its own card in the same
+  /// thread, so opening one and showing only that turn makes the owner's second
+  /// question look like it replaced their first — which is what "broken up into
+  /// cards instead of one long thread" looks like from the glasses.
+  thread(card?: Card) { return card ? this.items.filter(item => item.threadId === card.threadId) : []; }
+  /// Whether this card continues an earlier conversation rather than opening one.
+  isFollowUp(card: Card) { return this.thread(card).indexOf(card) > 0; }
   add(id: string, parentId?: string) {
-    this.items.push({id, threadId: parentId ?? id, question: 'Voice question', answer: '', status: 'queued'});
+    // The Mac files a follow-up under its parent's *thread*, not under the
+    // parent's id, so the local card has to do the same — otherwise the row
+    // appears as a second conversation for the second or so before the Mac's own
+    // snapshot arrives and replaces it.
+    const parent = parentId ? this.items.find(item => item.id === parentId) : undefined;
+    this.items.push({id, threadId: parent?.threadId ?? parentId ?? id, question: 'Voice question', answer: '', status: 'queued'});
     const pending = this.pendingFocus; this.home(); this.pendingFocus = pending;
   }
 }

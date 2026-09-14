@@ -447,6 +447,16 @@ signed timestamp rather than a replayable token. Without `-root-key-file` the
 relay refuses `/appliance/enrol` and appliances have to be provisioned by hand.
 The appliance reads its own secret from `~/.sage/call-relay.secret`.
 
+**One link, one endpoint process.** The token in a pairing is written down and
+reused, so a `sage-voice-webrtc` that survives the daemon which started it keeps
+polling the relay for the *same* link as the one that replaces it — and the relay
+hands each offer to whichever process is waiting, so the two race and the owner
+gets an intermittent failure with nothing wrong underneath it. The endpoint
+therefore stops any other process serving its token before it starts polling, and
+the daemon starts it with `-exit-with-parent` so a crash, a force quit or an
+update landing on a running daemon cannot leave one behind. See
+`webrtc/siblings.go`.
+
 `sage-voiced` is the debugging surface for all of it — `transcribe`, `brain`,
 `search`, `setup`, `verify-sage`, `key`, `google`, `daemon`, `check`,
 `calendar`. Run it with no arguments for usage.

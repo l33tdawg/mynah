@@ -118,6 +118,50 @@ public actor CallHost {
         FileManager.default.fileExists(atPath: secretURL.path)
     }
 
+    /// The endpoint's argument vector, built in one place so that it can be
+    /// asserted rather than only observed on a running Mac.
+    ///
+    /// **`-exit-with-parent` is not housekeeping.** The token in a pairing is
+    /// written down and reused, so an endpoint that outlives this daemon keeps
+    /// polling the relay for the *same* link as the one it starts next; the relay
+    /// gives an offer to whichever of them is waiting, so they race, and when the
+    /// leftover wins the owner's glasses are answered by a build older than the
+    /// daemon that is running — an endpoint from before the queued-request
+    /// command answers `unknown control`, which the companion can only report as
+    /// "Your Mac's Mynah refused this recording", on a link that is fine. The
+    /// endpoint's own `reapSiblingEndpoints` clears a leftover that already
+    /// exists; this flag is what stops new ones being created by a crash, a force
+    /// quit or an update landing on a running daemon.
+    static func endpointArguments(
+        relayURL: String,
+        secretPath: String,
+        token: String,
+        appliancePath: String,
+        screenOnly: Bool,
+        applianceID: String?
+    ) -> [String] {
+        var arguments = [
+            "-relay", relayURL,
+            "-relay-secret-file", secretPath,
+            "-token", token,
+            // Where the brain answers. If nothing is listening the endpoint
+            // loops the caller back to themselves rather than dropping the
+            // call — which is also how a transport problem gets told apart from
+            // an appliance problem, in one call.
+            "-appliance", appliancePath
+        ]
+        if screenOnly { arguments.append("-screen-only") }
+        arguments.append("-exit-with-parent")
+        // Only when this Mac minted its own credential. A hand-provisioned
+        // appliance has no id, sends no header, and the relay finds its secret
+        // by scanning — which is what every Mac did before minting existed and
+        // has to keep working across the deploy that adds it.
+        if let applianceID {
+            arguments.append(contentsOf: ["-appliance-id", applianceID])
+        }
+        return arguments
+    }
+
     /// Starts an endpoint and returns the link to send.
     ///
     /// Any previous call is stopped first — not merely because two endpoints
@@ -137,25 +181,14 @@ public actor CallHost {
         let token = savedToken ?? CallInvitation.token()
         let process = Process()
         process.executableURL = endpointURL
-        var arguments = [
-            "-relay", relayURL,
-            "-relay-secret-file", secretURL.path,
-            "-token", token,
-            // Where the brain answers. If nothing is listening the endpoint
-            // loops the caller back to themselves rather than dropping the
-            // call — which is also how a transport problem gets told apart from
-            // an appliance problem, in one call.
-            "-appliance", CallTurnServer.defaultSocket().path
-        ]
-        if screenOnly { arguments.append("-screen-only") }
-        // Only when this Mac minted its own credential. A hand-provisioned
-        // appliance has no id, sends no header, and the relay finds its secret
-        // by scanning — which is what every Mac did before minting existed and
-        // has to keep working across the deploy that adds it.
-        if let id = CallEnrolment.identity() {
-            arguments.append(contentsOf: ["-appliance-id", id])
-        }
-        process.arguments = arguments
+        process.arguments = CallHost.endpointArguments(
+            relayURL: relayURL,
+            secretPath: secretURL.path,
+            token: token,
+            appliancePath: CallTurnServer.defaultSocket().path,
+            screenOnly: screenOnly,
+            applianceID: CallEnrolment.identity()
+        )
         // Inherited, so a failed call is diagnosable from the same log as
         // everything else the appliance did that minute.
         try process.run()

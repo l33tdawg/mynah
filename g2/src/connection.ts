@@ -1,18 +1,71 @@
 import { connectionURL, protocol, replyEvent, type ReplyEvent } from './protocol.ts';
 
+/// Why a step could not be taken, authored per case.
+///
+/// The three refusals the relay can give have three different next steps: a link
+/// that is gone (`//g2` again), a Mac that is not holding a poll yet (wait a
+/// moment), and a Mac that took too long (tap again). Every one of them used to
+/// arrive as the same sentence about a revoked pairing — which sent the owner to
+/// re-pair a pairing that was fine, and is how "the link did not change" became
+/// a question worth asking. The relay's own body text is not repeated for the
+/// same reason it is not repeated anywhere else in this product: it is written
+/// for an operator, not for a person holding glasses.
+function refusal(status: number): Error {
+  if (status === 404) return new Error('This pairing link has expired. Send //g2 in your chat for a new one, then paste it here.');
+  if (status === 503) return new Error('Your Mac is not answering yet. Reconnecting automatically; tap again in a moment.');
+  if (status === 504) return new Error('Your Mac did not answer in time. Tap again to retry.');
+  return new Error('Mynah is offline or the pairing was revoked. Reconnecting automatically.');
+}
+
+/// A refusal to reach the relay at all.
+///
+/// `fetch` rejects with a bare `TypeError`, and both signals in this class abort
+/// with a `DOMException` whose message is "The operation was aborted" or "signal
+/// is aborted without reason". None of those is a sentence, and all of them used
+/// to reach the status line as one. The phone's connection is the suspect
+/// because that is the part the owner can do something about; the pairing is
+/// not, and saying so is what made a working pairing look revoked.
+function unreachable(error: unknown): Error {
+  if (error instanceof Error && ['AbortError', 'TimeoutError', 'TypeError'].includes(error.name)) {
+    return new Error('Mynah is unreachable from this phone. Check its connection; reconnecting automatically.');
+  }
+  return error instanceof Error ? error : new Error('Something went wrong reaching Mynah. Reconnecting automatically.');
+}
+
 export class MynahConnection {
   private peer?: RTCPeerConnection;
   private channel?: RTCDataChannel;
   private abort = new AbortController();
   private closed = false;
   private readyTimer?: ReturnType<typeof setTimeout>;
-  constructor(private event: (event: ReplyEvent) => void, private ended: () => void) {}
+  // Ordinary fields rather than constructor parameter properties: this file is
+  // imported directly by its test, and Node's type-stripping runner rejects the
+  // short form. One assignment is a smaller price than a test that cannot read
+  // the code it is testing.
+  private event: (event: ReplyEvent) => void;
+  private ended: () => void;
+  constructor(event: (event: ReplyEvent) => void, ended: () => void) {
+    this.event = event;
+    this.ended = ended;
+  }
 
   async connect(input: string) {
+    try {
+      await this.open(input);
+    } catch (error) {
+      // Aborted by `close()`, which is how the companion supersedes a connection
+      // on purpose: the end path is already telling the owner what happened, and
+      // this one must not add "unreachable from this phone" to it.
+      if (this.closed) throw error;
+      throw unreachable(error);
+    }
+  }
+
+  private async open(input: string) {
     const url = connectionURL(input);
     const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(30000)]);
     const config = await fetch(`${url}/connect`, { signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
-    if (!config.ok) throw new Error('Mynah is offline or the pairing was revoked. Reconnecting automatically.');
+    if (!config.ok) throw refusal(config.status);
     const data = await config.json();
     if (data.protocol !== protocol || !Array.isArray(data.iceServers)) throw new Error('Update the Mynah relay to support G2.');
     signal.throwIfAborted();
@@ -51,7 +104,7 @@ export class MynahConnection {
       body: JSON.stringify({ sdp: peer.localDescription?.sdp }), signal,
       credentials: 'omit', referrerPolicy: 'no-referrer'
     });
-    if (!response.ok) throw new Error('Mynah is temporarily unavailable. Reconnecting automatically.');
+    if (!response.ok) throw refusal(response.status);
     const answer = await response.json();
     signal.throwIfAborted();
     await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp });

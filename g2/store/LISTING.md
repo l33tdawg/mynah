@@ -17,6 +17,8 @@ Mynah G2 connects Even G2 glasses to Mynah on a Mac you own. Install and set up 
 
 A home dashboard keeps the dot-matrix clock, date, glasses battery and optional local weather beside your messages. Clear selection borders and status icons make questions easy to browse.
 
+The display sleeps when nothing is happening — the clock and icons included — and lights again when you touch the glasses or when an answer lands.
+
 Tap to speak, then tap to send. Each new ask has its own question-and-answer card. Queue up to five requests while Mynah works, browse recent answers, or follow up in the selected conversation. Your Mac processes requests in order. Answers also appear in your linked Signal or WhatsApp self-chat. The phone companion has a scrollable message window for full answer previews.
 
 Ask about tasks, capture ideas, save notes or look things up. Actions and processing depend on the tools and local or cloud model configured in Mynah. There is no spoken playback on G2.
@@ -32,6 +34,35 @@ Pair once and reconnect automatically. Recent cards survive companion reconnects
 Weather is optional and uses phone location. Permission help is available in the companion. Background behavior depends on the phone and Even app. Mynah cannot read other apps’ inboxes or reply to mirrored notifications.
 
 Created by Dhillon Kannabhiran (l33tdawg).
+
+## Release notes — 0.2.9
+
+The display goes to sleep. Twelve seconds after the last thing that changed — a
+tap, a swipe, an answer — the glasses dim to nothing, clock and icons included,
+instead of staying a lit screen in a dark room. A tap, a swipe or an arriving
+answer lights them again.
+
+A finished answer now wakes the glasses, and what lit them is the answer itself.
+No Even SDK can post a notification to your phone and the G2 cannot be asked to
+make one, so a completion is announced by the display — which is why the sleep
+has to be the thing that lights back up.
+
+A recording that was too short no longer wedges the connection: the next
+question is answered instead of being refused until the companion reconnects.
+That half lives in Mynah's glasses endpoint on the Mac, so it needs the matching
+Mynah build there as well.
+
+The companion also stops blaming the pairing when the relay is the one
+refusing. An expired link, a Mac that is not answering and a phone that cannot
+reach the relay are now three different sentences with three different next
+steps, instead of one sentence about a revoked pairing that was never revoked.
+
+A conversation reads as a conversation. Tapping a finished answer continues it
+rather than starting something new, and now says so: the last page of an answer
+reads "Tap to follow up.", the recording that follows is announced as a
+follow-up, and a continuation is marked with ↳ where the asks are listed. Opening
+any turn shows every turn of that conversation in order, oldest first, instead of
+one card per question with the earlier ones hidden.
 
 ## Release notes — 0.2.8
 

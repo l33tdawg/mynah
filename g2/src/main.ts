@@ -5,8 +5,8 @@ import {
 } from '@evenrealities/even_hub_sdk';
 import { MynahConnection } from './connection.ts';
 import { connectionURL, cardPages, type ReplyEvent } from './protocol.ts';
-import { clockPixels, batteryLabel, weatherLabel, batteryPixels, weatherPixels, titlePixels } from './home.ts';
-import { Cards, cardIcon } from './cards.ts';
+import { clockPixels, batteryLabel, weatherLabel, batteryPixels, weatherPixels, titlePixels, blankPixels } from './home.ts';
+import { Cards, cardIcon, type Card } from './cards.ts';
 import { inputType } from './input.ts';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -146,6 +146,11 @@ let waitingHintSeen = false;
 let waitingTimer: ReturnType<typeof setTimeout> | undefined;
 let waitingHidden = false;
 let waitingActive = false;
+// The whole display, not just the card. `waiting-quiet` above dims one card
+// while a turn is in flight; this is what stops the glasses being a lamp on a
+// bedside table for the rest of the night.
+let asleep = false;
+let sleepTimer: ReturnType<typeof setTimeout> | undefined;
 function stopWaitingDisplay() {
   clearTimeout(waitingTimer); waitingTimer = undefined; waitingHidden = false; waitingActive = false;
   el('display').classList.remove('waiting-quiet');
@@ -259,19 +264,70 @@ function showTransient(text: string) {
   holdingMessage = false;
   show(text);
 }
+/// How long the glasses stay lit with nobody touching them.
+///
+/// Deliberately two seconds longer than the ten-second `waiting-quiet` above, so
+/// a turn in flight dims its card first and the whole display follows. A tap, a
+/// swipe, an arriving answer or any other repaint restarts it.
+const displaySleepMs = 12000;
+/// Puts the whole display out.
+///
+/// The firmware's text brightness goes down to 0, which the SDK documents as a
+/// real level rather than an absence — and the images carry their own pixels, so
+/// the clock digits, title and the two icons are blanked with zeroed bitmaps of
+/// their own shape. The page itself stays up: Even keeps delivering taps, swipes
+/// and menu events to a page it can still draw into, which is why sleeping is
+/// this and not `shutDownPageContainer` — exiting would put the owner back at
+/// Even's app list and make "tap to talk" a thing they had to find again.
+function sleepDisplay() {
+  sleepTimer = undefined;
+  if (asleep || exiting || !bridge || phase === 'listening') return;
+  asleep = true;
+  // The layout carries the brightness for every text container and its key
+  // includes `asleep`, so one rebuild dims all of them — rows included, whose
+  // selected and unselected levels are 4 and 2 rather than the default.
+  void draw();
+}
+/// Lights it again. Every repaint is a wake, so this only has to clear the flag.
+function wakeDisplay() {
+  if (!asleep) return;
+  asleep = false;
+}
+function armDisplaySleep() {
+  clearTimeout(sleepTimer); sleepTimer = undefined;
+  // Never while recording: the owner is mid-sentence, and the microphone is
+  // Even's, so a dark display with a live capture would be the worst of both.
+  if (exiting || !bridge || phase === 'listening') return;
+  sleepTimer = setTimeout(sleepDisplay, displaySleepMs);
+}
 function render() {
+  // Any repaint is something the owner should be able to see: an answer landing
+  // while the display slept is exactly the notification this companion can
+  // give, and it is why the wake is here rather than only on input.
+  wakeDisplay();
   iconKinds = []; iconFocus = -1;
   const settled = !['listening','offline','connecting'].includes(phase) && !waitingActive && !waitingHidden;
   if (settled && (queueEnabled || atHome)) {
     if (cards.detail && cards.current) {
       const c = cards.current;
-      reading = cardPages(`? ${c.question}\n\n${c.status === 'ready' ? '✓ ' + c.answer : cardIcon(c) + ' ' + c.status + (c.status === 'failed' ? '\n'+c.answer : '')}`);
+      // The whole conversation, oldest turn first, then what to do next. A
+      // follow-up lands in the same thread, so reading one turn at a time showed
+      // the owner their own questions as separate cards and hid the fact that
+      // the last one continued the first.
+      const turns = cards.thread(c);
+      const conversation = turns.map(turn => `? ${turn.question}\n\n${turn.status === 'ready'
+        ? '✓ ' + turn.answer
+        : cardIcon(turn) + ' ' + turn.status + (turn.status === 'failed' ? '\n' + turn.answer : '')}`).join('\n\n');
+      const latest = turns[turns.length - 1];
+      const next = latest?.status === 'ready' ? 'Tap to follow up.'
+        : latest?.status === 'failed' ? 'Tap to ask again.' : 'Working…';
+      reading = cardPages(`${conversation}\n\n${next}`);
       page = Math.min(page, reading.length - 1);
     } else if (!holdingMessage) {
       const first = Math.max(0, cards.selected - 1);
       iconFocus = cards.selected === -1 ? 0 : cards.selected - first + 1;
       iconKinds = ['new', ...cards.items.slice(first, first + 2).map(c => c.status)];
-      reading = [`${cards.selected === -1 ? '›' : ' '}      New ask\n` + cards.items.slice(first, first + 2).map((c, i) => `${cards.selected === first + i ? '›' : ' '}      ${c.question.slice(0,22)}\n       ${c.unread ? '● ' : ''}${c.status}`).join('\n')];
+      reading = [`${cards.selected === -1 ? '›' : ' '}      New ask\n` + cards.items.slice(first, first + 2).map((c, i) => `${cards.selected === first + i ? '›' : ' '}      ${rowLabel(c)}\n       ${c.unread ? '● ' : ''}${c.status}`).join('\n')];
       page = 0;
     }
   }
@@ -282,7 +338,7 @@ function render() {
   // Keep the old phone text through its CSS fade; glasses clear immediately.
   if (!waitingHidden) {
     const phoneDisplay = iconKinds.length
-      ? [`${cards.selected === -1 ? '›' : ' '} + New ask`, ...cards.items.map((c,i) => `${cards.selected === i ? '›' : ' '} ${{queued:'◷',working:'◌',ready:'✓',failed:'!'}[c.status]} ${c.question}\n    ${c.unread ? '● ' : ''}${c.status}`)].join('\n\n')
+      ? [`${cards.selected === -1 ? '›' : ' '} + New ask`, ...cards.items.map((c,i) => `${cards.selected === i ? '›' : ' '} ${{queued:'◷',working:'◌',ready:'✓',failed:'!'}[c.status]} ${cards.isFollowUp(c) ? '↳ ' : ''}${c.question}\n    ${c.unread ? '● ' : ''}${c.status}`)].join('\n\n')
       : reading.join('\n');
     const display = el('display');
     if (display.textContent !== phoneDisplay) display.textContent = phoneDisplay;
@@ -290,6 +346,7 @@ function render() {
 
   }
   controls();
+  armDisplaySleep();
   void draw();
 }
 function draw(): Promise<void> {
@@ -308,7 +365,7 @@ async function drawFrame() {
         if (await evenBridge(() => host.rebuildPageContainer(new RebuildPageContainer(pageLayout()))) !== true) throw Error('Could not move the selection on the glasses.');
         sentLayoutKey = layout; sentTitle = false; sentRows = []; sentClockMinute = ''; sentIndicators = '';
       }
-      if (!sentTitle) { await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:8,containerName:'title',imageData:titlePixels()}))); sentTitle = true; }
+      if (!sentTitle) { await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:8,containerName:'title',imageData:asleep ? blankPixels(144,24) : titlePixels()}))); sentTitle = true; }
       const rowText = homeRows();
       for (let i=0;i<rowText.length;i++) if (sentRows[i] !== rowText[i]) {
         const id = i === 0 ? 12 : 8+i;
@@ -329,16 +386,16 @@ async function drawFrame() {
       }
       const indicators = JSON.stringify([batteryLevel, weatherCode]);
       if (sentIndicators !== indicators) {
-        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:6,containerName:'battery',imageData:batteryPixels(batteryLevel)})));
-        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:7,containerName:'weather-icon',imageData:weatherPixels(weatherCode)})));
+        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:6,containerName:'battery',imageData:asleep ? blankPixels(28,20) : batteryPixels(batteryLevel)})));
+        await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:7,containerName:'weather-icon',imageData:asleep ? blankPixels(24,24) : weatherPixels(weatherCode)})));
         sentIndicators = indicators;
       }
       if (sentClockMinute !== clockMinute) {
         const minute = clockMinute;
-        const result = await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:4,containerName:'digits',imageData:desiredPixels})));
+        const result = await evenBridge(() => host.updateImageRawData(new ImageRawDataUpdate({containerID:4,containerName:'digits',imageData:asleep ? blankPixels(156,144) : desiredPixels})));
         if (result !== ImageRawDataUpdateResult.success) {
           // Keep a truthful text clock if the host cannot update the bitmap.
-          await evenBridge(() => host.textContainerUpgrade(new TextContainerUpgrade({containerID:2,containerName:'clock',contentOffset:0,contentLength:0,content:desiredClock+'\n'+minute})));
+          await evenBridge(() => host.textContainerUpgrade(new TextContainerUpgrade({containerID:2,containerName:'clock',contentOffset:0,contentLength:0,content:desiredClock+'\n'+minute,textColor:asleep?0:4})));
         }
         sentClockMinute = minute;
       }
@@ -466,8 +523,15 @@ async function toggleRecording() {
     if (queueEnabled) { requestID = 'g2-' + crypto.randomUUID(); current.startRequest(requestID, parentID); }
     else current.control('start');
     phase = 'listening'; controls();
+    // **Said out loud, because nothing else said it.** Tapping a finished answer
+    // continues that conversation rather than starting a new one, and the only
+    // place that was ever written down was the phone's hint text — so a
+    // follow-up looked exactly like a first question, and a conversation looked
+    // like a pile of unrelated cards. `next` is what the last page of the answer
+    // says, so this is the same sentence in the same words.
+    const next = parentID ? 'Follow-up…\nTap again to send.' : 'Listening…\nTap again to send.';
     // Finish the home-to-recording rebuild before opening the hardware stream.
-    show('Listening…\nTap again to send.');
+    show(next);
     await draw();
     if (phase !== 'listening' || connection !== current || exiting) return;
     if (!await openMicrophone()) {
@@ -476,7 +540,7 @@ async function toggleRecording() {
     el('permission-status').textContent = 'Glasses microphone connected. No phone microphone setting is needed for this recording.';
     // A disconnect or background event may have happened during audioControl.
     if (phase !== 'listening') { await stopMicrophone(); return; }
-    status('Listening · tap again to send'); show('Listening…\nTap again to send.');
+    status(parentID ? 'Following up · tap again to send' : 'Listening · tap again to send'); show(next);
     recordingTimer = setTimeout(() => queue(async () => { if (phase === 'listening') await toggleRecording(); }), 59000);
   } else if (phase === 'connecting') {
     status('Still connecting to Mynah…');
@@ -539,7 +603,7 @@ previous.onclick = () => { if (queueEnabled && !cards.detail) { holdingMessage =
 next.onclick = () => { if (queueEnabled && !cards.detail) { holdingMessage = false; cards.select(1); stopWaitingDisplay(); render(); return; } page = Math.min(reading.length - 1, page + 1); render(); };
 // A hidden WebView is normal when the paired phone is locked. Do not gate
 // glasses input on document.visibilityState. Page teardown still stops capture.
-window.addEventListener('pagehide', () => { exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer); clearTimeout(weatherTimer); void stopMicrophone(); connection?.close(); });
+window.addEventListener('pagehide', () => { exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer); clearTimeout(weatherTimer); clearTimeout(sleepTimer); void stopMicrophone(); connection?.close(); });
 window.addEventListener('pageshow', event => {
   if (event.persisted) { exiting = false; updateClock(); if (weatherEnabled) void refreshWeather(); queue(connectPaired); }
 });
@@ -562,7 +626,7 @@ void (async () => {
   bridge.onEvenHubEvent(event => {
     if (event.menuItemClickEvent?.itemID === 1) { queue(returnHome); return; }
     if (event.sysEvent?.eventType === OsEventTypeList.SYSTEM_EXIT_EVENT || event.sysEvent?.eventType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
-      exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer);
+      exiting = true; clearTimeout(reconnectTimer); clearTimeout(clockTimer); clearTimeout(sleepTimer);
       void stopMicrophone(); connection?.close(); return;
     }
     // Coming back from a suspended WebView: Even has stopped any capture we had.
@@ -707,13 +771,25 @@ async function returnHome() {
   atHome = true;
 }
 
-function layoutKey() { return iconKinds.length ? `home:${cards.selected}:${iconKinds.length}` : 'reading'; }
+// `asleep` is part of the key on purpose: brightness is a property of the page
+// containers, so the only way to dim — and to light back up — is a rebuild.
+// That also restores the rows' selected/unselected levels, which are not the
+// same number as anyone else's.
+function layoutKey() { return `${asleep ? 'asleep:' : ''}${iconKinds.length ? `home:${cards.selected}:${iconKinds.length}` : 'reading'}`; }
+/// One list row: the question, marked when it continues an earlier conversation.
+///
+/// The list is one row per ask, and a follow-up *is* an ask — so without the
+/// marker a conversation reads as the owner having asked the same thing twice,
+/// which is how "broken up into cards instead of one long thread" looked.
+function rowLabel(card: Card) {
+  return cards.isFollowUp(card) ? `↳ ${card.question.slice(0,20)}` : card.question.slice(0,22);
+}
 function homeRows(): string[] {
   if (!iconKinds.length) return [' ',' ',' '];
   const first = Math.max(0,cards.selected-1);
   return ['   + New ask', ...[0,1].map(i => {
     const c=cards.items[first+i];
-    return c ? ` ${cardIcon(c)} ${c.question.slice(0,22)}\n    ${c.unread ? '* ' : ''}${c.status}` : ' ';
+    return c ? ` ${cardIcon(c)} ${rowLabel(c)}\n    ${c.unread ? '* ' : ''}${c.status}` : ' ';
   })];
 }
 function pageLayout() { return {
@@ -722,16 +798,16 @@ function pageLayout() { return {
     textObject: [new TextContainerProperty({
       containerID: 1, containerName: 'mynah', xPosition: 176, yPosition: 12,
       width: 392, height: 264, paddingLength: 12, borderWidth: 1, borderColor: 4, borderRadius: 8, isEventCapture: 1,
-      content: desiredDisplay
+      content: desiredDisplay, textColor: asleep ? 0 : undefined
     }), new TextContainerProperty({
       containerID: 2, containerName: 'clock', xPosition: 8, yPosition: 8,
       width: 120, height: 68, paddingLength: 8, isEventCapture: 0,
-      content: desiredClock
+      content: desiredClock, textColor: asleep ? 0 : undefined
     }), new TextContainerProperty({
-      containerID: 3, containerName: 'weather', xPosition: 108, yPosition: 232, width:60, height:48, paddingLength: 8, isEventCapture:0, content:desiredWeather
+      containerID: 3, containerName: 'weather', xPosition: 108, yPosition: 232, width:60, height:48, paddingLength: 8, isEventCapture:0, content:desiredWeather, textColor: asleep ? 0 : undefined
     }), ...[40,90,180].map((y,i) => {
       const id=i===0?12:8+i, visible=iconKinds.length > 0 && (i===0 || !!cards.items[Math.max(0,cards.selected-1)+i-1]);
-      return new TextContainerProperty({containerID:id,containerName:`row-${id}`,xPosition:188,yPosition:y,width:368,height:i===0?46:80,paddingLength:i===0?6:8,isEventCapture:0,borderWidth:visible?(iconFocus===i?2:1):0,borderColor:iconFocus===i?4:1,borderRadius:4,textColor:iconFocus===i?4:2,content:homeRows()[i]});
+      return new TextContainerProperty({containerID:id,containerName:`row-${id}`,xPosition:188,yPosition:y,width:368,height:i===0?46:80,paddingLength:i===0?6:8,isEventCapture:0,borderWidth:visible?(iconFocus===i?2:1):0,borderColor:iconFocus===i?4:1,borderRadius:4,textColor:asleep?0:iconFocus===i?4:2,content:homeRows()[i]});
     })],
     imageObject: [new ImageContainerProperty({containerID:8,containerName:'title',xPosition:300,yPosition:0,width:144,height:24}), new ImageContainerProperty({containerID:4,containerName:'digits',xPosition:8,yPosition:66,width:156,height:144}), new ImageContainerProperty({containerID:6,containerName:'battery',xPosition:132,yPosition:18,width:28,height:20}), new ImageContainerProperty({containerID:7,containerName:'weather-icon',xPosition:12,yPosition:240,width:24,height:24})]
   }; }

@@ -83,6 +83,7 @@ func main() {
 		relayURL        = flag.String("relay", "", "call relay to wait at, e.g. https://call.sage.delivery")
 		relaySecretFile = flag.String("relay-secret-file", "", "file holding the secret this appliance authenticates with")
 		applianceID     = flag.String("appliance-id", "", "identity this appliance was minted with; empty means a hand-provisioned secret the relay finds by scanning")
+		exitWithParent  = flag.Bool("exit-with-parent", false, "stop when the process that started this endpoint goes away; set by Mynah, which is what starts it")
 	)
 	flag.Parse()
 
@@ -116,6 +117,17 @@ what stands between a private microphone and anyone who can reach it.`)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
+
+		// **Before the first poll, not after.** Both of these exist because the
+		// relay hands an offer to whichever process is holding a poll for the
+		// link, so a leftover endpoint is not a wasted process — it is a second
+		// answerer, and the owner sees a link that works and then does not. See
+		// siblings.go for the whole of the reasoning.
+		reapSiblingEndpoints(*token, *screenOnly)
+		if *exitWithParent {
+			go watchParent(ctx, os.Getppid, cancel, 10*time.Second)
+		}
+
 		calls := &callServer{
 			screenOnly: *screenOnly,
 			ice:        iceServers(*stunURL, *turnURL),

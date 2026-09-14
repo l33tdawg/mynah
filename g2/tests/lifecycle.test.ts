@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import {randomUUID} from 'node:crypto';
 import { connectionURL, cardPages } from '../src/protocol.ts';
-import { clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels } from '../src/home.ts';
+import { clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels, blankPixels } from '../src/home.ts';
 import { Cards, cardIcon } from '../src/cards.ts';
 import { inputType } from '../src/input.ts';
 
@@ -23,6 +23,7 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
   const writes: string[] = [];
   const peers: any[] = [];
   const displays: any[] = [];
+  const images: any[] = [];
   const layouts: any[] = [];
   const weatherURLs: string[] = [];
   let layout: any;
@@ -53,7 +54,8 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     textContainerUpgrade: async (value: any) => { assert.ok(layout.textObject.some((c: any) => c.containerID === value.containerID && c.containerName === value.containerName), 'text updates must target an existing container'); assert.equal(typeof value.content, 'string'); displays.push(value); return true; },
     rebuildPageContainer: async (value: any) => { hardware.push('rebuild'); validateLayout(value); layouts.push(value); return true; },
     getAppLocation: async () => options.location ?? null,
-    getDeviceInfo: async () => null, onDeviceStatusChanged() {}, updateImageRawData: async () => 0,
+    getDeviceInfo: async () => null, onDeviceStatusChanged() {},
+    updateImageRawData: async (value: any) => { images.push(value); return 0; },
     audioControl: async (enabled: boolean, source?: any) => {
       hardware.push(enabled ? 'mic-start' : 'mic-stop'); microphones.push(enabled); micCalls.push({ enabled, source });
       // Even's native bridge can reject with its own message instead of
@@ -97,18 +99,19 @@ async function harness(options: { connect?: Promise<any>; saved?: Promise<any>; 
     // test does not have to drive a clock to see a retry; the minute-long
     // recording and ten-second waiting timers stay real.
     setTimeout: (fn: Function, delay: number) => { const id = ++timer; timers.set(id, { fn, delay }); if (delay <= 250) Promise.resolve().then(() => { if (timers.delete(id)) fn(); }); return id; }, clearTimeout: (id: number) => timers.delete(id),
-    waitForEvenAppBridge: async () => bridge, MynahConnection: Connection, connectionURL, cardPages, inputType, Cards, cardIcon, clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels,
+    waitForEvenAppBridge: async () => bridge, MynahConnection: Connection, connectionURL, cardPages, inputType, Cards, cardIcon, clockPixels, batteryLabel, weatherLabel, statusPixels, batteryPixels, weatherPixels, titlePixels, blankPixels,
     CreateStartUpPageContainer: class { constructor(value: any) { Object.assign(this, value); } }, TextContainerProperty: class { constructor(value: any) { Object.assign(this, value); } }, TextContainerUpgrade: class { constructor(value: any) { Object.assign(this, value); } },
     AppLocationAccuracy:{Low:'low'},
     RebuildPageContainer: class { constructor(value: any) { Object.assign(this, value); } },
-    ImageContainerProperty: class { constructor(value: any) { Object.assign(this, value); } }, ImageRawDataUpdate: class {}, ImageRawDataUpdateResult: {success:0},
+    ImageContainerProperty: class { constructor(value: any) { Object.assign(this, value); } }, ImageRawDataUpdate: class { constructor(value: any) { Object.assign(this, value); } }, ImageRawDataUpdateResult: {success:0},
     StartUpPageCreateResult: { success: 0 }, AudioInputSource: { Glasses: 1 },
     OsEventTypeList, MenuContainerProperty, MenuItemProperty,
   });
   const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
   await flush();
-  return { hardware, shutdowns, failMic: (times = Infinity) => { micFailures = times; }, get, flush, peers, displays, layouts, weatherURLs, layout, storage, writes, microphones, micCalls, listeners,
+  return { hardware, shutdowns, failMic: (times = Infinity) => { micFailures = times; }, get, flush, peers, displays, images, layouts, weatherURLs, layout, storage, writes, microphones, micCalls, listeners,
     expireWaiting: () => { for (const [id, t] of timers) if (t.delay === 10000) { timers.delete(id); t.fn(); } },
+    expireSleep: () => { for (const [id, t] of timers) if (t.delay === 12000) { timers.delete(id); t.fn(); } },
     expireForget: () => { for (const [id, t] of timers) if (t.delay === 8000) { timers.delete(id); t.fn(); } },
     rejectMic: (text: string) => { micRejection = text; },
     event: (event: any) => onEvent(event), blockStop: (value: Promise<any>) => { stop = value; },
@@ -402,6 +405,115 @@ test('idle disconnect does not ask Even to stop a microphone that was never open
   h.peers[0].close(); await h.flush();
   assert.equal(h.microphones.length, 0);
   assert.match(h.get('status').textContent, /offline/);
+});
+
+// The owner asked for the glasses to stop being a lit display after a while.
+// Text takes the firmware's brightness level 0; images carry pixels rather than
+// a brightness, so they have to be sent as empty bitmaps of their own shape.
+test('the display sleeps after twelve quiet seconds, images included', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  assert.ok(h.layouts.at(-1).textObject.every((c: any) => c.textColor !== 0), 'nothing is dim while it is in use');
+  h.expireSleep(); await h.flush();
+  const slept = h.layouts.at(-1);
+  assert.equal(slept.textObject.length, 6, 'every text container is there to dim');
+  assert.ok(slept.textObject.every((c: any) => c.textColor === 0), 'rows included: they are 4 and 2 when awake');
+  const blanked = new Map(h.images.slice(-4).map((i: any) => [i.containerID, i.imageData]));
+  assert.deepEqual([...blanked.keys()].sort((a, b) => a - b), [4, 6, 7, 8]);
+  for (const [id, [width, height]] of [[4, [156, 144]], [6, [28, 20]], [7, [24, 24]], [8, [144, 24]]] as [number, number[]][]) {
+    const data = blanked.get(id);
+    assert.equal(data?.length, (width * height) / 2, `container ${id} must keep its packed shape`);
+    assert.ok(data?.every((value: number) => value === 0), `container ${id} must be entirely off`);
+  }
+});
+
+test('a swipe or a tap lights the display again', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.expireSleep(); await h.flush();
+  assert.ok(h.layouts.at(-1).textObject.every((c: any) => c.textColor === 0));
+  h.event({ textEvent: { eventType: 2 } }); await h.flush();
+  const awake = h.layouts.at(-1);
+  assert.ok(awake.textObject.some((c: any) => c.textColor !== 0), 'reading is a repaint, and every repaint wakes it');
+  assert.match(h.get('display').textContent, /New ask/);
+});
+
+// This is the notification this companion can actually give: no SDK here can
+// post one to the phone, but a finished answer lights the glasses and says so,
+// which is what the owner asked for when they asked to be told.
+test('an answer that lands while the glasses sleep wakes them with it', async () => {
+  const h = await harness(); await h.pair();
+  h.peers[0].event({ type: 'state', text: JSON.stringify({ queueVersion: 1, status: 'working', cards: [{ id: 'one', threadId: 'one', question: 'First question', answer: '', status: 'working' }] }) });
+  await h.flush();
+  h.expireSleep(); await h.flush();
+  assert.ok(h.layouts.at(-1).textObject.every((c: any) => c.textColor === 0), 'asleep while Mynah works');
+  h.peers[0].event({ type: 'state', text: JSON.stringify({ queueVersion: 1, status: 'ready', cards: [{ id: 'one', threadId: 'one', question: 'First question', answer: 'First answer', status: 'ready' }] }) });
+  await h.flush();
+  assert.ok(h.layouts.at(-1).textObject.some((c: any) => c.textColor !== 0), 'the answer must light the display');
+  assert.ok(h.get('display').textContent.includes('First answer'), 'and be what is lit');
+  const digits = [...h.images].reverse().find((image: any) => image.containerID === 4);
+  assert.ok(digits?.imageData.some((value: number) => value !== 0), 'the clock comes back with the text');
+});
+
+test('a recording in progress is never put to sleep', async () => {
+  const h = await harness(); await h.pair(); await h.ready();
+  h.get('talk').click(); await h.flush();
+  const before = h.layouts.length;
+  h.expireSleep(); await h.flush();
+  assert.equal(h.layouts.length, before, 'no rebuild while the microphone is open');
+  assert.match(h.get('display').textContent, /Listening/);
+});
+
+// The owner's report was that there was no way to continue a conversation. There
+// was — tapping a finished answer — and nothing anywhere said so on the glasses,
+// so a follow-up was indistinguishable from a first question.
+test('a finished answer can be continued, and says that is what a tap does', async () => {
+  const h = await harness(); await h.pair();
+  const snapshot = (cards: any[]) => h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',text:'',cards})});
+  snapshot([{id:'one',threadId:'one',question:'First question',answer:'First answer',status:'ready'}]); await h.flush();
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  h.event({sysEvent:{eventType:0}}); await h.flush();
+  assert.match(h.get('display').textContent, /Tap to follow up/, 'the reading has to say what a tap does');
+  h.event({sysEvent:{eventType:0}}); await h.flush();
+  assert.match(h.get('display').textContent.replace(/\s+/g, ' '), /Follow-up/, 'a follow-up says it is one while recording');
+  assert.match(h.get('status').textContent, /Following up/);
+  const command = JSON.parse(h.peers[0].commands.at(-1));
+  assert.equal(command.parentId, 'one', 'the Mac is told which answer is being continued');
+  h.event({audioEvent:{source:1,audioPcm:new Uint8Array(16000)}});
+  h.get('talk').click(); await h.flush();
+  const followUp = JSON.parse(h.peers[0].commands.filter((c: string) => c.startsWith('{')).at(-1));
+  assert.equal(followUp.parentId, 'one');
+  assert.notEqual(followUp.id, 'one', 'a follow-up is a new ask in the same conversation');
+});
+
+// One conversation, read as one conversation: every turn in order, and the
+// second one marked as a continuation where it is listed.
+test('a continued conversation reads as one thread, oldest turn first', async () => {
+  const h = await harness(); await h.pair();
+  const cards = [
+    {id:'one',threadId:'one',question:'First question',answer:'First answer',status:'ready'},
+    {id:'two',threadId:'one',question:'Second question',answer:'Second answer',status:'ready'},
+  ];
+  h.peers[0].event({type:'state',text:JSON.stringify({queueVersion:1,status:'ready',text:'',cards})}); await h.flush();
+  const rows = h.layouts.at(-1).textObject.filter((r: any) => [12,9,10].includes(r.containerID)).map((r: any) => r.content);
+  assert.ok(rows[0].includes('New ask'));
+  assert.ok(rows[2].startsWith(' ✓ ↳') || rows[2].includes('↳'), `the continuation must be marked: ${JSON.stringify(rows[2])}`);
+  h.event({textEvent:{eventType:2}}); await h.flush();
+  h.event({sysEvent:{eventType:0}}); await h.flush();
+  const reading = h.get('display').textContent;
+  assert.ok(reading.includes('First answer') && reading.includes('Second answer'));
+  assert.ok(reading.indexOf('First answer') < reading.indexOf('Second question'), 'turns are read oldest first');
+});
+
+// The Mac files a follow-up under its parent's thread, and the local card has to
+// agree immediately: a row that appeared as its own conversation for the second
+// before the Mac's snapshot arrived is the flicker that makes a thread look like
+// unrelated cards.
+test('a follow-up card joins its parent thread before the Mac answers it', () => {
+  const cards = new Cards();
+  cards.items = [{id:'one',threadId:'one',question:'First question',answer:'First answer',status:'ready'}];
+  cards.add('two','one');
+  assert.equal(cards.items[1].threadId, 'one');
+  assert.ok(cards.isFollowUp(cards.items[1]));
+  assert.equal(cards.thread(cards.items[1]).length, 2);
 });
 
 

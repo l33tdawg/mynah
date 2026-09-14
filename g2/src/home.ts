@@ -24,6 +24,15 @@ export function batteryLabel(level?: number, charging?: boolean): string {
   const bars = Math.round(level / 25);
   return `[${'|'.repeat(bars)}${' '.repeat(4-bars)}] ${Math.round(level)}%${charging ? '+' : ''}`;
 }
+/// The same packed shape as the drawings above, with every pixel off.
+///
+/// Text dims to the firmware's brightness 0, but an image container holds
+/// pixels and no brightness at all — so "asleep" has to be sent as an empty
+/// bitmap of that container's own size. Sharing the packing with the drawings
+/// is what keeps a future size change from leaving one lit stripe behind.
+export function blankPixels(width: number, height: number): number[] {
+  return new Array((width * height) / 2).fill(0);
+}
 export function weatherLabel(code: number, temperature: number): string {
   const condition = code === 0 ? '☀ Clear' : code <= 3 ? '☁ Cloudy' : code <= 48 ? '≋ Fog' : code <= 67 ? '☂ Rain' : code <= 77 ? '❄ Snow' : code <= 82 ? '☂ Showers' : code <= 86 ? '❄ Snow' : 'ϟ Storm';
   return `${Math.round(temperature)}°C\n${condition}`;

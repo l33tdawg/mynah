@@ -20,6 +20,27 @@ recent card and queue state rather than replaying the question or its tools.
 Answers are not injected over another glasses app; return to Mynah to see them,
 or read the ordinary notes-to-self reply.
 
+The display sleeps. Twelve seconds after the last thing that changed — a tap, a
+swipe, a turn's status, an answer — every text container goes to the firmware's
+brightness 0 and the four image containers are sent empty bitmaps of their own
+shape, so the clock, the title and the battery and weather icons go out with the
+card. Text brightness rather than `shutDownPageContainer`: a page that is still
+up is a page Even still delivers taps and swipes to, so waking costs a rebuild
+instead of a trip through the glasses menu. A recording is never slept through.
+This is also the only notification this companion can give, because the SDK has
+no notification entry point: an answer that lands while the display is asleep
+lights it, and what it lights is the finished answer.
+
+A conversation is one conversation. Tapping a finished answer continues it —
+the Mac is told which answer is being continued, and the follow-up lands in the
+same short-term history — and the reading says so rather than leaving it to be
+discovered: the last page of an answer ends with "Tap to follow up.", the next
+recording is announced as a follow-up while it is open, and where the asks are
+listed a continuation is marked ↳. Opening any turn of a conversation shows
+every turn of it in order, oldest first, so a follow-up does not hide the
+question it answered. Each New ask still starts its own conversation with its own
+context.
+
 ## Quick hardware test
 
 1. Install the updated Mynah daemon and `sage-voice-webrtc` on the Mac, and the
@@ -88,6 +109,12 @@ Official references: [local testing](https://hub.evenrealities.com/docs/test/loc
 - The public SDK does not expose Signal/WhatsApp inboxes or mirrored phone
   notifications. This companion addresses only Mynah's authorized self-chat.
   Replying to third-party contacts is not implemented.
+- **There is no notification API, and that is not a gap this app can close.** A
+  finished answer is announced the only way the SDK allows: the display wakes and
+  shows it. Nothing appears on the glasses while Even's own app is closed, and
+  nothing can be posted to the phone. A task asked for somewhere else — a
+  Signal message, a typed self-chat question — is not a G2 card, so it does not
+  wake the glasses either.
 - The companion stores the validated connection link in Even SDK local storage
   for reopening, and clears it on Forget pairing — which asks for a second tap
   on the control first, because the first version cleared the link on one touch

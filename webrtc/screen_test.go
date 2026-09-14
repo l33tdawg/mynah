@@ -41,6 +41,134 @@ func TestScreenCaptureBoundsAndCommit(t *testing.T) {
 // Proves G2 PCM reaches ASR framing and Unicode answers return without RTP/TTS.
 func TestScreenDataChannelRoundTrip(t *testing.T)       { screenRoundTrip(t, false) }
 func TestQueuedScreenDataChannelRoundTrip(t *testing.T) { screenRoundTrip(t, true) }
+// The owner's second question, over the connection the first one used.
+//
+// Reported as "the first time it works, the second time Mynah refuses it", with
+// the pairing unchanged — so this walks the real data channel twice against a
+// fake Mac socket that stays open between turns, which is what the daemon's
+// screen socket does. Everything about the second ask (a fresh request id, its
+// own metadata frame, its own PCM) has to survive the first one's reply.
+func TestATwoQueuedRecordingConnectionAnswersTwice(t *testing.T) {
+	listener, err := net.Listen("unix", filepath.Join("/tmp", "mynah-g2-twice-"+time.Now().Format("150405.000000000")+".screen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	path := listener.Addr().String()
+	macDone := make(chan error, 1)
+	requests := []string{
+		`{"command":"start","id":"g2-11111111-1111-4111-8111-111111111111"}`,
+		`{"command":"start","id":"g2-22222222-2222-4222-8222-222222222222"}`,
+	}
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			macDone <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+		for _, request := range requests {
+			kind, metadata, err := callaudio.ReadFrame(conn)
+			if err != nil || kind != callaudio.KindScreenStatus || string(metadata) != request {
+				macDone <- net.InvalidAddrError("lost a request's metadata")
+				return
+			}
+			kind, wav, err := callaudio.ReadFrame(conn)
+			if err != nil || kind != callaudio.KindUtterance || len(wav) != 12844 {
+				macDone <- net.InvalidAddrError("wrong utterance framing")
+				return
+			}
+			_ = callaudio.WriteFrame(conn, callaudio.KindReplyText, []byte("answer"))
+			_ = callaudio.WriteFrame(conn, callaudio.KindReplyEnd, nil)
+		}
+		macDone <- nil
+		// Hold the socket open the way the daemon does, so the endpoint's read
+		// loop ends on the caller's terms rather than ours.
+		var b [1]byte
+		_, _ = conn.Read(b[:])
+	}()
+
+	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	dc, err := peer.CreateDataChannel(screenChannel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan map[string]string, 40)
+	dc.OnMessage(func(message webrtc.DataChannelMessage) {
+		var event map[string]string
+		if json.Unmarshal(message.Data, &event) == nil {
+			events <- event
+		}
+	})
+	offer, _ := peer.CreateOffer(nil)
+	gathered := webrtc.GatheringCompletePromise(peer)
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gathered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("gather timeout")
+	}
+	server := &callServer{appliance: strings.TrimSuffix(path, ".screen")}
+	answer, err := server.answerOffer(peer.LocalDescription().SDP, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(index int) error {
+		if err := dc.SendText(requests[index]); err != nil {
+			return err
+		}
+		if err := dc.Send(make([]byte, 12800)); err != nil {
+			return err
+		}
+		return dc.SendText("stop")
+	}
+	turn := 0
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			switch event["type"] {
+			case "ready":
+				if turn == 0 {
+					if err := send(turn); err != nil {
+						t.Fatal(err)
+					}
+					turn = 1
+				}
+			case "error":
+				t.Fatalf("turn %d was refused: %s", turn, event["text"])
+			case "done":
+				if turn == 1 {
+					if err := send(turn); err != nil {
+						t.Fatal(err)
+					}
+					turn = 2
+					continue
+				}
+				if turn == 2 {
+					if err := <-macDone; err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatalf("the second question was never answered (turn %d)", turn)
+		}
+	}
+}
+
 func screenRoundTrip(t *testing.T, queued bool) {
 	// macOS UNIX paths are limited to 104 bytes; t.TempDir can exceed that.
 	listener, err := net.Listen("unix", filepath.Join("/tmp", "mynah-g2-"+time.Now().Format("150405.000000000")+".screen"))
@@ -180,5 +308,35 @@ func TestQueuedCaptureAcceptsNextRecordingWithoutWaitingForReply(t *testing.T) {
 		if c.busy {
 			t.Fatal("queued turn blocked the next recording")
 		}
+	}
+}
+
+// A first recording that was too short is not a dead connection.
+//
+// The owner's report was a second ask refused with the first one having worked.
+// This is one shape of that: a stop arriving with under 400 ms of audio used to
+// return its error and leave `recording` true, so every later question on the
+// same data channel was answered with "a turn is already in progress" until the
+// companion reconnected — and nothing on the glasses said the first recording
+// was the reason.
+func TestATooShortRecordingDoesNotWedTheNextOne(t *testing.T) {
+	c := screenCapture{}
+	if _, err := c.receive([]byte(`{"command":"start","id":"g2-11111111-1111-4111-8111-111111111111"}`), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.receive(make([]byte, 2000), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.receive([]byte("stop"), true); err == nil {
+		t.Fatal("a recording under 400 ms was committed as a question")
+	}
+	if _, err := c.receive([]byte(`{"command":"start","id":"g2-22222222-2222-4222-8222-222222222222"}`), true); err != nil {
+		t.Fatalf("the next question was refused: %v", err)
+	}
+	if _, err := c.receive([]byte("cancel"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.receive([]byte("stop"), true); err != nil {
+		t.Fatalf("a stop with nothing recording was reported as a failure: %v", err)
 	}
 }

@@ -732,7 +732,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
           <span data-download-size></span>free and open source<span data-latest></span>
         </span>
       </div>
-      <a class="g2-link" href="#what-it-can-do">New in 2.6.0 · Send it a photo, get an answer &rarr;</a>
+      <a class="g2-link" href="#what-it-can-do">Send it a photo, get an answer &rarr;</a>
     </div>
 
     <!-- The Mac it runs on, and the Signal thread it answers in. Both are real
@@ -747,7 +747,7 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
 <!-- ===================================================================== -->
 
 <section id="even-g2" aria-labelledby="g2-heading">
-  <p class="eyebrow">Even G2 companion · beta 0.2.8</p>
+  <p class="eyebrow">Even G2 companion · beta 0.2.9</p>
   <h2 class="title1 column" id="g2-heading">Speak a thought. Glance at the answer.</h2>
   <p class="lede">The Mynah you already know, on your glasses. Ask about your tasks,
     capture an idea, or look something up while your phone stays in your pocket.</p>
@@ -771,12 +771,14 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     <div class="card"><h3 class="title3">Tap, speak, tap to send</h3>
       <p>Use your G2 glasses or R1 ring to record a question. Read the answer on the display
         and swipe through longer replies. No spoken playback.</p></div>
-    <div class="card"><h3 class="title3">A separate thread for every ask</h3>
-      <p>Queue up to five questions, browse recent answers, and follow up in the selected conversation.
-        Questions and answers also appear in your linked Signal or WhatsApp self-chat.</p></div>
+    <div class="card"><h3 class="title3">A conversation you can continue</h3>
+      <p>Queue up to five questions and browse recent answers. Open one to read the whole
+        conversation, oldest turn first, then tap a finished answer to follow up — or start a
+        separate one with New ask. Questions and answers also appear in your linked Signal or
+        WhatsApp self-chat.</p></div>
   </div>
 
-  <p class="dim g2-summary">A dashboard keeps the time, date, battery and optional local weather beside your message cards.
+  <p class="dim g2-summary">A dashboard keeps the time, date, battery and optional local weather beside your message cards, and sleeps twelve seconds after the last thing that changed — a tap, a swipe or a finished answer lights it again.
     Scroll full answer previews on your phone, with permission help available in the companion.</p>
 
   <h3 class="title2" style="margin-top: 28px">Pair once, right in Mynah.</h3>
@@ -793,8 +795,10 @@ footer .close .legal { font-size: 12px; max-width: 38rem; line-height: 1.5; }
     <a href="https://www.evenrealities.com/">Explore Even G2 &rarr;</a>
   </div>
   <p class="callout dim" style="margin-top: 20px"><strong>Awaiting store approval.</strong> Companion 0.2.1 is in review. The Even Hub link above will offer public installation once Even approves the app.
-    Developers can still <a href="https://github.com/l33tdawg/mynah/releases/download/v2.6.1/mynah-g2-0.2.8.ehpk">download the companion package</a> for developer installation — beta 0.2.8 asks before it forgets a pairing, and reports a refused microphone or an out-of-date Mac in words rather than an internal error code.
-    Requires Mynah 2.5.1 or later, Even G2,
+    Developers can still <a href="https://github.com/l33tdawg/mynah/releases/download/v2.6.3/mynah-g2-0.2.9.ehpk">download the companion package</a> for developer installation — beta 0.2.9 reads a conversation as one thread you can follow up in, sleeps the display when nothing is happening, and names what actually went wrong instead of blaming a pairing that was never revoked.
+    Requires Mynah 2.5.1 or later, and a Mac kept up to date — half of this release is the
+    Mac&#8217;s side of the pairing, and a Mac left on an older build can leave an old endpoint
+    answering your glasses. Also needs Even G2,
     Even app 2.2.9 or later, and a linked Signal or WhatsApp self-chat. Uses the local or cloud
     model you choose in Mynah. Background reconnection depends on your phone and the Even app.
     The companion cannot read other apps&rsquo; inboxes or reply to mirrored notifications.</p>

@@ -62,7 +62,19 @@ func (c *screenCapture) receive(data []byte, text bool) ([]byte, error) {
 		c.pcm = nil
 		c.recording = true
 	case "stop":
-		if !c.recording || len(c.pcm) < 12800 {
+		// **The state is cleared before the error is returned, and that ordering
+		// is the whole point.** A stop with too little audio used to leave
+		// `recording` true, so every later question on that connection was
+		// refused with "a turn is already in progress" — a second ask that fails
+		// because the first one was short, with nothing the owner could do but
+		// reconnect. A stop with nothing recording is not a failure at all; it
+		// is a control that arrived twice.
+		if !c.recording {
+			return nil, nil
+		}
+		if len(c.pcm) < 12800 {
+			c.pcm = nil
+			c.recording = false
 			return nil, errors.New("record at least 400 ms")
 		}
 		wav := callaudio.WAV(callaudio.Samples(c.pcm), 16000)
