@@ -558,34 +558,65 @@ FLOOR_SITS_UNDER="${MYNAH_FLOOR_SITS_UNDER:-12}"
 # spot, and past 30 the gate stops seeing a missing document surface at all.
 MAX_SKIPPED="${MYNAH_MAX_SKIPPED_TESTS:-24}"
 
-# The line after "Test Suite 'All tests' passed", specifically, rather than the
+# The lines after every "Test Suite 'All tests'", specifically, rather than the
 # last line matching "Executed" anywhere. XCTest prints a summary per suite, so
 # there are hundreds of candidates, and `swift test` prints the swift-testing
 # runner's own summary after XCTest has finished — taking the last match is a
 # coincidence waiting to break.
-SUMMARY="$(awk "/Test Suite 'All tests' (passed|failed) at/ { getline; print; exit }" "$LOG")"
+#
+# **Every bundle, summed — and this is a fix, not a tidy-up.** The gate used to
+# take the FIRST of those lines, which read correctly only while SwiftPM ran both
+# XCTest bundles in one process and printed one combined summary. On the current
+# toolchain (`swift test`, Swift 6.4) each bundle gets its own process and its
+# own line, so the first is SageVoiceCoreTests alone — measured 22 Sep 2026:
+# 2,580 there against a suite of 2,618. Every number in the floor's arithmetic is
+# built on the suite including KokoroEngineTests' 38, so reading one bundle meant
+# **losing the other target would not have moved the number at all**, which is
+# the one failure the floor exists to catch. `SMALLEST_TEST_TARGET` is 38 for
+# exactly that reason and was blind.
+SUMMARY_LINES="$(awk "/Test Suite 'All tests' (passed|failed) at/ { getline; print; }" "$LOG")"
+# Kept for the messages below, which quote what was read.
+SUMMARY="$(printf '%s' "$SUMMARY_LINES" | tr '\n' ' ')"
 
-[[ -n "$SUMMARY" ]] \
+[[ -n "$SUMMARY_LINES" ]] \
   || die "$LOG contains no XCTest summary at all, so no test ran and nothing was verified.
 This is not an empty suite; it is the suite never having started. Search the log
 for 'incompatible architecture' — on an Apple Silicon Mac where the xctest
 runner resolves to x86_64 the test bundle fails to load, the run reports zero
 tests, and the command still exits 0. Rerun with: arch -arm64 swift test"
 
-EXECUTED="$(printf '%s\n' "$SUMMARY" | sed -E 's/.*Executed ([0-9]+) tests?,.*/\1/')"
-[[ "$EXECUTED" =~ ^[0-9]+$ ]] \
-  || die "could not read an executed-test count out of the XCTest summary in $LOG.
-The line was: $SUMMARY
+EXECUTED=0
+SKIPPED=0
+FAILURES=0
+while IFS= read -r LINE; do
+  [[ -n "$LINE" ]] || continue
+  [[ "$LINE" =~ Executed\ ([0-9]+)\ tests? ]] \
+    || die "could not read an executed-test count out of the XCTest summary in $LOG.
+The line was: $LINE
 If XCTest has changed its wording, this script has to be taught the new one —
 leaving it unable to parse would silently retire the gate."
+  EXECUTED=$(( EXECUTED + BASH_REMATCH[1] ))
 
-# The skipped clause is absent, not zero, when nothing was skipped: XCTest
-# writes "with 0 failures" and no mention of skipping at all.
-if [[ "$SUMMARY" =~ with\ ([0-9]+)\ tests?\ skipped ]]; then
-  SKIPPED="${BASH_REMATCH[1]}"
-else
-  SKIPPED=0
-fi
+  # The skipped clause is absent, not zero, when nothing was skipped: XCTest
+  # writes "with 0 failures" and no mention of skipping at all.
+  if [[ "$LINE" =~ with\ ([0-9]+)\ tests?\ skipped ]]; then
+    SKIPPED=$(( SKIPPED + BASH_REMATCH[1] ))
+  fi
+
+  # Read here, where the lines are, rather than from the joined string below: a
+  # run with one failing bundle has to fail this gate, and the count is per line.
+  if [[ "$LINE" =~ (with|and)\ ([0-9]+)\ failures? ]]; then
+    FAILURES=$(( FAILURES + BASH_REMATCH[2] ))
+  else
+    # No failure clause at all is not "no failures" — it is a summary this
+    # script cannot read, and the same wording change would retire the counts
+    # above.
+    die "could not read a failure count out of the XCTest summary in $LOG.
+The line was: $LINE
+If XCTest has changed its wording, teach this script the new one rather than
+leaving it unable to parse — that would silently retire the gate."
+  fi
+done <<< "$SUMMARY_LINES"
 
 # **A run with failures in it verified nothing, and this script used to say it
 # had.** The awk above deliberately matches `Test Suite 'All tests' failed at`
@@ -598,23 +629,11 @@ fi
 # ever reached. Luck is not a gate, this file is invoked by name from two
 # places, and its own first line claims it decides whether a run verified
 # anything. So it decides.
-# `with` or `and`, because XCTest writes both: "with 0 failures" on a run that
-# skipped nothing, and "with 21 tests skipped and 3 failures" when it did. A
-# pattern that matched only `with` read a failing run as zero failures — which
-# is the same class of miss as reading a skipped test as an executed one, and it
-# is why this is checked against a real failing summary below rather than
-# reasoned about.
-if [[ "$SUMMARY" =~ (with|and)\ ([0-9]+)\ failures? ]]; then
-  FAILURES="${BASH_REMATCH[2]}"
-else
-  # No failure clause at all is not "no failures" — it is a summary this script
-  # cannot read, and the same wording change would retire the counts above.
-  die "could not read a failure count out of the XCTest summary in $LOG.
-The line was: $SUMMARY
-If XCTest has changed its wording, teach this script the new one rather than
-leaving it unable to parse — that would silently retire the gate."
-fi
-
+# `with` or `and` is matched inside the loop above, because XCTest writes both:
+# "with 0 failures" on a run that skipped nothing, and "with 21 tests skipped and
+# 3 failures" when it did. A pattern that matched only `with` read a failing run
+# as zero failures — which is the same class of miss as reading a skipped test as
+# an executed one.
 if (( FAILURES > 0 )); then
   die "the suite reported $FAILURES failing test(s), so this run did not verify the release.
 See them with:
@@ -623,6 +642,12 @@ fi
 
 RAN=$(( EXECUTED - SKIPPED ))
 
+# **The backticks in the message below are escaped, and that is not cosmetic.**
+# This string is double-quoted, so an unescaped pair is a command substitution —
+# the message printed SwiftPM's help text and `dump-package: command not found`
+# *above* the sentence it was trying to deliver, on the one occasion this path
+# ran (22 Sep 2026). Text written for somebody to paste has to survive being
+# written down.
 if (( EXECUTED < MIN_EXECUTED )); then
   die "the suite executed $EXECUTED tests, under the floor of $MIN_EXECUTED, so this run did not cover the release.
 Worth checking in this order:
@@ -644,9 +669,7 @@ Worth checking in this order:
      dylib restored and .build deleted still enumerated 2463 ids; clearing the
      manifest caches as well gave 2501. Clearing the manifest caches without
      also deleting .build is equally not enough — the configured build keeps its
-     own copy of the product graph. `swift package --manifest-cache none
-     dump-package` tells you what the manifest says today without touching
-     either.
+     own copy of the product graph. \`swift package --manifest-cache none dump-package\` tells you what the manifest says today without touching either.
   3. tests really were deleted on purpose, in which case lower
      MYNAH_MIN_EXECUTED_TESTS in the same commit that deleted them, so the new
      floor is reviewed alongside the removal."
