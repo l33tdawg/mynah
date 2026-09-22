@@ -62,10 +62,16 @@ final class AHostedBrainIsNotCuratedLikeA4BTests: XCTestCase {
     /// The composed catalogue also carries what this repository implements, and
     /// the allowlist names those too — leaving `web_search` out of it was once a
     /// silent no-op for the whole web-search feature.
+    ///
+    /// `schedule_work` is the newest of them and the reason this list has to be
+    /// the *composed* one rather than the node's: it is published by an
+    /// appliance source like the note tools, and a fixture that only listed
+    /// SAGE's names would now fail this suite for a tool no node was ever
+    /// supposed to publish.
     private var everythingPublished: [String] {
         Self.sagePublishesToday
             + NotesToolSource.toolNames.sorted()
-            + [WebSearchToolSource.toolName]
+            + [WebSearchToolSource.toolName, ScheduledWorkToolSource.toolName]
     }
 
     private func offered(to tier: BrainTier) async throws -> Set<String> {
@@ -106,8 +112,16 @@ final class AHostedBrainIsNotCuratedLikeA4BTests: XCTestCase {
     /// meant to be a refusal somebody had to read. The sweep then measured an
     /// identical 9/12 at composed 20, 21, 22, 24 and 27, falling to 6/12 only at
     /// 32, so the ceiling moved to 22 and the equality stopped being true. The
-    /// relationship is now `<=` with two measured slots of room, and the
-    /// assertion says so rather than being loosened quietly.
+    /// relationship has been `<=` since, and the assertion says so rather than
+    /// being loosened quietly.
+    ///
+    /// **The room those slots described was spent on 22 September 2026, and the
+    /// equality is true again for a measured reason rather than by accident.**
+    /// `schedule_work` — the owner asking for something on a clock in
+    /// conversation — took the catalogue to 22, and the sweep was re-run on the
+    /// same model, prompt and utterances with and without it: 10/12 either way,
+    /// with the flat region simply shifted one name. So this is now a catalogue
+    /// that fits its ceiling exactly, and the next name added to it will not.
     ///
     /// What still has to hold exactly is the CONTENTS: the local brain is
     /// offered the curated set and nothing else, whatever room the ceiling

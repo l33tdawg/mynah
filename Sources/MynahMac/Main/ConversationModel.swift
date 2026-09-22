@@ -392,6 +392,22 @@ actor ToolLoopTurnEngine: TurnEngine {
                 provider: notes,
                 isRequired: true,
                 expectedToolNames: NotesToolSource.toolNames
+            ),
+            // **The window is conversation too.** Asked here for something on a
+            // clock — "check my inbox every morning" — the appliance has to be
+            // able to do it, or the owner is told the feature is not there by
+            // the surface he is looking at. Same source, same reader and the
+            // same file as the daemon's, so the two cannot drift about what a
+            // cadence means or where the list lives.
+            //
+            // Required, like the notes source: in-process, one small file, and
+            // nothing that can be down. A catalogue that quietly loses it is a
+            // model saying the tool does not exist.
+            CompositeToolSource.Source(
+                label: "scheduled work",
+                provider: ScheduledWorkToolSource(log: { conversationLog.info("\($0)") }),
+                isRequired: true,
+                expectedToolNames: [ScheduledWorkToolSource.toolName]
             )
         ]
         if allowsWebSearch {

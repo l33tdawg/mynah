@@ -64,6 +64,13 @@ ALLOWLIST = {
     "sage_directory", "sage_federation", "sage_corroborate", "sage_link",
     "sage_message_send", "sage_message_reply", "sage_message_history",
     "sage_message_handoff",
+    # **Not SAGE's.** `schedule_work` is published by this appliance, and it is
+    # in the measured set rather than in COMPOSED_EXTRAS below because it is the
+    # one this file was changed to answer a question about: does the catalogue
+    # that ships still route when the owner's own tool is in it. Its schema comes
+    # from Tests/Fixtures/appliance-tool-schemas.json, pinned against the Swift
+    # that publishes it by ApplianceToolSchemasTests.
+    "schedule_work",
 }
 
 # What the composed catalogue carries besides SAGE: four note tools and
@@ -153,11 +160,33 @@ def load_tools():
             tools = d["result"]["tools"]
     if not tools:
         sys.exit("no tools/list response in /tmp/mcp_tools.jsonl")
-    return [{"type": "function",
-             "function": {"name": t["name"],
-                          "description": t.get("description", ""),
-                          "parameters": t.get("inputSchema", {"type": "object"})}}
-            for t in tools]
+    published = [{"type": "function",
+                  "function": {"name": t["name"],
+                               "description": t.get("description", ""),
+                               "parameters": t.get("inputSchema", {"type": "object"})}}
+                 for t in tools]
+    return published + local_tools()
+
+
+_LOCAL_SCHEMAS = (pathlib.Path(__file__).resolve().parent.parent
+                  / "Tests/Fixtures/appliance-tool-schemas.json")
+
+
+def local_tools():
+    """The tools this repository publishes itself, in the shape the message
+    endpoint takes.
+
+    **They used to be a count** — COMPOSED_EXTRAS, five names nobody measured the
+    bytes of — and the caveat that came with it ("out of scope here") was true of
+    the sweep and false of the catalogue: a description this repository writes is
+    prefill the model reads exactly like SAGE's, and a tool added to the allowlist
+    without its schema in the sweep is a row that describes a catalogue nobody
+    runs. One fixture, pinned against the Swift that publishes it, is the same
+    arrangement the spoken hints and the utterances already have.
+    """
+    if not _LOCAL_SCHEMAS.is_file():
+        return []
+    return json.loads(_LOCAL_SCHEMAS.read_text())["tools"]
 
 
 def ask(model, tools, utterance, timeout=180):
@@ -228,12 +257,24 @@ def sweep_sizes(full, curated):
 
 if __name__ == "__main__":
     model = sys.argv[1]
-    full = apply_hints(load_tools())
+    loaded = apply_hints(load_tools())
+
+    # **The one-addition comparison, which is what a ceiling actually asks.**
+    # `MYNAH_MEASURE_EXCLUDE=schedule_work` runs the sweep against the catalogue
+    # it was added to; without it, against the catalogue it ships in. Same
+    # harness, same prompt, same twelve utterances either way, so the difference
+    # between the two runs is the tool — where the +1 row below would have added
+    # a SAGE distractor instead and answered a different question.
+    excluded = {n.strip() for n in os.environ.get("MYNAH_MEASURE_EXCLUDE", "").split(",")
+                if n.strip()}
+    if excluded:
+        print(f"note: holding {sorted(excluded)} out of the catalogue")
+    full = [t for t in loaded if t["function"]["name"] not in excluded]
     curated = [t for t in full if t["function"]["name"] in ALLOWLIST]
     if os.environ.get("MYNAH_TOOL_HINTS") == "1":
         print("note: spoken hints applied from Tests/Fixtures/spoken-tool-hints.json")
 
-    missing = ALLOWLIST - {t["function"]["name"] for t in full}
+    missing = ALLOWLIST - {t["function"]["name"] for t in loaded}
     if missing:
         print(f"warning: this node does not publish {sorted(missing)} — "
               "the curated row is smaller than what ships", file=sys.stderr)

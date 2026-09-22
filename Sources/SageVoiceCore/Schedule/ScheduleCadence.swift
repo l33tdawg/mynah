@@ -79,7 +79,10 @@ public enum ScheduleCadence: Equatable, Sendable {
         String(format: "%02d:%02d", hour, minute)
     }
 
-    static func spokenInterval(_ minutes: Int) -> String {
+    /// Public because the Mac's Scheduled screen writes the same words into its
+    /// interval picker: two spellings of "every 2 hours" is how the screen and
+    /// the read-back start disagreeing about what the owner chose.
+    public static func spokenInterval(_ minutes: Int) -> String {
         // Hours only when they divide exactly: "every 90 minutes" is a cadence,
         // "every 1.5 hours" is arithmetic.
         if minutes >= 60, minutes % 60 == 0 {
@@ -94,7 +97,7 @@ public enum ScheduleCadence: Equatable, Sendable {
     /// A fixed table rather than `Calendar.weekdaySymbols`, because this string
     /// is read back to the owner in his own language of the two dozen this
     /// appliance speaks, and because a table is checkable by a test.
-    static func weekdayName(_ weekday: Int) -> String {
+    public static func weekdayName(_ weekday: Int) -> String {
         let names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
         guard names.indices.contains(weekday - 1) else { return "day" }
         return names[weekday - 1]

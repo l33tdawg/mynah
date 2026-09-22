@@ -540,7 +540,22 @@ public enum BrainPrompts {
         // Not a SAGE tool. The allowlist filters the *composed* catalogue, so a
         // name missing here is a tool the model never sees, whichever source
         // published it — leaving this out was a silent no-op for web search.
-        WebSearchToolSource.toolName
+        WebSearchToolSource.toolName,
+        // **The owner's own tool, and the reason the budget below moved.**
+        //
+        // Asked on 22 September 2026 to set Mynah up on a clock in conversation,
+        // the owner's answer was not a preference: *"it needs to be set up in the
+        // app itself then its just available to the user in conversation bro."* A
+        // capability the owner can only reach by typing a command he has to be
+        // told about is a capability he does not have, and the sentence he was
+        // answering with was Mynah telling him its own tool did not exist.
+        //
+        // Not a `sage_` name, so `PromptNamesOnlyRealToolsTests` does not sweep
+        // it in as a claim about the node — the same reasoning
+        // `AfterTheCallToolSource` writes down. It reads the owner's cadence with
+        // the same code `//schedule` does, so a model cannot invent a time; see
+        // `ScheduledWorkToolSource`.
+        ScheduledWorkToolSource.toolName
     ]).union(NotesToolSource.toolNames)
 
     /// **What a hosted brain may also reach, and why it is not simply added

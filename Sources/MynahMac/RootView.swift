@@ -807,6 +807,16 @@ private struct ReadyPhoneLinkSheet: View {
 /// The sections in the sidebar. Order is the order they appear.
 enum MainSection: String, CaseIterable, Identifiable, Hashable {
     case home
+    /// **What Mynah does when nobody is talking to it.**
+    ///
+    /// Second in the bar, after Home, because it answers the same kind of
+    /// question from the other side: Home is what the owner said and what is on
+    /// their plate, and this is what the appliance will do on its own. It is
+    /// also where standing work is switched off or killed, which is the half of
+    /// it the owner asked for in those words — *"user can go in and turn off
+    /// tasks or kill those poll jobs"* — and a control nobody can find is a poll
+    /// that runs for a year.
+    case scheduled
     case memories
     /// Not a section of Settings, and the distinction is the point: there is
     /// nothing here to change. Settings answers "how is this set up"; this
@@ -821,6 +831,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .home: return "Home"
+        case .scheduled: return "Scheduled"
         case .memories: return "Memories"
         case .privacy: return "Privacy"
         case .settings: return "Settings"
@@ -833,6 +844,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var glyph: String {
         switch self {
         case .home: return "waveform"
+        case .scheduled: return "clock"
         case .memories: return "text.append"
         // The glyph this app already uses for "sends your words off this Mac",
         // on the brain-choice cards. Not a lock and not a shield: `OptionCard`
@@ -854,6 +866,7 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .home: return "What's on your plate"
+        case .scheduled: return "What runs on a clock"
         case .memories: return "What Mynah remembers"
         case .privacy: return "What leaves this Mac"
         case .settings: return "How Mynah is set up"
@@ -999,6 +1012,7 @@ struct MainShell: View {
     private var detail: some View {
         switch selection ?? .home {
         case .home: HomePane(onOpenSettings: { selection = .settings })
+        case .scheduled: ScheduledWorkView()
         case .memories: MemoriesView()
         case .privacy: PrivacyView(onOpenSection: { selection = $0 })
         case .settings: SettingsView(onOpenSection: { selection = $0 })

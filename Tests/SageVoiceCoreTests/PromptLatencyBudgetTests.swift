@@ -128,18 +128,39 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// description collisions that miss at every size below the cliff, and
     /// neither is the new tool.
     ///
-    /// **This number and `BrainCapabilities.onDevice.maxRoutableTools` bound the
-    /// same quantity and disagree**, which is worth seeing rather than
-    /// inheriting. Both count `BrainPrompts.voiceToolAllowlist`; that one says 22
-    /// with a measured table behind it and this one said 20 with the superseded
-    /// "27 = 5-6/12, 14 = 12/12" behind it — a claim `BrainCapabilities` itself
-    /// records as not reproducible against a list the appliance never ran. So the
-    /// effective ceiling has been the LOWER of the two all along, and the "two
-    /// slots of room" the other file describes were never really there. Both are
-    /// left standing rather than collapsed: two ratchets that both force a
-    /// re-measurement cost one re-run, and deleting the stricter one buys room
-    /// nobody measured for. Collapsing them is a decision, not a tidy-up.
-    static let voiceCatalogueBudget = 21
+    /// **Re-measured 2026-09-22 for `schedule_work`** — qwen3.5:4b (the model
+    /// this appliance ships as its default), the real 8,300-character voice
+    /// prompt, `MYNAH_TOOL_HINTS=1`, and the live node's schemas (35 tools) plus
+    /// this repository's own tool from `Tests/Fixtures/appliance-tool-schemas.json`.
+    /// Two runs of the same harness, same prompt, same twelve utterances; the
+    /// only difference is whether the owner's tool is in the catalogue:
+    ///
+    ///     composed                             21  22  23  24  25  26  28  29  33  34  40  41
+    ///     without schedule_work                10  10  10   -  10   -  10   -   8   -   9   -
+    ///     with it — what this release ships     -  10  10  10   -  10   -  10   -   9   -   9
+    ///
+    /// **The two runs agree at the size this changes**, which is the whole
+    /// question a ceiling asks: composed 22 — 16 SAGE tools it is offered, plus
+    /// this repository's four note tools, web search, and `schedule_work` — reads
+    /// 10/12 either way. The flat region runs one name further than the 21 Aug
+    /// table because the tool shifted the curve by exactly the name it added;
+    /// nothing about the shape moved.
+    ///
+    /// **Three misses, not two, and that is worth knowing rather than tidying
+    /// away.** `sage_forget` and `sage_directory` are the collisions that miss at
+    /// every size, and in both of these runs `sage_status` loses to
+    /// `sage_node_health` — a distractor the node publishes today that the 21 Aug
+    /// table never saw. None of the three is this tool, and none is reachable by
+    /// curation: the first needs a `memory_id` no spoken sentence carries, the
+    /// second answers a different question from the one asked, and the third is
+    /// two health tools competing for one sentence.
+    ///
+    /// **Both ceilings now agree at 22**, which they did not before — this was
+    /// 21 against `BrainCapabilities.onDevice.maxRoutableTools`' 22, and the
+    /// effective limit was the lower. The room the other file described has been
+    /// spent, deliberately and with the measurement above behind it; the next
+    /// addition to this list pays for itself the same way or not at all.
+    static let voiceCatalogueBudget = 22
 
     func testTheVoiceCatalogueDoesNotSilentlyGrow() {
         let count = BrainPrompts.voiceToolAllowlist.count
@@ -160,11 +181,21 @@ final class PromptLatencyBudgetTests: XCTestCase {
     /// Measured against the tool sources rather than a hardcoded string, so a
     /// verbose description added to `NotesToolSource` shows up here rather than
     /// in a "feels slower" report from a phone.
-    static let ownedToolSchemaByteBudget = 3_000
+    ///
+    /// **Raised 3,000 → 5,000 with `schedule_work`.** The owner's own tool is one
+    /// of the schemas this repository owns — 1,280 bytes of it, measured — and a
+    /// budget that only counted the note tools was measuring three of the four
+    /// things it claims to. Raised rather than trimmed for the reason its own
+    /// note gives: the description is the routing, a tool that carries the
+    /// owner's phrasing ("check my inbox every morning") is what makes a 4B pick
+    /// it at all, and the alternative — a shorter description — buys back a
+    /// third of a second and costs the feature.
+    static let ownedToolSchemaByteBudget = 5_000
 
     func testOurOwnToolSchemasStayWithinTheirPrefillBudget() async throws {
         let published = try await NotesToolSource(directory: Self.scratchDirectory()).listTools()
             + WebSearchToolSource(backends: []).listTools()
+            + ScheduledWorkToolSource().listTools()
 
         let bytes = try PromptStableJSON.data(from: published.map(\.brainTool.ollamaWireObject)).count
         XCTAssertLessThanOrEqual(

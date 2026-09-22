@@ -256,25 +256,29 @@ public extension ScheduledWork {
     ///
     /// The shapes. `//help` carries them, it is one keystroke away on the same
     /// thread, and a model reciting a grammar it half-remembers is worse than
-    /// one pointing at the command that says it exactly. What this gives the
-    /// model is the three facts it needs to answer honestly: that standing work
-    /// exists, what is currently set up, and that the owner — not the model —
-    /// sets it up from his phone.
+    /// one pointing at the command — or, since `ScheduledWorkToolSource` exists,
+    /// worse than one just reaching for the tool that reads the shape properly.
+    /// What this gives the model is the three facts it needs to answer honestly:
+    /// that standing work exists, what is currently set up, and **both** ways it
+    /// gets there — asked for in conversation, or typed as a command — plus
+    /// where the owner goes to turn one off, which is the Mac and not this
+    /// thread.
     func note() -> String {
         let listed = numbered().map { "\($0.number)) \($0.task.summary)" }
+        let holding = tasks.filter { !$0.isEnabled }.count
+        let managing = "He adds one by asking you — \(ScheduledWorkToolSource.toolName) — or by "
+            + "typing //schedule <when>: <what to do>, and turns them off or kills them in "
+            + "Mynah's Scheduled screen on the Mac."
         guard !listed.isEmpty else {
             return """
-                (STANDING WORK: the owner can put work on a clock from his phone with \
-                //schedule <when>: <what to do>, and it then runs on its own and messages \
-                him, whether or not he is talking to you. Nothing is set up right now.)
+                (STANDING WORK ON A CLOCK: work that runs by itself and messages him, whether \
+                or not he is talking to you. \(managing) Nothing is set up right now.)
                 """
         }
-        let paused = tasks.filter { !$0.isEnabled }.count
         return """
-            (STANDING WORK he has put on a clock, which runs on its own and messages him: \
-            \(listed.joined(separator: "; "))\(paused == 0 ? "" : "; \(paused) held"). \
-            He adds, lists, pauses and stops these with //schedule from his phone — the exact \
-            shapes are in //help.)
+            (STANDING WORK ON A CLOCK, running by itself and messaging him: \
+            \(listed.joined(separator: "; "))\(holding == 0 ? "" : "; \(holding) held"). \
+            \(managing))
             """
     }
 

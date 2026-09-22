@@ -21,13 +21,22 @@ final class MainSectionTests: XCTestCase {
     ///
     /// Asserted rather than left to a diff, because re-adding a nav entry is a
     /// one-line change and the reasoning against it is not visible in the code.
+    ///
+    /// **The exact list is pinned for the same reason, and `scheduled` was added
+    /// to it on purpose on 22 September 2026.** A destination is the most
+    /// expensive thing this window can grow — one more word in the bar, one more
+    /// pane to keep working, one more place for the owner to look — so the list
+    /// is a decision somebody has to make out loud rather than a consequence of
+    /// adding a screen. `scheduled` earned it: standing work runs whether or not
+    /// anyone is at the Mac, and the owner asked for somewhere to go and switch
+    /// it off or kill it.
     func testThereIsNoAgentDirectorySection() {
         let names = MainSection.allCases.map { $0.rawValue.lowercased() }
         XCTAssertFalse(
             names.contains { $0.contains("agent") },
             "an agent directory section is back in the sidebar: \(names)"
         )
-        XCTAssertEqual(names, ["home", "memories", "privacy", "settings"])
+        XCTAssertEqual(names, ["home", "scheduled", "memories", "privacy", "settings"])
     }
 
     /// Every section needs a title and a one-line summary, because the sidebar

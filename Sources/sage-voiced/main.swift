@@ -387,6 +387,7 @@ func makeToolSource(
             expectedToolNames: BrainPrompts.voiceToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])
                 .subtracting(NotesToolSource.toolNames)
+                .subtracting([ScheduledWorkToolSource.toolName])
         ),
         // Required. Unlike search, this has no network to be down and no
         // credential to expire — if it cannot list its three tools something is
@@ -396,6 +397,20 @@ func makeToolSource(
             provider: notes,
             isRequired: true,
             expectedToolNames: NotesToolSource.toolNames
+        ),
+        // **The owner asking for something on a clock, in his own thread.**
+        //
+        // Required for the same reason the notes source is: it is in-process,
+        // writing one small file, with nothing between it and the owner that can
+        // be down. A catalogue that quietly loses it is a model that tells him
+        // the feature does not exist — which is the answer this change exists to
+        // stop, so degrading quietly here would hide exactly the failure it was
+        // added to remove.
+        .init(
+            label: "scheduled work",
+            provider: ScheduledWorkToolSource(log: { note($0) }),
+            isRequired: true,
+            expectedToolNames: [ScheduledWorkToolSource.toolName]
         )
     ]
     if allowWeb {
@@ -444,6 +459,7 @@ func makeCallToolSource(
             expectedToolNames: BrainPrompts.callToolAllowlist
                 .subtracting([WebSearchToolSource.toolName])
                 .subtracting([AfterTheCallToolSource.toolName])
+                .subtracting([ScheduledWorkToolSource.toolName])
         ),
         // Required for the same reason the notes source is on the daemon: it is
         // in-process and has nothing to be down, so a failure to publish it
@@ -454,6 +470,16 @@ func makeCallToolSource(
             provider: AfterTheCallToolSource(queue: queue, log: { note($0) }),
             isRequired: true,
             expectedToolNames: [AfterTheCallToolSource.toolName]
+        ),
+        // A call is conversation too, and "check my inbox every morning" said
+        // out loud is the same request as one typed. Same source, same reader,
+        // same file as the message surface — there is no second implementation
+        // to keep in step.
+        .init(
+            label: "scheduled work",
+            provider: ScheduledWorkToolSource(log: { note($0) }),
+            isRequired: true,
+            expectedToolNames: [ScheduledWorkToolSource.toolName]
         )
     ]
     if allowWeb {

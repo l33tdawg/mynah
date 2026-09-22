@@ -78,12 +78,15 @@ once-a-day update check against GitHub.
   Where the calendar has the same item, the run-up nudges are left to the OS and
   Mynah keeps only the overdue check-in — because "did that happen, or should I
   move it?" is a question, and a calendar alert has nowhere to put the answer.
-- Runs work you put on a clock, whether or not you are talking to it:
+- Runs work you put on a clock, whether or not you are talking to it. Ask for it
+  in the conversation — "check my inbox every morning at 8" — or set it up on
+  the Scheduled screen, or send
   `//schedule every day at 8am: check my inbox and tell me what's waiting`. Each
   request runs once per occurrence and messages you here; a Mac that was asleep
-  runs the one it missed when it wakes rather than all of them, and what it has
-  set up rides every turn, so it can answer for its own schedule instead of
-  telling you it has no timer.
+  runs the one it missed when it wakes rather than all of them. The Scheduled
+  screen is where they are read, switched off, or killed, and what is set up
+  rides every turn, so Mynah answers for its own schedule instead of telling you
+  it has no timer.
 - Finds another agent on your SAGE node from its own roster, hands it a job, and
   tells you what came back.
 - Shows the work assigned to it on Home, read from `sage_backlog`.
@@ -141,12 +144,20 @@ the model because asking a language model which commands it supports gets a
 confident guess. It also states what calling needs as part of the list, so a Mac
 that cannot place a call says why before you try.
 
-`//schedule` reads three shapes: `every day at 8am`, `every Monday at 9:30am`
-and `every 30 minutes`. It is read by code and not by a language model, because
-the sentence creates something that keeps speaking for as long as it stands: a
-cadence a model misread is not a wrong answer, it is your phone buzzing at the
-wrong hour with nothing on screen saying which of you chose it. A bare hour —
-"at 8" — is refused rather than guessed at, and the refusal says so.
+Scheduled work is the one thing here that can also be set up just by asking:
+"check my inbox every morning at 8" makes the tool call, and it appears on the
+Scheduled screen without a restart. **The cadence is still read by code and
+never by the model** — the tool hands your own phrase to the same reader
+`//schedule` uses, so a model cannot invent a time: ask for "every day at 8" and
+it comes back asking whether you meant am or pm, because that is what the reader
+says about a bare hour. It reads three shapes: `every day at 8am`,
+`every Monday at 9:30am` and `every 30 minutes`.
+
+Turning one off happens on the Mac, on purpose. The Scheduled screen has a
+switch that holds one — the clock restarts when you switch it back on, and what
+it said is kept — and a cross that kills it for good. Mynah will not stop one
+from the thread, because a 4B reaching for the right row of a numbered list it
+read a turn ago is a worse interface than a switch you can see.
 
 Pausing the appliance holds scheduled work as well — pause is you saying *not
 now* to the whole thing — and whatever came round meanwhile runs once when you

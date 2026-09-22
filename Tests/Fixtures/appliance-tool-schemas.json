@@ -1,0 +1,27 @@
+{
+  "_comment": "Tool schemas this repository publishes ITSELF, in the shape the message endpoint takes, read by scripts/measure-tool-routing.py and pinned against the Swift that produces them by ApplianceToolSchemasTests. They are here because the sweep's catalogue used to be SAGE's tools plus a COUNT of the appliance's own five (COMPOSED_EXTRAS), and a tool added to the allowlist without its schema in the sweep is a row describing a catalogue nobody runs - the same defect this script's own header warns about for its drifted tool list. Not every appliance tool is here yet: the four note tools and web_search are still counted rather than schemed, which is a known approximation and the reason COMPOSED_EXTRAS still exists.",
+  "_measured": "22 Sep 2026, qwen3.5:4b, real 8300-char voice prompt, MYNAH_TOOL_HINTS=1. With this tool in the catalogue (composed 22) the twelve utterances score the same as the catalogue it was added to (composed 21); see the table in PromptLatencyBudgetTests.voiceCatalogueBudget.",
+  "tools": [
+    {
+      "function": {
+        "description": "Put something on a clock for the owner: from now on, Mynah does it itself at that time and messages him the answer, whether or not he is talking to you. Use it when he asks for something to happen every day, on a day of the week, or every so often — \"check my inbox every morning\", \"send me the week ahead on Monday\", \"look every half hour\". Nothing happens now: this sets the time and the work, and the first one the owner hears about is the first time it comes round. Stopping one is not done here — he turns them off or kills them in Mynah's Scheduled screen on the Mac, and you can tell him so.",
+        "name": "schedule_work",
+        "parameters": {
+          "properties": {
+            "what": {
+              "description": "What to do when it comes round, in his words and as an instruction to you — \"check my inbox and tell me what's waiting\", \"send me the week ahead\".",
+              "type": "string"
+            },
+            "when": {
+              "description": "When it should happen, in the owner's own words — \"every day at 8am\", \"every Monday at 9:30am\", \"every 30 minutes\", \"hourly\". A time of day needs am/pm or a 24-hour clock: \"at 8\" is refused, so ask him rather than guessing, and the refusal tells you what to ask for.",
+              "type": "string"
+            }
+          },
+          "required": ["when", "what"],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}
