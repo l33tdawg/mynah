@@ -481,6 +481,18 @@ public struct UpdateInstaller: Sendable {
 
     // MARK: Getting it
 
+    /// How many times a stopped transfer is picked up again before the owner is
+    /// told it did not finish.
+    ///
+    /// **Not a retry loop in the ordinary sense: each attempt asks for the bytes
+    /// that are missing.** The owner reported a download that "fails half way"
+    /// on 22 September 2026, and the code behind it had no way to do anything
+    /// but start the whole 670 MB again — while the server at the other end
+    /// advertises `accept-ranges: bytes` and answers a ranged request with 206.
+    /// Half a gigabyte fetched from zero, repeatedly, on a line that drops once
+    /// per gigabyte, is a download that never finishes.
+    static let downloadAttempts = 5
+
     private func fetch(
         _ asset: Asset,
         progress: @escaping @Sendable (UpdateInstallProgress) -> Void
@@ -491,10 +503,12 @@ public struct UpdateInstaller: Sendable {
         } catch {
             return .failure(.cannotWriteThere(updates.path))
         }
-        // Whatever a previous attempt left. Kept until now rather than deleted
-        // on success so that a failed attempt's bytes are still there to look
-        // at; cleared here so two builds never sit in the folder at once.
-        prune(updates, keeping: 0)
+        // Whatever a previous *build* left — but not this download's own partial
+        // file, which is the thing a resumed transfer is made of. Kept until now
+        // rather than deleted on success so that a failed attempt's bytes are
+        // still there to look at; everything but the file being fetched is
+        // cleared here so two builds never sit in the folder at once.
+        prune(updates, keepingOnly: asset.name)
 
         // The image, the copy of the app made out of it, and the old app moved
         // aside — three times the download, near enough, and running out of
@@ -509,27 +523,115 @@ public struct UpdateInstaller: Sendable {
         }
 
         let destination = updates.appendingPathComponent(asset.name)
+        var current = asset
+
+        for attempt in 1...Self.downloadAttempts {
+            switch await fetchOnce(current, to: destination, attempt: attempt, progress: progress) {
+            case .success(let url):
+                return .success(url)
+            case .failure(let problem):
+                // **Only a transfer that stopped is worth asking again.** A
+                // refusal is an answer — 403, 404, 416 — and a retry gets the
+                // same one; a cancellation is this app stopping it on purpose.
+                switch problem {
+                case .downloadFailed:
+                    break
+                default:
+                    return .failure(problem)
+                }
+                guard attempt < Self.downloadAttempts else { return .failure(problem) }
+                log.info("update: the download stopped at \(self.bytesOnDisk(destination) ?? 0) "
+                    + "of \(current.size ?? 0); picking it up again (attempt "
+                    + "\(attempt + 1) of \(Self.downloadAttempts))")
+                // **A fresh URL each time, and this is not tidiness.** GitHub
+                // hands over a *signed* link with an hour on it; a resumed
+                // request against an expired one is refused, which would turn a
+                // resume into a refusal loop. Asking the API again costs one
+                // round trip and gets a signature that is valid now.
+                if case .success(let release) = await newestRelease() { current = release.1 }
+            }
+        }
+        return .failure(.downloadFailed)
+    }
+
+    /// One attempt. Resumes from whatever is already on disk.
+    private func fetchOnce(
+        _ asset: Asset,
+        to destination: URL,
+        attempt: Int,
+        progress: @escaping @Sendable (UpdateInstallProgress) -> Void
+    ) async -> Result<URL, UpdateInstallProblem> {
+        let already = bytesOnDisk(destination) ?? 0
+
+        // Nothing left to fetch: the last attempt's bytes are the whole file,
+        // and asking for the byte after the end would be a 416.
+        if let size = asset.size, already >= size {
+            guard already == size else {
+                // Longer than the release says it is — unusable, and the next
+                // attempt has to start from nothing.
+                try? fileManager.removeItem(at: destination)
+                return .failure(.downloadFailed)
+            }
+            return .success(destination)
+        }
+
         var request = URLRequest(url: asset.url)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("Mynah", forHTTPHeaderField: "User-Agent")
+        if already > 0 {
+            request.setValue("bytes=\(already)-", forHTTPHeaderField: "Range")
+        }
+
+        // Said before the request, so the bar starts where the bytes are rather
+        // than at zero with a jump.
+        progress(UpdateInstallProgress(stage: .downloading, transfer: UpdateTransfer(
+            received: already, expected: asset.size
+        )))
 
         do {
             let status = try await fetcher.download(request, to: destination) { transfer in
                 progress(UpdateInstallProgress(stage: .downloading, transfer: transfer))
             }
             guard (200..<300).contains(status) else {
+                // 416 is the one refusal a resumed transfer can earn honestly:
+                // the file on disk is longer than the release, so the range
+                // cannot be satisfied. Cleared, so the next attempt starts from
+                // nothing rather than refusing identically forever.
+                //
+                // **Every other refusal clears it too, and that is not tidiness
+                // either.** A refused request still has a body — GitHub's is a
+                // sentence about rate limits — and those bytes are not a prefix
+                // of the release. Resuming from them would splice an error page
+                // onto the front of a disk image. `UpdateInstallTests` has
+                // asserted this since before there was any resume to get wrong:
+                // "a refusal's body is not a build and should not be left lying
+                // about".
                 try? fileManager.removeItem(at: destination)
+                if status == 416 { return .failure(.downloadFailed) }
                 return .failure(.downloadRefused(status))
             }
-            return .success(destination)
         } catch is CancellationError {
             try? fileManager.removeItem(at: destination)
             return .failure(.cancelled)
         } catch {
-            try? fileManager.removeItem(at: destination)
             log.error("update: the download failed: \(String(describing: error))")
             return .failure(Task.isCancelled ? .cancelled : .downloadFailed)
         }
+
+        // **Kept, not deleted, when the bytes are short.** A file that is a
+        // prefix of the release is exactly what the next attempt resumes from;
+        // the version of this code that removed it on every failure threw away
+        // 600 MB to make a point about tidiness.
+        if let expected = asset.size, let actual = bytesOnDisk(destination), actual != expected {
+            if actual > expected { try? fileManager.removeItem(at: destination) }
+            log.error("update: attempt \(attempt) left \(actual) of \(expected) bytes")
+            return .failure(.downloadFailed)
+        }
+        return .success(destination)
+    }
+
+    private func bytesOnDisk(_ url: URL) -> Int64? {
+        (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? Int64
     }
 
     // MARK: Opening it
@@ -695,6 +797,19 @@ public struct UpdateInstaller: Sendable {
         return nil
     }
 
+    /// Everything except `keepingOnly`, whose bytes may be a download in
+    /// progress.
+    private func prune(_ directory: URL, keepingOnly name: String) {
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for item in contents where item.lastPathComponent != name {
+            try? fileManager.removeItem(at: item)
+        }
+    }
+
     /// Newest first, then everything past the first `keeping`.
     private func prune(_ directory: URL, keeping: Int) {
         let contents = (try? fileManager.contentsOfDirectory(
@@ -738,6 +853,9 @@ public final class GitHubAssetDownloader: NSObject, UpdateFetching, URLSessionDo
     private var progress: (@Sendable (UpdateTransfer) -> Void)?
     private var expected: Int64?
     private var lastReported: Int64 = 0
+    /// Bytes that were already in the destination when this attempt started, so
+    /// a resumed transfer's progress counts the whole file rather than the tail.
+    private var resumedFrom: Int64 = 0
     private var task: URLSessionDownloadTask?
     private var session: URLSession?
 
@@ -803,6 +921,12 @@ public final class GitHubAssetDownloader: NSObject, UpdateFetching, URLSessionDo
         self.progress = progress
         self.expected = nil
         self.lastReported = 0
+        // Read here rather than trusted from the request: the only thing that
+        // decides whether bytes are appended is what is on disk, which is the
+        // same file the delegate is about to write beside.
+        self.resumedFrom = (try? FileManager.default.attributesOfItem(
+            atPath: destination.path
+        ))?[.size] as? Int64 ?? 0
         lock.unlock()
     }
 
@@ -816,15 +940,18 @@ public final class GitHubAssetDownloader: NSObject, UpdateFetching, URLSessionDo
         totalBytesExpectedToWrite: Int64
     ) {
         lock.lock()
-        if totalBytesExpectedToWrite > 0 { expected = totalBytesExpectedToWrite }
+        // On a resumed transfer the server counts what is *left*, so the number
+        // the bar divides by is what was already here plus what is still coming.
+        if totalBytesExpectedToWrite > 0 { expected = resumedFrom + totalBytesExpectedToWrite }
         let total = expected
-        let due = totalBytesWritten - lastReported >= Self.reportEvery
-        if due { lastReported = totalBytesWritten }
+        let received = resumedFrom + totalBytesWritten
+        let due = received - lastReported >= Self.reportEvery
+        if due { lastReported = received }
         let report = progress
         lock.unlock()
 
         guard due else { return }
-        report?(UpdateTransfer(received: totalBytesWritten, expected: total))
+        report?(UpdateTransfer(received: received, expected: total))
     }
 
     public func urlSession(
@@ -839,11 +966,39 @@ public final class GitHubAssetDownloader: NSObject, UpdateFetching, URLSessionDo
         guard let destination else { return }
         // Inside the delegate call, which is the only window in which the
         // temporary file still exists.
+        //
+        // **A 206 is appended, a 200 replaces, and the status is what decides.**
+        // `URLSessionDownloadTask` always writes the response body to a file of
+        // its own, so a resumed transfer arrives as just the tail; appending it
+        // is what makes the partial on disk grow into the whole download rather
+        // than being replaced by its last chunk.
+        let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 206, FileManager.default.fileExists(atPath: destination.path) {
+            do {
+                try Self.append(location, to: destination)
+            } catch {
+                finish(status: 0, failure: error)
+            }
+            return
+        }
         try? FileManager.default.removeItem(at: destination)
         do {
             try FileManager.default.moveItem(at: location, to: destination)
         } catch {
             finish(status: 0, failure: error)
+        }
+    }
+
+    /// The tail onto the file, in chunks rather than one `Data` — this is the
+    /// half of a 670 MB download that a resumed transfer can be carrying.
+    static func append(_ source: URL, to destination: URL) throws {
+        let incoming = try FileHandle(forReadingFrom: source)
+        defer { try? incoming.close() }
+        let existing = try FileHandle(forWritingTo: destination)
+        defer { try? existing.close() }
+        try existing.seekToEnd()
+        while let chunk = try incoming.read(upToCount: 1 << 20), !chunk.isEmpty {
+            try existing.write(contentsOf: chunk)
         }
     }
 

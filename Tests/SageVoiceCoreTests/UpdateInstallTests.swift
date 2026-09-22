@@ -16,7 +16,12 @@ private struct ScriptedReleases: UpdateCheck.Transport {
 /// A download that writes whatever bytes the test wants, and reports arriving.
 private struct ScriptedDownload: UpdateFetching {
     var status = 200
-    var bytes = 1024
+    /// **The bytes it writes, and they have to be the bytes the release says it
+    /// published** — the release body below declares `"size":2048`, and the
+    /// installer now checks what landed against it. It used to be 1024, which
+    /// meant every one of these tests was quietly downloading a file half the
+    /// size of the one it asked for; nothing noticed because nothing looked.
+    var bytes = 2048
     var failure: Error?
 
     func download(
@@ -28,6 +33,85 @@ private struct ScriptedDownload: UpdateFetching {
         progress(UpdateTransfer(received: Int64(bytes / 2), expected: Int64(bytes)))
         try Data(repeating: 0x4D, count: bytes).write(to: destination)
         progress(UpdateTransfer(received: Int64(bytes), expected: Int64(bytes)))
+        return status
+    }
+}
+
+/// **A connection that stops part way, and then gets asked again.**
+///
+/// The owner's report on 22 September 2026 was "download seems to fail half way",
+/// and the code behind it could only ever start the whole 670 MB again. This stub
+/// is the shape of that failure: it writes the bytes it managed, throws, and
+/// records what the next attempt asked for — which is where a `Range` header
+/// shows up, or does not.
+private final class StoppingDownload: UpdateFetching, @unchecked Sendable {
+
+    struct Attempt: Equatable {
+        /// The `Range` header, if the request carried one. `nil` on a fresh start.
+        let range: String?
+        /// Bytes already on disk when this attempt began.
+        let alreadyOnDisk: Int
+    }
+
+    private let lock = NSLock()
+    private var attempts: [Attempt] = []
+    /// Bytes to write per attempt, in order. Every attempt after the last one in
+    /// this list completes the file.
+    private let chunks: [Int]
+    /// Statuses per attempt, same indexing. Defaults to 200; 206 stands for the
+    /// appended tail a resumed request earns.
+    private let statuses: [Int]
+    private let total: Int
+
+    init(chunks: [Int], statuses: [Int] = [], total: Int) {
+        self.chunks = chunks
+        self.statuses = statuses
+        self.total = total
+    }
+
+    var recordedAttempts: [Attempt] {
+        lock.lock()
+        defer { lock.unlock() }
+        return attempts
+    }
+
+    func download(
+        _ request: URLRequest,
+        to destination: URL,
+        progress: @escaping @Sendable (UpdateTransfer) -> Void
+    ) async throws -> Int {
+        let onDisk = (try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? Int ?? 0
+        lock.lock()
+        attempts.append(Attempt(range: request.value(forHTTPHeaderField: "Range"),
+                                alreadyOnDisk: onDisk))
+        let index = attempts.count - 1
+        lock.unlock()
+
+        // A server honouring a range answers 206; ours pretends to when the
+        // request asked for the tail.
+        let asked = request.value(forHTTPHeaderField: "Range")
+        let status = index < statuses.count
+            ? statuses[index]
+            : (asked == nil ? 200 : 206)
+        let written = index < chunks.count ? chunks[index] : max(0, total - onDisk)
+        let tail = Data(repeating: 0x4D, count: max(0, written))
+        if asked != nil, FileManager.default.fileExists(atPath: destination.path) {
+            let handle = try FileHandle(forWritingTo: destination)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: tail)
+            try handle.close()
+        } else {
+            try tail.write(to: destination)
+        }
+        let final = (try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? Int ?? 0
+        progress(UpdateTransfer(received: Int64(final), expected: Int64(total)))
+
+        // Short of the whole file: this is the drop half way. The partial is
+        // left exactly where it is, which is what the installer has to resume
+        // from rather than delete.
+        guard final >= total else {
+            throw URLError(.networkConnectionLost)
+        }
         return status
     }
 }
@@ -189,7 +273,7 @@ final class UpdateInstallTests: XCTestCase {
         running: String = "1.2.0",
         release: String = releaseBody(),
         status: Int = 200,
-        download: ScriptedDownload = ScriptedDownload(),
+        download: any UpdateFetching = ScriptedDownload(),
         tools: UpdateCommanding? = nil,
         bundle: URL? = nil
     ) -> UpdateInstaller {
@@ -209,6 +293,54 @@ final class UpdateInstallTests: XCTestCase {
     }
 
     // MARK: The whole errand
+
+    /// **The report: "download seems to fail half way."**
+    ///
+    /// A transfer that stops at 1024 of 2048 bytes used to be the end of the
+    /// errand — the partial was deleted and the owner was told the download had
+    /// stopped, having paid for half a gigabyte that went in the bin. Now the
+    /// next attempt asks for `bytes=1024-`, the server answers 206 with the tail,
+    /// and the file becomes the whole release.
+    func testADownloadThatStopsHalfWayIsPickedUpWhereItLeftOff() async throws {
+        let download = StoppingDownload(chunks: [1024], total: 2048)
+        let outcome = await run(installer(download: download))
+
+        let attempts = download.recordedAttempts
+        XCTAssertEqual(attempts.count, 2, "it did not try again: \(attempts)")
+        XCTAssertNil(attempts.first?.range, "the first attempt asked for a range")
+        XCTAssertEqual(attempts.last?.range, "bytes=1024-", "the second attempt started over")
+        XCTAssertEqual(attempts.last?.alreadyOnDisk, 1024, "the first attempt's bytes were thrown away")
+
+        guard case .success = outcome else {
+            return XCTFail("a resumed download did not finish: \(outcome)")
+        }
+        // And the whole errand really did complete: the new build is installed.
+        XCTAssertEqual(mac.installedMarker(), "new")
+    }
+
+    /// A refused request is an *answer*, not a transfer that stopped. Asking
+    /// again gets the same one, and five rounds of that is a support ticket.
+    func testARefusalIsNotRetried() async throws {
+        let download = StoppingDownload(chunks: [], statuses: [403], total: 2048)
+        let outcome = await run(installer(download: download))
+
+        XCTAssertEqual(download.recordedAttempts.count, 1)
+        guard case .failure(.downloadRefused(403)) = outcome else {
+            return XCTFail("a refusal was reported as something else: \(outcome)")
+        }
+    }
+
+    /// And a download that never finishes gives up rather than looping — five
+    /// attempts, then the sentence the owner already knows.
+    func testADownloadThatNeverFinishesStopsTrying() async throws {
+        let download = StoppingDownload(chunks: [1, 1, 1, 1, 1], total: 4096)
+        let outcome = await run(installer(download: download))
+
+        XCTAssertEqual(download.recordedAttempts.count, UpdateInstaller.downloadAttempts)
+        guard case .failure(.downloadFailed) = outcome else {
+            return XCTFail("an unfinished download reported something else: \(outcome)")
+        }
+    }
 
     func testInstallsTheNewerBuildAndKeepsTheOldOne() async throws {
         let outcome = await run(installer())
