@@ -20,6 +20,11 @@ public struct SageProactiveSource: ProactiveSource {
     public enum Trouble: Error, Equatable {
         /// The reply parsed as neither a backlog nor an empty one.
         case unreadableBacklog(String)
+        /// The node's own answer says it is holding more than it returned, and
+        /// this appliance could not read the rest — so it does not have a
+        /// backlog, and must behave exactly as it does for a node that said
+        /// nothing at all. See `SageBacklogReply`.
+        case incompleteBacklog(String)
     }
 
     /// `ProactiveWatch`'s lines about a check that used this source, into the
@@ -126,19 +131,65 @@ public struct SageProactiveSource: ProactiveSource {
     /// An empty `tasks_by_domain` is still an empty backlog and still returns
     /// `[]`: the owner finishing everything is a real state and must not read as
     /// a fault.
+    /// **Read to the end of the list, or not at all.**
+    ///
+    /// This was one call with no arguments until 22 September 2026, and as of
+    /// SAGE 11.23.x that is no longer enough: the tool's own description now says
+    /// the listing is *paged* and that "one call is never the whole board". A
+    /// page read as the whole list is the 6 August calendar failure with the
+    /// sign flipped — every task past the first page reads as having just been
+    /// completed, and the mirror deletes their events — so this pages until the
+    /// node says it is finished and **throws if it cannot get to the end**. The
+    /// watch already treats a throw as "could not look", which changes nothing.
+    ///
+    /// The current node ignores `limit` and answers with everything it holds, so
+    /// the second call does not happen — verified against 11.23.7 on 22
+    /// September 2026, where a call asking for two rows answered with five and no
+    /// paging fields at all. The loop is for the day that stops being true.
     public func openTasks() async throws -> [WatchedTask] {
-        let reply = try await tools.call(name: "sage_backlog", arguments: [:])
-        guard let tasks = Self.tasks(inBacklog: reply) else {
-            // **The line that was missing on 6 August.** The calendar emptied
-            // itself and the log said only "mirroring 0 dated task(s)", which is
-            // a true statement about the plan and says nothing about why. The
-            // reply is what makes the next one diagnosable rather than guessed
-            // at, so a bounded head of it goes in the log verbatim.
-            log("[watch] sage_backlog answered with something that is not a backlog, so this "
-                + "check changed nothing: \(Self.head(of: reply))")
-            throw Trouble.unreadableBacklog(Self.head(of: reply))
+        var collected: [WatchedTask] = []
+        var seen = Set<String>()
+        var arguments = SageBacklogReply.firstPageArguments
+
+        for _ in 0..<SageBacklogReply.mostPages {
+            let reply = try await tools.call(name: "sage_backlog", arguments: arguments)
+            guard let tasks = Self.tasks(inBacklog: reply),
+                  let reading = SageBacklogReply.read(reply) else {
+                // **The line that was missing on 6 August.** The calendar emptied
+                // itself and the log said only "mirroring 0 dated task(s)", which
+                // is a true statement about the plan and says nothing about why.
+                // The reply is what makes the next one diagnosable rather than
+                // guessed at, so a bounded head of it goes in the log verbatim.
+                log("[watch] sage_backlog answered with something that is not a backlog, so this "
+                    + "check changed nothing: \(Self.head(of: reply))")
+                throw Trouble.unreadableBacklog(Self.head(of: reply))
+            }
+            let fresh = tasks.filter { seen.insert($0.id).inserted }
+            collected.append(contentsOf: fresh)
+
+            switch reading.continuation(afterReading: collected.count) {
+            case .complete:
+                // Sorted, so two checks that saw the same backlog produce the
+                // same order — a message whose lines shuffle between checks reads
+                // as more having happened than did.
+                return collected.sorted { $0.id < $1.id }
+            case .more(let nextPage):
+                // The node says there is more and asking again produced nothing
+                // new, so it is not paging for us however it was asked. A third
+                // ask gets the same reply forever.
+                guard !fresh.isEmpty else { break }
+                arguments = nextPage
+            case .unreachable:
+                break
+            }
         }
-        return tasks
+
+        log("[watch] sage_backlog is holding more than this appliance reads in "
+            + "\(SageBacklogReply.mostPages) pages of \(SageBacklogReply.pageSize), so this check "
+            + "changed nothing rather than treating a page as the whole list")
+        throw Trouble.incompleteBacklog(
+            "more than \(SageBacklogReply.mostPages * SageBacklogReply.pageSize) open tasks"
+        )
     }
 
     /// Enough of a reply to recognise it, and not enough to fill the log.

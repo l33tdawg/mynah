@@ -45,32 +45,71 @@ actor MCPTaskSource: TaskSource {
 
     static let shared = MCPTaskSource()
 
-    private let call: @Sendable () async throws -> JSONValue
+    /// Takes arguments, because the listing is paged as of SAGE 11.23.x — see
+    /// `SageBacklogReply`, and `board()` below for what happens to a page that
+    /// cannot be read to the end.
+    private let call: @Sendable ([String: JSONValue]) async throws -> JSONValue
 
     /// Defaults to the long-lived MCP connection `SageMemoryStore` already
     /// holds — the same appliance identity the Memories page and the agent
     /// roster sign as. No second node process and no second key.
     init(
-        call: @escaping @Sendable () async throws -> JSONValue = {
-            try await SageMemoryStore.shared.callTool("sage_backlog")
+        call: @escaping @Sendable ([String: JSONValue]) async throws -> JSONValue = {
+            try await SageMemoryStore.shared.callTool("sage_backlog", arguments: $0)
         }
     ) {
         self.call = call
     }
 
+    /// The whole board, or a refusal.
+    ///
+    /// **Paged, and refusing rather than truncating.** `sage_backlog` says as of
+    /// SAGE 11.23.x that a listing is a page and that the caller has to page
+    /// until `has_more` is false "before claiming you have seen every task".
+    /// A board is exactly such a claim: it draws the count, the columns and the
+    /// "came off the list" wording from what it was handed. So this asks until
+    /// the node says it is done and, if it never does, fails the way an
+    /// unreadable reply fails — an error on the board is recoverable, a board
+    /// that quietly shows a quarter of the work is not.
+    ///
+    /// The current node answers everything in one call and ignores `limit`
+    /// (verified against 11.23.7, 22 September 2026), so this is one call in
+    /// practice. It exists for the shape the node documents.
     func board() async throws -> TaskBoard {
-        let payload: JSONValue
-        do {
-            payload = try await call()
-        } catch let error as MCPClientError {
-            throw Self.failure(for: error)
-        } catch {
-            throw TaskSourceFailure.unreachable
+        var pages: [JSONValue] = []
+        var arguments = SageBacklogReply.firstPageArguments
+        var rowsRead = 0
+
+        for _ in 0..<SageBacklogReply.mostPages {
+            let payload: JSONValue
+            do {
+                payload = try await call(arguments)
+            } catch let error as MCPClientError {
+                throw Self.failure(for: error)
+            } catch {
+                throw TaskSourceFailure.unreachable
+            }
+            guard let reading = SageBacklogReply.read(payload) else {
+                throw TaskSourceFailure.unreadable
+            }
+            pages.append(payload)
+            rowsRead += reading.returned
+            switch reading.continuation(afterReading: rowsRead) {
+            case .complete:
+                guard let board = TaskBacklogReading.board(from: pages) else {
+                    throw TaskSourceFailure.unreadable
+                }
+                return board
+            case .more(let nextPage):
+                // A page that adds nothing means this node is not paging for us
+                // however it was asked, and asking again would repeat forever.
+                guard reading.returned > 0 else { throw TaskSourceFailure.unreadable }
+                arguments = nextPage
+            case .unreachable:
+                throw TaskSourceFailure.unreadable
+            }
         }
-        guard let board = TaskBacklogReading.board(from: payload) else {
-            throw TaskSourceFailure.unreadable
-        }
-        return board
+        throw TaskSourceFailure.unreadable
     }
 
     /// MCP failures, mapped the way the rest of the app maps them — one for a
@@ -129,6 +168,28 @@ enum TaskBacklogReading {
     /// The prefix the store writes onto every task's content. Shown to the owner
     /// it is noise on every single row — they know they are looking at tasks.
     static let storedPrefix = "[TASK] "
+
+    /// Several pages of one listing, as the single payload the board draws.
+    ///
+    /// Merged rather than drawn page by page because everything the board says
+    /// is a statement about the *whole* list: the counts on the column headers,
+    /// and whether a task has arrived or left. Handing it a page at a time would
+    /// make each page look like the plate.
+    static func board(from pages: [JSONValue]) -> TaskBoard? {
+        guard pages.count > 1 else { return pages.first.flatMap(board(from:)) }
+        var domains: [String: JSONValue] = [:]
+        var total = 0
+        for page in pages {
+            total = max(total, page["total_open"]?.intValue ?? 0)
+            for (domain, rows) in page["tasks_by_domain"]?.objectValue ?? [:] {
+                let existing = domains[domain]?.arrayValue ?? []
+                domains[domain] = .array(existing + (rows.arrayValue ?? []))
+            }
+        }
+        var merged: [String: JSONValue] = ["tasks_by_domain": .object(domains)]
+        if total > 0 { merged["total_open"] = .int(total) }
+        return board(from: .object(merged))
+    }
 
     static func board(from payload: JSONValue) -> TaskBoard? {
         // The shape is `{"tasks_by_domain": {"<domain>": [task, …]}, …}`. A

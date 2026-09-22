@@ -63,7 +63,7 @@ final class MCPTaskSourceTests: XCTestCase {
     }
 
     private func source(_ answer: JSONValue) -> MCPTaskSource {
-        MCPTaskSource(call: { answer })
+        MCPTaskSource(call: { _ in answer })
     }
 
     // MARK: The bug that kept it shut
@@ -83,7 +83,7 @@ final class MCPTaskSourceTests: XCTestCase {
     /// the words "this list won't open" appear on screen.
     @MainActor
     func testAnEmptyBacklogLeavesTheScreenWithNoTrouble() async {
-        let model = TaskBoardModel(source: MCPTaskSource(call: { self.payload([:], total: 0) }))
+        let model = TaskBoardModel(source: MCPTaskSource(call: { _ in self.payload([:], total: 0) }))
         await model.refresh()
 
         XCTAssertNil(model.trouble, "an empty plate was reported as a broken list")

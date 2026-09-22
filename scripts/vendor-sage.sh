@@ -111,9 +111,59 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # already published when the artifact was built, and "the newest published at
 # the moment of the cut" is the rule this file has followed since .25.
 #
+# 11.19.22 -> 11.23.7 on 22 Sep 2026, cutting 2.7.2. Sixteen releases landed in
+# nine days, and the check this file demands was done **mechanically rather than
+# by reading prose**, because these releases' notes are auto-generated PR titles:
+# both brains' published schemas were dumped (`tools/list` through the appliance
+# identity, from `vendor/SAGE.app` and from `/Applications/SAGE.app`) and diffed.
+# That is a better instrument than the notes were, and it is recorded here so the
+# next bump copies it:
+#
+#     for binary in vendor/SAGE.app /Applications/SAGE.app; do
+#       printf '…initialize…\n…tools/list…\n' |
+#         SAGE_IDENTITY_PATH=~/.sage/agents/sage-voice-bridge-agent-*/agent.key \
+#         SAGE_CLAUDE_CHANNEL=0 "$binary/Contents/MacOS/sage-gui" mcp > dump.jsonl
+#     done
+#
+# **What the diff found: one tool added, two changed, none removed.**
+#
+#  - **`sage_node_health` is new** — a read of the node's signer-fence state,
+#    "CALL THIS when a write fails with 'Signing key temporarily held'". It is
+#    deliberately NOT offered to the model in this release: it is an
+#    operator-facing diagnostic for a coding agent whose write just failed, the
+#    appliance already tells the owner in words when a write did not land, and
+#    the on-device catalogue is at its measured ceiling of 22. Adding it is a
+#    measurement, not a line, and the same rule that withheld `sage_get_links`
+#    applies. Revisit as its own change if the owner ever asks what went wrong
+#    with a write and the honest answer needs it.
+#  - **`sage_backlog` is now PAGED**, and its description says so: "one call is
+#    never the whole board… page with `offset` until has_more is false before
+#    claiming you have seen every task. `scan_capped` means the node stopped
+#    scanning at its bound." This is a behaviour change to a tool two readers in
+#    this repository depend on, and it is the reason this bump is not just a
+#    version number: a page read as the whole list is the 6 August calendar
+#    failure with the sign flipped. Both readers were taught to page (see
+#    `SageBacklogReply`, `SageProactiveSource.openTasks`, `MCPTaskSource.board`),
+#    and to refuse rather than truncate when the end cannot be reached. Verified
+#    against 11.23.7 on this Mac, where a call asking for two rows answered with
+#    five and no paging fields at all — so in practice it is one call today, and
+#    the loop is for the day that changes.
+#  - **`sage_task`'s `memory_id` now accepts an unambiguous prefix** of at least
+#    eight characters. Nothing here needed to change: the appliance passes the id
+#    it was given, and a prefix is strictly more forgiving.
+#
+# Nothing was removed or renamed, so no exclusion in `BrainPrompts` expired:
+# `sage_message_replies` is still withheld because
+# `sage_message_history(folder: "outbox")` answers the same question, and
+# `sage_get_links` for the measurement reason above.
+#
+# **The newer brain is also the one installed on the build Mac**
+# (`/Applications/SAGE.app` reports 11.23.7, matching what is now vendored), so
+# the live-node tests in the suite exercise this exact node.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.19.22}"
+TAG="${SAGE_RELEASE_TAG:-v11.23.7}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build
