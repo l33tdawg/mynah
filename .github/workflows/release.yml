@@ -193,10 +193,10 @@ jobs:
           # Three tests were added, so the runner graph is 2531 and twelve under
           # that is 2519.
           #
-          # 2519 -> 2568 with `//schedule`, alongside the script's 2557 -> 2606.
-          # Forty-nine tests were added, so the runner graph is 2580 and twelve
-          # under that is 2568.
-          MYNAH_MIN_EXECUTED_TESTS: "2568"
+          # 2568 -> 2592 with the Scheduled screen and `schedule_work`,
+          # alongside the script's 2606 -> 2630. Twenty-four tests were added, so
+          # the runner graph is 2604 and twelve under that is 2592.
+          MYNAH_MIN_EXECUTED_TESTS: "2592"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -258,9 +258,9 @@ jobs:
           # `AnEndpointStopsWithItsDaemonTests`, which this path has in its graph
           # exactly as the build Mac does.
           #
-          # 2557 -> 2606 with `//schedule`, for the same forty-nine tests the
-          # script's own floor moved for.
-          MYNAH_MIN_EXECUTED_TESTS: "2606"
+          # 2606 -> 2630 with the Scheduled screen and `schedule_work`, for the
+          # same twenty-four tests the script's own floor moved for.
+          MYNAH_MIN_EXECUTED_TESTS: "2630"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

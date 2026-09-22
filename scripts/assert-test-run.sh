@@ -507,12 +507,13 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # reason it exists — arithmetic moves the gate out of position on its own, and
 # nobody notices a blind gate by looking at it.
 #
-# **Raised 2557 -> 2606 with `//schedule`.** Forty-nine tests arrived with the
-# scheduler: the clock's rules, the reading of the owner's own sentence, and
-# what the model is told about its own standing work. Measured here rather than
-# derived — this bundle executed 2580 and KokoroEngineTests executed 38, so the
-# suite is 2618 and twelve under it is 2606.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2606}"
+# **Raised 2606 -> 2630 with the Scheduled screen and `schedule_work`.** Another
+# twenty-four tests: the tool's boundary (what it accepts, what it hands back
+# when a phrase cannot be read, and that it writes what the command writes), the
+# screen's two controls, and the fixture that pins the tool's schema to the
+# sweep. Measured here — this bundle executed 2604 and KokoroEngineTests
+# executed 38, so the suite is 2642 and twelve under it is 2630.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2630}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
