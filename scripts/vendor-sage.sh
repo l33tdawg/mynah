@@ -161,9 +161,23 @@ REPO="${SAGE_GITHUB_REPO:-l33tdawg/sage}"
 # (`/Applications/SAGE.app` reports 11.23.7, matching what is now vendored), so
 # the live-node tests in the suite exercise this exact node.
 #
+# 11.23.7 -> 11.23.8 on 22 Sep 2026, hours later, because the pin's own check
+# fired while 2.7.3 was being cut and the rule this file follows is "the newest
+# published at the moment of the cut". Two fixes, both about signing: `sage-gui`
+# drains signing on an ordinary exit rather than only on a restart, and
+# `fence abandon` carries the peer redelivery acknowledgement. The schema diff
+# that the paragraph above documents was run again and is one line long —
+# **35 tools, none added, none removed, no description or schema changed** — so
+# nothing the model can reach is different and no exclusion expired.
+#
+# Note what that leaves behind: the vendored brain is now one patch ahead of the
+# copy installed on the build Mac, so the live-node tests exercise 11.23.7 while
+# the app ships 11.23.8. The two differ only in those two signing fixes, which no
+# tool call in that suite touches.
+#
 # Re-vendoring requires SAGE_FORCE_DOWNLOAD=1. Changing this line alone does
 # nothing while a bundle is already staged, which is the whole trap above.
-TAG="${SAGE_RELEASE_TAG:-v11.23.7}"
+TAG="${SAGE_RELEASE_TAG:-v11.23.8}"
 OUT="${SAGE_APP_SOURCE:-$ROOT/vendor/SAGE.app}"
 EXPECTED_BUNDLE_ID="${SAGE_EXPECTED_BUNDLE_ID:-com.sage.brain}"
 # Apple Silicon only: WhisperKit runs on the Neural Engine, so an x86 build

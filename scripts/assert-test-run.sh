@@ -513,13 +513,13 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # screen's two controls, and the fixture that pins the tool's schema to the
 # sweep.
 #
-# **Raised 2628 -> 2638 with the SAGE 11.23.7 bump.** Ten tests arrived with the
-# paged-backlog work (`SageBacklogPagesTests`), and the gate's own run measured
-# this bundle at 2612 with KokoroEngineTests' 38 — 2650, twelve under is 2638.
-# **The same bundle reports two tests differently depending on whether a live
-# node answers** (2612 with it, 2614 without, across runs), which is worth knowing
-# before somebody "corrects" this from a run made in the other condition.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2638}"
+# **Raised 2638 -> 2642 with the download-resume work.** Four tests arrived with
+# it (three on the installer's resume loop, one more on the paged backlog), and
+# the gate's own run measured this bundle at 2616 with KokoroEngineTests' 38 —
+# 2654, twelve under is 2642. **The same bundle reports two tests differently
+# depending on whether a live node answers**, which is worth knowing before
+# somebody "corrects" this from a run made in the other condition.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2642}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

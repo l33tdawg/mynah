@@ -193,14 +193,13 @@ jobs:
           # Three tests were added, so the runner graph is 2531 and twelve under
           # that is 2519.
           #
-          # 2590 -> 2600 with the SAGE 11.23.7 bump and its paged backlog,
-          # alongside the script's 2628 -> 2638. Ten tests were added, so the
-          # runner graph is 2612 and twelve under that is 2600. The graph here has
-          # no KokoroEngineTests (38 fewer) and no node for the four live tests to
-          # talk to, and the bundle counts two tests differently in that condition
-          # than it does on the build Mac — 2614 with the live tests off. 2600
-          # clears both readings.
-          MYNAH_MIN_EXECUTED_TESTS: "2600"
+          # 2600 -> 2604 with the download-resume work, alongside the script's
+          # 2638 -> 2642. Four tests were added, so the runner graph is 2616 and
+          # twelve under that is 2604. The graph here has no KokoroEngineTests (38
+          # fewer) and no node for the four live tests to talk to, and the bundle
+          # counts two tests differently in that condition than it does on the
+          # build Mac — 2618 with the live tests off. 2604 clears both readings.
+          MYNAH_MIN_EXECUTED_TESTS: "2604"
           # **28 -> 29 for `ScheduledWorkRenderHarness`, and this is the case the
           # number is allowed to move for.** It skips unless `MYNAH_RENDER_PNGS=1`
           # — it draws the Scheduled screen for a human to look at, which no
@@ -269,9 +268,9 @@ jobs:
           # `AnEndpointStopsWithItsDaemonTests`, which this path has in its graph
           # exactly as the build Mac does.
           #
-          # 2628 -> 2638 with the SAGE 11.23.7 bump and its paged backlog, for the
-          # same ten tests the script's own floor moved for.
-          MYNAH_MIN_EXECUTED_TESTS: "2638"
+          # 2638 -> 2642 with the download-resume work, for the same four tests
+          # the script's own floor moved for.
+          MYNAH_MIN_EXECUTED_TESTS: "2642"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 
