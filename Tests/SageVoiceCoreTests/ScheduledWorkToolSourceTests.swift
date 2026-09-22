@@ -99,14 +99,22 @@ final class ScheduledWorkToolSourceTests: XCTestCase {
         let viaTool = scratch.appendingPathComponent("via-tool.json")
         let viaCommand = scratch.appendingPathComponent("via-command.json")
 
-        _ = try await ScheduledWorkToolSource(fileURL: viaTool, now: { now }, log: { _ in })
-            .call(
-                name: ScheduledWorkToolSource.toolName,
-                arguments: [
-                    "when": .string("every Monday at 9:30am"),
-                    "what": .string("send me the week ahead")
-                ]
-            )
+        // `isPaused` is pinned false rather than left to the default. The
+        // default reads the appliance's real pause file, which makes this test
+        // depend on something outside itself — and it did: the release gate
+        // failed here once while the same test passed in isolation, which is a
+        // test reading the machine rather than the code. What is under test is
+        // the write, so the pause state is stated.
+        let written = try await ScheduledWorkToolSource(
+            fileURL: viaTool, now: { now }, isPaused: { false }, log: { _ in }
+        )
+        .call(
+            name: ScheduledWorkToolSource.toolName,
+            arguments: [
+                "when": .string("every Monday at 9:30am"),
+                "what": .string("send me the week ahead")
+            ]
+        )
         _ = ScheduledWorkCommand.perform(
             .request(.create(
                 instruction: "send me the week ahead",
@@ -118,6 +126,9 @@ final class ScheduledWorkToolSourceTests: XCTestCase {
 
         let fromTool = ScheduledWork.load(from: viaTool)
         let fromCommand = ScheduledWork.load(from: viaCommand)
+        // The sentence first, so a failure names the reason rather than the
+        // arithmetic that followed from it.
+        XCTAssertTrue(written.hasPrefix("SCHEDULED"), written)
         XCTAssertEqual(fromTool.tasks.count, fromCommand.tasks.count)
         XCTAssertEqual(fromTool.tasks.first?.instruction, fromCommand.tasks.first?.instruction)
         XCTAssertEqual(fromTool.tasks.first?.cadence, fromCommand.tasks.first?.cadence)

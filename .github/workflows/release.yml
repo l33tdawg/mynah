@@ -193,10 +193,14 @@ jobs:
           # Three tests were added, so the runner graph is 2531 and twelve under
           # that is 2519.
           #
-          # 2568 -> 2592 with the Scheduled screen and `schedule_work`,
-          # alongside the script's 2606 -> 2630. Twenty-four tests were added, so
-          # the runner graph is 2604 and twelve under that is 2592.
-          MYNAH_MIN_EXECUTED_TESTS: "2592"
+          # 2568 -> 2590 with the Scheduled screen and `schedule_work`,
+          # alongside the script's 2606 -> 2628. Twenty-four tests were added, so
+          # the runner graph is 2602 and twelve under that is 2590. The graph here
+          # has no KokoroEngineTests (38 fewer) and no node for the four live
+          # tests to talk to, and the bundle counts two tests differently in that
+          # condition than it does on the build Mac — 2604 with the live tests
+          # off. 2590 clears both readings.
+          MYNAH_MIN_EXECUTED_TESTS: "2590"
           MYNAH_MAX_SKIPPED_TESTS: "28"
         run: |
           set -euo pipefail
@@ -258,9 +262,9 @@ jobs:
           # `AnEndpointStopsWithItsDaemonTests`, which this path has in its graph
           # exactly as the build Mac does.
           #
-          # 2606 -> 2630 with the Scheduled screen and `schedule_work`, for the
+          # 2606 -> 2628 with the Scheduled screen and `schedule_work`, for the
           # same twenty-four tests the script's own floor moved for.
-          MYNAH_MIN_EXECUTED_TESTS: "2630"
+          MYNAH_MIN_EXECUTED_TESTS: "2628"
           MYNAH_MAX_SKIPPED_TESTS: "45"
         run: bash scripts/release.sh
 

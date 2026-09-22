@@ -507,13 +507,19 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # reason it exists — arithmetic moves the gate out of position on its own, and
 # nobody notices a blind gate by looking at it.
 #
-# **Raised 2606 -> 2630 with the Scheduled screen and `schedule_work`.** Another
+# **Raised 2606 -> 2628 with the Scheduled screen and `schedule_work`.** Another
 # twenty-four tests: the tool's boundary (what it accepts, what it hands back
 # when a phrase cannot be read, and that it writes what the command writes), the
 # screen's two controls, and the fixture that pins the tool's schema to the
-# sweep. Measured here — this bundle executed 2604 and KokoroEngineTests
-# executed 38, so the suite is 2642 and twelve under it is 2630.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2630}"
+# sweep.
+#
+# Measured on the release's own gate run, live-node tests on: this bundle
+# executed 2602, KokoroEngineTests executed 38, so the suite is 2640 and twelve
+# under it is 2628. **The same bundle reports 2604 with the live-node tests off**
+# — two tests are counted differently depending on whether a node answers, which
+# is worth knowing before somebody "corrects" this number from a run made in the
+# other condition. 2628 clears both.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2628}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #
