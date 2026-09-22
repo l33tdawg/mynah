@@ -201,7 +201,14 @@ jobs:
           # condition than it does on the build Mac — 2604 with the live tests
           # off. 2590 clears both readings.
           MYNAH_MIN_EXECUTED_TESTS: "2590"
-          MYNAH_MAX_SKIPPED_TESTS: "28"
+          # **28 -> 29 for `ScheduledWorkRenderHarness`, and this is the case the
+          # number is allowed to move for.** It skips unless `MYNAH_RENDER_PNGS=1`
+          # — it draws the Scheduled screen for a human to look at, which no
+          # runner can do — so it is one legitimately opt-in test, which the
+          # ceiling's own message says to raise it for rather than a document
+          # surface quietly not being staged. Twelve at once remain what this
+          # watches for; 29 still sees them, and the guidance is to stay under 32.
+          MYNAH_MAX_SKIPPED_TESTS: "29"
         run: |
           set -euo pipefail
           swift build
