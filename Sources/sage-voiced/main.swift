@@ -1678,6 +1678,12 @@ func runDaemon(_ arguments: [String]) -> Never {
         }
         defer { wakeTask.cancel() }
 
+        // The owner's own scheduled work — the `//schedule` surface, read a
+        // minute at a time by the loop below. Nothing here starts a timer of its
+        // own: a second clock in this process would be a second answer to when
+        // it is now.
+        let standingWork = ScheduledWorkRunner(log: { note($0) })
+
         let watchTask = Task { [weak daemon] in
             // The owner's own thread — Note to Self, which is where every other
             // reply lands.
@@ -1712,6 +1718,17 @@ func runDaemon(_ arguments: [String]) -> Never {
                     }
                 },
                 wakeLatch: wakeLatch,
+                scheduledWork: standingWork,
+                runStandingWork: { task in
+                    // One thread, resolved the way every other follow-up is —
+                    // the app the owner last spoke through, else the first
+                    // thread he has. A scheduled answer is the appliance
+                    // speaking in the conversation, and the conversation
+                    // already has a home.
+                    let preferred = await daemon.preferredAnnouncementRecipient(among: ownerThreads)
+                    guard let owner = preferred ?? ownerThreads.first else { return }
+                    _ = await daemon.runScheduledWork(task, to: owner)
+                },
                 say: { message, quotingAnotherAgent, senders in
                     let preferred = await daemon.preferredAnnouncementRecipient(
                         among: ownerThreads
@@ -2246,6 +2263,26 @@ func runProactiveWatch(
     /// and on any build that has not started one, where this loop behaves
     /// exactly as it did before: it checks on the owner's interval.
     wakeLatch: MessageWakeLatch? = nil,
+    /// Standing work the owner set up himself — the `//schedule` surface.
+    /// `nil` switches it off; everything else here behaves exactly as it did
+    /// before.
+    scheduledWork: ScheduledWorkRunner? = nil,
+    /// Whether the owner has the appliance switched off right now.
+    ///
+    /// Read per tick, like every other switch here. **Standing work is the one
+    /// thing in this loop that is not behind `ProactivePreferences.isOn`**: that
+    /// switch is the owner's answer to "may you speak first about things I did
+    /// not ask about", and this is work he typed out and dated himself. What it
+    /// does answer to is the pause — that is him saying *not now* to the whole
+    /// appliance — and the check is out here rather than inside the run so that
+    /// nothing is claimed while it is off. A schedule that came round during a
+    /// pause therefore runs at the first tick after he switches back on: once,
+    /// late, and not once per occurrence he slept through.
+    isPaused: @Sendable () -> Bool = { PauseState().isPaused() },
+    /// Runs one piece of that work and delivers whatever it found. A closure for
+    /// the same reason `say` is one: the daemon is this loop's caller, not its
+    /// argument, and on a Mac with no owner thread there is nothing to run for.
+    runStandingWork: @escaping @Sendable (ScheduledTask) async -> Void = { _ in },
     /// The second argument says whether the text quotes an agent that is not
     /// Mynah, which decides how it is written into the thread's history rather
     /// than how it reads on the phone. The third carries the exact identities
@@ -2311,6 +2348,29 @@ func runProactiveWatch(
         let wokenByMessage = await wakeLatch?.isWoken() ?? false
         if wokenByMessage {
             log("[watch] the node says a message is waiting; checking now")
+        }
+
+        // **Standing work runs on every tick, and it is the one thing here that
+        // neither the proactive switch nor the quiet hours gate.** Both of those
+        // are the owner's answer to *"may you speak first, at an hour I did not
+        // choose"* — the news, the digest, the reminders — and this is work he
+        // typed out and put a time on himself with `//schedule`. Honouring a
+        // quiet hour against it would mean the 8am he asked for arriving at
+        // nine, which is a worse answer than the one he wrote down. What it does
+        // answer to is the pause, which is him saying *not now* to the appliance
+        // itself: the claim is skipped while that is set so nothing is lost, and
+        // whatever came round while it was off runs once when he switches back
+        // on.
+        //
+        // Claimed before it runs, never after: `claimDue` writes the run time
+        // down as part of taking the work, so a crash in the middle costs one
+        // run rather than one per minute until somebody notices.
+        if let scheduledWork, !isPaused() {
+            for task in scheduledWork.claimDue(at: now) {
+                guard !Task.isCancelled else { return }
+                log("[watch] standing work is due: \(task.summary)")
+                await runStandingWork(task)
+            }
         }
 
         guard ProactiveSchedule.isDue(

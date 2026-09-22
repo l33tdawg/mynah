@@ -78,6 +78,12 @@ once-a-day update check against GitHub.
   Where the calendar has the same item, the run-up nudges are left to the OS and
   Mynah keeps only the overdue check-in — because "did that happen, or should I
   move it?" is a question, and a calendar alert has nowhere to put the answer.
+- Runs work you put on a clock, whether or not you are talking to it:
+  `//schedule every day at 8am: check my inbox and tell me what's waiting`. Each
+  request runs once per occurrence and messages you here; a Mac that was asleep
+  runs the one it missed when it wakes rather than all of them, and what it has
+  set up rides every turn, so it can answer for its own schedule instead of
+  telling you it has no timer.
 - Finds another agent on your SAGE node from its own roster, hands it a job, and
   tells you what came back.
 - Shows the work assigned to it on Home, read from `sage_backlog`.
@@ -120,11 +126,14 @@ waits, and nothing has to be forwarded, installed or kept reachable.
 
 ## Commands
 
-Two, both handled before the model sees the message. Everything else you send is
-just a question.
+Handled before the model sees the message. Everything else you send is just a
+question.
 
-    //help     what you can say. Also //commands and //?
-    //call     set up a voice call and send back a link
+    //help                      what you can say. Also //commands and //?
+    //call                      set up a voice call and send back a link
+    //schedule <when>: <what>    standing work run on a clock, messaged back to you
+    //schedules                 what is set up, numbered
+    //schedule cancel <number>  stop one. pause and resume hold it for a while
 
 `//help` exists because nothing else discovers a slash command — you are in a
 Signal thread, not reading this file. It is answered by the daemon rather than
@@ -132,7 +141,18 @@ the model because asking a language model which commands it supports gets a
 confident guess. It also states what calling needs as part of the list, so a Mac
 that cannot place a call says why before you try.
 
-Both are anchored. A message that merely mentions `//call` — "how do I use
+`//schedule` reads three shapes: `every day at 8am`, `every Monday at 9:30am`
+and `every 30 minutes`. It is read by code and not by a language model, because
+the sentence creates something that keeps speaking for as long as it stands: a
+cadence a model misread is not a wrong answer, it is your phone buzzing at the
+wrong hour with nothing on screen saying which of you chose it. A bare hour —
+"at 8" — is refused rather than guessed at, and the refusal says so.
+
+Pausing the appliance holds scheduled work as well — pause is you saying *not
+now* to the whole thing — and whatever came round meanwhile runs once when you
+switch back on, rather than once per occurrence you missed.
+
+Every command is anchored. A message that merely mentions one — "how do I use
 //call" — is a question, not a command. The cost of getting that wrong is a
 microphone opening on your phone.
 

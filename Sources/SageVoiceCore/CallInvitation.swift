@@ -63,6 +63,8 @@ public enum CallInvitation {
 
             Manage or revoke G2 access in those settings. //g2 and //g2 unpair are also available here.
 
+            \(ScheduledWorkCommand.helpLines)
+
             //help — this.
 
             Anything else is just a question. Talk normally — text or a voice \

@@ -506,7 +506,13 @@ Capture one with: arch -arm64 swift test 2>&1 | tee $LOG"
 # the third time the rot check has fired on a green suite, which is the whole
 # reason it exists — arithmetic moves the gate out of position on its own, and
 # nobody notices a blind gate by looking at it.
-MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2557}"
+#
+# **Raised 2557 -> 2606 with `//schedule`.** Forty-nine tests arrived with the
+# scheduler: the clock's rules, the reading of the owner's own sentence, and
+# what the model is told about its own standing work. Measured here rather than
+# derived — this bundle executed 2580 and KokoroEngineTests executed 38, so the
+# suite is 2618 and twelve under it is 2606.
+MIN_EXECUTED="${MYNAH_MIN_EXECUTED_TESTS:-2606}"
 
 # The smallest thing whose disappearance this gate has to notice.
 #

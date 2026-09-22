@@ -1269,6 +1269,28 @@ public actor VoiceBridgeDaemon {
             return .replied(transcript: transcript, reply: "help", seconds: 0)
         }
 
+        // **Standing work, answered here and for the same reason `//help` is.**
+        //
+        // A model asked to turn "every day at 8am: check my inbox" into a
+        // schedule would usually get it right, and *usually* is the problem: a
+        // cadence it misreads is not a wrong sentence, it is the owner's phone
+        // buzzing at the wrong hour for as long as the request stands, with
+        // nothing on screen that says which of the two of them chose it. The
+        // reading is code — see `ScheduledWorkCommand` — so the only thing that
+        // can be wrong is his own typing, and a refusal says so.
+        //
+        // Before the pause check, like `//call` and `//help`: a read should work
+        // either way, and `perform` refuses the *writes* while the appliance is
+        // off with a sentence that says which switch to turn back on.
+        if let reading = ScheduledWorkCommand.read(transcript) {
+            let sentence = ScheduledWorkCommand.perform(
+                reading, now: Date(), isPaused: pause.isPaused()
+            )
+            log("[daemon] scheduled work: \(sentence.prefix(80))")
+            await reply(sentence, to: recipient, allowSpeaking: false)
+            return .replied(transcript: transcript, reply: "scheduled work", seconds: 0)
+        }
+
         if message.isGlassesInput {
             _ = await reply("From G2: \(transcript)", to: recipient, allowSpeaking: false, as: .unprompted)
         }
@@ -2416,6 +2438,186 @@ public actor VoiceBridgeDaemon {
             result.reply,
             attaching: notes?.drainOutgoingFiles() ?? [],
             to: fallback
+        )
+    }
+
+    // MARK: - Standing work
+
+    /// What one piece of the owner's standing work did, for the log.
+    ///
+    /// Everything the owner hears has already been sent by the time one of
+    /// these comes back; this is what the *watch* says about it, and what a test
+    /// or a future UI could act on.
+    public enum ScheduledWorkOutcome: Equatable, Sendable {
+        /// It ran, and something went to the owner.
+        case said
+        /// It ran and had nothing worth sending. Deliberately distinct from a
+        /// failure: the tick is not the owner's business.
+        case silent
+        /// It ran, and the channel refused the message. Logged rather than
+        /// retried — a phone that cannot be reached is not a schedule that
+        /// failed, and re-running the work would perform its side effects twice.
+        case notDelivered
+        /// It did not run, and the owner has been told in plain words.
+        case didNotRun
+        /// The owner has the appliance switched off. Nothing was claimed.
+        case paused
+    }
+
+    /// Runs one piece of scheduled work through the ordinary brain, and sends
+    /// what it found.
+    ///
+    /// **The same turn as any other, deliberately.** It gets the whole tool
+    /// catalogue, the turn ceiling, the notes handoff and the history — the work
+    /// the owner scheduled is work he could have asked for by hand, so it runs
+    /// down the same path. What is different is only who starts it and what the
+    /// model is told about why, which is `ScheduledWork.transcript`.
+    ///
+    /// **Told to the owner when it fails, and this is the opposite of the
+    /// watch's rule.** The proactive watch swallows every failure because
+    /// nothing it does was asked for: a check that could not reach the node is
+    /// not news. This was asked for, on a clock, by the owner — and a request
+    /// that quietly stops happening is exactly the "written promise with nothing
+    /// that will ever mention it again" failure that `AfterTheCallDrain` exists
+    /// to prevent. So a failed run says so and says when the next one is.
+    ///
+    /// **Called from the watch, and it runs here on the daemon's actor.** That
+    /// is `doAfterTheCall`'s shape rather than a second loop: same `ToolLoop`,
+    /// same notes buffer, same conversation, so a run that collides with
+    /// something the owner has just asked for behaves exactly as an
+    /// after-the-call instruction already does. Serialising it against the
+    /// owner instead was the alternative, and it is the wrong trade — a
+    /// scheduled check that he happened to talk over would then be skipped
+    /// rather than run, and "eight in the morning" would quietly mean "eight in
+    /// the morning, if you were not busy".
+    ///
+    /// - Parameter recipient: where the answer goes, resolved by the caller.
+    ///   One thread rather than one per channel: this is the appliance speaking
+    ///   in the conversation, and the conversation already has a home — the same
+    ///   resolution `VoiceBridgeDaemon.preferredAnnouncementRecipient` makes for
+    ///   every other follow-up.
+    @discardableResult
+    public func runScheduledWork(
+        _ task: ScheduledTask,
+        to recipient: ChannelRecipient
+    ) async -> ScheduledWorkOutcome {
+        guard !pause.isPaused() else {
+            log("[daemon] standing work held — the appliance is paused")
+            return .paused
+        }
+        let key = recipient.description
+
+        // Anything left in the shared buffer belongs to an earlier turn. Clear
+        // it first so this run's own output cannot be confused with it — the
+        // same guard `doAfterTheCall` opens with, and the same shared buffer.
+        _ = notes?.drainOutgoingFiles()
+        let priorTurns = histories[key] ?? []
+
+        let catalogue: [MCPTool]
+        do {
+            catalogue = try await toolCatalogue()
+        } catch {
+            log("[daemon] standing work could not reach its tools: \(error)")
+            await saidItDidNotRun(task, to: recipient)
+            return .didNotRun
+        }
+
+        let result: ToolLoopResult
+        do {
+            let turn = try await withDeadline(
+                configuration.turnCeilingSeconds, label: "standing work"
+            ) {
+                try await self.loop.run(
+                    transcript: ScheduledWork.transcript(task.instruction),
+                    tools: catalogue,
+                    history: priorTurns,
+                    images: [],
+                    onToolDecision: nil,
+                    onProgress: nil
+                )
+            }
+            // **Its work can change the owner's list, and the watch has to be
+            // told it was us.** Otherwise "every Monday, tidy the backlog" comes
+            // back to him fifteen minutes later as news that a stranger edited
+            // his tasks. Same guard, same reason as `doAfterTheCall`'s.
+            if OwnTaskEdits.wroteToTheTaskList(turn.trace) {
+                await onTaskWrites?()
+            }
+            result = turn
+        } catch {
+            log("[daemon] standing work “\(task.summary)” did not run: \(error)")
+            await saidItDidNotRun(task, to: recipient)
+            return .didNotRun
+        }
+
+        let files = notes?.drainOutgoingFiles() ?? []
+        let words = result.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else {
+            log("[daemon] standing work “\(task.summary)” had nothing to say")
+            return .silent
+        }
+
+        // Text, never a voice note, and `.unprompted`: nobody is waiting on this
+        // turn, so it must not close whatever the owner is in the middle of
+        // asking. Same two rulings as every other announcement.
+        //
+        // The two arguments stay on one line, because `WorkingLineGateTests`
+        // reads the statement a line at a time and a guard that cannot see
+        // across a line break is the defect it was written to catch.
+        let delivered = await reply(
+            words,
+            to: recipient,
+            attaching: files,
+            allowSpeaking: false, as: .unprompted,
+            attachmentsAreThePoint: !files.isEmpty
+        )
+        guard delivered else {
+            log("[daemon] standing work “\(task.summary)” reached nothing to say it on")
+            return .notDelivered
+        }
+
+        // **The answer is written down; the instruction it ran is not.**
+        //
+        // The store keeps one assistant turn per unprompted message, and this
+        // is the same shape `announce` uses — for two reasons that both show up
+        // on the Home screen.
+        //
+        // The first is whose words they are. The turn the run is *fed* is
+        // framed — "[Standing work the owner set up in advance, running now
+        // because its time came round…]" — and `ConversationStore` renders a
+        // user turn as the owner speaking. Storing it would put machine text in
+        // his mouth in his own transcript, which is the defect `recordFromCall`
+        // names when it refuses to split a transcript back into roles.
+        //
+        // The second is what the next turn should read. "Check my inbox" filed
+        // as something he just said is a request the model will think it is
+        // already part-way through; the answer to it is what a conversation
+        // actually continues from.
+        //
+        // After the send, not before, for the reason the main turn gives:
+        // history is the record of what the owner received.
+        histories[key] = Self.trimmed(
+            (histories[key] ?? []) + [BrainMessage(role: .assistant, content: words)],
+            keepingLastTurns: configuration.historyTurnLimit
+        )
+        persistConversations()
+        log("[daemon] standing work: \(result.trace.summary)")
+        return .said
+    }
+
+    private func saidItDidNotRun(
+        _ task: ScheduledTask,
+        to recipient: ChannelRecipient
+    ) async {
+        // The summary on its own line rather than stitched into the sentence:
+        // it is the owner's own words and may end in anything or nothing, and
+        // "…tell me what's waiting I'll try again" is the sort of seam that
+        // makes a message read as assembled.
+        _ = await reply(
+            "The work you scheduled didn't go through just now:\n\n\(task.summary)\n\n"
+                + "I'll try again the next time it comes round.",
+            to: recipient,
+            allowSpeaking: false, as: .unprompted
         )
     }
 

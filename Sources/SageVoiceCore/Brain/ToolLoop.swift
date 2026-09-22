@@ -685,6 +685,24 @@ public final class ToolLoop: @unchecked Sendable {
         /// `BrainPrompts.voiceToolAllowlist`.
         public var allowedToolNames: Set<String>
 
+        /// What the appliance is already set up to do on a clock, read fresh for
+        /// every turn. See `ScheduledWork.note`.
+        ///
+        /// **On the turn rather than in the system prompt**, for the reason
+        /// `WhereWeAre.rightNow` gives for the clock: the prompt is the cache's
+        /// prefix, held for the life of the process, and a list that changes
+        /// when the owner sets something up would be a cache miss on every turn
+        /// that followed — and stale in the one direction that matters, which is
+        /// Mynah denying work he has just asked for.
+        ///
+        /// A closure rather than a value because the file is read per turn
+        /// (setting one up mid-conversation has to reach the next turn), and
+        /// optional because a `Configuration()` built by a test should not read
+        /// the developer's own schedule file. `forStyle(_:)` is where the real
+        /// one is installed, so every surface that talks to the owner gets it —
+        /// the daemon, the window and the call loop all build from there.
+        public var standingWork: (@Sendable () -> String?)?
+
         /// Everything a reply style decides, decided once.
         ///
         /// **The prompt and the token ceiling are two halves of one choice**, and
@@ -705,7 +723,17 @@ public final class ToolLoop: @unchecked Sendable {
         public static func forStyle(_ style: ReplyStyle) -> Configuration {
             Configuration(
                 systemPrompt: BrainPrompts.voiceAgentManager(style: style),
-                maxGeneratedTokens: style.maximumGeneratedTokens
+                maxGeneratedTokens: style.maximumGeneratedTokens,
+                // **Here rather than at the three call sites**, for the reason
+                // this function exists at all: the daemon, the window and the
+                // call loop all build their configuration from it, and the
+                // knowledge that this appliance holds standing work for the
+                // owner is exactly the kind of thing one of three callers would
+                // be left without — which is how the window ended up on a
+                // spoken token ceiling and how the daemon ended up answering a
+                // question about its own scheduler with "I have no tool that
+                // does that".
+                standingWork: { ScheduledWork.load().note() }
             )
         }
 
@@ -719,7 +747,8 @@ public final class ToolLoop: @unchecked Sendable {
             reasoningOnSummary: ReasoningPreference = .disabled,
             maxGeneratedTokens: Int? = ReplyStyle.default.maximumGeneratedTokens,
             maxToolResultCharacters: Int? = nil,
-            allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist
+            allowedToolNames: Set<String> = BrainPrompts.voiceToolAllowlist,
+            standingWork: (@Sendable () -> String?)? = nil
         ) {
             self.systemPrompt = systemPrompt
             self.maxIterations = maxIterations
@@ -731,6 +760,7 @@ public final class ToolLoop: @unchecked Sendable {
             self.maxGeneratedTokens = maxGeneratedTokens
             self.maxToolResultCharacters = maxToolResultCharacters
             self.allowedToolNames = allowedToolNames
+            self.standingWork = standingWork
         }
     }
 
@@ -1128,7 +1158,16 @@ public final class ToolLoop: @unchecked Sendable {
         ]
         messages.append(contentsOf: history.dropFirst(leading.count).filter { $0.role != .system })
         // Stamped here and nowhere else. See `WhereWeAre.rightNow`.
-        messages.append(.user(WhereWeAre.stamp(transcript), images: images))
+        //
+        // The appliance's standing work rides behind the stamped turn, in the
+        // same parenthesised shape, so the model knows what this machine is
+        // already set up to do on a clock before it answers a question about
+        // one. See `ScheduledWork.note` for why that is not in the prompt above.
+        let stamped = [WhereWeAre.stamp(transcript), configuration.standingWork?()]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        messages.append(.user(stamped, images: images))
         // Only appends follow, so this stays valid — it is where the stamp comes
         // back off before the messages are handed to the caller to replay.
         let ownTurn = messages.count - 1
