@@ -72,9 +72,10 @@ actor MCPTaskSource: TaskSource {
     /// unreadable reply fails — an error on the board is recoverable, a board
     /// that quietly shows a quarter of the work is not.
     ///
-    /// The current node answers everything in one call and ignores `limit`
-    /// (verified against 11.23.7, 22 September 2026), so this is one call in
-    /// practice. It exists for the shape the node documents.
+    /// **11.23.7 pages**, so the arguments here are explicit rather than left to
+    /// the node's default of twenty-five, and the loop covers a plate larger
+    /// than one page. The brain 2.7.1 shipped — 11.19.22 — was the one that
+    /// ignored `limit`; that probe is recorded on `SageBacklogReply`.
     func board() async throws -> TaskBoard {
         var pages: [JSONValue] = []
         var arguments = SageBacklogReply.firstPageArguments

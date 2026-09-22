@@ -142,10 +142,14 @@ public struct SageProactiveSource: ProactiveSource {
     /// node says it is finished and **throws if it cannot get to the end**. The
     /// watch already treats a throw as "could not look", which changes nothing.
     ///
-    /// The current node ignores `limit` and answers with everything it holds, so
-    /// the second call does not happen — verified against 11.23.7 on 22
-    /// September 2026, where a call asking for two rows answered with five and no
-    /// paging fields at all. The loop is for the day that stops being true.
+    /// **The loop is not hypothetical.** 11.23.7 pages: a call with no arguments
+    /// answers at most twenty-five rows and says so in `limit`, `returned` and
+    /// `has_more`. This asks for `pageSize` explicitly so a single call still
+    /// covers any realistic plate, and pages when it does not. The brain the
+    /// previous release shipped — 11.19.22 — ignored `limit` entirely and
+    /// answered with everything; the probe that mistook one for the other is
+    /// recorded on `SageBacklogReply`, and the A/B that settled it was a 2.7.1
+    /// DMG asked the same question.
     public func openTasks() async throws -> [WatchedTask] {
         var collected: [WatchedTask] = []
         var seen = Set<String>()

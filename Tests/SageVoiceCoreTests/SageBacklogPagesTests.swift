@@ -40,12 +40,34 @@ final class SageBacklogPagesTests: XCTestCase {
 
     // MARK: The envelope
 
-    /// What 11.23.7 actually answers on this Mac: everything, a count, and no
-    /// paging fields at all. It has to read as complete, or this appliance would
-    /// go quiet about a node it can read perfectly.
+    /// **What 11.23.7 actually answers on this Mac**, to a call with no
+    /// arguments: everything it holds, a count, and the paging fields saying so
+    /// — `limit: 25, offset: 0, returned: 5, total_open: 5, has_more: false`.
+    /// It has to read as complete, or this appliance would go quiet about a node
+    /// it can read perfectly.
+    ///
+    /// The brain 2.7.1 shipped answers the same question with a different shape
+    /// — no `limit`, no `returned`, no `has_more` — and that one is complete too,
+    /// which is why the rule counts rows as well as reading the flags.
     func testTheShapeTheNodeAnswersTodayIsComplete() throws {
-        let reading = try XCTUnwrap(SageBacklogReply.read(page(ids: ["a1", "a2"], total: 2)))
+        let reading = try XCTUnwrap(SageBacklogReply.read("""
+            {"tasks_by_domain":{"voice-interface":[
+              {"memory_id":"a1","content":"[TASK] a1","task_status":"planned"},
+              {"memory_id":"a2","content":"[TASK] a2","task_status":"planned"}]},
+             "message":"You have 2 assigned open tasks across 1 domains.",
+             "limit":25,"offset":0,"returned":2,"total_open":2,"has_more":false}
+            """))
 
+        XCTAssertEqual(reading.returned, 2)
+        XCTAssertEqual(reading.continuation(afterReading: reading.returned), .complete)
+    }
+
+    /// And the shape the brain *before* this release answered with, which has no
+    /// paging fields at all: also complete, by the count alone.
+    func testTheOlderBrainsShapeIsAlsoComplete() throws {
+        let reading = try XCTUnwrap(
+            SageBacklogReply.read(#"{"tasks_by_domain":{"d":[{"memory_id":"a1","content":"[TASK] a1","task_status":"planned"}]},"total_open":1}"#)
+        )
         XCTAssertEqual(reading.continuation(afterReading: reading.returned), .complete)
     }
 

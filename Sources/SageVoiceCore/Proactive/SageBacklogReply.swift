@@ -27,11 +27,16 @@ import Foundation
 /// see, and the rule is the one the rest of this appliance runs on: **a read
 /// that cannot be shown to be complete is not a read.**
 ///
-/// The current node returns everything it holds for this agent and ignores
-/// `limit` — verified against 11.23.7 on 22 September 2026, where a call asking
-/// for two rows answered with five and no paging fields at all. This type is
-/// written for the shape the node *documents*, so that the day it starts paging
-/// is a day nothing changes rather than a day the calendar empties.
+/// **11.23.7 pages, and this was nearly a bug report to the node's authors
+/// instead of a fix here.** A call with no arguments answers
+/// `limit: 25, offset: 0, returned: 5, total_open: 5, has_more: false` — so any
+/// reader that takes `tasks_by_domain` alone is looking at at most twenty-five
+/// tasks and being told by two separate fields that it is a page. The brain the
+/// previous release shipped was the one that ignored all of this: 11.19.22
+/// answers with everything it holds and no paging fields at all, and the first
+/// version of this note recorded a probe of *that* binary as though it were the
+/// new one. The A/B that settled it is worth keeping: mount a 2.7.1 DMG, run the
+/// same call against the brain inside it, and watch the fields change.
 public struct SageBacklogReply: Equatable, Sendable {
 
     /// Rows the reply actually carried, counted across its domains.
